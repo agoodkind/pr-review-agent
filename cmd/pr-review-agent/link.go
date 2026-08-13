@@ -79,7 +79,7 @@ func keepInternalPackagesLinked() {
 	var apiErr githubapp.APIError
 	_ = apiErr.Error()
 
-	collector := diff.NewCollector(nil)
+	collector := diff.NewCollector(noopDiffSource{})
 	_, _ = collector.Collect(context.Background(), domain.PullRequestRef{}, githubapp.PullRequest{})
 	_, _ = diff.ChangedRightLines("")
 	_ = diff.ValidRange(nil, 1, 1)
@@ -92,3 +92,24 @@ func keepInternalPackagesLinked() {
 type noopRunner struct{}
 
 func (noopRunner) Run(context.Context, domain.ReviewJob) error { return nil }
+
+type noopDiffSource struct{}
+
+func (noopDiffSource) ListChangedFiles(
+	context.Context,
+	int64,
+	domain.Repository,
+	int,
+) ([]githubapp.ChangedFile, error) {
+	return nil, nil
+}
+
+func (noopDiffSource) GetFile(
+	context.Context,
+	int64,
+	domain.Repository,
+	string,
+	domain.HeadSHA,
+) ([]byte, error) {
+	return nil, nil
+}
