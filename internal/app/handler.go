@@ -34,9 +34,9 @@ func newHandler(
 ) *handler {
 	return &handler{
 		webhookHMACKey: cfg.GitHubWebhookSecret, // gitleaks:allow
-		cache:         cache,
-		dispatcher:    dispatcher,
-		logger:        logger,
+		cache:          cache,
+		dispatcher:     dispatcher,
+		logger:         logger,
 	}
 }
 
