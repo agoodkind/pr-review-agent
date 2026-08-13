@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"goodkind.io/pr-review-agent/internal/clyde"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -87,6 +88,22 @@ func keepInternalPackagesLinked() {
 	_ = diff.FileContext{}
 	_ = diff.ReviewInput{}
 	_ = diff.Chunk{}
+
+	clydeClient := clyde.NewClient(cfg, http.DefaultClient, func(ctx context.Context, delay time.Duration) error {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return nil
+		}
+	})
+	_ = clydeClient
+	_ = (*clyde.Client)(nil).Review
+	_ = (*clyde.Client)(nil).Reconcile
+	var clydeAPIErr clyde.APIError
+	_ = clydeAPIErr.Error()
 }
 
 type noopRunner struct{}
