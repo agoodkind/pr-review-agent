@@ -1,0 +1,136 @@
+package app
+
+import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+
+	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/queue"
+	"goodkind.io/pr-review-agent/internal/webhook"
+)
+
+type routePath string
+
+const (
+	routeRoot    routePath = "/"
+	routeHealth  routePath = "/health"
+	routeWebhook routePath = "/api/v1/github_webhooks"
+)
+
+type handler struct {
+	webhookHMACKey []byte
+	cache          *queue.DeliveryCache
+	dispatcher     *queue.Dispatcher
+	logger         *slog.Logger
+}
+
+func newHandler(
+	cfg config.Config,
+	cache *queue.DeliveryCache,
+	dispatcher *queue.Dispatcher,
+	logger *slog.Logger,
+) *handler {
+	return &handler{
+		webhookHMACKey: cfg.GitHubWebhookSecret, // gitleaks:allow
+		cache:          cache,
+		dispatcher:     dispatcher,
+		logger:         logger,
+	}
+}
+
+func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	handler.logger.DebugContext(
+		request.Context(),
+		"http request",
+		slog.String("method", request.Method),
+		slog.String("path", request.URL.Path),
+	)
+
+	switch routePath(request.URL.Path) {
+	case routeRoot:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowed(writer)
+			return
+		}
+		writeStatusOK(writer)
+	case routeHealth:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowed(writer)
+			return
+		}
+		writeStatusOK(writer)
+	case routeWebhook:
+		if request.Method != http.MethodPost {
+			writeMethodNotAllowed(writer)
+			return
+		}
+		handler.handleGitHubWebhook(writer, request)
+	default:
+		http.NotFound(writer, request)
+	}
+}
+
+func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request *http.Request) {
+	signature := request.Header.Get("X-Hub-Signature-256")
+	eventType := request.Header.Get("X-Github-Event")
+	deliveryID := request.Header.Get("X-Github-Delivery")
+
+	limited := io.LimitReader(request.Body, config.MaximumWebhookBytes+1)
+	body, err := io.ReadAll(limited)
+	if err != nil {
+		handler.logger.ErrorContext(request.Context(), "read webhook body", slog.String("err", err.Error()))
+		http.Error(writer, "read body failed", http.StatusBadRequest)
+		return
+	}
+	if int64(len(body)) > config.MaximumWebhookBytes {
+		http.Error(writer, "payload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+
+	if err := webhook.VerifySHA256(signature, handler.webhookHMACKey, body); err != nil {
+		http.Error(writer, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	if eventType == "" || deliveryID == "" {
+		http.Error(writer, "missing required headers", http.StatusBadRequest)
+		return
+	}
+
+	event, supported, err := webhook.ParsePullRequest(eventType, deliveryID, body)
+	if err != nil {
+		http.Error(writer, "malformed payload", http.StatusBadRequest)
+		return
+	}
+	if !supported {
+		writer.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if !handler.cache.Claim(deliveryID) {
+		writer.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if !handler.dispatcher.Enqueue(event.Job()) {
+		handler.cache.Release(deliveryID)
+		http.Error(writer, "queue full", http.StatusServiceUnavailable)
+		return
+	}
+
+	writer.WriteHeader(http.StatusAccepted)
+}
+
+func writeStatusOK(writer http.ResponseWriter) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(writer).Encode(map[string]string{"status": "ok"}); err != nil {
+		http.Error(writer, "encode response failed", http.StatusInternalServerError)
+	}
+}
+
+func writeMethodNotAllowed(writer http.ResponseWriter) {
+	http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+}
