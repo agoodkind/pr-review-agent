@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	// Model is the Clyde model used for review and reconciliation.
+	// Model is the OpenAI model used for review and reconciliation.
 	Model = "gpt-5.6-sol"
-	// ReasoningEffort is the Clyde reasoning effort for every completion.
+	// ReasoningEffort is the OpenAI reasoning effort for every completion.
 	ReasoningEffort = "high"
 	// BotLogin is the default GitHub App bot login.
 	BotLogin = "agoodkind-pr-review-agent[bot]"

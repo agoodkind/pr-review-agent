@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"time"
 
-	"goodkind.io/pr-review-agent/internal/clyde"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/reconcile"
 	"goodkind.io/pr-review-agent/internal/review"
@@ -37,25 +37,25 @@ type App struct {
 }
 
 // New wires the review runtime and returns a ready application.
-func New(cfg config.Config, githubHTTP *http.Client, clydeHTTP *http.Client, logger *slog.Logger) *App {
+func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, logger *slog.Logger) *App {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if githubHTTP == nil {
 		githubHTTP = http.DefaultClient
 	}
-	if clydeHTTP == nil {
-		clydeHTTP = http.DefaultClient
+	if openaiHTTP == nil {
+		openaiHTTP = http.DefaultClient
 	}
 
 	githubClient := githubapp.NewClient(cfg, githubHTTP, time.Now, logger)
-	clydeClient := clyde.NewClient(cfg, clydeHTTP, clydeSleep)
-	reconcileService := reconcile.NewService(githubClient, clydeClient, cfg.GitHubBotLogin, logger)
+	openaiClient := openai.NewClient(cfg, openaiHTTP)
+	reconcileService := reconcile.NewService(githubClient, openaiClient, cfg.GitHubBotLogin, logger)
 	collector := diff.NewCollector(githubClient)
 	reviewService := review.NewService(
 		githubClient,
 		collector,
-		clydeClient,
+		openaiClient,
 		reconcileService,
 		queue.NewKeyedLocker(),
 		cfg.GitHubBotLogin,
@@ -148,17 +148,4 @@ func (runner reviewRunner) Run(ctx context.Context, job domain.ReviewJob) error 
 		return fmt.Errorf("review job: %w", err)
 	}
 	return nil
-}
-
-func clydeSleep(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		err := ctx.Err()
-		slog.ErrorContext(ctx, "clyde sleep cancelled", slog.String("err", err.Error()))
-		return fmt.Errorf("clyde sleep: %w", err)
-	case <-timer.C:
-		return nil
-	}
 }

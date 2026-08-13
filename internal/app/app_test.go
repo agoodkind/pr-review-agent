@@ -638,6 +638,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if secondReview["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("second event = %v, want APPROVE", secondReview["event"])
 	}
+	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
 		t.Fatalf("resolve count = %d, want 1", fixture.githubState.resolveCallCount())
 	}
@@ -846,6 +847,18 @@ func (fixture *appFixture) waitForSubmitReviews(t *testing.T, count int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("submit review count = %d, want >= %d", fixture.githubState.submitReviewCount(), count)
+}
+
+func (fixture *appFixture) waitForResolveCalls(t *testing.T, count int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if fixture.githubState.resolveCallCount() >= count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("resolve count = %d, want >= %d", fixture.githubState.resolveCallCount(), count)
 }
 
 type webhookRequestOptions struct {

@@ -26,7 +26,7 @@ var (
 
 const (
 	githubHTTPTimeout = 30 * time.Second
-	clydeHTTPTimeout  = 610 * time.Second
+	openaiHTTPTimeout = 610 * time.Second
 	shutdownTimeout   = 30 * time.Second
 )
 
@@ -62,8 +62,8 @@ func run(
 
 	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	githubHTTP := &http.Client{Timeout: githubHTTPTimeout}
-	clydeHTTP := &http.Client{Timeout: clydeHTTPTimeout}
-	application := app.New(cfg, githubHTTP, clydeHTTP, logger)
+	openaiHTTP := &http.Client{Timeout: openaiHTTPTimeout}
+	application := app.New(cfg, githubHTTP, openaiHTTP, logger)
 
 	ctx, stop := notifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
