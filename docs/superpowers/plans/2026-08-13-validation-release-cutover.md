@@ -61,8 +61,8 @@
 ### Plan 1 handoff
 
 - Plan 1 ends with five open, ready, dependent Graphite pull requests.
-- Their bottom-to-top titles are Add Go review intake contracts, Add GitHub review data pipeline, Add Clyde review analysis, Add review lifecycle reconciliation, and Add PR review service runtime.
-- Every Plan 1 pull request changes only Go files.
+- Their bottom-to-top titles are Add Go review intake contracts, Add GitHub review data pipeline, Add OpenAI review analysis, Add review lifecycle reconciliation, and Add PR review service runtime.
+- Every Plan 1 pull request changes Go files. The OpenAI slice also changes go.mod and go.sum for github.com/openai/openai-go.
 - The stack remains unmerged when this plan starts.
 - Route confirmed Go fixes to the lowest owning branch through Graphite, then restack and resubmit affected branches.
 - Do not add validation, image, workflow, infrastructure, or evidence files to the five Plan 1 branches.
@@ -147,10 +147,10 @@ After a later commit:
 - [ ] Run Graphite state and log short from pr-review-agent.
 - [ ] Record the five Plan 1 branches and pull requests from bottom to top.
 - [ ] Record the Plan 1 starting commit and stack-tip commit.
-- [ ] Diff each branch against its immediate parent and require every changed path to end in .go.
-- [ ] Verify no Plan 1 branch changes go.mod, workflows, documentation, images, or infrastructure.
+- [ ] Diff each branch against its immediate parent and require every changed path to end in .go, except go.mod and go.sum for openai-go.
+- [ ] Verify no Plan 1 branch changes workflows, documentation, images, or infrastructure.
 - [ ] Read every Go source file completely.
-- [ ] Trace webhook ingestion to check creation, diff collection, Clyde, review publication, and reconciliation.
+- [ ] Trace webhook ingestion to check creation, diff collection, OpenAI completions, review publication, and reconciliation.
 - [ ] Search for forbidden behavior:
   - issue_comment
   - pull_request_review_comment
@@ -200,7 +200,7 @@ After a later commit:
 - [ ] Run concurrent duplicate-delivery tests fifty times under the race detector.
 - [ ] Run stale-head tests ten times.
 - [ ] Run pagination tests with 101 files and 101 threads.
-- [ ] Run tests with malformed GitHub and Clyde JSON.
+- [ ] Run tests with malformed GitHub and OpenAI JSON.
 - [ ] Run tests with HTTP 401, 403, 404, 409, 422, 429, and 500 responses.
 - [ ] Run tests with missing patches, binary files, deleted files, renamed files, and oversized hunks.
 - [ ] Run tests with head changes before publication and before reconciliation mutation.
@@ -256,7 +256,7 @@ Review these attack classes:
 Do not use production credentials.
 
 - [ ] Generate an ephemeral RSA key in a temporary directory.
-- [ ] Start fake GitHub and Clyde HTTP servers.
+- [ ] Start fake GitHub and OpenAI HTTP servers.
 - [ ] Start the compiled pr-review-agent process with dummy secrets and test URLs supported through direct Config construction or a test harness.
 - [ ] Verify GET / returns HTTP 200 and exact JSON.
 - [ ] Verify GET /health returns HTTP 200 and exact JSON.

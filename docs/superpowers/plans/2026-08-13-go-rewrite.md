@@ -4,17 +4,17 @@
 
 **Goal:** Replace the active PR-Agent review path with a small Go service that reviews every new pull request head, publishes one complete GitHub review, and silently resolves earlier bot findings fixed by later commits.
 
-**Architecture:** Build one standard-library Go process with strict configuration, signed GitHub webhook ingestion, a bounded single-worker queue, a GitHub App client, a direct Clyde client, deterministic review policy, and silent thread reconciliation. Persist review idempotency in hidden GitHub markers. Keep delivery deduplication in memory.
+**Architecture:** Build one Go process with strict configuration, signed GitHub webhook ingestion, a bounded single-worker queue, a GitHub App client, an OpenAI SDK completion client, deterministic review policy, and silent thread reconciliation. Persist review idempotency in hidden GitHub markers. Keep delivery deduplication in memory.
 
-**Tech Stack:** Go 1.26.5, Go standard library, GitHub REST and GraphQL APIs, Clyde OpenAI-compatible chat completions, httptest, and the existing go-makefile consumer.
+**Tech Stack:** Go 1.26.5, Go standard library, github.com/openai/openai-go, GitHub REST and GraphQL APIs, OpenAI chat completions, httptest, and the existing go-makefile consumer.
 
 ## Global Constraints
 
 - Work in /Users/agoodkind/Sites/pr-review-agent.
-- Modify or create only files ending in .go.
-- Do not modify go.mod, Makefile, bootstrap.mk, workflows, documentation, Docker files, Cloudflare files, GitHub settings, or external repositories.
-- Do not add dependencies. Use the Go standard library only.
-- Do not call live Clyde, Cloudflare, or container services.
+- Modify or create only .go files, except go.mod and go.sum for github.com/openai/openai-go.
+- Do not modify Makefile, bootstrap.mk, workflows, documentation, Docker files, Cloudflare files, GitHub settings, or external repositories.
+- Do not reimplement the OpenAI HTTP client, retries, or API errors.
+- Do not call live model, Cloudflare, or container services.
 - Use live GitHub only for Graphite state, stack submission, pull request metadata, pull request descriptions, and marking the five pull requests ready.
 - Use local httptest.Server instances for every HTTP behavior test.
 - Create, commit, push, and publish the five dependent slices through Graphite.
@@ -33,9 +33,9 @@
 - After a successful new-head review, silently resolve earlier owned findings proven fixed or invalid.
 - Never post a reply while reconciling.
 - Preserve the PR-Agent Review check lifecycle.
-- Use gpt-5.6-sol through the configured Clyde endpoint with reasoning effort high.
+- Use gpt-5.6-sol through CLYDE_BASE_URL with reasoning effort high.
 - Treat pull request prose, repository content, diffs, and comments as untrusted model input.
-- Never log private keys, webhook secrets, bearer tokens, Clyde keys, or Cloudflare Access secrets.
+- Never log private keys, webhook secrets, bearer tokens, CLYDE_API_KEY values, or Cloudflare Access secrets.
 - Run focused tests after each slice. Run go test ./..., go test -race ./..., and make check before handoff.
 - Before the first edit, record git rev-parse HEAD as the starting commit and retain it for the completion gate.
 
@@ -157,9 +157,9 @@ Create these focused Go files:
     internal/diff/patch.go
     internal/diff/collect.go
     internal/diff/diff_test.go
-    internal/clyde/schema.go
-    internal/clyde/client.go
-    internal/clyde/client_test.go
+    internal/openai/schema.go
+    internal/openai/client.go
+    internal/openai/client_test.go
     internal/review/policy.go
     internal/review/render.go
     internal/review/analyze.go
@@ -183,7 +183,7 @@ These slices are dependent because each upper layer imports the lower Go package
 | --- | --- | --- | --- |
 | 1 | Add Go review intake contracts | 1 through 3 | main |
 | 2 | Add GitHub review data pipeline | 4 through 6 | Pull request 1 branch |
-| 3 | Add Clyde review analysis | 7 and 8 | Pull request 2 branch |
+| 3 | Add OpenAI review analysis | 7 and 8 | Pull request 2 branch |
 | 4 | Add review lifecycle reconciliation | 9 and 10 | Pull request 3 branch |
 | 5 | Add PR review service runtime | 11 and 12 | Pull request 4 branch |
 
@@ -703,48 +703,46 @@ Rules:
 
 ---
 
-### Task 7: Add the Direct Clyde Client
+### Task 7: Add the OpenAI Review Client
 
 **Files:**
 
-- Create internal/clyde/schema.go, client.go, and client_test.go.
+- Create internal/openai/schema.go, client.go, and client_test.go.
+- Add github.com/openai/openai-go to go.mod and go.sum.
 
 **Required interface:**
 
-    func NewClient(config.Config, *http.Client, func(context.Context, time.Duration) error) *Client
+    func NewClient(config.Config, *http.Client) *Client
     func (*Client) Review(context.Context, string) (domain.ReviewResult, error)
     func (*Client) Reconcile(context.Context, string) ([]domain.ThreadResolution, error)
 
-Send POST {CLYDE_BASE_URL}/chat/completions with:
+Construct the SDK client with option.WithAPIKey, option.WithBaseURL from CLYDE_BASE_URL, option.WithHTTPClient, option.WithHeader for CF-Access-Client-Id and CF-Access-Client-Secret, and option.WithMaxRetries(3).
+
+Call Chat.Completions.New with:
 
 - model gpt-5.6-sol.
 - reasoning_effort high.
 - max_completion_tokens 8000.
-- A system message containing the writing and untrusted-input policies.
+- A system message from review.PolicyHeader.
 - A user message containing the delimited input.
-- response_format type json_schema.
-- Strict review or reconciliation schema.
-- additionalProperties=false at every object level.
+- response_format json_schema with additionalProperties=false at every object level.
 
-Set Authorization, Content-Type, CF-Access-Client-ID, and CF-Access-Client-Secret headers.
-
-Retry connection errors, HTTP 429, and HTTP 5xx three times after 1, 2, and 4 seconds. Do not retry other 4xx responses or invalid structured output. Decode choices[0].message.content with DisallowUnknownFields and require end of input.
+Do not write a custom HTTP client, retry loop, or APIError type. Unmarshal choices[0].message.content with encoding/json, then call domain.Validate or domain.ValidateThreadResolutions.
 
 - [ ] Write TestReviewSendsExactModelHeadersPolicyAndSchema.
-- [ ] Write TestReviewRejectsUnknownFieldsAndInvalidFindings.
-- [ ] Write TestReviewRetriesTransientFailuresThreeTimes.
+- [ ] Write TestReviewRejectsInvalidFindings.
+- [ ] Write TestReviewRetriesTransientFailures.
 - [ ] Write TestReviewDoesNotRetryAuthenticationFailure.
-- [ ] Write TestReviewErrorsDoNotContainCredentials.
 - [ ] Write TestReconcileAcceptsOnlyKnownResolutionValues.
 - [ ] Write TestReconcileRejectsDuplicateThreadIDs.
-- [ ] Run go test ./internal/clyde -count=1 and observe failure.
-- [ ] Implement strict requests, schemas, retries, and decoding.
-- [ ] Run gofmt -w internal/clyde/*.go.
-- [ ] Run go test ./internal/clyde -count=1.
+- [ ] Run go test ./internal/openai -count=1 and observe failure.
+- [ ] Implement the SDK wrapper and schemas.
+- [ ] Run gofmt -w internal/openai/*.go.
+- [ ] Run go test ./internal/openai -count=1.
 - [ ] Start pull request 3 through Graphite MCP:
 
-    git add internal/clyde/schema.go internal/clyde/client.go internal/clyde/client_test.go
-    args: ["create", "--message", "Add structured Clyde review client"]
+    git add go.mod go.sum internal/openai/schema.go internal/openai/client.go internal/openai/client_test.go
+    args: ["create", "--message", "Add structured OpenAI review client"]
 
 ---
 
@@ -947,7 +945,7 @@ Responses:
 - 405 for wrong methods on known paths.
 - 404 for unknown paths.
 
-The first HTTP client passed to New is for GitHub. The second is for Clyde. Production main constructs a GitHub client with a 30-second timeout and a Clyde client with a 610-second timeout.
+The first HTTP client passed to New is for GitHub. The second is for OpenAI. Production main constructs a GitHub client with a 30-second timeout and an OpenAI client with a 610-second timeout.
 
 The process must keep --version, reject other arguments with exit 2, load configuration before listening, emit JSON logs, listen on :PORT, handle SIGINT and SIGTERM, stop HTTP admission, and drain accepted work for at most 30 seconds. Configure the inbound http.Server with ReadHeaderTimeout 5 seconds, ReadTimeout 15 seconds, WriteTimeout 15 seconds, IdleTimeout 60 seconds, and MaxHeaderBytes 1 MiB.
 
@@ -958,7 +956,7 @@ The process must keep --version, reject other arguments with exit 2, load config
 - [ ] The end-to-end test must simulate an opened defective head, one REQUEST_CHANGES review, one inline finding, duplicate replay, a corrected synchronize head, one APPROVE review, and one silent old-thread resolution.
 - [ ] The fake GitHub server must fail on issue-comment and reply endpoints.
 - [ ] Run go test ./internal/app ./cmd/pr-review-agent -count=1 and observe failure.
-- [ ] Wire concrete GitHub, Clyde, diff, review, reconciliation, queue, and HTTP values.
+- [ ] Wire concrete GitHub, OpenAI, diff, review, reconciliation, queue, and HTTP values.
 - [ ] Implement signal and server lifecycle in testable functions.
 - [ ] Run gofmt -w internal/app/*.go cmd/pr-review-agent/*.go.
 - [ ] Run go test -race ./internal/app ./cmd/pr-review-agent -count=1.
@@ -983,7 +981,7 @@ Add these public-boundary scenarios:
 - REQUEST_CHANGES with a blocking finding.
 - Stale head with no review.
 - GitHub failure with failed lifecycle.
-- Clyde failure with failed lifecycle.
+- OpenAI failure with failed lifecycle.
 - Concurrent duplicate delivery with one review.
 - Replay after a fresh App instance with durable review-marker deduplication.
 - More than 100 files and more than 100 threads.
@@ -992,14 +990,14 @@ Add these public-boundary scenarios:
 - No typographic dashes in published model prose.
 
 - [ ] Add one named end-to-end test per scenario.
-- [ ] Run go test ./internal/domain ./internal/marker ./internal/config ./internal/webhook ./internal/queue ./internal/githubapp ./internal/diff ./internal/clyde ./internal/review ./internal/reconcile ./internal/app ./cmd/pr-review-agent -count=1.
+- [ ] Run go test ./internal/domain ./internal/marker ./internal/config ./internal/webhook ./internal/queue ./internal/githubapp ./internal/diff ./internal/openai ./internal/review ./internal/reconcile ./internal/app ./cmd/pr-review-agent -count=1.
 - [ ] Run go test ./... -count=1.
 - [ ] Run go test -race ./... -count=1.
 - [ ] Run make check.
 - [ ] Fix only Go files if any gate fails.
 - [ ] Add the task commit to pull request 5 through Graphite MCP:
 
-    git add cmd/pr-review-agent/main_test.go internal/domain/review_test.go internal/marker/marker_test.go internal/config/config_test.go internal/webhook/webhook_test.go internal/queue/queue_test.go internal/githubapp/client_test.go internal/diff/diff_test.go internal/clyde/client_test.go internal/review/review_test.go internal/reconcile/service_test.go internal/app/app_test.go
+    git add cmd/pr-review-agent/main_test.go internal/domain/review_test.go internal/marker/marker_test.go internal/config/config_test.go internal/webhook/webhook_test.go internal/queue/queue_test.go internal/githubapp/client_test.go internal/diff/diff_test.go internal/openai/client_test.go internal/review/review_test.go internal/reconcile/service_test.go internal/app/app_test.go
     args: ["modify", "--commit", "--message", "Add end-to-end Go review coverage"]
 
 ---
@@ -1027,8 +1025,8 @@ Do not merge, enable merge-when-ready, babysit checks, alter implementation afte
 
 Before handoff:
 
-- [ ] git diff --name-only "$starting_commit"..HEAD lists only .go files.
-- [ ] Every planned package exists.
+- [ ] git diff --name-only "$starting_commit"..HEAD lists only .go files plus go.mod and go.sum for openai-go.
+- [ ] Every planned package exists. There is no internal/clyde package.
 - [ ] go test ./... -count=1 passes.
 - [ ] go test -race ./... -count=1 passes.
 - [ ] make check passes.
@@ -1040,7 +1038,7 @@ Before handoff:
 - [ ] Graphite shows exactly five dependent branches in the specified order.
 - [ ] All five branches are pushed.
 - [ ] All five pull requests exist and are ready for review.
-- [ ] Every pull request has the correct parent branch, title, and Go-only slice.
+- [ ] Every pull request has the correct parent branch, title, and slice.
 - [ ] The stack tip passes all local gates.
 
 Stop here. Do not merge, create images, modify workflows, modify infrastructure, release, deploy, change GitHub App settings, create live product-validation pull requests, or collect production evidence. Those actions belong only to Plan 2.
