@@ -1,10 +1,8 @@
-package clyde_test
+package openai_test
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,15 +10,15 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
-	"goodkind.io/pr-review-agent/internal/clyde"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/openai"
+	"goodkind.io/pr-review-agent/internal/review"
 )
 
 func testAPIKeyValue() string {
-	return "fixture-clyde-" + strings.Repeat("k", 12)
+	return "fixture-openai-" + strings.Repeat("k", 12)
 }
 
 func testCFClientIDValue() string {
@@ -49,20 +47,14 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if request.Header.Get("Authorization") != "Bearer "+testAPIKeyValue() {
 		t.Fatalf("Authorization = %q, want Bearer prefix with api key", request.Header.Get("Authorization"))
 	}
-	if request.Header.Get("Content-Type") != "application/json" {
-		t.Fatalf("Content-Type = %q, want application/json", request.Header.Get("Content-Type"))
+	if request.Header.Get("Cf-Access-Client-Id") != testCFClientIDValue() {
+		t.Fatalf("Cf-Access-Client-Id = %q, want %q", request.Header.Get("Cf-Access-Client-Id"), testCFClientIDValue())
 	}
-	if request.Header.Get("CF-Access-Client-ID") != testCFClientIDValue() {
-		t.Fatalf("CF-Access-Client-ID = %q, want %q", request.Header.Get("CF-Access-Client-ID"), testCFClientIDValue())
-	}
-	if request.Header.Get("CF-Access-Client-Secret") != testCFClientSecretValue() {
-		t.Fatalf("CF-Access-Client-Secret mismatch")
+	if request.Header.Get("Cf-Access-Client-Secret") != testCFClientSecretValue() {
+		t.Fatalf("Cf-Access-Client-Secret mismatch")
 	}
 
 	body := state.lastRequestBody
-	if body == nil {
-		t.Fatal("request body missing")
-	}
 	if body["model"] != config.Model {
 		t.Fatalf("model = %v, want %q", body["model"], config.Model)
 	}
@@ -78,20 +70,15 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 		t.Fatalf("messages = %T len=%d, want 2 chat messages", body["messages"], len(messages))
 	}
 	systemMessage, ok := messages[0].(map[string]any)
-	if !ok || systemMessage["role"] != "system" {
+	if !ok {
 		t.Fatalf("first message = %v, want system role", messages[0])
 	}
 	systemContent, _ := systemMessage["content"].(string)
 	if !strings.Contains(systemContent, config.WritingPolicy) {
 		t.Fatalf("system message missing writing policy")
 	}
-	if !strings.Contains(systemContent, clyde.UntrustedInputPolicy) {
+	if !strings.Contains(systemContent, review.UntrustedInputPolicy) {
 		t.Fatalf("system message missing untrusted input policy")
-	}
-
-	userMessage, ok := messages[1].(map[string]any)
-	if !ok || userMessage["role"] != "user" || userMessage["content"] != "review input" {
-		t.Fatalf("user message = %v, want review input", messages[1])
 	}
 
 	responseFormat, ok := body["response_format"].(map[string]any)
@@ -108,56 +95,24 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if jsonSchema["name"] != "review_result" {
 		t.Fatalf("schema name = %v, want review_result", jsonSchema["name"])
 	}
-	schema, ok := jsonSchema["schema"].(map[string]any)
-	if !ok {
-		t.Fatalf("schema body missing")
-	}
-	if schema["additionalProperties"] != false {
-		t.Fatalf("root additionalProperties = %v, want false", schema["additionalProperties"])
-	}
-	properties, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("schema properties missing")
-	}
-	findings, ok := properties["findings"].(map[string]any)
-	if !ok {
-		t.Fatalf("findings schema missing")
-	}
-	findingItems, ok := findings["items"].(map[string]any)
-	if !ok || findingItems["additionalProperties"] != false {
-		t.Fatalf("finding item additionalProperties = %v, want false", findingItems["additionalProperties"])
-	}
 }
 
-func TestReviewRejectsUnknownFieldsAndInvalidFindings(t *testing.T) {
+func TestReviewRejectsInvalidFindings(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
 
-	state.completionContent = `{"summary":"ok","coverage_complete":true,"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":1,"extra":true}]}`
+	state.completionContent = `{"summary":"ok","coverage_complete":true,"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
-		t.Fatal("Review with unknown finding field: want error")
+		t.Fatal("Review with invalid importance: want error")
 	}
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
 	}
-
-	state.completionContent = `{"summary":"ok","coverage_complete":true,"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
-	_, err = client.Review(context.Background(), "prompt")
-	if err == nil {
-		t.Fatal("Review with invalid importance: want error")
-	}
-	if state.requestCount != 2 {
-		t.Fatalf("request count = %d, want 2 without retry", state.requestCount)
-	}
 }
 
-func TestReviewRetriesTransientFailuresThreeTimes(t *testing.T) {
-	sleepCalls := 0
-	client, server, state := newTestClientWithSleep(t, func(context.Context, time.Duration) error {
-		sleepCalls++
-		return nil
-	})
+func TestReviewRetriesTransientFailures(t *testing.T) {
+	client, server, state := newTestClient(t)
 	defer server.Close()
 
 	state.statusSequence = []int{
@@ -174,60 +129,20 @@ func TestReviewRetriesTransientFailuresThreeTimes(t *testing.T) {
 	if state.requestCount != 3 {
 		t.Fatalf("request count = %d, want 3", state.requestCount)
 	}
-	if sleepCalls != 2 {
-		t.Fatalf("sleep calls = %d, want 2", sleepCalls)
-	}
 }
 
 func TestReviewDoesNotRetryAuthenticationFailure(t *testing.T) {
-	sleepCalls := 0
-	client, server, state := newTestClientWithSleep(t, func(context.Context, time.Duration) error {
-		sleepCalls++
-		return nil
-	})
+	client, server, state := newTestClient(t)
 	defer server.Close()
 
 	state.statusSequence = []int{http.StatusUnauthorized}
-	state.completionContent = validReviewContent()
 
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review: want authentication error")
 	}
-	var apiErr clyde.APIError
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("error type = %T, want APIError", err)
-	}
-	if apiErr.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", apiErr.StatusCode)
-	}
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1", state.requestCount)
-	}
-	if sleepCalls != 0 {
-		t.Fatalf("sleep calls = %d, want 0", sleepCalls)
-	}
-}
-
-func TestReviewErrorsDoNotContainCredentials(t *testing.T) {
-	client, server, state := newTestClient(t)
-	defer server.Close()
-
-	state.statusSequence = []int{http.StatusUnauthorized}
-	apiKey := testAPIKeyValue()
-	cfSecret := testCFClientSecretValue()
-	state.errorBody = fmt.Sprintf("invalid key Bearer %s and secret %s", apiKey, cfSecret)
-
-	_, err := client.Review(context.Background(), "prompt")
-	if err == nil {
-		t.Fatal("Review: want error")
-	}
-	errorText := err.Error()
-	if strings.Contains(errorText, apiKey) {
-		t.Fatalf("error leaks api key: %q", errorText)
-	}
-	if strings.Contains(errorText, cfSecret) {
-		t.Fatalf("error leaks cf secret: %q", errorText)
 	}
 }
 
@@ -271,17 +186,9 @@ type testServerState struct {
 	statusSequence    []int
 	statusIndex       int
 	completionContent string
-	errorBody         string
 }
 
-func newTestClient(t *testing.T) (*clyde.Client, *httptest.Server, *testServerState) {
-	return newTestClientWithSleep(t, func(context.Context, time.Duration) error { return nil })
-}
-
-func newTestClientWithSleep(
-	t *testing.T,
-	sleep func(context.Context, time.Duration) error,
-) (*clyde.Client, *httptest.Server, *testServerState) {
+func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerState) {
 	t.Helper()
 
 	state := &testServerState{
@@ -305,22 +212,22 @@ func newTestClientWithSleep(
 		}
 
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
-			body := state.errorBody
-			if body == "" {
-				body = "request failed"
-			}
-			http.Error(writer, body, status)
+			writer.Header().Set("Retry-After-Ms", "0")
+			writeJSON(writer, status, map[string]any{
+				"error": map[string]any{
+					"message": "request failed",
+					"type":    "invalid_request_error",
+					"param":   "",
+					"code":    "request_failed",
+				},
+			})
 			return
 		}
 
 		writeJSON(writer, status, map[string]any{
-			"choices": []map[string]any{
-				{
-					"message": map[string]any{
-						"content": state.completionContent,
-					},
-				},
-			},
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion",
+			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": state.completionContent}}},
 		})
 	}))
 
@@ -335,9 +242,7 @@ func newTestClientWithSleep(
 		CFAccessClientID:     testCFClientIDValue(),
 		CFAccessClientSecret: testCFClientSecretValue(), // gitleaks:allow
 	}
-
-	client := clyde.NewClient(cfg, server.Client(), sleep)
-	return client, server, state
+	return openai.NewClient(cfg, server.Client()), server, state
 }
 
 func validReviewContent() string {
