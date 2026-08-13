@@ -8,6 +8,23 @@ Scaffold: `a3c4f1c`.
 
 Rows stay `Not yet proven` until a later Plan 2 task records a command, CI run, image digest, release, deployment, or live GitHub artifact. Source paths and test names are locators, not proof.
 
+## Task 2 local reproduction
+
+Commit: `19a4bcb`.
+No defects recorded.
+
+| Command | Start | End | Exit |
+| --- | --- | --- | --- |
+| `go test ./... -count=1` | 2026-08-13 15:12:15 PDT | 2026-08-13 15:12:20 PDT | 0 |
+| `go test -race ./... -count=1` | 2026-08-13 15:12:27 PDT | 2026-08-13 15:12:44 PDT | 0 |
+| `go test ./internal/app -count=10 -run TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation` | 2026-08-13 15:12:58 PDT | 2026-08-13 15:13:10 PDT | 0 |
+| `go test ./internal/app -count=10 -run TestEndToEndStaleHeadProducesNoReview` | 2026-08-13 15:12:58 PDT | 2026-08-13 15:13:10 PDT | 0 |
+| `go test ./internal/queue -race -count=50 -run TestEndToEndConcurrentDuplicateDeliveryOneReview` | 2026-08-13 15:12:58 PDT | 2026-08-13 15:13:10 PDT | 0 |
+| `go test ./internal/app -count=1 -run TestEndToEndMoreThanOneHundredFilesAndThreads` | 2026-08-13 15:12:58 PDT | 2026-08-13 15:13:10 PDT | 0 |
+| `make check` | 2026-08-13 15:11 PDT | 2026-08-13 15:11 PDT | 0 |
+
+`make check` passed lint-golangci, lint-format, lint-gocyclo, lint-deadcode, and staticcheck-extra. Test servers reject `/issues/comments` and `/pulls/comments/.../replies` in `internal/app/app_test.go`, `internal/review/review_test.go`, and `internal/githubapp/client_test.go`. Passing tests do not close this ledger.
+
 ## Plan 1 output
 
 | Position | Branch | PR | State | Base | Tip |
