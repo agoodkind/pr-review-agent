@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -77,6 +78,15 @@ func keepInternalPackagesLinked() {
 	_ = githubapp.ReviewThread{}
 	var apiErr githubapp.APIError
 	_ = apiErr.Error()
+
+	collector := diff.NewCollector(nil)
+	_, _ = collector.Collect(context.Background(), domain.PullRequestRef{}, githubapp.PullRequest{})
+	_, _ = diff.ChangedRightLines("")
+	_ = diff.ValidRange(nil, 1, 1)
+	_, _ = diff.ChunkInput(diff.ReviewInput{}, 1)
+	_ = diff.FileContext{}
+	_ = diff.ReviewInput{}
+	_ = diff.Chunk{}
 }
 
 type noopRunner struct{}
