@@ -104,7 +104,7 @@ func keepInternalPackagesLinked() {
 	var reviewModel review.Model = openaiClient
 	_ = reviewModel
 	_ = review.Analysis{}
-	reconcileService := reconcile.NewService(client, clydeClient, cfg.GitHubBotLogin, logger)
+	reconcileService := reconcile.NewService(client, openaiClient, cfg.GitHubBotLogin, logger)
 	reviewService := review.NewService(
 		client,
 		collector,
@@ -125,7 +125,7 @@ func keepInternalPackagesLinked() {
 	_ = (*reconcile.Service)(nil).Reconcile
 	var reconcileGitHub reconcile.GitHub = client
 	_ = reconcileGitHub
-	var reconcileModel reconcile.Model = clydeClient
+	var reconcileModel reconcile.Model = openaiClient
 	_ = reconcileModel
 }
 
