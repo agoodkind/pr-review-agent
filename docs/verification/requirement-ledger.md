@@ -25,6 +25,13 @@ No defects recorded.
 
 `make check` passed lint-golangci, lint-format, lint-gocyclo, lint-deadcode, and staticcheck-extra. Test servers reject `/issues/comments` and `/pulls/comments/.../replies` in `internal/app/app_test.go`, `internal/review/review_test.go`, and `internal/githubapp/client_test.go`. Passing tests do not close this ledger.
 
+## Task 3 adversarial review
+
+Commit: `9595a60`.
+Confirmed findings: none.
+
+Reviewed against source for the 18 Plan 2 attack classes. HMAC compare uses `hmac.Equal`. File content loads `pullRequest.Head`, not the queued webhook SHA. Production GitHub client has no issue-comment or reply write. Queue claim, keyed lock, and stale-head cancel have passing tests from Task 2. No reachable confirmed defect was reproduced, so no Go fix is in this task.
+
 ## Plan 1 output
 
 | Position | Branch | PR | State | Base | Tip |
