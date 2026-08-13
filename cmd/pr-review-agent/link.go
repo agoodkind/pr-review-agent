@@ -14,6 +14,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/queue"
+	"goodkind.io/pr-review-agent/internal/reconcile"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
@@ -103,12 +104,12 @@ func keepInternalPackagesLinked() {
 	var reviewModel review.Model = openaiClient
 	_ = reviewModel
 	_ = review.Analysis{}
-	reconciler := noopReconciler{}
+	reconcileService := reconcile.NewService(client, clydeClient, cfg.GitHubBotLogin, logger)
 	reviewService := review.NewService(
 		client,
 		collector,
 		reviewNoopModel{},
-		reconciler,
+		reconcileService,
 		queue.NewKeyedLocker(),
 		cfg.GitHubBotLogin,
 		logger,
@@ -118,8 +119,14 @@ func keepInternalPackagesLinked() {
 	_ = reviewGitHub
 	var reviewCollector review.Collector = collector
 	_ = reviewCollector
-	var reviewReconciler review.Reconciler = reconciler
+	var reviewReconciler review.Reconciler = reconcileService
 	_ = reviewReconciler
+	_ = reconcile.NewService
+	_ = (*reconcile.Service)(nil).Reconcile
+	var reconcileGitHub reconcile.GitHub = client
+	_ = reconcileGitHub
+	var reconcileModel reconcile.Model = clydeClient
+	_ = reconcileModel
 }
 
 type reviewNoopModel struct{}
@@ -152,7 +159,3 @@ func (noopDiffSource) GetFile(
 ) ([]byte, error) {
 	return nil, nil
 }
-
-type noopReconciler struct{}
-
-func (noopReconciler) Reconcile(context.Context, domain.ReviewJob) error { return nil }
