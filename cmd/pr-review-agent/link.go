@@ -103,6 +103,23 @@ func keepInternalPackagesLinked() {
 	var reviewModel review.Model = openaiClient
 	_ = reviewModel
 	_ = review.Analysis{}
+	reconciler := noopReconciler{}
+	reviewService := review.NewService(
+		client,
+		collector,
+		reviewNoopModel{},
+		reconciler,
+		queue.NewKeyedLocker(),
+		cfg.GitHubBotLogin,
+		logger,
+	)
+	_ = reviewService.Run
+	var reviewGitHub review.GitHub = client
+	_ = reviewGitHub
+	var reviewCollector review.Collector = collector
+	_ = reviewCollector
+	var reviewReconciler review.Reconciler = reconciler
+	_ = reviewReconciler
 }
 
 type reviewNoopModel struct{}
@@ -135,3 +152,7 @@ func (noopDiffSource) GetFile(
 ) ([]byte, error) {
 	return nil, nil
 }
+
+type noopReconciler struct{}
+
+func (noopReconciler) Reconcile(context.Context, domain.ReviewJob) error { return nil }
