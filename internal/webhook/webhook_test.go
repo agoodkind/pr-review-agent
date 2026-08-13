@@ -8,6 +8,34 @@ import (
 	"testing"
 )
 
+func TestEndToEndPullRequestWebhookAcceptance(t *testing.T) {
+	payload := []byte(`{
+		"action":"opened",
+		"installation":{"id":42},
+		"repository":{"name":"repo","owner":{"login":"owner"}},
+		"pull_request":{"number":7,"draft":false,"head":{"sha":"a3c4f1cac7f595bc824704b9d2a1f1191630dc32"}}
+	}`)
+	secret := []byte("secret")
+	mac := hmac.New(sha256.New, secret)
+	_, _ = mac.Write(payload)
+	signature := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+
+	if err := VerifySHA256(signature, secret, payload); err != nil {
+		t.Fatalf("VerifySHA256: %v", err)
+	}
+
+	event, supported, err := ParsePullRequest("pull_request", "delivery-e2e", payload)
+	if err != nil {
+		t.Fatalf("ParsePullRequest: %v", err)
+	}
+	if !supported {
+		t.Fatal("supported = false, want true")
+	}
+	if event.Head != "a3c4f1cac7f595bc824704b9d2a1f1191630dc32" {
+		t.Fatalf("head = %q, want opened head sha", event.Head)
+	}
+}
+
 func TestVerifySHA256AcceptsValidSignature(t *testing.T) {
 	secret := []byte("secret")
 	body := []byte(`{"action":"opened"}`)

@@ -22,6 +22,38 @@ const (
 	testRepoName    = "pr-review-agent"
 )
 
+func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-owned", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\nissue line\nline3\n"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{reconcileErr: errors.New("reconcile failed")}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if err := service.Reconcile(context.Background(), testJob()); err == nil {
+		t.Fatal("Reconcile: want error")
+	}
+	if len(github.resolveCalls) != 0 {
+		t.Fatalf("resolve calls = %v, want none after model failure", github.resolveCalls)
+	}
+}
+
 func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 	finding := sampleFinding()
 	ownedBody, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)

@@ -1,6 +1,37 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+
+	"goodkind.io/pr-review-agent/internal/config"
+)
+
+func TestEndToEndCommentWithIncompleteCoverage(t *testing.T) {
+	result := ReviewResult{
+		Summary:          "Coverage incomplete.",
+		CoverageComplete: false,
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	findings := []Finding{{
+		Path:       "main.go",
+		StartLine:  1,
+		EndLine:    1,
+		Title:      "Blocker",
+		Body:       "Would request changes if coverage were complete.",
+		Importance: config.BlockingImportance,
+	}}
+	for _, finding := range findings {
+		if err := finding.Validate(); err != nil {
+			t.Fatalf("finding validate: %v", err)
+		}
+	}
+	if result.CoverageComplete {
+		t.Fatal("coverage_complete = true, want false")
+	}
+}
 
 func TestParseHeadSHAAcceptsSHA1AndSHA256(t *testing.T) {
 	sha1 := "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"

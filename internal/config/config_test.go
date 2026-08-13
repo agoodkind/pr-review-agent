@@ -9,6 +9,25 @@ import (
 	"testing"
 )
 
+func TestEndToEndLoadEnablesReviewRuntime(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GitHubPrivateKey == nil {
+		t.Fatal("GitHubPrivateKey is nil")
+	}
+	if len(cfg.GitHubWebhookSecret) == 0 {
+		t.Fatal("GitHubWebhookSecret is empty")
+	}
+	if cfg.ClydeBaseURL == nil || cfg.ClydeBaseURL.String() == "" {
+		t.Fatal("ClydeBaseURL is empty")
+	}
+	if cfg.GitHubAPIBaseURL == nil || cfg.GitHubAPIBaseURL.String() == "" {
+		t.Fatal("GitHubAPIBaseURL is empty")
+	}
+}
+
 func TestLoadRequiresEverySecret(t *testing.T) {
 	_, err := Load(func(string) (string, bool) { return "", false })
 	if err == nil {

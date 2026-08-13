@@ -3,6 +3,7 @@ package diff_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -361,6 +362,30 @@ func TestChunkInputSplitsBetweenHunks(t *testing.T) {
 	}
 	if strings.Count(chunks[1].Text, "Diff hunk:") != 1 {
 		t.Fatal("second chunk should contain one hunk")
+	}
+}
+
+func TestEndToEndMoreThanOneHundredChangedFiles(t *testing.T) {
+	files := make([]githubapp.ChangedFile, 0, 101)
+	contents := make(map[string][]byte, 101)
+	for index := range 101 {
+		path := fmt.Sprintf("internal/pkg/file_%03d.go", index)
+		files = append(files, githubapp.ChangedFile{
+			Path:         path,
+			Status:       "modified",
+			Patch:        "@@ -1 +1,2 @@\n x\n+y\n",
+			PatchPresent: true,
+		})
+		contents[path] = []byte("x\ny\n")
+	}
+
+	source := &fakeSource{files: files, contents: contents}
+	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(input.Files) != 101 {
+		t.Fatalf("file count = %d, want 101", len(input.Files))
 	}
 }
 

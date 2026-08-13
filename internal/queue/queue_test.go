@@ -5,11 +5,53 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/domain"
 )
+
+func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
+	cache := NewDeliveryCache(100, time.Hour, time.Now)
+	runner := &recordingRunner{}
+	dispatcher := NewDispatcher(1, runner, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dispatcher.Start(ctx)
+
+	job := domain.ReviewJob{DeliveryID: "delivery-concurrent"}
+	if !cache.Claim(job.DeliveryID) {
+		t.Fatal("first claim: want true")
+	}
+
+	var winners int32
+	var waitGroup sync.WaitGroup
+	for range 12 {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			if cache.Claim(job.DeliveryID) {
+				atomic.AddInt32(&winners, 1)
+			}
+		}()
+	}
+	waitGroup.Wait()
+	if winners != 0 {
+		t.Fatalf("extra claims = %d, want 0", winners)
+	}
+
+	if !dispatcher.Enqueue(job) {
+		t.Fatal("enqueue: want true")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for len(runner.snapshot()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := runner.snapshot(); len(got) != 1 || got[0] != job.DeliveryID {
+		t.Fatalf("processed = %v, want one delivery-concurrent job", got)
+	}
+}
 
 func TestDeliveryCacheClaimsOnceUntilExpiry(t *testing.T) {
 	now := time.Unix(100, 0)

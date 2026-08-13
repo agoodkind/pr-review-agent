@@ -29,6 +29,31 @@ func testCFClientSecretValue() string {
 	return "fixture-cf-" + strings.Repeat("s", 12)
 }
 
+func TestEndToEndClydeFailureSetsFailedLifecycle(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.statusSequence = []int{
+		http.StatusInternalServerError,
+		http.StatusInternalServerError,
+		http.StatusInternalServerError,
+		http.StatusInternalServerError,
+	}
+	state.completionContent = validReviewContent()
+
+	_, err := client.Review(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("Review: want error")
+	}
+	if state.requestCount != 4 {
+		t.Fatalf("request count = %d, want 4 attempts", state.requestCount)
+	}
+	var apiErr clyde.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T, want APIError", err)
+	}
+}
+
 func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()

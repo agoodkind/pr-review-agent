@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+func TestEndToEndVersionRunsWithoutConfiguration(t *testing.T) {
+	if code := run([]string{"pr-review-agent", "--version"}, lookupEnv, io.Discard, stubNotifyContext); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+}
+
 func TestVersionFlag(t *testing.T) {
 	command := exec.Command("go", "run", ".", "--version")
 	output, err := command.CombinedOutput()

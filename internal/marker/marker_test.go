@@ -6,6 +6,22 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
+func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
+	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
+	firstBody := "Summary\n\n" + Review(head)
+	secondBody := "Updated summary\n\n" + Review(head)
+
+	if _, ok := FindReview(firstBody); !ok {
+		t.Fatal("first review marker missing")
+	}
+	if _, ok := FindReview(secondBody); !ok {
+		t.Fatal("second review marker missing")
+	}
+	if firstBody == secondBody {
+		t.Fatal("different prose should not compare equal")
+	}
+}
+
 func TestReviewMarkerRoundTrip(t *testing.T) {
 	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
 	body := "Summary text\n\n" + Review(head)

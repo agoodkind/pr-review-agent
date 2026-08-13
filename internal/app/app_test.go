@@ -38,6 +38,14 @@ const (
 	testInstallation  = int64(99)
 )
 
+var integrationTestMu sync.Mutex
+
+func withIntegrationLock(t *testing.T) {
+	t.Helper()
+	integrationTestMu.Lock()
+	t.Cleanup(integrationTestMu.Unlock)
+}
+
 func TestHealthNoExternalCalls(t *testing.T) {
 	fixture := newAppFixture(t, appFixtureOptions{})
 	defer fixture.close()
@@ -211,6 +219,7 @@ func TestUnsupportedEventReturns202(t *testing.T) {
 }
 
 func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
+	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{approveReviewContent()},
 	})
@@ -241,7 +250,317 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	}
 }
 
+func TestEndToEndApproveWithCompleteCoverage(t *testing.T) {
+	withIntegrationLock(t)
+
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-approve",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckConclusion(t, "success")
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", review["event"])
+	}
+	if fixture.githubState.completedCheckCount() != 1 {
+		t.Fatalf("completed check count = %d, want 1", fixture.githubState.completedCheckCount())
+	}
+	body, _ := review["body"].(string)
+	if containsTypographicDash(body) {
+		t.Fatalf("review body contains typographic dash: %q", body)
+	}
+	if fixture.githubState.forbiddenEndpointHits() != 0 {
+		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
+	}
+}
+
+func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
+	withIntegrationLock(t)
+	blockingFinding := domain.Finding{
+		Path:       testFindingPath,
+		StartLine:  3,
+		EndLine:    3,
+		Title:      "Missing validation",
+		Body:       "Validate the webhook payload before enqueue.",
+		Importance: config.BlockingImportance,
+	}
+
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(blockingFinding)},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-blocking",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
+	}
+	comments, ok := review["comments"].([]any)
+	if !ok || len(comments) != 1 {
+		t.Fatalf("comments = %T(%v), want one inline comment", review["comments"], review["comments"])
+	}
+}
+
+func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses:    []string{approveReviewContent()},
+		headAfterAnalysis: testCorrectedHead,
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-stale",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForClydeCalls(t, 1)
+	time.Sleep(200 * time.Millisecond)
+	if fixture.githubState.submitReviewCount() != 0 {
+		t.Fatalf("submit review count = %d, want 0", fixture.githubState.submitReviewCount())
+	}
+	if fixture.githubState.lastCheckConclusion() != "cancelled" {
+		t.Fatalf("check conclusion = %q, want cancelled", fixture.githubState.lastCheckConclusion())
+	}
+}
+
+func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses:     []string{approveReviewContent()},
+		submitReviewStatus: http.StatusInternalServerError,
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-github-fail",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForClydeCalls(t, 1)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if fixture.githubState.lastCheckConclusion() == "failure" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
+}
+
+func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
+	withIntegrationLock(t)
+	githubState := newGitHubServerState(testDefectiveHead)
+	githubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if failForbiddenEndpoint(writer, request) {
+			githubState.recordForbiddenEndpointHit()
+			return
+		}
+		githubState.handle(writer, request)
+	}))
+	defer githubServer.Close()
+
+	clydeState := newClydeServerState(appFixtureOptions{clydeResponses: []string{approveReviewContent()}})
+	clydeServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		clydeState.handle(writer, request)
+	}))
+	defer clydeServer.Close()
+
+	runWebhook := func(t *testing.T, deliveryID string) {
+		t.Helper()
+		fixture := newAppFixtureOnServers(t, githubServer, clydeServer, githubState, clydeState)
+		defer fixture.close()
+
+		response := fixture.postWebhook(t, webhookRequestOptions{
+			eventType:  "pull_request",
+			deliveryID: deliveryID,
+			body:       openedPayload(testDefectiveHead),
+		})
+		if response.StatusCode != http.StatusAccepted {
+			t.Fatalf("status = %d, want 202", response.StatusCode)
+		}
+		_ = response.Body.Close()
+		fixture.waitForSubmitReviews(t, 1)
+	}
+
+	runWebhook(t, "delivery-first-app")
+	if githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count after first app = %d, want 1", githubState.submitReviewCount())
+	}
+
+	runWebhook(t, "delivery-second-app")
+	time.Sleep(200 * time.Millisecond)
+	if clydeState.requestCount() != 1 {
+		t.Fatalf("clyde requests after fresh app = %d, want 1", clydeState.requestCount())
+	}
+	if githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count after fresh app = %d, want 1", githubState.submitReviewCount())
+	}
+}
+
+func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses:   []string{approveReviewContent()},
+		changedFileCount: 101,
+		threadCount:      101,
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-large",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	if fixture.githubState.listedFilePages() < 2 {
+		t.Fatalf("file page fetches = %d, want at least 2", fixture.githubState.listedFilePages())
+	}
+}
+
+func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{
+			defectiveReviewContent(domain.Finding{
+				Path:       testFindingPath,
+				StartLine:  3,
+				EndLine:    3,
+				Title:      "Missing validation",
+				Body:       "Validate the webhook payload before enqueue.",
+				Importance: config.BlockingImportance,
+			}),
+			approveReviewContent(),
+			approveReviewContent(),
+		},
+		clydeReconcileResponses: []string{reconcileResolvedContent("thread-owned")},
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-no-comments",
+		body:       openedPayload(testDefectiveHead),
+	})
+	_ = opened.Body.Close()
+	fixture.waitForSubmitReviews(t, 1)
+
+	fixture.githubState.setHead(testCorrectedHead)
+	fixture.githubState.setChangedFiles(correctedChangedFiles())
+	fixture.githubState.setFileContent(correctedFileContent())
+
+	sync := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-no-comments-sync",
+		body:       synchronizePayload(testCorrectedHead),
+	})
+	_ = sync.Body.Close()
+
+	fixture.waitForClydeCalls(t, 3)
+	fixture.waitForSubmitReviews(t, 2)
+	if fixture.githubState.forbiddenEndpointHits() != 0 {
+		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
+	}
+}
+
+func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
+	withIntegrationLock(t)
+
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses:  []string{approveReviewContent()},
+		reconcileStatus: http.StatusInternalServerError,
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-reconcile-fail",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckConclusion(t, "success")
+}
+
+func TestEndToEndPublishedProseHasNoTypographicDashes(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{typographicReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-typographic",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	body, _ := review["body"].(string)
+	if containsTypographicDash(body) {
+		t.Fatalf("published review body contains typographic dash: %q", body)
+	}
+	comments, _ := review["comments"].([]any)
+	for _, item := range comments {
+		comment, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		commentBody, _ := comment["body"].(string)
+		if containsTypographicDash(commentBody) {
+			t.Fatalf("published inline body contains typographic dash: %q", commentBody)
+		}
+	}
+}
+
 func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T) {
+	withIntegrationLock(t)
 	defectiveFinding := domain.Finding{
 		Path:       testFindingPath,
 		StartLine:  3,
@@ -255,8 +574,8 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 		clydeResponses: []string{
 			defectiveReviewContent(defectiveFinding),
 			approveReviewContent(),
-			reconcileResolvedContent("thread-owned"),
 		},
+		clydeReconcileResponses: []string{reconcileResolvedContent("thread-owned")},
 	})
 	defer fixture.close()
 
@@ -274,6 +593,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if fixture.githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count = %d, want 1", fixture.githubState.submitReviewCount())
 	}
+	fixture.waitForCheckConclusion(t, "success")
 	firstReview := fixture.githubState.lastSubmitReview()
 	if firstReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("first event = %v, want REQUEST_CHANGES", firstReview["event"])
@@ -327,7 +647,14 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 }
 
 type appFixtureOptions struct {
-	clydeResponses []string
+	clydeResponses          []string
+	clydeReconcileResponses []string
+	clydeStatus             int
+	reconcileStatus         int
+	headAfterAnalysis       string
+	submitReviewStatus      int
+	changedFileCount        int
+	threadCount             int
 }
 
 type appFixture struct {
@@ -340,28 +667,56 @@ type appFixture struct {
 	baseURL     string
 	client      *http.Client
 	cancel      context.CancelFunc
+	ownsGitHub  bool
+	ownsClyde   bool
 }
 
 func newAppFixture(t *testing.T, options appFixtureOptions) *appFixture {
 	t.Helper()
 
-	privateKey := testPrivateKey(t)
 	githubState := newGitHubServerState(testDefectiveHead)
+	applyGitHubFixtureOptions(githubState, options)
+
 	githubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if failForbiddenEndpoint(writer, request) {
+			githubState.recordForbiddenEndpointHit()
 			return
 		}
 		githubState.handle(writer, request)
 	}))
 
-	clydeState := &clydeServerState{responses: options.clydeResponses}
-	if len(clydeState.responses) == 0 {
-		clydeState.responses = []string{approveReviewContent()}
-	}
+	clydeState := newClydeServerState(options)
 	clydeServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		clydeState.handle(writer, request)
 	}))
 
+	fixture := wireAppFixture(t, githubServer, clydeServer, githubState, clydeState)
+	fixture.ownsGitHub = true
+	fixture.ownsClyde = true
+	return fixture
+}
+
+func newAppFixtureOnServers(
+	t *testing.T,
+	githubServer *httptest.Server,
+	clydeServer *httptest.Server,
+	githubState *githubServerState,
+	clydeState *clydeServerState,
+) *appFixture {
+	t.Helper()
+	return wireAppFixture(t, githubServer, clydeServer, githubState, clydeState)
+}
+
+func wireAppFixture(
+	t *testing.T,
+	githubServer *httptest.Server,
+	clydeServer *httptest.Server,
+	githubState *githubServerState,
+	clydeState *clydeServerState,
+) *appFixture {
+	t.Helper()
+
+	privateKey := testPrivateKey(t)
 	apiURL, err := url.Parse(githubServer.URL)
 	if err != nil {
 		t.Fatalf("Parse github URL: %v", err)
@@ -378,14 +733,14 @@ func newAppFixture(t *testing.T, options appFixtureOptions) *appFixture {
 	cfg := config.Config{
 		Port:                 "0",
 		GitHubAppID:          12345,
-		GitHubPrivateKey:     privateKey, // gitleaks:allow
+		GitHubPrivateKey:     privateKey,                // gitleaks:allow
 		GitHubWebhookSecret:  []byte(testWebhookSecret), // gitleaks:allow
 		GitHubBotLogin:       config.BotLogin,
 		GitHubAPIBaseURL:     apiURL,
 		GitHubGraphQLURL:     graphqlURL,
 		ClydeBaseURL:         clydeURL,
 		ClydeAPIKey:          "fixture-clyde-key", // gitleaks:allow
-		CFAccessClientID:     "fixture-cf-id", // gitleaks:allow
+		CFAccessClientID:     "fixture-cf-id",     // gitleaks:allow
 		CFAccessClientSecret: "fixture-cf-secret", // gitleaks:allow
 	}
 
@@ -409,6 +764,34 @@ func newAppFixture(t *testing.T, options appFixtureOptions) *appFixture {
 	}
 }
 
+func applyGitHubFixtureOptions(state *githubServerState, options appFixtureOptions) {
+	if options.changedFileCount > 0 {
+		state.setChangedFiles(buildChangedFiles(options.changedFileCount))
+	}
+	if options.threadCount > 0 {
+		state.setThreads(buildReviewThreads(options.threadCount))
+	}
+	if options.headAfterAnalysis != "" {
+		state.headAfterAnalysis = options.headAfterAnalysis
+	}
+	if options.submitReviewStatus != 0 {
+		state.submitReviewStatus = options.submitReviewStatus
+	}
+}
+
+func newClydeServerState(options appFixtureOptions) *clydeServerState {
+	state := &clydeServerState{
+		responses:          options.clydeResponses,
+		reconcileResponses: options.clydeReconcileResponses,
+		status:             options.clydeStatus,
+		reconcileStatus:    options.reconcileStatus,
+	}
+	if len(state.responses) == 0 && state.status == 0 {
+		state.responses = []string{approveReviewContent()}
+	}
+	return state
+}
+
 func (fixture *appFixture) close() {
 	if fixture.cancel != nil {
 		fixture.cancel()
@@ -421,10 +804,10 @@ func (fixture *appFixture) close() {
 	if fixture.server != nil {
 		fixture.server.Close()
 	}
-	if fixture.github != nil {
+	if fixture.ownsGitHub && fixture.github != nil {
 		fixture.github.Close()
 	}
-	if fixture.clyde != nil {
+	if fixture.ownsClyde && fixture.clyde != nil {
 		fixture.clyde.Close()
 	}
 }
@@ -439,6 +822,18 @@ func (fixture *appFixture) waitForClydeCalls(t *testing.T, count int32) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("clyde requests = %d, want >= %d", fixture.clydeState.requestCount(), count)
+}
+
+func (fixture *appFixture) waitForCheckConclusion(t *testing.T, conclusion string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if fixture.githubState.lastCheckConclusion() == conclusion {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("check conclusion = %q, want %q", fixture.githubState.lastCheckConclusion(), conclusion)
 }
 
 func (fixture *appFixture) waitForSubmitReviews(t *testing.T, count int) {
@@ -574,6 +969,58 @@ func approveReviewContent() string {
 	return `{"summary":"No issues found.","coverage_complete":true,"findings":[]}`
 }
 
+func typographicReviewContent() string {
+	return `{"summary":"Issue — details","coverage_complete":true,"findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","importance":5}]}`
+}
+
+func buildChangedFiles(count int) []map[string]any {
+	files := make([]map[string]any, 0, count)
+	for index := range count {
+		path := fmt.Sprintf("internal/pkg/file_%03d.go", index)
+		files = append(files, map[string]any{
+			"filename": path,
+			"status":   "modified",
+			"patch": strings.Join([]string{
+				"@@ -1,1 +1,2 @@",
+				" package pkg",
+				"+// change",
+			}, "\n"),
+		})
+	}
+	return files
+}
+
+func buildReviewThreads(count int) []map[string]any {
+	threads := make([]map[string]any, 0, count)
+	for index := range count {
+		threads = append(threads, map[string]any{
+			"id":         fmt.Sprintf("thread-%d", index),
+			"isResolved": true,
+			"comments": map[string]any{
+				"nodes": []map[string]any{{
+					"databaseId": float64(index + 1),
+					"body":       "resolved",
+					"path":       "internal/app/handler.go",
+					"line":       float64(3),
+					"startLine":  float64(3),
+					"author":     map[string]any{"login": config.BotLogin},
+				}},
+			},
+		})
+	}
+	return threads
+}
+
+func containsTypographicDash(value string) bool {
+	for _, character := range value {
+		switch character {
+		case '\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212':
+			return true
+		}
+	}
+	return false
+}
+
 func reconcileResolvedContent(threadID string) string {
 	payload := map[string]any{
 		"resolutions": []map[string]any{{
@@ -631,19 +1078,29 @@ func correctedFileContent() string {
 type githubServerState struct {
 	mu sync.Mutex
 
-	currentHead     string
-	changedFiles    []map[string]any
-	fileContent     string
-	compareFiles    []map[string]any
-	checkRuns       []map[string]any
-	nextCheckRunID  int64
-	submitReviews   []map[string]any
-	listReviewPages [][]map[string]any
-	reviewPageIndex int
-	threads         []map[string]any
-	resolveCalls    []string
-	lastResolveID   string
-	requests        int32
+	currentHead          string
+	headAfterAnalysis    string
+	changedFiles         []map[string]any
+	changedFilePages     [][]map[string]any
+	changedFilePageIndex int
+	fileContent          string
+	compareFiles         []map[string]any
+	checkRuns            []map[string]any
+	nextCheckRunID       int64
+	submitReviews        []map[string]any
+	submitReviewStatus   int
+	listReviewPages      [][]map[string]any
+	reviewPageIndex      int
+	threads              []map[string]any
+	threadPages          [][]map[string]any
+	threadPageIndex      int
+	resolveCalls         []string
+	lastResolveID        string
+	pullRequestReads     int32
+	forbiddenHits        int32
+	filePageFetches      int32
+	threadPageFetches    int32
+	requests             int32
 }
 
 func newGitHubServerState(head string) *githubServerState {
@@ -710,6 +1167,32 @@ func (state *githubServerState) lastResolveThreadID() string {
 	return state.lastResolveID
 }
 
+func (state *githubServerState) forbiddenEndpointHits() int32 {
+	return atomic.LoadInt32(&state.forbiddenHits)
+}
+
+func (state *githubServerState) recordForbiddenEndpointHit() {
+	atomic.AddInt32(&state.forbiddenHits, 1)
+}
+
+func (state *githubServerState) lastCheckConclusion() string {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.checkRuns) == 0 {
+		return ""
+	}
+	conclusion, _ := state.checkRuns[len(state.checkRuns)-1]["conclusion"].(string)
+	return conclusion
+}
+
+func (state *githubServerState) listedFilePages() int32 {
+	return atomic.LoadInt32(&state.filePageFetches)
+}
+
+func (state *githubServerState) listedThreadPages() int32 {
+	return atomic.LoadInt32(&state.threadPageFetches)
+}
+
 func (state *githubServerState) setHead(head string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -720,12 +1203,28 @@ func (state *githubServerState) setChangedFiles(files []map[string]any) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.changedFiles = files
+	state.changedFilePages = paginateMapPages(files, 100)
+	state.changedFilePageIndex = 0
 }
 
 func (state *githubServerState) setFileContent(content string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.fileContent = content
+}
+
+func (state *githubServerState) setCompareFiles(files []map[string]any) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.compareFiles = files
+}
+
+func (state *githubServerState) setThreads(threads []map[string]any) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.threads = threads
+	state.threadPages = paginateMapPages(threads, 100)
+	state.threadPageIndex = 0
 }
 
 func (state *githubServerState) handle(writer http.ResponseWriter, request *http.Request) {
@@ -770,10 +1269,7 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	}
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/files") {
-		state.mu.Lock()
-		files := state.changedFiles
-		state.mu.Unlock()
-		writeJSON(writer, http.StatusOK, files)
+		state.handleListChangedFiles(writer, request)
 		return
 	}
 
@@ -797,8 +1293,12 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	}
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
+		readCount := atomic.AddInt32(&state.pullRequestReads, 1)
 		state.mu.Lock()
 		head := state.currentHead
+		if readCount > 1 && state.headAfterAnalysis != "" {
+			head = state.headAfterAnalysis
+		}
 		state.mu.Unlock()
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"number": float64(testPRNumber),
@@ -899,6 +1399,16 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 	}
 
 	state.mu.Lock()
+	submitStatus := state.submitReviewStatus
+	state.mu.Unlock()
+	if submitStatus != 0 && submitStatus != http.StatusOK {
+		writeJSON(writer, submitStatus, map[string]any{
+			"message": "submit review failed",
+		})
+		return
+	}
+
+	state.mu.Lock()
 	state.submitReviews = append(state.submitReviews, body)
 	commitID, _ := body["commit_id"].(string)
 	reviewBody, _ := body["body"].(string)
@@ -972,7 +1482,53 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 
 	state.mu.Lock()
 	threads := state.threads
+	threadPages := state.threadPages
+	threadPageIndex := state.threadPageIndex
 	state.mu.Unlock()
+
+	if len(threadPages) > 0 {
+		atomic.AddInt32(&state.threadPageFetches, 1)
+		if threadPageIndex >= len(threadPages) {
+			writeJSON(writer, http.StatusOK, map[string]any{
+				"data": map[string]any{
+					"repository": map[string]any{
+						"pullRequest": map[string]any{
+							"reviewThreads": map[string]any{
+								"pageInfo": map[string]any{
+									"hasNextPage": false,
+									"endCursor":   "",
+								},
+								"nodes": []map[string]any{},
+							},
+						},
+					},
+				},
+			})
+			return
+		}
+		page := threadPages[threadPageIndex]
+		state.mu.Lock()
+		state.threadPageIndex++
+		hasNext := state.threadPageIndex < len(threadPages)
+		state.mu.Unlock()
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"data": map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"reviewThreads": map[string]any{
+							"pageInfo": map[string]any{
+								"hasNextPage": hasNext,
+								"endCursor":   fmt.Sprintf("cursor-%d", threadPageIndex),
+							},
+							"nodes": page,
+						},
+					},
+				},
+			},
+		})
+		return
+	}
+
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"data": map[string]any{
 			"repository": map[string]any{
@@ -990,25 +1546,121 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 	})
 }
 
+func (state *githubServerState) handleListChangedFiles(writer http.ResponseWriter, request *http.Request) {
+	state.mu.Lock()
+	pages := state.changedFilePages
+	pageIndex := state.changedFilePageIndex
+	files := state.changedFiles
+	state.mu.Unlock()
+
+	if len(pages) > 0 {
+		atomic.AddInt32(&state.filePageFetches, 1)
+		if pageIndex >= len(pages) {
+			writeJSON(writer, http.StatusOK, []map[string]any{})
+			return
+		}
+		page := pages[pageIndex]
+		state.mu.Lock()
+		state.changedFilePageIndex++
+		hasNext := state.changedFilePageIndex < len(pages)
+		state.mu.Unlock()
+		if hasNext {
+			next := fmt.Sprintf("http://%s%s", request.Host, request.URL.Path)
+			if request.URL.RawQuery != "" {
+				next += "?" + request.URL.RawQuery + "&page=2"
+			} else {
+				next += "?page=2"
+			}
+			writer.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
+		}
+		writeJSON(writer, http.StatusOK, page)
+		return
+	}
+
+	writeJSON(writer, http.StatusOK, files)
+}
+
+func paginateMapPages(items []map[string]any, pageSize int) [][]map[string]any {
+	if len(items) == 0 {
+		return nil
+	}
+	pages := make([][]map[string]any, 0)
+	for start := 0; start < len(items); start += pageSize {
+		end := start + pageSize
+		if end > len(items) {
+			end = len(items)
+		}
+		pages = append(pages, items[start:end])
+	}
+	return pages
+}
+
 type clydeServerState struct {
-	mu        sync.Mutex
-	responses []string
-	index     int
-	requests  int32
+	mu                 sync.Mutex
+	responses          []string
+	reconcileResponses []string
+	index              int
+	reconcileIndex     int
+	status             int
+	reconcileStatus    int
+	requests           int32
+	reconcileRequests  int32
 }
 
 func (state *clydeServerState) requestCount() int32 {
 	return atomic.LoadInt32(&state.requests)
 }
 
+func (state *clydeServerState) reconcileRequestCount() int32 {
+	return atomic.LoadInt32(&state.reconcileRequests)
+}
+
 func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.Request) {
 	atomic.AddInt32(&state.requests, 1)
+
+	body, err := readJSONBody(request)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	isReconcile := false
+	if responseFormat, ok := body["response_format"].(map[string]any); ok {
+		if jsonSchema, ok := responseFormat["json_schema"].(map[string]any); ok {
+			if name, ok := jsonSchema["name"].(string); ok && name == "thread_resolutions" {
+				isReconcile = true
+				atomic.AddInt32(&state.reconcileRequests, 1)
+			}
+		}
+	}
+
 	state.mu.Lock()
-	content := state.responses[state.index]
-	if state.index < len(state.responses)-1 {
-		state.index++
+	status := state.status
+	if isReconcile && state.reconcileStatus != 0 {
+		status = state.reconcileStatus
+	}
+	var content string
+	if isReconcile {
+		if len(state.reconcileResponses) == 0 {
+			content = reconcileResolvedContent("thread-owned")
+		} else {
+			content = state.reconcileResponses[state.reconcileIndex]
+			if state.reconcileIndex < len(state.reconcileResponses)-1 {
+				state.reconcileIndex++
+			}
+		}
+	} else {
+		content = state.responses[state.index]
+		if state.index < len(state.responses)-1 {
+			state.index++
+		}
 	}
 	state.mu.Unlock()
+
+	if status != 0 && status != http.StatusOK {
+		http.Error(writer, "clyde request failed", status)
+		return
+	}
 
 	writeJSON(writer, http.StatusOK, map[string]any{
 		"choices": []map[string]any{{

@@ -337,6 +337,38 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 	}
 }
 
+func TestEndToEndMoreThanOneHundredReviewThreads(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	state.threadPages = buildThreadPages(101)
+
+	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 6)
+	if err != nil {
+		t.Fatalf("ListReviewThreads: %v", err)
+	}
+	if len(threads) != 101 {
+		t.Fatalf("thread count = %d, want 101", len(threads))
+	}
+}
+
+func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	state.submitReviewStatus = http.StatusInternalServerError
+	_, err := client.SubmitReview(context.Background(), 99, testRepo(), 6, githubapp.SubmitReviewRequest{
+		CommitID: domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32"),
+		Body:     "body",
+		Event:    domain.ReviewDecisionApprove,
+	})
+	if err == nil {
+		t.Fatal("SubmitReview: want error")
+	}
+}
+
 func TestListReviewThreadsPaginatesBeyondOneHundred(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
@@ -402,6 +434,7 @@ type testServerState struct {
 	lastResolveThreadID    string
 	resolveThreadID        string
 	graphQLError           string
+	submitReviewStatus     int
 }
 
 func newTestClient(t *testing.T, privateKey *rsa.PrivateKey, now time.Time) (*githubapp.Client, *httptest.Server) {
@@ -484,6 +517,12 @@ func handleTestRequest(writer http.ResponseWriter, request *http.Request, state 
 		body, err := readJSONBody(request)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if state.submitReviewStatus != 0 && state.submitReviewStatus != http.StatusOK {
+			writeJSON(writer, state.submitReviewStatus, map[string]any{
+				"message": "submit review failed",
+			})
 			return
 		}
 		state.lastSubmitReview = body

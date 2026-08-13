@@ -425,6 +425,40 @@ func containsTypographicDash(value string) bool {
 	return false
 }
 
+func TestEndToEndCommentWithLowImportanceFindings(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{
+				Summary:          "Low severity note.",
+				CoverageComplete: true,
+				Findings: []domain.Finding{{
+					Path:       "main.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Style note",
+					Body:       "Consider renaming for clarity.",
+					Importance: 4,
+				}},
+			}},
+		},
+	})
+
+	err := fixture.service.Run(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("SubmitReview was not called")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
+		t.Fatalf("event = %v, want COMMENT", fixture.state.lastSubmitReview["event"])
+	}
+	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
+	if !ok || len(comments) != 1 {
+		t.Fatalf("comments = %T(%v), want one inline comment", fixture.state.lastSubmitReview["comments"], fixture.state.lastSubmitReview["comments"])
+	}
+}
+
 func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 	fixture.state.reviewPages = [][]map[string]any{{}}
