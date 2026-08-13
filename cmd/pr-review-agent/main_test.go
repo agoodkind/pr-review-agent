@@ -9,7 +9,7 @@ import (
 )
 
 func TestEndToEndVersionRunsWithoutConfiguration(t *testing.T) {
-	if code := run([]string{"pr-review-agent", "--version"}, lookupEnv, io.Discard, stubNotifyContext); code != 0 {
+	if code := run([]string{"pr-review-agent", "--version"}, io.Discard, stubNotifyContext); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 }
@@ -28,13 +28,13 @@ func TestVersionFlag(t *testing.T) {
 }
 
 func TestRejectsUnknownArguments(t *testing.T) {
-	if code := run([]string{"pr-review-agent", "--help"}, lookupEnv, io.Discard, stubNotifyContext); code != 2 {
+	if code := run([]string{"pr-review-agent", "--help"}, io.Discard, stubNotifyContext); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
 }
 
 func TestRunPrintsVersion(t *testing.T) {
-	if code := run([]string{"pr-review-agent", "--version"}, lookupEnv, io.Discard, stubNotifyContext); code != 0 {
+	if code := run([]string{"pr-review-agent", "--version"}, io.Discard, stubNotifyContext); code != 0 {
 		t.Fatalf("exit code = %d, want 0", code)
 	}
 }

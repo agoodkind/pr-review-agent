@@ -71,6 +71,11 @@ func (client *Client) SubmitReview(
 	number int,
 	request SubmitReviewRequest,
 ) (Review, error) {
+	if _, err := domain.ParseReviewDecision(string(request.Event)); err != nil {
+		client.logger.ErrorContext(ctx, "invalid review event", slog.String("err", err.Error()))
+		return Review{}, errors.New("invalid review event")
+	}
+
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews", number))
 	payload := submitReviewBody{
 		CommitID: string(request.CommitID),

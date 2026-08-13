@@ -14,14 +14,7 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/app"
 	"goodkind.io/pr-review-agent/internal/config"
-	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/version"
-)
-
-var (
-	keepHandlerExported       = (*app.App).Handler
-	keepFromEnvironment       = config.FromEnvironment
-	keepParseReviewDecision   = domain.ParseReviewDecision
 )
 
 const (
@@ -32,16 +25,11 @@ const (
 
 func main() {
 	slog.Debug("pr-review-agent start", slog.String("component", "pr-review-agent"))
-	os.Exit(run(os.Args, lookupEnv, os.Stdout, signal.NotifyContext))
-}
-
-func lookupEnv(key string) (string, bool) {
-	return os.LookupEnv(key)
+	os.Exit(run(os.Args, os.Stdout, signal.NotifyContext))
 }
 
 func run(
 	args []string,
-	lookup config.LookupEnv,
 	stdout io.Writer,
 	notifyContext func(context.Context, ...os.Signal) (context.Context, context.CancelFunc),
 ) int {
@@ -53,7 +41,7 @@ func run(
 		return 2
 	}
 
-	cfg, err := config.Load(lookup)
+	cfg, err := config.FromEnvironment()
 	if err != nil {
 		slog.Error("load config failed", slog.String("err", err.Error()))
 		_, _ = fmt.Fprintf(os.Stderr, "load config: %v\n", err)

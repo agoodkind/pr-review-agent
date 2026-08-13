@@ -91,11 +91,6 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 	}
 }
 
-// Handler returns the HTTP handler for tests.
-func (application *App) Handler() http.Handler {
-	return application.server.Handler
-}
-
 // Start launches the dispatcher and HTTP server until the context is cancelled.
 func (application *App) Start(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))

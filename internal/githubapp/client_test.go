@@ -271,6 +271,24 @@ func TestSubmitReviewSendsOneCompletePayload(t *testing.T) {
 	}
 }
 
+func TestSubmitReviewRejectsUnknownEvent(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	_, err := client.SubmitReview(context.Background(), 99, testRepo(), 4, githubapp.SubmitReviewRequest{
+		CommitID: domain.HeadSHA(testHeadSHA),
+		Body:     "summary",
+		Event:    "SHIP_IT",
+	})
+	if err == nil {
+		t.Fatal("SubmitReview unknown event: want error")
+	}
+	if state.lastSubmitReview != nil {
+		t.Fatal("SubmitReview posted a review for an unknown event")
+	}
+}
+
 func TestListReviewsPreservesAuthorForMarkerOwnership(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))

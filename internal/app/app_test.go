@@ -1,4 +1,4 @@
-package app_test
+package app
 
 import (
 	"context"
@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"goodkind.io/pr-review-agent/internal/app"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 )
@@ -659,7 +658,7 @@ type appFixtureOptions struct {
 }
 
 type appFixture struct {
-	application *app.App
+	application *App
 	server      *httptest.Server
 	github      *httptest.Server
 	clyde       *httptest.Server
@@ -746,9 +745,9 @@ func wireAppFixture(
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	application := app.New(cfg, githubServer.Client(), clydeServer.Client(), logger)
+	application := New(cfg, githubServer.Client(), clydeServer.Client(), logger)
 
-	httpServer := httptest.NewServer(application.Handler())
+	httpServer := httptest.NewServer(application.server.Handler)
 	ctx, cancel := context.WithCancel(context.Background())
 	application.Start(ctx)
 
