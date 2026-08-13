@@ -4,10 +4,12 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/webhook"
@@ -49,6 +51,32 @@ func keepInternalPackagesLinked() {
 	_, _, _ = webhook.ParsePullRequest("", "", nil)
 	_ = webhook.VerifySHA256("", nil, nil)
 	_ = webhook.PullRequestEvent{}.Job()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg, _ := config.Load(func(string) (string, bool) { return "", false })
+	client := githubapp.NewClient(cfg, http.DefaultClient, time.Now, logger)
+	_ = client
+	_ = (*githubapp.Client)(nil).GetPullRequest
+	_ = (*githubapp.Client)(nil).ListChangedFiles
+	_ = (*githubapp.Client)(nil).GetFile
+	_ = (*githubapp.Client)(nil).Compare
+	_ = (*githubapp.Client)(nil).ListReviews
+	_ = (*githubapp.Client)(nil).SubmitReview
+	_ = (*githubapp.Client)(nil).FindCheckRun
+	_ = (*githubapp.Client)(nil).CreateCheckRun
+	_ = (*githubapp.Client)(nil).StartCheckRun
+	_ = (*githubapp.Client)(nil).CompleteCheckRun
+	_ = (*githubapp.Client)(nil).ListReviewThreads
+	_ = (*githubapp.Client)(nil).ResolveReviewThread
+	_ = githubapp.PullRequest{}
+	_ = githubapp.ChangedFile{}
+	_ = githubapp.Review{}
+	_ = githubapp.InlineComment{}
+	_ = githubapp.SubmitReviewRequest{}
+	_ = githubapp.CheckRun{}
+	_ = githubapp.ReviewThread{}
+	var apiErr githubapp.APIError
+	_ = apiErr.Error()
 }
 
 type noopRunner struct{}
