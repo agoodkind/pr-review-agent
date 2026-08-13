@@ -14,6 +14,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/queue"
+	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
 
@@ -104,6 +105,21 @@ func keepInternalPackagesLinked() {
 	_ = (*clyde.Client)(nil).Reconcile
 	var clydeAPIErr clyde.APIError
 	_ = clydeAPIErr.Error()
+
+	_ = review.DecisionFor(true, nil)
+	_, _ = review.Analyze(context.Background(), reviewNoopModel{}, diff.ReviewInput{})
+	_ = review.RenderBody(domain.HeadSHA(""), review.Analysis{})
+	_, _ = review.RenderInline(domain.HeadSHA(""), nil)
+	_ = review.UntrustedInputPolicy
+	var reviewModel review.Model = clydeClient
+	_ = reviewModel
+	_ = review.Analysis{}
+}
+
+type reviewNoopModel struct{}
+
+func (reviewNoopModel) Review(context.Context, string) (domain.ReviewResult, error) {
+	return domain.ReviewResult{}, nil
 }
 
 type noopRunner struct{}
