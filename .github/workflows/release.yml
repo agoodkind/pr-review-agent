@@ -18,7 +18,7 @@ jobs:
       attestations: write
     with:
       binary: pr-review-agent
-      platforms: linux/amd64 linux/arm64
+      platforms: linux/amd64
     secrets: inherit
 
   container:
@@ -62,7 +62,6 @@ jobs:
           cd dist
           expected_archives=(
             pr-review-agent_linux_amd64.tar.gz
-            pr-review-agent_linux_arm64.tar.gz
           )
           shopt -s nullglob
           archives=(pr-review-agent_linux_*.tar.gz)
@@ -100,7 +99,6 @@ jobs:
           actual_version=${version_output#* }
           actual_version=${actual_version%% *}
           test "${actual_version}" = "${RELEASE_TAG}"
-      - uses: docker/setup-qemu-action@v4.2.0
       - uses: docker/setup-buildx-action@v4.2.0
       - uses: docker/login-action@v4.6.0
         with:
@@ -119,7 +117,7 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.release.outputs.tag }}
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           provenance: mode=max
           push: true
           sbom: true
@@ -141,8 +139,8 @@ jobs:
           docker buildx imagetools inspect --raw "${IMAGE}@${IMAGE_DIGEST}" > manifest.json
           docker buildx imagetools inspect --raw "${IMAGE}:${EXPECTED_VERSION}" > version-manifest.json
           cmp manifest.json version-manifest.json
-          jq -e '[.manifests[].platform | select(.os != "unknown" and .architecture != "unknown") | (.os + "/" + .architecture)] | sort == ["linux/amd64", "linux/arm64"]' manifest.json
-          for platform in linux/amd64 linux/arm64; do
+          jq -e '[.manifests[].platform | select(.os != "unknown" and .architecture != "unknown") | (.os + "/" + .architecture)] | sort == ["linux/amd64"]' manifest.json
+          for platform in linux/amd64; do
             platform_digest=$(jq -r --arg platform "${platform}" '.manifests[] | select((.platform.os + "/" + .platform.architecture) == $platform) | .digest' manifest.json)
             test -n "${platform_digest}"
             container_id=$(docker create --platform "${platform}" "${IMAGE}@${platform_digest}" --version)
