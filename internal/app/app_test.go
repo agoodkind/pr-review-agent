@@ -1301,7 +1301,9 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		return
 	}
 
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/check-runs") {
+	if request.Method == http.MethodGet &&
+		strings.Contains(request.URL.Path, "/commits/") &&
+		strings.HasSuffix(request.URL.Path, "/check-runs") {
 		state.handleListCheckRuns(writer, request)
 		return
 	}
@@ -1375,7 +1377,8 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 func (state *githubServerState) handleListCheckRuns(writer http.ResponseWriter, request *http.Request) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	headSHA := request.URL.Query().Get("head_sha")
+	pathWithoutSuffix := strings.TrimSuffix(request.URL.Path, "/check-runs")
+	headSHA := pathWithoutSuffix[strings.LastIndex(pathWithoutSuffix, "/")+1:]
 	checkName := request.URL.Query().Get("check_name")
 	matches := make([]map[string]any, 0)
 	for _, item := range state.checkRuns {
