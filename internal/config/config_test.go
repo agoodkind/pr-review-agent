@@ -41,6 +41,8 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		"CLYDE_API_KEY",
 		"CF_ACCESS_CLIENT_ID",
 		"CF_ACCESS_CLIENT_SECRET",
+		"REVIEW_MIN_IMPORTANCE",
+		"REVIEW_MAX_UNRESOLVED_COMMENTS",
 	} {
 		if !strings.Contains(err.Error(), secret) {
 			t.Fatalf("error %q missing %q", err.Error(), secret)
@@ -107,9 +109,6 @@ func TestLoadUsesPortBotAndGitHubDefaults(t *testing.T) {
 	if cfg.GitHubGraphQLURL.String() != "https://api.github.com/graphql" {
 		t.Fatalf("GitHubGraphQLURL = %q", cfg.GitHubGraphQLURL)
 	}
-	if cfg.MinimumImportance != DefaultMinimumImportance {
-		t.Fatalf("MinimumImportance = %d, want %d", cfg.MinimumImportance, DefaultMinimumImportance)
-	}
 }
 
 func TestLoadUsesConfiguredMinimumImportance(t *testing.T) {
@@ -119,6 +118,16 @@ func TestLoadUsesConfiguredMinimumImportance(t *testing.T) {
 	}
 	if cfg.MinimumImportance != 9 {
 		t.Fatalf("MinimumImportance = %d, want 9", cfg.MinimumImportance)
+	}
+}
+
+func TestLoadUsesConfiguredMaximumUnresolvedComments(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{"REVIEW_MAX_UNRESOLVED_COMMENTS": "12"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MaximumUnresolvedComments != 12 {
+		t.Fatalf("MaximumUnresolvedComments = %d, want 12", cfg.MaximumUnresolvedComments)
 	}
 }
 
@@ -172,13 +181,15 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 	}))
 
 	values := map[string]string{
-		"GITHUB_APP_ID":           "12345",
-		"GITHUB_PRIVATE_KEY":      defaultKey,
-		"GITHUB_WEBHOOK_SECRET":   "fixture-webhook-" + strings.Repeat("a", 8),
-		"CLYDE_BASE_URL":          "https://clyde.example",
-		"CLYDE_API_KEY":           "fixture-clyde-" + strings.Repeat("b", 8),
-		"CF_ACCESS_CLIENT_ID":     "fixture-cf-id",
-		"CF_ACCESS_CLIENT_SECRET": "fixture-cf-" + strings.Repeat("c", 8),
+		"GITHUB_APP_ID":                  "12345",
+		"GITHUB_PRIVATE_KEY":             defaultKey,
+		"GITHUB_WEBHOOK_SECRET":          "fixture-webhook-" + strings.Repeat("a", 8),
+		"CLYDE_BASE_URL":                 "https://clyde.example",
+		"CLYDE_API_KEY":                  "fixture-clyde-" + strings.Repeat("b", 8),
+		"CF_ACCESS_CLIENT_ID":            "fixture-cf-id",
+		"CF_ACCESS_CLIENT_SECRET":        "fixture-cf-" + strings.Repeat("c", 8),
+		"REVIEW_MIN_IMPORTANCE":          "7",
+		"REVIEW_MAX_UNRESOLVED_COMMENTS": "10",
 	}
 	for key, value := range overrides {
 		values[key] = value

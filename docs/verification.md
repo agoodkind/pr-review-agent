@@ -10,7 +10,7 @@ This ledger separates local source evidence from release, deployment, and live p
 | Baseline quality gates | Verified | `make check` passed on the merged source. |
 | Confirmed defects | Verified | Plaintext Clyde transport and cross file hunk identity each failed through a public boundary before repair. |
 | Focused repairs | Verified | Both regression tests pass after repair. |
-| Local image | Verified | Canonical release builds produced static Linux AMD64 and ARM64 binaries. Both pinned nonroot images built and ran their stamped versions. |
+| Local image | Verified | Canonical release builds produced a static Linux AMD64 binary. Its pinned nonroot image ran the stamped version. |
 | Final branch gates | Verified | `go test ./... -count=1`, `go test -race ./... -count=1`, and `make check` passed after the branch changes. |
 | Hostile input and lifecycle repetitions | Verified | Signature, malformed body, body limit, duplicate delivery, keyed concurrency, and shutdown tests passed 20 race enabled runs. |
 | Continuous integration | Pending | Record the branch run and every required check. |

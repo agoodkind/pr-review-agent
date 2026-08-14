@@ -60,6 +60,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		queue.NewKeyedLocker(),
 		cfg.GitHubBotLogin,
 		cfg.MinimumImportance,
+		cfg.MaximumUnresolvedComments,
 		logger,
 	)
 

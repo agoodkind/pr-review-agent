@@ -50,8 +50,6 @@ type ReviewDecision string
 const (
 	// ReviewDecisionApprove approves a pull request with no findings.
 	ReviewDecisionApprove ReviewDecision = "APPROVE"
-	// ReviewDecisionComment leaves review comments without blocking merge.
-	ReviewDecisionComment ReviewDecision = "COMMENT"
 	// ReviewDecisionRequestChanges blocks merge until findings are addressed.
 	ReviewDecisionRequestChanges ReviewDecision = "REQUEST_CHANGES"
 )
@@ -59,7 +57,7 @@ const (
 // ParseReviewDecision parses a GitHub review event name.
 func ParseReviewDecision(value string) (ReviewDecision, error) {
 	switch ReviewDecision(value) {
-	case ReviewDecisionApprove, ReviewDecisionComment, ReviewDecisionRequestChanges:
+	case ReviewDecisionApprove, ReviewDecisionRequestChanges:
 		return ReviewDecision(value), nil
 	default:
 		return "", fmt.Errorf("unknown review decision %q", value)
@@ -123,16 +121,12 @@ func (finding Finding) Validate() error {
 
 // ReviewResult is the structured model output for one review pass.
 type ReviewResult struct {
-	Summary          string    `json:"summary"`
 	CoverageComplete bool      `json:"coverage_complete"`
 	Findings         []Finding `json:"findings"`
 }
 
-// Validate rejects empty summaries, invalid findings, and exact duplicates.
+// Validate rejects invalid findings and exact duplicates.
 func (result ReviewResult) Validate() error {
-	if strings.TrimSpace(result.Summary) == "" {
-		return errors.New("review summary is required")
-	}
 	seen := make(map[string]struct{}, len(result.Findings))
 	for _, finding := range result.Findings {
 		if err := finding.Validate(); err != nil {

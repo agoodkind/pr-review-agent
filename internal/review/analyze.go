@@ -30,8 +30,6 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumIm
 	fileIndex := buildFileIndex(input.Files)
 	seen := make(map[string]struct{})
 	anchored := make([]domain.Finding, 0)
-	unanchored := make([]domain.Finding, 0)
-	summaries := make([]string, 0, len(chunks))
 
 	for _, chunk := range chunks {
 		result, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
@@ -44,11 +42,6 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumIm
 		}
 		if !result.CoverageComplete {
 			coverageComplete = false
-		}
-
-		summary := strings.TrimSpace(sanitizeProse(result.Summary))
-		if summary != "" {
-			summaries = append(summaries, summary)
 		}
 
 		for _, finding := range result.Findings {
@@ -74,22 +67,19 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumIm
 	}
 
 	sortFindings(anchored)
-	sortFindings(unanchored)
 
 	return Analysis{
-		Summary:          strings.Join(summaries, "\n\n"),
 		CoverageComplete: coverageComplete,
 		Anchored:         anchored,
-		Unanchored:       unanchored,
 		Decision:         DecisionFor(anchored, minimumImportance),
 	}, nil
 }
 
 func buildPrompt(chunk diff.Chunk, minimumImportance int) string {
 	var builder strings.Builder
-	builder.WriteString("Only report severe findings on changed lines with importance ")
+	builder.WriteString("Review changed lines. Return only concrete defects with importance ")
 	fmt.Fprintf(&builder, "%d", minimumImportance)
-	builder.WriteString(" or higher. Review chunk ")
+	builder.WriteString(" or higher. Return no findings when none meet that threshold. Review chunk ")
 	fmt.Fprintf(&builder, "%d/%d", chunk.Index, chunk.Total)
 	builder.WriteString(".\n")
 	builder.WriteString(WrapUntrusted(chunk.Text))

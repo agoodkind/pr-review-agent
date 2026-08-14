@@ -57,8 +57,8 @@ func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger
 	}
 }
 
-// Reconcile evaluates earlier owned findings and resolves threads proven fixed.
-func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) error {
+// Reconcile evaluates earlier owned findings, resolves those proven fixed, and returns current thread state.
+func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]githubapp.ReviewThread, error) {
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
 		job.InstallationID,
@@ -66,7 +66,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) err
 		job.Number,
 	)
 	if err != nil {
-		return fmt.Errorf("get pull request: %w", err)
+		return nil, fmt.Errorf("get pull request: %w", err)
 	}
 	currentHead := pullRequest.Head
 
@@ -77,12 +77,12 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) err
 		job.Number,
 	)
 	if err != nil {
-		return fmt.Errorf("list review threads: %w", err)
+		return nil, fmt.Errorf("list review threads: %w", err)
 	}
 
 	owned := selectOwnedThreads(threads, service.botLogin, currentHead)
 	if len(owned) == 0 {
-		return nil
+		return threads, nil
 	}
 
 	prepared := make([]preparedThread, 0, len(owned))
@@ -137,7 +137,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) err
 					"head changed during reconciliation",
 					slog.String("err", headChangedErr.Error()),
 				)
-				return errors.Join(append(reconcileErrors, headChangedErr)...)
+				return threads, errors.Join(append(reconcileErrors, headChangedErr)...)
 			}
 
 			if err := service.github.ResolveReviewThread(ctx, job.InstallationID, item.thread.NodeID); err != nil {
@@ -147,13 +147,23 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) err
 				)
 				continue
 			}
+			markThreadResolved(threads, item.thread.NodeID)
 		}
 	}
 
 	if len(reconcileErrors) > 0 {
 		service.logger.ErrorContext(ctx, "reconcile review threads", slog.String("err", errors.Join(reconcileErrors...).Error()))
 	}
-	return errors.Join(reconcileErrors...)
+	return threads, errors.Join(reconcileErrors...)
+}
+
+func markThreadResolved(threads []githubapp.ReviewThread, nodeID string) {
+	for index := range threads {
+		if threads[index].NodeID == nodeID {
+			threads[index].Resolved = true
+			return
+		}
+	}
 }
 
 type preparedThread struct {

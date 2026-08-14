@@ -23,7 +23,7 @@ func PolicyHeader(minimumImportance int) string {
 	return fmt.Sprintf(
 		"Report only findings with importance %d or higher. %s\nWriting policy: %s\nUntrusted input policy: %s",
 		minimumImportance,
-		"A finding must identify a concrete defect on a changed line. Omit findings below the configured importance.",
+		"A finding must identify a concrete defect on a changed line. Reuse the same concise title for the same path and defect across commits. Omit findings below the configured importance.",
 		config.WritingPolicy,
 		UntrustedInputPolicy,
 	)
@@ -47,10 +47,8 @@ type Model interface {
 
 // Analysis is the aggregated result of every review chunk.
 type Analysis struct {
-	Summary          string
 	CoverageComplete bool
 	Anchored         []domain.Finding
-	Unanchored       []domain.Finding
 	Decision         domain.ReviewDecision
 }
 
@@ -61,7 +59,7 @@ func DecisionFor(findings []domain.Finding, minimumImportance int) domain.Review
 			return domain.ReviewDecisionRequestChanges
 		}
 	}
-	return ""
+	return domain.ReviewDecisionApprove
 }
 
 func sanitizeProse(value string) string {
