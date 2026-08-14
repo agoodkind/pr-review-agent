@@ -119,6 +119,15 @@ func TestLoadRejectsInvalidURLsAndAppIDs(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsPlaintextClydeURL(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{
+		"CLYDE_BASE_URL": "http://clyde.example",
+	})
+	if err == nil {
+		t.Fatal("plaintext Clyde URL: want error")
+	}
+}
+
 func TestLoadErrorsDoNotContainSecretValues(t *testing.T) {
 	secret := "fixture-" + strings.Repeat("z", 12)
 	_, err := loadWithOverrides(map[string]string{

@@ -29,7 +29,7 @@ func TestChangedRightLinesMultipleHunks(t *testing.T) {
 		"+added9",
 	}, "\n")
 
-	changed, err := diff.ChangedRightLines(patch)
+	changed, _, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestChangedRightLinesDeletionAndContextExcluded(t *testing.T) {
 		" context2",
 	}, "\n")
 
-	changed, err := diff.ChangedRightLines(patch)
+	changed, _, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestChangedRightLinesDeletionAndContextExcluded(t *testing.T) {
 }
 
 func TestChangedRightLinesMalformedHeader(t *testing.T) {
-	_, err := diff.ChangedRightLines("@@ not-a-hunk @@\n context")
+	_, _, err := diff.ChangedRightLines("@@ not-a-hunk @@\n context")
 	if err == nil {
 		t.Fatal("malformed header: want error")
 	}
@@ -75,7 +75,7 @@ func TestChangedRightLinesTruncatedHunk(t *testing.T) {
 		"+added",
 	}, "\n")
 
-	changed, err := diff.ChangedRightLines(patch)
+	changed, _, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
@@ -115,17 +115,17 @@ func TestValidRangeSingleAndMultilineWithinHunk(t *testing.T) {
 		" context5",
 	}, "\n")
 
-	changed, err := diff.ChangedRightLines(patch)
+	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
-	if !diff.ValidRange(changed, 2, 2) {
+	if !diff.ValidRange(changed, hunks, 2, 2) {
 		t.Fatal("single added line should be valid")
 	}
-	if !diff.ValidRange(changed, 2, 4) {
+	if !diff.ValidRange(changed, hunks, 2, 4) {
 		t.Fatal("contiguous added lines in one hunk should be valid")
 	}
-	if diff.ValidRange(changed, 2, 5) {
+	if diff.ValidRange(changed, hunks, 2, 5) {
 		t.Fatal("range including context end line should be invalid")
 	}
 }
@@ -139,11 +139,11 @@ func TestValidRangeRejectsLinesAcrossHunks(t *testing.T) {
 		"+line4",
 	}, "\n")
 
-	changed, err := diff.ChangedRightLines(patch)
+	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
-	if diff.ValidRange(changed, 2, 4) {
+	if diff.ValidRange(changed, hunks, 2, 4) {
 		t.Fatal("range across hunks should be invalid")
 	}
 }

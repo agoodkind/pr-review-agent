@@ -125,7 +125,7 @@ func isAnchored(finding domain.Finding, fileIndex map[string]diff.FileContext) b
 	if !ok {
 		return false
 	}
-	if !diff.ValidRange(file.ChangedRightLines, finding.StartLine, finding.EndLine) {
+	if !diff.ValidRange(file.ChangedRightLines, file.ChangedRightHunks, finding.StartLine, finding.EndLine) {
 		return false
 	}
 	return true

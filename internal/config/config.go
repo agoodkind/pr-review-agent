@@ -200,6 +200,9 @@ func parseRequiredURL(name string, value string) (*url.URL, error) {
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("%s must be an absolute URL", name)
 	}
+	if parsed.Scheme != "https" {
+		return nil, fmt.Errorf("%s must use HTTPS", name)
+	}
 	return parsed, nil
 }
 
