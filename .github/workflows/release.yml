@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: release
+  group: pr-review-agent-release
   cancel-in-progress: false
 
 jobs:
