@@ -2,6 +2,8 @@
 
 A Go executable for end-to-end pull request reviews.
 
+The service posts one check and one complete review for each pull request head. It silently resolves fixed findings on later heads.
+
 ## Install
 
 Install the latest release through the canonical go-makefile installer:
@@ -24,3 +26,9 @@ List every available target:
 ```bash
 make help
 ```
+
+## Operate
+
+Use the [operations guide](docs/operations.md) for runtime configuration, image verification, health checks, and recovery.
+
+Use the [verification ledger](docs/verification.md) to record release, deployment, GitHub App, live review, and retirement evidence.
