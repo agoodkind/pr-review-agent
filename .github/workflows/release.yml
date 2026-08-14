@@ -142,7 +142,9 @@ jobs:
           cmp manifest.json version-manifest.json
           jq -e '[.manifests[].platform | select(.os != "unknown" and .architecture != "unknown") | (.os + "/" + .architecture)] | sort == ["linux/amd64", "linux/arm64"]' manifest.json
           for platform in linux/amd64 linux/arm64; do
-            container_id=$(docker create --platform "${platform}" "${IMAGE}@${IMAGE_DIGEST}" --version)
+            platform_digest=$(jq -r --arg platform "${platform}" '.manifests[] | select((.platform.os + "/" + .platform.architecture) == $platform) | .digest' manifest.json)
+            test -n "${platform_digest}"
+            container_id=$(docker create --platform "${platform}" "${IMAGE}@${platform_digest}" --version)
             test "$(docker container inspect --format '{{.Config.User}}' "${container_id}")" = "65532:65532"
             test "$(docker container inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${container_id}")" = "${EXPECTED_VERSION}"
             version_output=$(docker start --attach "${container_id}")
