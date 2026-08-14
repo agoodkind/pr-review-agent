@@ -80,6 +80,12 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !strings.Contains(systemContent, review.UntrustedInputPolicy) {
 		t.Fatalf("system message missing untrusted input policy")
 	}
+	if !strings.Contains(systemContent, "importance 7 or higher") {
+		t.Fatalf("system message missing configured importance")
+	}
+	if strings.Contains(systemContent, "security breach") {
+		t.Fatalf("system message restricts configurable importance to fixed categories")
+	}
 	if !strings.Contains(systemContent, "Return only JSON") {
 		t.Fatalf("system message missing JSON-only fallback")
 	}

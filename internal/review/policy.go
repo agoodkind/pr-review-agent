@@ -23,7 +23,7 @@ func PolicyHeader(minimumImportance int) string {
 	return fmt.Sprintf(
 		"Report only findings with importance %d or higher. %s\nWriting policy: %s\nUntrusted input policy: %s",
 		minimumImportance,
-		"A finding must show a concrete security breach, data loss, outage, or incorrect core behavior on a changed line. Omit all other findings.",
+		"A finding must identify a concrete defect on a changed line. Omit findings below the configured importance.",
 		config.WritingPolicy,
 		UntrustedInputPolicy,
 	)
