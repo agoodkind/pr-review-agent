@@ -29,3 +29,59 @@ jobs:
       id-token: write
       attestations: write
     secrets: inherit
+
+  container:
+    name: Container
+    needs: go
+    if: needs.go.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build canonical Linux binary
+        id: release
+        env:
+          RELEASE_PLATFORMS: linux/amd64
+          RELEASE_STAGE: compile
+        run: |
+          make release
+          version_output=$(dist/pr-review-agent_linux_amd64/pr-review-agent --version)
+          version=${version_output#* }
+          version=${version%% *}
+          if [[ ! "${version}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "release version is not a valid container tag" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - uses: docker/setup-buildx-action@v4.2.0
+      - name: Build container
+        uses: docker/build-push-action@v7.3.0
+        with:
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+            VERSION=${{ steps.release.outputs.version }}
+          context: .
+          load: true
+          platforms: linux/amd64
+          provenance: false
+          tags: pr-review-agent:ci
+      - name: Verify container
+        env:
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          test "$(docker image inspect --format '{{.Config.User}}' pr-review-agent:ci)" = "65532:65532"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' pr-review-agent:ci)" = "${EXPECTED_VERSION}"
+          version_output=$(docker run --rm pr-review-agent:ci --version)
+          actual_version=${version_output#* }
+          actual_version=${actual_version%% *}
+          test "${actual_version}" = "${EXPECTED_VERSION}"
+          if docker run --rm --entrypoint /bin/sh pr-review-agent:ci; then
+            exit 1
+          fi

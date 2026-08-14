@@ -18,6 +18,7 @@ type FileContext struct {
 	Patch             string
 	CurrentContent    string
 	ChangedRightLines map[int]struct{}
+	ChangedRightHunks map[int]int
 	CoverageComplete  bool
 }
 
@@ -96,6 +97,7 @@ func (collector *Collector) collectFile(
 		Patch:             changedFile.Patch,
 		CurrentContent:    "",
 		ChangedRightLines: map[int]struct{}{},
+		ChangedRightHunks: map[int]int{},
 		CoverageComplete:  true,
 	}
 
@@ -108,12 +110,13 @@ func (collector *Collector) collectFile(
 		return fileContext
 	}
 
-	changedLines, err := ChangedRightLines(changedFile.Patch)
+	changedLines, changedHunks, err := ChangedRightLines(changedFile.Patch)
 	if err != nil {
 		fileContext.CoverageComplete = false
 		return fileContext
 	}
 	fileContext.ChangedRightLines = changedLines
+	fileContext.ChangedRightHunks = changedHunks
 
 	parsed, err := parsePatch(changedFile.Patch)
 	if err != nil || !parsed.complete {

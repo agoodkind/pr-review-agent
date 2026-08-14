@@ -200,7 +200,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 		" func other() {}",
 		"+added2",
 	}, "\n")
-	changed, err := diff.ChangedRightLines(patch)
+	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
@@ -214,6 +214,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 				Patch:             patch,
 				CurrentContent:    largeContent,
 				ChangedRightLines: changed,
+				ChangedRightHunks: hunks,
 				CoverageComplete:  true,
 			},
 			{
@@ -310,7 +311,7 @@ func TestAnalyzePromptsInjectWritingPolicyAndUntrustedInput(t *testing.T) {
 		" package main",
 		"+added",
 	}, "\n")
-	changed, err := diff.ChangedRightLines(patch)
+	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
@@ -322,6 +323,7 @@ func TestAnalyzePromptsInjectWritingPolicyAndUntrustedInput(t *testing.T) {
 			Patch:             patch,
 			CurrentContent:    "package main\nadded\n",
 			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
 		}},
 	}
@@ -358,7 +360,7 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 		" package main",
 		"+added",
 	}, "\n")
-	changed, err := diff.ChangedRightLines(patch)
+	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
@@ -370,6 +372,7 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 			Patch:             patch,
 			CurrentContent:    "package main\nadded\n",
 			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
 		}},
 	}
@@ -744,7 +747,7 @@ func (stubCollector) Collect(
 		" package main",
 		"+added",
 	}, "\n")
-	changed, err := diff.ChangedRightLines(patch)
+	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
 	}
@@ -756,6 +759,7 @@ func (stubCollector) Collect(
 			Patch:             patch,
 			CurrentContent:    "package main\nadded\n",
 			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
 		}},
 	}, nil

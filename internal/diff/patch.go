@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
-	"sync"
 )
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
@@ -44,24 +42,18 @@ type hunkParser struct {
 	inHunk       bool
 }
 
-var (
-	lineHunkMu    sync.RWMutex
-	lineHunkIndex = make(map[string]map[int]int)
-)
-
-// ChangedRightLines parses a unified diff patch and returns right-side added line numbers.
-func ChangedRightLines(patch string) (map[int]struct{}, error) {
+// ChangedRightLines parses a patch and returns added lines with their hunk identities.
+func ChangedRightLines(patch string) (map[int]struct{}, map[int]int, error) {
 	result, err := parsePatch(patch)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	registerHunkIndex(result.changedLines, result.lineHunks)
-	return result.changedLines, nil
+	return result.changedLines, result.lineHunks, nil
 }
 
 // ValidRange reports whether every line in the inclusive range is a changed right-side line
 // from the same unified diff hunk.
-func ValidRange(changed map[int]struct{}, startLine, endLine int) bool {
+func ValidRange(changed map[int]struct{}, hunks map[int]int, startLine, endLine int) bool {
 	if startLine < 1 || endLine < startLine {
 		return false
 	}
@@ -70,9 +62,6 @@ func ValidRange(changed map[int]struct{}, startLine, endLine int) bool {
 		return ok
 	}
 
-	lineHunkMu.RLock()
-	hunks := lineHunkIndex[cacheKey(changed)]
-	lineHunkMu.RUnlock()
 	if hunks == nil {
 		return false
 	}
@@ -252,29 +241,6 @@ func (parser *hunkParser) applyAdditionLine() {
 	parser.result.lineHunks[parser.newLine] = parser.hunkIndex
 	parser.newLine++
 	parser.newRemaining--
-}
-
-func registerHunkIndex(changed map[int]struct{}, lineHunks map[int]int) {
-	key := cacheKey(changed)
-	lineHunkMu.Lock()
-	lineHunkIndex[key] = lineHunks
-	lineHunkMu.Unlock()
-}
-
-func cacheKey(changed map[int]struct{}) string {
-	if len(changed) == 0 {
-		return ""
-	}
-	lines := make([]int, 0, len(changed))
-	for line := range changed {
-		lines = append(lines, line)
-	}
-	sort.Ints(lines)
-	parts := make([]string, 0, len(lines))
-	for _, line := range lines {
-		parts = append(parts, strconv.Itoa(line))
-	}
-	return strings.Join(parts, ",")
 }
 
 func formatHunkChunk(path string, status string, content string, hunk parsedHunk) string {

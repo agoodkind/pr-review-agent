@@ -322,6 +322,52 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 	}
 }
 
+func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
+	withIntegrationLock(t)
+	finding := domain.Finding{
+		Path:       "a.go",
+		StartLine:  2,
+		EndLine:    3,
+		Title:      "Broken range",
+		Body:       "Both added lines form one defective block.",
+		Importance: config.BlockingImportance,
+	}
+
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(finding)},
+	})
+	defer fixture.close()
+	fixture.githubState.setChangedFiles([]map[string]any{
+		{
+			"filename": "a.go",
+			"status":   "modified",
+			"patch":    "@@ -1,1 +1,3 @@\n package app\n+one\n+two",
+		},
+		{
+			"filename": "z.go",
+			"status":   "modified",
+			"patch":    "@@ -1,0 +2,1 @@\n+one\n@@ -1,0 +3,1 @@\n+two",
+		},
+	})
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-file-hunks",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	comments, ok := review["comments"].([]any)
+	if !ok || len(comments) != 1 {
+		t.Fatalf("comments = %T(%v), want one inline comment", review["comments"], review["comments"])
+	}
+}
+
 func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
