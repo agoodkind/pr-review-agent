@@ -65,7 +65,24 @@ jobs:
             printf 'release assets = %s, want %s\n' "${archives[*]:-none}" "${expected_archives[*]}" >&2
             exit 1
           fi
-          sha256sum --check checksums.txt --ignore-missing
+          : > verified-checksums.txt
+          for archive in "${expected_archives[@]}"; do
+            match_count=0
+            matched_checksum=
+            while read -r checksum filename; do
+              filename=${filename#\*}
+              if [ "${filename}" = "${archive}" ]; then
+                match_count=$((match_count + 1))
+                matched_checksum=${checksum}
+              fi
+            done < checksums.txt
+            if [ "${match_count}" -ne 1 ]; then
+              echo "checksum entries for ${archive} = ${match_count}, want 1" >&2
+              exit 1
+            fi
+            printf '%s  %s\n' "${matched_checksum}" "${archive}" >> verified-checksums.txt
+          done
+          sha256sum --check verified-checksums.txt
           for archive in "${archives[@]}"; do
             gh attestation verify "${archive}" --repo "${GITHUB_REPOSITORY}"
             directory="${archive%.tar.gz}"
@@ -117,7 +134,7 @@ jobs:
           docker buildx imagetools inspect --raw "${IMAGE}@${IMAGE_DIGEST}" > manifest.json
           docker buildx imagetools inspect --raw "${IMAGE}:${EXPECTED_VERSION}" > version-manifest.json
           cmp manifest.json version-manifest.json
-          jq -e '[.manifests[].platform | (.os + "/" + .architecture)] | sort == ["linux/amd64", "linux/arm64"]' manifest.json
+          jq -e '[.manifests[].platform | select(.os != "unknown" and .architecture != "unknown") | (.os + "/" + .architecture)] | sort == ["linux/amd64", "linux/arm64"]' manifest.json
           for platform in linux/amd64 linux/arm64; do
             container_id=$(docker create --platform "${platform}" "${IMAGE}@${IMAGE_DIGEST}" --version)
             test "$(docker container inspect --format '{{.Config.User}}' "${container_id}")" = "65532:65532"
