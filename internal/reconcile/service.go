@@ -352,8 +352,7 @@ func batchPreparedThreads(threads []preparedThread, maxSize int) [][]preparedThr
 
 func buildBatchPrompt(batch []preparedThread, index, total int) string {
 	var builder strings.Builder
-	builder.WriteString(review.PolicyHeader())
-	builder.WriteString("\n\nReconciliation batch ")
+	builder.WriteString("Reconcile bot threads after a new commit. Batch ")
 	fmt.Fprintf(&builder, "%d/%d", index, total)
 	builder.WriteString(".\n")
 	var body strings.Builder

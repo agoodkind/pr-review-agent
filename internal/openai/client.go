@@ -21,7 +21,8 @@ const maxRetries = 3
 
 // Client performs structured OpenAI chat completion requests.
 type Client struct {
-	sdk openaigo.Client
+	sdk               openaigo.Client
+	minimumImportance int
 }
 
 // NewClient constructs an OpenAI SDK client from service config.
@@ -39,12 +40,25 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if cfg.ClydeBaseURL != nil {
 		opts = append(opts, option.WithBaseURL(strings.TrimRight(cfg.ClydeBaseURL.String(), "/")+"/"))
 	}
-	return &Client{sdk: openaigo.NewClient(opts...)}
+	minimumImportance := cfg.MinimumImportance
+	if minimumImportance == 0 {
+		minimumImportance = config.DefaultMinimumImportance
+	}
+	return &Client{
+		sdk:               openaigo.NewClient(opts...),
+		minimumImportance: minimumImportance,
+	}
 }
 
 // Review requests one structured review completion.
 func (client *Client) Review(ctx context.Context, prompt string) (domain.ReviewResult, error) {
-	content, err := client.complete(ctx, prompt, reviewSchemaName, reviewSchemaJSON)
+	content, err := client.complete(
+		ctx,
+		prompt,
+		review.PolicyHeader(client.minimumImportance),
+		reviewSchemaName,
+		reviewSchemaJSON,
+	)
 	if err != nil {
 		return domain.ReviewResult{}, err
 	}
@@ -60,7 +74,13 @@ func (client *Client) Review(ctx context.Context, prompt string) (domain.ReviewR
 
 // Reconcile requests one structured thread reconciliation completion.
 func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.ThreadResolution, error) {
-	content, err := client.complete(ctx, prompt, reconcileSchemaName, reconcileSchemaJSON)
+	content, err := client.complete(
+		ctx,
+		prompt,
+		review.ReconciliationPolicy(),
+		reconcileSchemaName,
+		reconcileSchemaJSON,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +99,7 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 func (client *Client) complete(
 	ctx context.Context,
 	prompt string,
+	policy string,
 	schemaName string,
 	schema json.RawMessage,
 ) (string, error) {
@@ -87,7 +108,7 @@ func (client *Client) complete(
 		ReasoningEffort:     shared.ReasoningEffort(config.ReasoningEffort),
 		MaxCompletionTokens: openaigo.Int(int64(config.MaximumOutputTokens)),
 		Messages: []openaigo.ChatCompletionMessageParamUnion{
-			openaigo.SystemMessage(review.PolicyHeader()),
+			openaigo.SystemMessage(structuredOutputPrompt(policy, schemaName, schema)),
 			openaigo.UserMessage(prompt),
 		},
 		ResponseFormat: openaigo.ChatCompletionNewParamsResponseFormatUnion{
@@ -111,4 +132,10 @@ func (client *Client) complete(
 		return "", errors.New("openai response missing message content")
 	}
 	return content, nil
+}
+
+func structuredOutputPrompt(policy string, schemaName string, schema json.RawMessage) string {
+	return policy +
+		"\n\nReturn only JSON. Do not use Markdown fences or add prose. " +
+		"The JSON must validate against schema " + schemaName + ":\n" + string(schema)
 }

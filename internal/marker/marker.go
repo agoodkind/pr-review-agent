@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -24,14 +23,15 @@ const (
 var (
 	reviewPattern  = regexp.MustCompile(`<!-- pr-review-agent:review:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) -->`)
 	findingPattern = regexp.MustCompile(
-		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) id=([0-9a-f]{64}) -->`,
+		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) importance=([1-9]|10) id=([0-9a-f]{64}) -->`,
 	)
 )
 
 // FindingMarker is the parsed finding marker embedded in a review comment body.
 type FindingMarker struct {
-	Head domain.HeadSHA
-	ID   string
+	Head       domain.HeadSHA
+	Importance int
+	ID         string
 }
 
 // Review returns the review marker for one head SHA.
@@ -58,20 +58,33 @@ func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return findingPrefix + string(head) + " id=" + id + markerSuffix, nil
+	return fmt.Sprintf(
+		"%s%s importance=%d id=%s%s",
+		findingPrefix,
+		head,
+		finding.Importance,
+		id,
+		markerSuffix,
+	), nil
 }
 
 // FindFinding extracts a finding marker from a comment body.
 func FindFinding(body string) (FindingMarker, bool) {
 	matches := findingPattern.FindStringSubmatch(body)
-	if len(matches) != 3 {
-		return FindingMarker{Head: "", ID: ""}, false
+	if len(matches) != 4 {
+		return FindingMarker{Head: "", Importance: 0, ID: ""}, false
 	}
 	head, err := domain.ParseHeadSHA(matches[1])
 	if err != nil {
-		return FindingMarker{Head: "", ID: ""}, false
+		return FindingMarker{Head: "", Importance: 0, ID: ""}, false
 	}
-	return FindingMarker{Head: head, ID: matches[2]}, true
+	var importance int
+	if matches[2] == "10" {
+		importance = 10
+	} else {
+		importance = int(matches[2][0] - '0')
+	}
+	return FindingMarker{Head: head, Importance: importance, ID: matches[3]}, true
 }
 
 // EncodeFindingBody renders the inline finding body with its marker.
@@ -83,10 +96,9 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 	title := strings.TrimSpace(finding.Title)
 	body := strings.TrimSpace(finding.Body)
 	return fmt.Sprintf(
-		"**%s**\n\n%s\n\nImportance: %d\n\n%s",
+		"### %s\n\n%s\n\n%s",
 		title,
 		body,
-		finding.Importance,
 		markerText,
 	), nil
 }
@@ -100,28 +112,16 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 
 	withoutMarker := findingPattern.ReplaceAllString(comment.Body, "")
 	withoutMarker = strings.TrimSpace(withoutMarker)
-	if !strings.HasPrefix(withoutMarker, "**") {
+	if !strings.HasPrefix(withoutMarker, "### ") {
 		return "", domain.Finding{}, errors.New("finding title missing")
 	}
 
-	titleEnd := strings.Index(withoutMarker, "**\n\n")
+	titleEnd := strings.Index(withoutMarker, "\n\n")
 	if titleEnd < 0 {
 		return "", domain.Finding{}, errors.New("finding title format invalid")
 	}
-	title := strings.TrimSpace(withoutMarker[2:titleEnd])
-	rest := strings.TrimSpace(withoutMarker[titleEnd+4:])
-
-	importancePrefix := "Importance: "
-	importanceIndex := strings.LastIndex(rest, "\n\n"+importancePrefix)
-	if importanceIndex < 0 {
-		return "", domain.Finding{}, errors.New("finding importance missing")
-	}
-	body := strings.TrimSpace(rest[:importanceIndex])
-	importanceText := strings.TrimSpace(rest[importanceIndex+len("\n\n"+importancePrefix):])
-	importance, err := strconv.Atoi(importanceText)
-	if err != nil {
-		return "", domain.Finding{}, errors.New("finding importance is not an integer")
-	}
+	title := strings.TrimSpace(withoutMarker[len("### "):titleEnd])
+	body := strings.TrimSpace(withoutMarker[titleEnd+2:])
 
 	finding := domain.Finding{
 		Path:       comment.Path,
@@ -129,7 +129,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 		EndLine:    comment.EndLine,
 		Title:      title,
 		Body:       body,
-		Importance: importance,
+		Importance: marker.Importance,
 	}
 	if err := finding.Validate(); err != nil {
 		return "", domain.Finding{}, errors.New("invalid finding")

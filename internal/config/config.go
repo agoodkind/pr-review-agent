@@ -23,8 +23,8 @@ const (
 	BotLogin = "agoodkind-pr-review-agent[bot]"
 	// ReviewCheckName is the GitHub check run name for review lifecycle.
 	ReviewCheckName = "PR-Agent Review"
-	// BlockingImportance is the minimum importance that requests changes.
-	BlockingImportance = 7
+	// DefaultMinimumImportance is the default minimum published finding importance.
+	DefaultMinimumImportance = 7
 	// ReviewTimeout bounds one review job execution.
 	ReviewTimeout = 600 * time.Second
 	// QueueCapacity is the maximum number of queued review jobs.
@@ -42,7 +42,7 @@ const (
 	// GitHubAPIVersion is the GitHub REST API version sent on every request.
 	GitHubAPIVersion = "2022-11-28"
 	// WritingPolicy is injected into every review and reconciliation prompt.
-	WritingPolicy = "State the finding first. Use short sentences with active verbs. Keep one idea per sentence and paragraph. Name exact identifiers when relevant. Explain the concrete trigger and impact. Omit praise, introductions, filler, repetition, generic advice, closing summaries, and typographic dashes. Stop after the actionable information."
+	WritingPolicy = "Use one short summary sentence. Use a short title and at most three short sentences for each defect, impact, and fix. Use plain Markdown. Omit praise, introductions, repetition, numeric severity, and typographic dashes."
 )
 
 // LookupEnv reads one environment variable.
@@ -51,6 +51,7 @@ type LookupEnv func(string) (string, bool)
 // Config holds validated service configuration.
 type Config struct {
 	Port                 string
+	MinimumImportance    int
 	GitHubAppID          int64
 	GitHubPrivateKey     *rsa.PrivateKey
 	GitHubWebhookSecret  []byte
@@ -94,10 +95,28 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	var missing []string
 
 	cfg.Port = loadPort(lookup)
+	minimumImportance, ok := loadMinimumImportance(lookup)
+	if !ok {
+		missing = append(missing, "REVIEW_MIN_IMPORTANCE")
+	} else {
+		cfg.MinimumImportance = minimumImportance
+	}
 	missing = append(missing, loadGitHub(lookup, &cfg)...)
 	missing = append(missing, loadClyde(lookup, &cfg)...)
 
 	return cfg, missing
+}
+
+func loadMinimumImportance(lookup LookupEnv) (int, bool) {
+	value, ok := lookup("REVIEW_MIN_IMPORTANCE")
+	if !ok || strings.TrimSpace(value) == "" {
+		return DefaultMinimumImportance, true
+	}
+	importance, err := strconv.Atoi(value)
+	if err != nil || importance < 1 || importance > 10 {
+		return 0, false
+	}
+	return importance, true
 }
 
 func loadPort(lookup LookupEnv) string {

@@ -3,43 +3,15 @@ package review
 import (
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-const unanchoredHeading = "## Unanchored findings"
-
-// RenderBody renders the GitHub review body for one analysis result.
-func RenderBody(head domain.HeadSHA, analysis Analysis) string {
-	var builder strings.Builder
-
-	summary := strings.TrimSpace(sanitizeProse(analysis.Summary))
-	if summary != "" {
-		builder.WriteString(summary)
-	}
-
-	if len(analysis.Unanchored) > 0 {
-		if builder.Len() > 0 {
-			builder.WriteString("\n\n")
-		}
-		builder.WriteString(unanchoredHeading)
-		builder.WriteString("\n\n")
-		for index, finding := range analysis.Unanchored {
-			if index > 0 {
-				builder.WriteString("\n\n")
-			}
-			builder.WriteString(renderUnanchoredFinding(finding))
-		}
-	}
-
-	if builder.Len() > 0 {
-		builder.WriteString("\n\n")
-	}
-	builder.WriteString(marker.Review(head))
-	return builder.String()
+// RenderBody renders the single visible GitHub review summary.
+func RenderBody(head domain.HeadSHA) string {
+	return "## Severe findings\n\n" + marker.Review(head)
 }
 
 // RenderInline renders anchored findings as GitHub inline review comments.
@@ -82,18 +54,4 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 		comments = append(comments, comment)
 	}
 	return comments, nil
-}
-
-func renderUnanchoredFinding(finding domain.Finding) string {
-	title := sanitizeProse(finding.Title)
-	body := sanitizeProse(finding.Body)
-	return fmt.Sprintf(
-		"**%s** (%s:%d-%d)\n\n%s\n\nImportance: %d",
-		title,
-		finding.Path,
-		finding.StartLine,
-		finding.EndLine,
-		body,
-		finding.Importance,
-	)
 }

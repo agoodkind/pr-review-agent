@@ -13,7 +13,7 @@ import (
 )
 
 // Analyze reviews every deterministic chunk and aggregates the model output.
-func Analyze(ctx context.Context, model Model, input diff.ReviewInput) (Analysis, error) {
+func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumImportance int) (Analysis, error) {
 	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
 	if err != nil {
 		return Analysis{}, fmt.Errorf("chunk input: %w", err)
@@ -34,7 +34,7 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput) (Analysis
 	summaries := make([]string, 0, len(chunks))
 
 	for _, chunk := range chunks {
-		result, err := model.Review(ctx, buildPrompt(chunk))
+		result, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
 		if err != nil {
 			return Analysis{}, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
 		}
@@ -53,6 +53,9 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput) (Analysis
 
 		for _, finding := range result.Findings {
 			sanitized := sanitizeFinding(finding)
+			if sanitized.Importance < minimumImportance {
+				continue
+			}
 			normalizedPath, pathErr := marker.NormalizePath(sanitized.Path)
 			if pathErr == nil {
 				sanitized.Path = normalizedPath
@@ -66,29 +69,27 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput) (Analysis
 
 			if isAnchored(sanitized, fileIndex) {
 				anchored = append(anchored, sanitized)
-				continue
 			}
-			unanchored = append(unanchored, sanitized)
 		}
 	}
 
 	sortFindings(anchored)
 	sortFindings(unanchored)
 
-	allFindings := append(append([]domain.Finding{}, anchored...), unanchored...)
 	return Analysis{
 		Summary:          strings.Join(summaries, "\n\n"),
 		CoverageComplete: coverageComplete,
 		Anchored:         anchored,
 		Unanchored:       unanchored,
-		Decision:         DecisionFor(coverageComplete, allFindings),
+		Decision:         DecisionFor(anchored, minimumImportance),
 	}, nil
 }
 
-func buildPrompt(chunk diff.Chunk) string {
+func buildPrompt(chunk diff.Chunk, minimumImportance int) string {
 	var builder strings.Builder
-	builder.WriteString(PolicyHeader())
-	builder.WriteString("\n\nReview chunk ")
+	builder.WriteString("Only report severe findings on changed lines with importance ")
+	fmt.Fprintf(&builder, "%d", minimumImportance)
+	builder.WriteString(" or higher. Review chunk ")
 	fmt.Fprintf(&builder, "%d/%d", chunk.Index, chunk.Total)
 	builder.WriteString(".\n")
 	builder.WriteString(WrapUntrusted(chunk.Text))
