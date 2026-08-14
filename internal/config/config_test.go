@@ -107,6 +107,19 @@ func TestLoadUsesPortBotAndGitHubDefaults(t *testing.T) {
 	if cfg.GitHubGraphQLURL.String() != "https://api.github.com/graphql" {
 		t.Fatalf("GitHubGraphQLURL = %q", cfg.GitHubGraphQLURL)
 	}
+	if cfg.MinimumImportance != DefaultMinimumImportance {
+		t.Fatalf("MinimumImportance = %d, want %d", cfg.MinimumImportance, DefaultMinimumImportance)
+	}
+}
+
+func TestLoadUsesConfiguredMinimumImportance(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{"REVIEW_MIN_IMPORTANCE": "9"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.MinimumImportance != 9 {
+		t.Fatalf("MinimumImportance = %d, want 9", cfg.MinimumImportance)
+	}
 }
 
 func TestLoadRejectsInvalidURLsAndAppIDs(t *testing.T) {

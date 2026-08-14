@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -42,14 +43,15 @@ type Reconciler interface {
 
 // Service publishes one complete GitHub review per pull request head.
 type Service struct {
-	github     GitHub
-	collector  Collector
-	model      Model
-	reconciler Reconciler
-	locker     *queue.KeyedLocker
-	botLogin   string
-	checkName  string
-	logger     *slog.Logger
+	github            GitHub
+	collector         Collector
+	model             Model
+	reconciler        Reconciler
+	locker            *queue.KeyedLocker
+	botLogin          string
+	checkName         string
+	minimumImportance int
+	logger            *slog.Logger
 }
 
 // NewService constructs a review publication service.
@@ -60,20 +62,25 @@ func NewService(
 	reconciler Reconciler,
 	locker *queue.KeyedLocker,
 	botLogin string,
+	minimumImportance int,
 	logger *slog.Logger,
 ) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if minimumImportance == 0 {
+		minimumImportance = config.DefaultMinimumImportance
+	}
 	return &Service{
-		github:     github,
-		collector:  collector,
-		model:      model,
-		reconciler: reconciler,
-		locker:     locker,
-		botLogin:   botLogin,
-		checkName:  config.ReviewCheckName,
-		logger:     logger,
+		github:            github,
+		collector:         collector,
+		model:             model,
+		reconciler:        reconciler,
+		locker:            locker,
+		botLogin:          botLogin,
+		checkName:         config.ReviewCheckName,
+		minimumImportance: minimumImportance,
+		logger:            logger,
 	}
 }
 
@@ -89,6 +96,10 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	if err != nil {
 		return err
 	}
+	if checkRun.Status == "completed" && checkRun.Conclusion == "success" {
+		service.reconcile(ctx, job)
+		return nil
+	}
 
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
@@ -103,7 +114,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		return service.failCheck(ctx, job, checkRun.ID, err)
 	}
 
-	analysis, err := Analyze(ctx, service.model, input)
+	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, err)
 	}
@@ -114,6 +125,10 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	}
 	if currentPullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
+	}
+
+	if len(analysis.Anchored) == 0 {
+		return service.succeed(ctx, job, checkRun.ID)
 	}
 
 	comments, err := RenderInline(head, analysis.Anchored)
@@ -128,7 +143,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		job.Number,
 		githubapp.SubmitReviewRequest{
 			CommitID: head,
-			Body:     RenderBody(head, analysis),
+			Body:     reviewBody(reviews, service.botLogin, head),
 			Event:    analysis.Decision,
 			Comments: comments,
 		},
@@ -219,6 +234,11 @@ func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, check
 		service.logger.ErrorContext(ctx, "complete successful check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete check run: %w", err)
 	}
+	service.reconcile(ctx, job)
+	return nil
+}
+
+func (service *Service) reconcile(ctx context.Context, job domain.ReviewJob) {
 	if err := service.reconciler.Reconcile(ctx, job); err != nil {
 		service.logger.ErrorContext(
 			ctx,
@@ -226,7 +246,6 @@ func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, check
 			slog.String("err", err.Error()),
 		)
 	}
-	return nil
 }
 
 func (service *Service) failCheck(
@@ -251,6 +270,23 @@ func (service *Service) failCheck(
 	}
 	service.logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
 	return cause
+}
+
+func reviewBody(reviews []githubapp.Review, botLogin string, head domain.HeadSHA) string {
+	for _, item := range reviews {
+		if item.Author != botLogin {
+			continue
+		}
+		markerHead, ok := marker.FindReview(item.Body)
+		if !ok {
+			continue
+		}
+		visible := strings.TrimSpace(strings.ReplaceAll(item.Body, marker.Review(markerHead), ""))
+		if visible != "" {
+			return marker.Review(head)
+		}
+	}
+	return RenderBody(head)
 }
 
 func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {

@@ -21,7 +21,7 @@ func TestEndToEndCommentWithIncompleteCoverage(t *testing.T) {
 		EndLine:    1,
 		Title:      "Blocker",
 		Body:       "Would request changes if coverage were complete.",
-		Importance: config.BlockingImportance,
+		Importance: config.DefaultMinimumImportance,
 	}}
 	for _, finding := range findings {
 		if err := finding.Validate(); err != nil {

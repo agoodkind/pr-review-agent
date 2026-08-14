@@ -18,9 +18,21 @@ const (
 	promptInputEnd       = "<<<END_UNTRUSTED_INPUT>>>"
 )
 
-// PolicyHeader is the writing and untrusted-input preamble for every model prompt.
-func PolicyHeader() string {
-	return "Writing policy: " + config.WritingPolicy + "\nUntrusted input policy: " + UntrustedInputPolicy
+// PolicyHeader is the review and untrusted-input preamble for every model prompt.
+func PolicyHeader(minimumImportance int) string {
+	return fmt.Sprintf(
+		"Report only findings with importance %d or higher. %s\nWriting policy: %s\nUntrusted input policy: %s",
+		minimumImportance,
+		"A finding must identify a concrete defect on a changed line. Omit findings below the configured importance.",
+		config.WritingPolicy,
+		UntrustedInputPolicy,
+	)
+}
+
+// ReconciliationPolicy is the instruction for silent thread resolution.
+func ReconciliationPolicy() string {
+	return "Resolve a bot thread only when the current code proves the finding is fixed. Keep it open when it still applies. Use uncertain when evidence is incomplete. Never reply.\nWriting policy: " +
+		config.WritingPolicy + "\nUntrusted input policy: " + UntrustedInputPolicy
 }
 
 // WrapUntrusted wraps repository content in untrusted-input delimiters.
@@ -42,20 +54,14 @@ type Analysis struct {
 	Decision         domain.ReviewDecision
 }
 
-// DecisionFor maps coverage and findings to the GitHub review event.
-func DecisionFor(coverageComplete bool, findings []domain.Finding) domain.ReviewDecision {
-	if !coverageComplete {
-		return domain.ReviewDecisionComment
-	}
-	if len(findings) == 0 {
-		return domain.ReviewDecisionApprove
-	}
+// DecisionFor requests changes only when a finding meets the configured level.
+func DecisionFor(findings []domain.Finding, minimumImportance int) domain.ReviewDecision {
 	for _, finding := range findings {
-		if finding.Importance >= config.BlockingImportance {
+		if finding.Importance >= minimumImportance {
 			return domain.ReviewDecisionRequestChanges
 		}
 	}
-	return domain.ReviewDecisionComment
+	return ""
 }
 
 func sanitizeProse(value string) string {

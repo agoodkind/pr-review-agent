@@ -34,87 +34,51 @@ const (
 	testPRNumber     = 7
 )
 
-func TestDecisionForAllThreeDecisions(t *testing.T) {
-	t.Run("approve", func(t *testing.T) {
-		decision := review.DecisionFor(true, nil)
-		if decision != domain.ReviewDecisionApprove {
-			t.Fatalf("decision = %q, want %q", decision, domain.ReviewDecisionApprove)
+func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
+	t.Run("no findings", func(t *testing.T) {
+		decision := review.DecisionFor(nil, 9)
+		if decision != "" {
+			t.Fatalf("decision = %q, want no review", decision)
 		}
 	})
 
-	t.Run("comment", func(t *testing.T) {
+	t.Run("below configured level", func(t *testing.T) {
 		findings := []domain.Finding{{
 			Path:       "main.go",
 			StartLine:  1,
 			EndLine:    1,
 			Title:      "Note",
-			Body:       "Low severity issue.",
-			Importance: 6,
+			Body:       "Important but below this repository cutoff.",
+			Importance: 8,
 		}}
-		decision := review.DecisionFor(true, findings)
-		if decision != domain.ReviewDecisionComment {
-			t.Fatalf("decision = %q, want %q", decision, domain.ReviewDecisionComment)
+		decision := review.DecisionFor(findings, 9)
+		if decision != "" {
+			t.Fatalf("decision = %q, want no review", decision)
 		}
 	})
 
-	t.Run("request changes", func(t *testing.T) {
+	t.Run("at configured level", func(t *testing.T) {
 		findings := []domain.Finding{{
 			Path:       "main.go",
 			StartLine:  1,
 			EndLine:    1,
 			Title:      "Blocker",
 			Body:       "Must fix before merge.",
-			Importance: config.BlockingImportance,
+			Importance: 9,
 		}}
-		decision := review.DecisionFor(true, findings)
+		decision := review.DecisionFor(findings, 9)
 		if decision != domain.ReviewDecisionRequestChanges {
 			t.Fatalf("decision = %q, want %q", decision, domain.ReviewDecisionRequestChanges)
 		}
 	})
 }
 
-func TestIncompleteCoverageNeverApproves(t *testing.T) {
-	decision := review.DecisionFor(false, nil)
-	if decision != domain.ReviewDecisionComment {
-		t.Fatalf("decision = %q, want %q", decision, domain.ReviewDecisionComment)
-	}
-
-	analysis := review.Analysis{
-		Summary:          "Coverage incomplete.",
-		CoverageComplete: false,
-		Decision:         review.DecisionFor(false, nil),
-	}
-	if analysis.Decision == domain.ReviewDecisionApprove {
-		t.Fatalf("incomplete analysis decision = %q, want non-approve", analysis.Decision)
-	}
-}
-
-func TestRenderBodyContainsSummaryUnanchoredAndMarker(t *testing.T) {
+func TestRenderBodyIsOneShortSevereSummaryAndMarker(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
-	analysis := review.Analysis{
-		Summary: "Summary text.",
-		Unanchored: []domain.Finding{{
-			Path:       "other.go",
-			StartLine:  3,
-			EndLine:    3,
-			Title:      "Missing anchor",
-			Body:       "Path is not in the diff.",
-			Importance: 4,
-		}},
-	}
-
-	body := review.RenderBody(head, analysis)
-	if !strings.Contains(body, "Summary text.") {
-		t.Fatalf("body missing summary: %q", body)
-	}
-	if !strings.Contains(body, "## Unanchored findings") {
-		t.Fatalf("body missing unanchored heading: %q", body)
-	}
-	if !strings.Contains(body, "Missing anchor") {
-		t.Fatalf("body missing unanchored finding: %q", body)
-	}
-	if !strings.Contains(body, marker.Review(head)) {
-		t.Fatalf("body missing review marker: %q", body)
+	body := review.RenderBody(head)
+	want := "## Severe findings\n\n" + marker.Review(head)
+	if body != want {
+		t.Fatalf("body = %q, want %q", body, want)
 	}
 }
 
@@ -126,7 +90,7 @@ func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
 		EndLine:    6,
 		Title:      "Range issue",
 		Body:       "Multiline anchor.",
-		Importance: 5,
+		Importance: 9,
 	}}
 
 	comments, err := review.RenderInline(head, findings)
@@ -149,6 +113,9 @@ func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
 	}
 	if _, ok := marker.FindFinding(comment.Body); !ok {
 		t.Fatalf("comment body missing finding marker: %q", comment.Body)
+	}
+	if strings.Contains(comment.Body, "Importance:") {
+		t.Fatalf("comment body exposes numeric importance: %q", comment.Body)
 	}
 }
 
@@ -174,7 +141,7 @@ func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 		}},
 	}
 
-	body := review.RenderBody(head, analysis)
+	body := review.RenderBody(head)
 	if containsTypographicDash(body) {
 		t.Fatalf("review body still contains typographic dash: %q", body)
 	}
@@ -245,7 +212,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 					EndLine:    2,
 					Title:      "Duplicate",
 					Body:       "Same finding.",
-					Importance: 4,
+					Importance: 9,
 				}},
 			},
 			{
@@ -258,7 +225,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 						EndLine:    2,
 						Title:      "Duplicate",
 						Body:       "Same finding.",
-						Importance: 4,
+						Importance: 9,
 					},
 					{
 						Path:       "main.go",
@@ -281,7 +248,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 		},
 	}
 
-	analysis, err := review.Analyze(context.Background(), model, input)
+	analysis, err := review.Analyze(context.Background(), model, input, 9)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -297,15 +264,15 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 	if len(analysis.Anchored) != 1 {
 		t.Fatalf("anchored count = %d, want 1", len(analysis.Anchored))
 	}
-	if len(analysis.Unanchored) != 2 {
-		t.Fatalf("unanchored count = %d, want 2", len(analysis.Unanchored))
+	if len(analysis.Unanchored) != 0 {
+		t.Fatalf("unanchored count = %d, want 0", len(analysis.Unanchored))
 	}
-	if analysis.Decision != domain.ReviewDecisionComment {
-		t.Fatalf("decision = %q, want %q", analysis.Decision, domain.ReviewDecisionComment)
+	if analysis.Decision != domain.ReviewDecisionRequestChanges {
+		t.Fatalf("decision = %q, want %q", analysis.Decision, domain.ReviewDecisionRequestChanges)
 	}
 }
 
-func TestAnalyzePromptsInjectWritingPolicyAndUntrustedInput(t *testing.T) {
+func TestAnalyzePromptRequestsOnlyConfiguredFindingsAndWrapsUntrustedInput(t *testing.T) {
 	patch := strings.Join([]string{
 		"@@ -1,1 +1,2 @@",
 		" package main",
@@ -335,7 +302,7 @@ func TestAnalyzePromptsInjectWritingPolicyAndUntrustedInput(t *testing.T) {
 		}},
 	}
 
-	_, err = review.Analyze(context.Background(), model, input)
+	_, err = review.Analyze(context.Background(), model, input, 9)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -343,11 +310,8 @@ func TestAnalyzePromptsInjectWritingPolicyAndUntrustedInput(t *testing.T) {
 		t.Fatalf("prompt count = %d, want 1", len(model.prompts))
 	}
 	prompt := model.prompts[0]
-	if !strings.Contains(prompt, config.WritingPolicy) {
-		t.Fatalf("prompt missing writing policy: %q", prompt)
-	}
-	if !strings.Contains(prompt, review.UntrustedInputPolicy) {
-		t.Fatalf("prompt missing untrusted input policy: %q", prompt)
+	if !strings.Contains(prompt, "importance 9 or higher") {
+		t.Fatalf("prompt missing configured importance: %q", prompt)
 	}
 	if !strings.Contains(prompt, "<<<UNTRUSTED_INPUT>>>") {
 		t.Fatalf("prompt missing untrusted input delimiter: %q", prompt)
@@ -392,7 +356,7 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 		}},
 	}
 
-	_, err = review.Analyze(context.Background(), model, input)
+	_, err = review.Analyze(context.Background(), model, input, 9)
 	if err == nil {
 		t.Fatal("Analyze invalid model result: want error")
 	}
@@ -428,8 +392,9 @@ func containsTypographicDash(value string) bool {
 	return false
 }
 
-func TestEndToEndCommentWithLowImportanceFindings(t *testing.T) {
+func TestEndToEndStaysQuietBelowConfiguredImportance(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
 		model: &sequenceModel{
 			results: []domain.ReviewResult{{
 				Summary:          "Low severity note.",
@@ -440,7 +405,7 @@ func TestEndToEndCommentWithLowImportanceFindings(t *testing.T) {
 					EndLine:    2,
 					Title:      "Style note",
 					Body:       "Consider renaming for clarity.",
-					Importance: 4,
+					Importance: 8,
 				}},
 			}},
 		},
@@ -450,15 +415,11 @@ func TestEndToEndCommentWithLowImportanceFindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview == nil {
-		t.Fatal("SubmitReview was not called")
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("SubmitReview was called: %v", fixture.state.lastSubmitReview)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
-		t.Fatalf("event = %v, want COMMENT", fixture.state.lastSubmitReview["event"])
-	}
-	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
-	if !ok || len(comments) != 1 {
-		t.Fatalf("comments = %T(%v), want one inline comment", fixture.state.lastSubmitReview["comments"], fixture.state.lastSubmitReview["comments"])
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 }
 
@@ -701,6 +662,7 @@ type serviceFixtureOptions struct {
 	submitReviewStatus int
 	reconcileErr       error
 	model              review.Model
+	minimumImportance  int
 }
 
 type serviceFixture struct {
@@ -890,11 +852,23 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 
 	reconciler := &recordingReconciler{err: options.reconcileErr}
 	model := options.model
+	minimumImportance := options.minimumImportance
+	if minimumImportance == 0 {
+		minimumImportance = config.DefaultMinimumImportance
+	}
 	if model == nil {
 		model = &sequenceModel{
 			results: []domain.ReviewResult{{
-				Summary:          "Service review summary.",
+				Summary:          "Severe finding.",
 				CoverageComplete: true,
+				Findings: []domain.Finding{{
+					Path:       "main.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Severe defect",
+					Body:       "The changed line breaks core behavior.",
+					Importance: config.DefaultMinimumImportance,
+				}},
 			}},
 		}
 	}
@@ -906,6 +880,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		reconciler,
 		queue.NewKeyedLocker(),
 		config.BotLogin,
+		minimumImportance,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 

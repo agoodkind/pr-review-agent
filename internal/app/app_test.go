@@ -23,6 +23,7 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/marker"
 )
 
 const (
@@ -249,7 +250,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	}
 }
 
-func TestEndToEndApproveWithCompleteCoverage(t *testing.T) {
+func TestEndToEndStaysQuietWithoutSevereFindings(t *testing.T) {
 	withIntegrationLock(t)
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -267,18 +268,12 @@ func TestEndToEndApproveWithCompleteCoverage(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckConclusion(t, "success")
-	review := fixture.githubState.lastSubmitReview()
-	if review["event"] != string(domain.ReviewDecisionApprove) {
-		t.Fatalf("event = %v, want APPROVE", review["event"])
+	if fixture.githubState.submitReviewCount() != 0 {
+		t.Fatalf("submit review count = %d, want 0", fixture.githubState.submitReviewCount())
 	}
 	if fixture.githubState.completedCheckCount() != 1 {
 		t.Fatalf("completed check count = %d, want 1", fixture.githubState.completedCheckCount())
-	}
-	body, _ := review["body"].(string)
-	if containsTypographicDash(body) {
-		t.Fatalf("review body contains typographic dash: %q", body)
 	}
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
@@ -293,7 +288,7 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 		EndLine:    3,
 		Title:      "Missing validation",
 		Body:       "Validate the webhook payload before enqueue.",
-		Importance: config.BlockingImportance,
+		Importance: config.DefaultMinimumImportance,
 	}
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -330,7 +325,7 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 		EndLine:    3,
 		Title:      "Broken range",
 		Body:       "Both added lines form one defective block.",
-		Importance: config.BlockingImportance,
+		Importance: config.DefaultMinimumImportance,
 	}
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -399,7 +394,10 @@ func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
 func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
-		clydeResponses:     []string{approveReviewContent()},
+		clydeResponses: []string{defectiveReviewContent(domain.Finding{
+			Path: testFindingPath, StartLine: 3, EndLine: 3,
+			Title: "Severe defect", Body: "Core behavior fails.", Importance: config.DefaultMinimumImportance,
+		})},
 		submitReviewStatus: http.StatusInternalServerError,
 	})
 	defer fixture.close()
@@ -457,12 +455,12 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 			t.Fatalf("status = %d, want 202", response.StatusCode)
 		}
 		_ = response.Body.Close()
-		fixture.waitForSubmitReviews(t, 1)
+		fixture.waitForCheckConclusion(t, "success")
 	}
 
 	runWebhook(t, "delivery-first-app")
-	if githubState.submitReviewCount() != 1 {
-		t.Fatalf("submit review count after first app = %d, want 1", githubState.submitReviewCount())
+	if githubState.submitReviewCount() != 0 {
+		t.Fatalf("submit review count after first app = %d, want 0", githubState.submitReviewCount())
 	}
 
 	runWebhook(t, "delivery-second-app")
@@ -470,8 +468,8 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	if clydeState.requestCount() != 1 {
 		t.Fatalf("clyde requests after fresh app = %d, want 1", clydeState.requestCount())
 	}
-	if githubState.submitReviewCount() != 1 {
-		t.Fatalf("submit review count after fresh app = %d, want 1", githubState.submitReviewCount())
+	if githubState.submitReviewCount() != 0 {
+		t.Fatalf("submit review count after fresh app = %d, want 0", githubState.submitReviewCount())
 	}
 }
 
@@ -494,7 +492,7 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckConclusion(t, "success")
 	if fixture.githubState.listedFilePages() < 2 {
 		t.Fatalf("file page fetches = %d, want at least 2", fixture.githubState.listedFilePages())
 	}
@@ -510,10 +508,16 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 				EndLine:    3,
 				Title:      "Missing validation",
 				Body:       "Validate the webhook payload before enqueue.",
-				Importance: config.BlockingImportance,
+				Importance: config.DefaultMinimumImportance,
 			}),
-			approveReviewContent(),
-			approveReviewContent(),
+			defectiveReviewContent(domain.Finding{
+				Path:       testFindingPath,
+				StartLine:  4,
+				EndLine:    4,
+				Title:      "Unsafe fallback",
+				Body:       "The new fallback still breaks core behavior.",
+				Importance: config.DefaultMinimumImportance,
+			}),
 		},
 		clydeReconcileResponses: []string{reconcileResolvedContent("thread-owned")},
 	})
@@ -540,6 +544,10 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 
 	fixture.waitForClydeCalls(t, 3)
 	fixture.waitForSubmitReviews(t, 2)
+	secondReview := fixture.githubState.lastSubmitReview()
+	if secondReview["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
+		t.Fatalf("second review body = %q, want marker only", secondReview["body"])
+	}
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -564,7 +572,6 @@ func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckConclusion(t, "success")
 }
 
@@ -612,7 +619,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 		EndLine:    3,
 		Title:      "Missing validation",
 		Body:       "Validate the webhook payload before enqueue.",
-		Importance: config.BlockingImportance,
+		Importance: config.DefaultMinimumImportance,
 	}
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -677,11 +684,9 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 		t.Fatalf("synchronize status = %d, want 202", synchronize.StatusCode)
 	}
 	fixture.waitForClydeCalls(t, 3)
-	fixture.waitForSubmitReviews(t, 2)
-
-	secondReview := fixture.githubState.lastSubmitReview()
-	if secondReview["event"] != string(domain.ReviewDecisionApprove) {
-		t.Fatalf("second event = %v, want APPROVE", secondReview["event"])
+	fixture.waitForCheckConclusion(t, "success")
+	if fixture.githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count after fix = %d, want 1", fixture.githubState.submitReviewCount())
 	}
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
@@ -1028,7 +1033,7 @@ func approveReviewContent() string {
 }
 
 func typographicReviewContent() string {
-	return `{"summary":"Issue — details","coverage_complete":true,"findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","importance":5}]}`
+	return `{"summary":"Issue — details","coverage_complete":true,"findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","importance":9}]}`
 }
 
 func buildChangedFiles(count int) []map[string]any {
@@ -1487,8 +1492,12 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 	if len(comments) > 0 {
 		comment, ok := comments[0].(map[string]any)
 		if ok {
-			state.threads = []map[string]any{{
-				"id":         "thread-owned",
+			threadID := "thread-owned"
+			if len(state.threads) > 0 {
+				threadID = fmt.Sprintf("thread-owned-%d", len(state.threads)+1)
+			}
+			state.threads = append(state.threads, map[string]any{
+				"id":         threadID,
 				"isResolved": false,
 				"comments": map[string]any{
 					"nodes": []map[string]any{{
@@ -1500,7 +1509,7 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 						"author":     map[string]any{"login": config.BotLogin},
 					}},
 				},
-			}}
+			})
 		}
 	}
 	state.mu.Unlock()
