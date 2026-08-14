@@ -7,7 +7,7 @@ on:
 
 jobs:
   release:
-    uses: agoodkind/go-makefile/.github/workflows/_release.yml@main
+    uses: agoodkind/go-makefile/.github/workflows/_release.yml@790f4428c2245753a61300ff029597493604b9f6 # main
     permissions:
       contents: write
       id-token: write
@@ -29,9 +29,10 @@ jobs:
       IMAGE: ghcr.io/agoodkind/pr-review-agent
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Resolve release tag
         id: release
         run: |
@@ -49,22 +50,32 @@ jobs:
           mkdir dist
           gh release download "${RELEASE_TAG}" --dir dist --pattern checksums.txt --pattern 'pr-review-agent_linux_*.tar.gz'
           cd dist
+          expected_archives=(
+            pr-review-agent_linux_amd64.tar.gz
+            pr-review-agent_linux_arm64.tar.gz
+          )
+          shopt -s nullglob
+          archives=(pr-review-agent_linux_*.tar.gz)
+          if [ "${archives[*]}" != "${expected_archives[*]}" ]; then
+            printf 'release assets = %s, want %s\n' "${archives[*]:-none}" "${expected_archives[*]}" >&2
+            exit 1
+          fi
           sha256sum --check checksums.txt --ignore-missing
-          for archive in pr-review-agent_linux_*.tar.gz; do
+          for archive in "${archives[@]}"; do
             gh attestation verify "${archive}" --repo "${GITHUB_REPOSITORY}"
             directory="${archive%.tar.gz}"
             mkdir "${directory}"
             tar -xzf "${archive}" -C "${directory}" pr-review-agent
           done
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Build and publish container
         id: image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           build-args: |
             SOURCE_REVISION=${{ github.sha }}
@@ -83,7 +94,7 @@ jobs:
             ${{ env.IMAGE }}:sha-${{ github.sha }}
             ${{ env.IMAGE }}:latest
       - name: Attest container
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.image.outputs.digest }}
