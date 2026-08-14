@@ -17,6 +17,7 @@ import (
 const (
 	reviewPrefix  = "<!-- pr-review-agent:review:v1 head="
 	findingPrefix = "<!-- pr-review-agent:finding:v1 head="
+	summaryMarker = "<!-- pr-review-agent:summary:v1 -->"
 	markerSuffix  = " -->"
 )
 
@@ -52,9 +53,19 @@ func FindReview(body string) (domain.HeadSHA, bool) {
 	return head, true
 }
 
+// Summary returns the marker for the single editable review summary.
+func Summary() string {
+	return summaryMarker
+}
+
+// HasSummary reports whether a review owns the editable summary.
+func HasSummary(body string) bool {
+	return strings.Contains(body, summaryMarker)
+}
+
 // Finding returns the finding marker for one head and finding pair.
 func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
-	id, err := findingID(head, finding)
+	id, err := FindingID(finding)
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +146,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 		return "", domain.Finding{}, errors.New("invalid finding")
 	}
 
-	recomputedID, err := findingID(marker.Head, finding)
+	recomputedID, err := FindingID(finding)
 	if err != nil {
 		return "", domain.Finding{}, err
 	}
@@ -162,36 +173,20 @@ func NormalizePath(value string) (string, error) {
 	return normalized, nil
 }
 
-func findingID(head domain.HeadSHA, finding domain.Finding) (string, error) {
+// FindingID returns the stable identity for a finding across pull request heads.
+func FindingID(finding domain.Finding) (string, error) {
 	normalizedPath, err := NormalizePath(finding.Path)
 	if err != nil {
 		return "", err
 	}
 	title := strings.TrimSpace(finding.Title)
-	body := strings.TrimSpace(finding.Body)
-	headText := string(head)
+	title = strings.ToLower(strings.Join(strings.Fields(title), " "))
 
 	var buffer bytes.Buffer
-	writeLengthHex(&buffer, len(headText))
-	buffer.WriteString(headText)
 	writeLengthHex(&buffer, len(normalizedPath))
 	buffer.WriteString(normalizedPath)
-	if finding.StartLine < 0 {
-		return "", errors.New("start line out of range for marker hash")
-	}
-	if finding.EndLine < 0 {
-		return "", errors.New("end line out of range for marker hash")
-	}
-	writeUint64Hex(&buffer, uint64(finding.StartLine))
-	writeUint64Hex(&buffer, uint64(finding.EndLine))
-	if finding.Importance < 0 || finding.Importance > 255 {
-		return "", errors.New("importance out of range for marker hash")
-	}
-	fmt.Fprintf(&buffer, "%02x", finding.Importance)
 	writeLengthHex(&buffer, len(title))
 	buffer.WriteString(title)
-	writeLengthHex(&buffer, len(body))
-	buffer.WriteString(body)
 
 	sum := sha256.Sum256(buffer.Bytes())
 	return hex.EncodeToString(sum[:]), nil
@@ -199,8 +194,4 @@ func findingID(head domain.HeadSHA, finding domain.Finding) (string, error) {
 
 func writeLengthHex(buffer *bytes.Buffer, length int) {
 	fmt.Fprintf(buffer, "%08x", length)
-}
-
-func writeUint64Hex(buffer *bytes.Buffer, value uint64) {
-	fmt.Fprintf(buffer, "%016x", value)
 }

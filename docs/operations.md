@@ -1,16 +1,22 @@
 # Operations
 
-The service turns supported GitHub pull request events into one check and one review for each head commit.
+The service turns each supported pull request push into one check and one final review decision for that head.
 
 ## Review lifecycle
 
 The service accepts `opened`, `reopened`, `ready_for_review`, and `synchronize` pull request events. It ignores draft pull requests until they become ready.
 
-Each head receives one `PR-Agent Review` check and one top level review. Findings on changed right side lines become inline review comments. Other findings remain in the review body.
+Each head receives one `PR-Agent Review` check. The final decision is `APPROVE` or `REQUEST_CHANGES`.
 
-Complete coverage with no findings approves the head. A finding with importance 7 or higher requests changes. Incomplete coverage or lower importance findings produce a comment review.
+The configured importance threshold controls publication. At least one anchored finding at or above the threshold requests changes. Otherwise, the service approves the head without visible commentary.
 
-Later heads receive new reviews. The service silently resolves earlier owned findings only when reconciliation classifies them as fixed. It never posts issue comments, progress comments, replies, or commands.
+Published findings appear only as concise inline comments on changed lines. One editable top level body identifies the active findings review. Later decisions use hidden markers, so the pull request never gains another visible summary.
+
+Before each decision, the service reads every prior bot review and thread. It silently resolves fixed threads before publishing new findings.
+
+Stable finding identities prevent republication across pull request history. The configured unresolved thread limit admits the highest importance new findings first. The final decision still considers every current finding.
+
+The service never posts issue comments, progress messages, replies, or commands.
 
 ## Configure the service
 
@@ -25,6 +31,8 @@ Set these required environment variables:
 | `CLYDE_API_KEY` | Clyde API credential |
 | `CF_ACCESS_CLIENT_ID` | Cloudflare Access service token identifier |
 | `CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token secret |
+| `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
+| `REVIEW_MAX_UNRESOLVED_COMMENTS` | Maximum unresolved bot threads, including `0` |
 
 `PORT` defaults to `3000`. `GITHUB_BOT_LOGIN` defaults to `agoodkind-pr-review-agent[bot]`.
 
@@ -53,7 +61,7 @@ docker buildx imagetools inspect \
     ghcr.io/agoodkind/pr-review-agent@<digest>
 ```
 
-Require `linux/amd64` and `linux/arm64`. Record the digest and current Worker version before deployment.
+Require only `linux/amd64`. Record the digest and current Worker version before deployment.
 
 ## Recover a failed deployment
 

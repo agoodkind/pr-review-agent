@@ -23,8 +23,6 @@ const (
 	BotLogin = "agoodkind-pr-review-agent[bot]"
 	// ReviewCheckName is the GitHub check run name for review lifecycle.
 	ReviewCheckName = "PR-Agent Review"
-	// DefaultMinimumImportance is the default minimum published finding importance.
-	DefaultMinimumImportance = 7
 	// ReviewTimeout bounds one review job execution.
 	ReviewTimeout = 600 * time.Second
 	// QueueCapacity is the maximum number of queued review jobs.
@@ -42,7 +40,7 @@ const (
 	// GitHubAPIVersion is the GitHub REST API version sent on every request.
 	GitHubAPIVersion = "2022-11-28"
 	// WritingPolicy is injected into every review and reconciliation prompt.
-	WritingPolicy = "Use one short summary sentence. Use a short title and at most three short sentences for each defect, impact, and fix. Use plain Markdown. Omit praise, introductions, repetition, numeric severity, and typographic dashes."
+	WritingPolicy = "Use clean GitHub Markdown. Give each finding one short heading and direct prose. Limit each finding to the defect, impact, and fix in at most three short sentences. Omit repetition, praise, introductions, numeric severity labels, unnecessary detail, progress messages, commands, replies, and typographic dashes."
 )
 
 // LookupEnv reads one environment variable.
@@ -50,18 +48,19 @@ type LookupEnv func(string) (string, bool)
 
 // Config holds validated service configuration.
 type Config struct {
-	Port                 string
-	MinimumImportance    int
-	GitHubAppID          int64
-	GitHubPrivateKey     *rsa.PrivateKey
-	GitHubWebhookSecret  []byte
-	GitHubBotLogin       string
-	GitHubAPIBaseURL     *url.URL
-	GitHubGraphQLURL     *url.URL
-	ClydeBaseURL         *url.URL
-	ClydeAPIKey          string
-	CFAccessClientID     string
-	CFAccessClientSecret string
+	Port                      string
+	MinimumImportance         int
+	MaximumUnresolvedComments int
+	GitHubAppID               int64
+	GitHubPrivateKey          *rsa.PrivateKey
+	GitHubWebhookSecret       []byte
+	GitHubBotLogin            string
+	GitHubAPIBaseURL          *url.URL
+	GitHubGraphQLURL          *url.URL
+	ClydeBaseURL              *url.URL
+	ClydeAPIKey               string
+	CFAccessClientID          string
+	CFAccessClientSecret      string
 }
 
 // FromEnvironment loads configuration from process environment variables.
@@ -101,16 +100,34 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	} else {
 		cfg.MinimumImportance = minimumImportance
 	}
+	maximumComments, ok := loadMaximumUnresolvedComments(lookup)
+	if !ok {
+		missing = append(missing, "REVIEW_MAX_UNRESOLVED_COMMENTS")
+	} else {
+		cfg.MaximumUnresolvedComments = maximumComments
+	}
 	missing = append(missing, loadGitHub(lookup, &cfg)...)
 	missing = append(missing, loadClyde(lookup, &cfg)...)
 
 	return cfg, missing
 }
 
+func loadMaximumUnresolvedComments(lookup LookupEnv) (int, bool) {
+	value, ok := lookup("REVIEW_MAX_UNRESOLVED_COMMENTS")
+	if !ok || strings.TrimSpace(value) == "" {
+		return 0, false
+	}
+	maximum, err := strconv.Atoi(value)
+	if err != nil || maximum < 0 {
+		return 0, false
+	}
+	return maximum, true
+}
+
 func loadMinimumImportance(lookup LookupEnv) (int, bool) {
 	value, ok := lookup("REVIEW_MIN_IMPORTANCE")
 	if !ok || strings.TrimSpace(value) == "" {
-		return DefaultMinimumImportance, true
+		return 0, false
 	}
 	importance, err := strconv.Atoi(value)
 	if err != nil || importance < 1 || importance > 10 {

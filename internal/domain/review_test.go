@@ -1,14 +1,9 @@
 package domain
 
-import (
-	"testing"
+import "testing"
 
-	"goodkind.io/pr-review-agent/internal/config"
-)
-
-func TestEndToEndCommentWithIncompleteCoverage(t *testing.T) {
+func TestReviewResultAllowsIncompleteCoverage(t *testing.T) {
 	result := ReviewResult{
-		Summary:          "Coverage incomplete.",
 		CoverageComplete: false,
 	}
 	if err := result.Validate(); err != nil {
@@ -21,7 +16,7 @@ func TestEndToEndCommentWithIncompleteCoverage(t *testing.T) {
 		EndLine:    1,
 		Title:      "Blocker",
 		Body:       "Would request changes if coverage were complete.",
-		Importance: config.DefaultMinimumImportance,
+		Importance: 7,
 	}}
 	for _, finding := range findings {
 		if err := finding.Validate(); err != nil {
@@ -60,8 +55,10 @@ func TestParseHeadSHARejectsUppercaseNonhexadecimalAndWrongLength(t *testing.T) 
 }
 
 func TestParseReviewDecisionRejectsUnknownValue(t *testing.T) {
-	if _, err := ParseReviewDecision("SHIP_IT"); err == nil {
-		t.Fatal("ParseReviewDecision unknown value: want error")
+	for _, value := range []string{"COMMENT", "SHIP_IT"} {
+		if _, err := ParseReviewDecision(value); err == nil {
+			t.Fatalf("ParseReviewDecision(%q): want error", value)
+		}
 	}
 }
 
@@ -131,7 +128,6 @@ func TestReviewResultValidateRejectsDuplicateFindings(t *testing.T) {
 		Importance: 3,
 	}
 	result := ReviewResult{
-		Summary:          "Summary",
 		CoverageComplete: true,
 		Findings:         []Finding{finding, finding},
 	}

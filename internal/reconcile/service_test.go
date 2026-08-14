@@ -46,7 +46,7 @@ func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 	model := &fakeModel{reconcileErr: errors.New("reconcile failed")}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	if err := service.Reconcile(context.Background(), testJob()); err == nil {
+	if _, err := service.Reconcile(context.Background(), testJob()); err == nil {
 		t.Fatal("Reconcile: want error")
 	}
 	if len(github.resolveCalls) != 0 {
@@ -88,7 +88,7 @@ func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
 	job := testJob()
-	if err := service.Reconcile(context.Background(), job); err != nil {
+	if _, err := service.Reconcile(context.Background(), job); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(model.prompts) != 1 {
@@ -125,7 +125,7 @@ func TestReconcileIgnoresForeignMalformedAndCurrentHeadThreads(t *testing.T) {
 	model := &fakeModel{}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	if err := service.Reconcile(context.Background(), testJob()); err != nil {
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(model.prompts) != 0 {
@@ -166,11 +166,15 @@ func TestReconcileResolvesOnlyProvenFixedOrInvalidFindings(t *testing.T) {
 	}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	if err := service.Reconcile(context.Background(), testJob()); err != nil {
+	threads, err := service.Reconcile(context.Background(), testJob())
+	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-resolved" {
 		t.Fatalf("resolve calls = %v, want [thread-resolved]", github.resolveCalls)
+	}
+	if !threads[0].Resolved || threads[1].Resolved {
+		t.Fatalf("resolved states = [%t %t], want [true false]", threads[0].Resolved, threads[1].Resolved)
 	}
 }
 
@@ -204,7 +208,7 @@ func TestReconcileLeavesOpenAndUncertainFindingsOpen(t *testing.T) {
 	}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	if err := service.Reconcile(context.Background(), testJob()); err != nil {
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(github.resolveCalls) != 0 {
@@ -242,7 +246,7 @@ func TestReconcilePostsNoReplies(t *testing.T) {
 	}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	if err := service.Reconcile(context.Background(), testJob()); err != nil {
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if github.replyCalls != 0 {
@@ -283,7 +287,7 @@ func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 	}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	err = service.Reconcile(context.Background(), testJob())
+	_, err = service.Reconcile(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("Reconcile: want aggregate error")
 	}
@@ -332,7 +336,7 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 	}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	err = service.Reconcile(context.Background(), testJob())
+	_, err = service.Reconcile(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("Reconcile: want head changed error")
 	}
@@ -369,7 +373,7 @@ func TestReconcileLeavesMissingContextOpen(t *testing.T) {
 	}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	if err := service.Reconcile(context.Background(), testJob()); err != nil {
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(model.prompts) != 0 {

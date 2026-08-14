@@ -28,17 +28,18 @@ import (
 )
 
 const (
-	testHeadSHA      = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
-	testStaleHeadSHA = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
-	testBaseSHA      = "c5e6f3ece9f717de046926d1f4c3f3313852fe54"
-	testPRNumber     = 7
+	testHeadSHA           = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+	testStaleHeadSHA      = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
+	testBaseSHA           = "c5e6f3ece9f717de046926d1f4c3f3313852fe54"
+	testPRNumber          = 7
+	testMinimumImportance = 7
 )
 
 func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 	t.Run("no findings", func(t *testing.T) {
 		decision := review.DecisionFor(nil, 9)
-		if decision != "" {
-			t.Fatalf("decision = %q, want no review", decision)
+		if decision != domain.ReviewDecisionApprove {
+			t.Fatalf("decision = %q, want APPROVE", decision)
 		}
 	})
 
@@ -52,8 +53,8 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 			Importance: 8,
 		}}
 		decision := review.DecisionFor(findings, 9)
-		if decision != "" {
-			t.Fatalf("decision = %q, want no review", decision)
+		if decision != domain.ReviewDecisionApprove {
+			t.Fatalf("decision = %q, want APPROVE", decision)
 		}
 	})
 
@@ -76,7 +77,7 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 func TestRenderBodyIsOneShortSevereSummaryAndMarker(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	body := review.RenderBody(head)
-	want := "## Severe findings\n\n" + marker.Review(head)
+	want := "## Findings\n\n" + marker.Summary() + "\n" + marker.Review(head)
 	if body != want {
 		t.Fatalf("body = %q, want %q", body, want)
 	}
@@ -121,7 +122,11 @@ func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
 
 func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
-	analysis := review.Analysis{
+	analysis := struct {
+		Summary    string
+		Anchored   []domain.Finding
+		Unanchored []domain.Finding
+	}{
 		Summary: "Issue — details",
 		Anchored: []domain.Finding{{
 			Path:       "main.go",
@@ -204,7 +209,6 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 	model := &sequenceModel{
 		results: []domain.ReviewResult{
 			{
-				Summary:          "First chunk summary.",
 				CoverageComplete: true,
 				Findings: []domain.Finding{{
 					Path:       "main.go",
@@ -216,7 +220,6 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 				}},
 			},
 			{
-				Summary:          "Second chunk summary.",
 				CoverageComplete: true,
 				Findings: []domain.Finding{
 					{
@@ -255,17 +258,11 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 	if model.callCount != len(chunks) {
 		t.Fatalf("model call count = %d, want %d", model.callCount, len(chunks))
 	}
-	if analysis.Summary != "First chunk summary.\n\nSecond chunk summary." {
-		t.Fatalf("summary = %q, want joined chunk summaries", analysis.Summary)
-	}
 	if analysis.CoverageComplete {
 		t.Fatal("coverage complete = true, want false from binary file")
 	}
 	if len(analysis.Anchored) != 1 {
 		t.Fatalf("anchored count = %d, want 1", len(analysis.Anchored))
-	}
-	if len(analysis.Unanchored) != 0 {
-		t.Fatalf("unanchored count = %d, want 0", len(analysis.Unanchored))
 	}
 	if analysis.Decision != domain.ReviewDecisionRequestChanges {
 		t.Fatalf("decision = %q, want %q", analysis.Decision, domain.ReviewDecisionRequestChanges)
@@ -297,7 +294,6 @@ func TestAnalyzePromptRequestsOnlyConfiguredFindingsAndWrapsUntrustedInput(t *te
 
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{
-			Summary:          "Chunk summary.",
 			CoverageComplete: true,
 		}},
 	}
@@ -343,7 +339,6 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{
-			Summary:          "Missing required finding fields.",
 			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
@@ -392,12 +387,11 @@ func containsTypographicDash(value string) bool {
 	return false
 }
 
-func TestEndToEndStaysQuietBelowConfiguredImportance(t *testing.T) {
+func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{
 			results: []domain.ReviewResult{{
-				Summary:          "Low severity note.",
 				CoverageComplete: true,
 				Findings: []domain.Finding{{
 					Path:       "main.go",
@@ -415,8 +409,15 @@ func TestEndToEndStaysQuietBelowConfiguredImportance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("SubmitReview was called: %v", fixture.state.lastSubmitReview)
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
+	}
+	if fixture.state.lastSubmitReview["body"] != marker.Review(domain.HeadSHA(testHeadSHA)) {
+		t.Fatalf("body = %v, want hidden marker", fixture.state.lastSubmitReview["body"])
+	}
+	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
+	if !ok || len(comments) != 0 {
+		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
@@ -473,8 +474,8 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.reconciler.callCount != 1 {
-		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
+	if fixture.reconciler.callCount != 0 {
+		t.Fatalf("reconcile call count = %d, want 0", fixture.reconciler.callCount)
 	}
 
 	wantOrder := []string{
@@ -535,8 +536,8 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.reconciler.callCount != 0 {
-		t.Fatalf("reconcile call count = %d, want 0", fixture.reconciler.callCount)
+	if fixture.reconciler.callCount != 1 {
+		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
 	wantOrder := []string{
@@ -583,20 +584,139 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 	}
 }
 
-func TestServiceKeepsSuccessWhenReconciliationFails(t *testing.T) {
+func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reconcileErr: errors.New("reconcile failed"),
 	})
 
 	err := fixture.service.Run(context.Background(), fixture.job())
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if err == nil {
+		t.Fatal("Run: want error")
 	}
 	if fixture.reconciler.callCount != 1 {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
-		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatal("SubmitReview was called after reconciliation failure")
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinCap(t *testing.T) {
+	historical := domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Historical defect",
+		Body:       "Original wording.",
+		Importance: 9,
+	}
+	historicalBody, err := marker.EncodeFindingBody(domain.HeadSHA(testStaleHeadSHA), historical)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:         9,
+		maximumUnresolvedComments: 1,
+		reconcileThreads: []githubapp.ReviewThread{{
+			NodeID:   "historical-thread",
+			Resolved: true,
+			RootComment: domain.ReviewComment{
+				Author:    config.BotLogin,
+				Body:      historicalBody,
+				Path:      historical.Path,
+				StartLine: historical.StartLine,
+				EndLine:   historical.EndLine,
+			},
+		}},
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{
+				{
+					Path:       "main.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Historical defect",
+					Body:       "New wording must not republish this finding.",
+					Importance: 10,
+				},
+				{
+					Path:       "main.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Lower importance defect",
+					Body:       "This finding waits because capacity is limited.",
+					Importance: 9,
+				},
+				{
+					Path:       "main.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Highest importance defect",
+					Body:       "This finding uses the available capacity.",
+					Importance: 10,
+				},
+			},
+		}}},
+	})
+
+	if err := fixture.service.Run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	}
+	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
+	if !ok || len(comments) != 1 {
+		t.Fatalf("comments = %v, want one", fixture.state.lastSubmitReview["comments"])
+	}
+	comment, ok := comments[0].(map[string]any)
+	if !ok {
+		t.Fatalf("comment = %T, want object", comments[0])
+	}
+	body, ok := comment["body"].(string)
+	if !ok || !strings.Contains(body, "Highest importance defect") {
+		t.Fatalf("comment body = %v, want highest importance finding", comment["body"])
+	}
+}
+
+func TestServiceRequestsChangesWithoutPublishingWhenThreadCapIsFull(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:         9,
+		maximumUnresolvedComments: 1,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Current severe defect",
+				Body:       "The defect still requires a blocking decision.",
+				Importance: 9,
+			}},
+		}}},
+		reconcileThreads: []githubapp.ReviewThread{{
+			NodeID:   "existing-thread",
+			Resolved: false,
+			RootComment: domain.ReviewComment{
+				Author: config.BotLogin,
+				Body:   "existing bot thread",
+			},
+		}},
+	})
+
+	if err := fixture.service.Run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	}
+	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
+	if !ok || len(comments) != 0 {
+		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
 	}
 }
 
@@ -657,12 +777,14 @@ func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 }
 
 type serviceFixtureOptions struct {
-	reviewPages        [][]map[string]any
-	headAfterAnalysis  string
-	submitReviewStatus int
-	reconcileErr       error
-	model              review.Model
-	minimumImportance  int
+	reviewPages               [][]map[string]any
+	headAfterAnalysis         string
+	submitReviewStatus        int
+	reconcileErr              error
+	reconcileThreads          []githubapp.ReviewThread
+	model                     review.Model
+	minimumImportance         int
+	maximumUnresolvedComments int
 }
 
 type serviceFixture struct {
@@ -682,6 +804,7 @@ type serviceServerState struct {
 	headAfterAnalysis  string
 	pullRequestReads   int32
 	lastSubmitReview   map[string]any
+	lastUpdateReview   map[string]any
 	lastCreateCheckRun map[string]any
 	lastUpdateCheckRun map[string]any
 	submitReviewStatus int
@@ -689,12 +812,16 @@ type serviceServerState struct {
 
 type recordingReconciler struct {
 	callCount int
+	threads   []githubapp.ReviewThread
 	err       error
 }
 
-func (reconciler *recordingReconciler) Reconcile(context.Context, domain.ReviewJob) error {
+func (reconciler *recordingReconciler) Reconcile(
+	context.Context,
+	domain.ReviewJob,
+) ([]githubapp.ReviewThread, error) {
 	reconciler.callCount++
-	return reconciler.err
+	return reconciler.threads, reconciler.err
 }
 
 type stubCollector struct{}
@@ -757,7 +884,6 @@ func (model *serialGateModel) Review(context.Context, string) (domain.ReviewResu
 	model.mu.Unlock()
 
 	return domain.ReviewResult{
-		Summary:          "Serialized review.",
 		CoverageComplete: true,
 	}, nil
 }
@@ -850,16 +976,22 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
-	reconciler := &recordingReconciler{err: options.reconcileErr}
+	reconciler := &recordingReconciler{
+		threads: options.reconcileThreads,
+		err:     options.reconcileErr,
+	}
 	model := options.model
 	minimumImportance := options.minimumImportance
 	if minimumImportance == 0 {
-		minimumImportance = config.DefaultMinimumImportance
+		minimumImportance = testMinimumImportance
+	}
+	maximumUnresolvedComments := options.maximumUnresolvedComments
+	if maximumUnresolvedComments == 0 {
+		maximumUnresolvedComments = 10
 	}
 	if model == nil {
 		model = &sequenceModel{
 			results: []domain.ReviewResult{{
-				Summary:          "Severe finding.",
 				CoverageComplete: true,
 				Findings: []domain.Finding{{
 					Path:       "main.go",
@@ -867,7 +999,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 					EndLine:    2,
 					Title:      "Severe defect",
 					Body:       "The changed line breaks core behavior.",
-					Importance: config.DefaultMinimumImportance,
+					Importance: testMinimumImportance,
 				}},
 			}},
 		}
@@ -881,6 +1013,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		queue.NewKeyedLocker(),
 		config.BotLogin,
 		minimumImportance,
+		maximumUnresolvedComments,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
@@ -940,6 +1073,23 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"id":        float64(42),
 			"commit_id": body["commit_id"],
 			"state":     "COMMENTED",
+			"body":      body["body"],
+			"user":      map[string]any{"login": config.BotLogin},
+		})
+		return
+	}
+
+	if request.Method == http.MethodPut && strings.Contains(request.URL.Path, "/pulls/") && strings.Contains(request.URL.Path, "/reviews/") {
+		body, err := serviceReadJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		state.lastUpdateReview = body
+		serviceWriteJSON(writer, http.StatusOK, map[string]any{
+			"id":        float64(42),
+			"commit_id": testHeadSHA,
+			"state":     "CHANGES_REQUESTED",
 			"body":      body["body"],
 			"user":      map[string]any{"login": config.BotLogin},
 		})

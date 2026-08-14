@@ -40,13 +40,9 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if cfg.ClydeBaseURL != nil {
 		opts = append(opts, option.WithBaseURL(strings.TrimRight(cfg.ClydeBaseURL.String(), "/")+"/"))
 	}
-	minimumImportance := cfg.MinimumImportance
-	if minimumImportance == 0 {
-		minimumImportance = config.DefaultMinimumImportance
-	}
 	return &Client{
 		sdk:               openaigo.NewClient(opts...),
-		minimumImportance: minimumImportance,
+		minimumImportance: cfg.MinimumImportance,
 	}
 }
 

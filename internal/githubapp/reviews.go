@@ -27,6 +27,10 @@ type submitReviewBody struct {
 	Comments []InlineComment `json:"comments"`
 }
 
+type updateReviewBody struct {
+	Body string `json:"body"`
+}
+
 // ListReviews returns every review on one pull request.
 func (client *Client) ListReviews(
 	ctx context.Context,
@@ -97,10 +101,37 @@ func (client *Client) SubmitReview(
 		return Review{}, err
 	}
 
+	return decodeReview(body, "submitted", ctx, client)
+}
+
+// UpdateReview replaces one submitted review summary body.
+func (client *Client) UpdateReview(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	number int,
+	reviewID int64,
+	bodyText string,
+) (Review, error) {
+	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews/%d", number, reviewID))
+	encoded, err := json.Marshal(updateReviewBody{Body: bodyText})
+	if err != nil {
+		client.logger.ErrorContext(ctx, "marshal update review body", slog.String("err", err.Error()))
+		return Review{}, errors.New("marshal update review body")
+	}
+
+	body, err := client.doREST(ctx, installationID, "PUT", path, nil, encoded)
+	if err != nil {
+		return Review{}, err
+	}
+	return decodeReview(body, "updated", ctx, client)
+}
+
+func decodeReview(body []byte, operation string, ctx context.Context, client *Client) (Review, error) {
 	var response reviewResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		client.logger.ErrorContext(ctx, "decode submitted review", slog.String("err", err.Error()))
-		return Review{}, errors.New("decode submitted review")
+		client.logger.ErrorContext(ctx, "decode "+operation+" review", slog.String("err", err.Error()))
+		return Review{}, errors.New("decode " + operation + " review")
 	}
 
 	head, err := parseHeadSHA(response.CommitID)

@@ -24,18 +24,20 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
+	reviewcore "goodkind.io/pr-review-agent/internal/review"
 )
 
 const (
-	testWebhookSecret = "test-webhook-secret" // gitleaks:allow
-	testDefectiveHead = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
-	testCorrectedHead = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
-	testBaseSHA       = "c5e6f3ece9f717de046926d1f4c3f3313852fe54"
-	testFindingPath   = "internal/app/handler.go"
-	testRepoOwner     = "agoodkind"
-	testRepoName      = "pr-review-agent"
-	testPRNumber      = 42
-	testInstallation  = int64(99)
+	testWebhookSecret     = "test-webhook-secret" // gitleaks:allow
+	testDefectiveHead     = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+	testCorrectedHead     = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
+	testBaseSHA           = "c5e6f3ece9f717de046926d1f4c3f3313852fe54"
+	testFindingPath       = "internal/app/handler.go"
+	testRepoOwner         = "agoodkind"
+	testRepoName          = "pr-review-agent"
+	testPRNumber          = 42
+	testInstallation      = int64(99)
+	testMinimumImportance = 7
 )
 
 var integrationTestMu sync.Mutex
@@ -250,7 +252,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	}
 }
 
-func TestEndToEndStaysQuietWithoutSevereFindings(t *testing.T) {
+func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	withIntegrationLock(t)
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -269,8 +271,19 @@ func TestEndToEndStaysQuietWithoutSevereFindings(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForCheckConclusion(t, "success")
-	if fixture.githubState.submitReviewCount() != 0 {
-		t.Fatalf("submit review count = %d, want 0", fixture.githubState.submitReviewCount())
+	if fixture.githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count = %d, want 1", fixture.githubState.submitReviewCount())
+	}
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", review["event"])
+	}
+	if review["body"] != marker.Review(domain.HeadSHA(testDefectiveHead)) {
+		t.Fatalf("body = %v, want hidden marker", review["body"])
+	}
+	comments, ok := review["comments"].([]any)
+	if !ok || len(comments) != 0 {
+		t.Fatalf("comments = %v, want none", review["comments"])
 	}
 	if fixture.githubState.completedCheckCount() != 1 {
 		t.Fatalf("completed check count = %d, want 1", fixture.githubState.completedCheckCount())
@@ -288,7 +301,7 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 		EndLine:    3,
 		Title:      "Missing validation",
 		Body:       "Validate the webhook payload before enqueue.",
-		Importance: config.DefaultMinimumImportance,
+		Importance: testMinimumImportance,
 	}
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -325,7 +338,7 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 		EndLine:    3,
 		Title:      "Broken range",
 		Body:       "Both added lines form one defective block.",
-		Importance: config.DefaultMinimumImportance,
+		Importance: testMinimumImportance,
 	}
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -396,7 +409,7 @@ func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{defectiveReviewContent(domain.Finding{
 			Path: testFindingPath, StartLine: 3, EndLine: 3,
-			Title: "Severe defect", Body: "Core behavior fails.", Importance: config.DefaultMinimumImportance,
+			Title: "Severe defect", Body: "Core behavior fails.", Importance: testMinimumImportance,
 		})},
 		submitReviewStatus: http.StatusInternalServerError,
 	})
@@ -459,8 +472,8 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	}
 
 	runWebhook(t, "delivery-first-app")
-	if githubState.submitReviewCount() != 0 {
-		t.Fatalf("submit review count after first app = %d, want 0", githubState.submitReviewCount())
+	if githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count after first app = %d, want 1", githubState.submitReviewCount())
 	}
 
 	runWebhook(t, "delivery-second-app")
@@ -468,8 +481,8 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	if clydeState.requestCount() != 1 {
 		t.Fatalf("clyde requests after fresh app = %d, want 1", clydeState.requestCount())
 	}
-	if githubState.submitReviewCount() != 0 {
-		t.Fatalf("submit review count after fresh app = %d, want 0", githubState.submitReviewCount())
+	if githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count after fresh app = %d, want 1", githubState.submitReviewCount())
 	}
 }
 
@@ -508,7 +521,7 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 				EndLine:    3,
 				Title:      "Missing validation",
 				Body:       "Validate the webhook payload before enqueue.",
-				Importance: config.DefaultMinimumImportance,
+				Importance: testMinimumImportance,
 			}),
 			defectiveReviewContent(domain.Finding{
 				Path:       testFindingPath,
@@ -516,7 +529,7 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 				EndLine:    4,
 				Title:      "Unsafe fallback",
 				Body:       "The new fallback still breaks core behavior.",
-				Importance: config.DefaultMinimumImportance,
+				Importance: testMinimumImportance,
 			}),
 		},
 		clydeReconcileResponses: []string{reconcileResolvedContent("thread-owned")},
@@ -547,6 +560,12 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 	secondReview := fixture.githubState.lastSubmitReview()
 	if secondReview["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
 		t.Fatalf("second review body = %q, want marker only", secondReview["body"])
+	}
+	if fixture.githubState.summaryReviewCount() != 1 {
+		t.Fatalf("summary review count = %d, want 1", fixture.githubState.summaryReviewCount())
+	}
+	if fixture.githubState.summaryReviewBody() != reviewcore.RenderBody(domain.HeadSHA(testCorrectedHead)) {
+		t.Fatalf("summary body = %q, want current findings body", fixture.githubState.summaryReviewBody())
 	}
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
@@ -619,7 +638,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 		EndLine:    3,
 		Title:      "Missing validation",
 		Body:       "Validate the webhook payload before enqueue.",
-		Importance: config.DefaultMinimumImportance,
+		Importance: testMinimumImportance,
 	}
 
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -685,8 +704,18 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	}
 	fixture.waitForClydeCalls(t, 3)
 	fixture.waitForCheckConclusion(t, "success")
-	if fixture.githubState.submitReviewCount() != 1 {
-		t.Fatalf("submit review count after fix = %d, want 1", fixture.githubState.submitReviewCount())
+	if fixture.githubState.submitReviewCount() != 2 {
+		t.Fatalf("submit review count after fix = %d, want 2", fixture.githubState.submitReviewCount())
+	}
+	approval := fixture.githubState.lastSubmitReview()
+	if approval["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("second event = %v, want APPROVE", approval["event"])
+	}
+	if approval["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
+		t.Fatalf("approval body = %v, want hidden marker", approval["body"])
+	}
+	if fixture.githubState.summaryReviewBody() != marker.Summary() {
+		t.Fatalf("summary body = %q, want hidden summary marker", fixture.githubState.summaryReviewBody())
 	}
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
@@ -782,17 +811,19 @@ func wireAppFixture(
 	}
 
 	cfg := config.Config{
-		Port:                 "0",
-		GitHubAppID:          12345,
-		GitHubPrivateKey:     privateKey,                // gitleaks:allow
-		GitHubWebhookSecret:  []byte(testWebhookSecret), // gitleaks:allow
-		GitHubBotLogin:       config.BotLogin,
-		GitHubAPIBaseURL:     apiURL,
-		GitHubGraphQLURL:     graphqlURL,
-		ClydeBaseURL:         clydeURL,
-		ClydeAPIKey:          "fixture-clyde-key", // gitleaks:allow
-		CFAccessClientID:     "fixture-cf-id",     // gitleaks:allow
-		CFAccessClientSecret: "fixture-cf-secret", // gitleaks:allow
+		Port:                      "0",
+		MinimumImportance:         testMinimumImportance,
+		MaximumUnresolvedComments: 100,
+		GitHubAppID:               12345,
+		GitHubPrivateKey:          privateKey,                // gitleaks:allow
+		GitHubWebhookSecret:       []byte(testWebhookSecret), // gitleaks:allow
+		GitHubBotLogin:            config.BotLogin,
+		GitHubAPIBaseURL:          apiURL,
+		GitHubGraphQLURL:          graphqlURL,
+		ClydeBaseURL:              clydeURL,
+		ClydeAPIKey:               "fixture-clyde-key", // gitleaks:allow
+		CFAccessClientID:          "fixture-cf-id",     // gitleaks:allow
+		CFAccessClientSecret:      "fixture-cf-secret", // gitleaks:allow
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -1010,7 +1041,6 @@ func synchronizePayload(head string) []byte {
 
 func defectiveReviewContent(finding domain.Finding) string {
 	payload := map[string]any{
-		"summary":           "Validation missing.",
 		"coverage_complete": true,
 		"findings": []map[string]any{{
 			"path":       finding.Path,
@@ -1029,7 +1059,7 @@ func defectiveReviewContent(finding domain.Finding) string {
 }
 
 func approveReviewContent() string {
-	return `{"summary":"No issues found.","coverage_complete":true,"findings":[]}`
+	return `{"coverage_complete":true,"findings":[]}`
 }
 
 func typographicReviewContent() string {
@@ -1218,6 +1248,35 @@ func (state *githubServerState) lastSubmitReview() map[string]any {
 	return state.submitReviews[len(state.submitReviews)-1]
 }
 
+func (state *githubServerState) summaryReviewBody() string {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for _, page := range state.listReviewPages {
+		for _, item := range page {
+			body, _ := item["body"].(string)
+			if marker.HasSummary(body) {
+				return body
+			}
+		}
+	}
+	return ""
+}
+
+func (state *githubServerState) summaryReviewCount() int {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	count := 0
+	for _, page := range state.listReviewPages {
+		for _, item := range page {
+			body, _ := item["body"].(string)
+			if marker.HasSummary(body) {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 func (state *githubServerState) resolveCallCount() int {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1330,6 +1389,11 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 
 	if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/reviews") {
 		state.handleSubmitReview(writer, request)
+		return
+	}
+
+	if request.Method == http.MethodPut && strings.Contains(request.URL.Path, "/pulls/") && strings.Contains(request.URL.Path, "/reviews/") {
+		state.handleUpdateReview(writer, request)
 		return
 	}
 
@@ -1479,15 +1543,18 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 	commitID, _ := body["commit_id"].(string)
 	reviewBody, _ := body["body"].(string)
 	comments, _ := body["comments"].([]any)
-	state.listReviewPages = [][]map[string]any{{
-		{
-			"id":        float64(100 + len(state.submitReviews)),
-			"commit_id": commitID,
-			"body":      reviewBody,
-			"state":     body["event"],
-			"user":      map[string]any{"login": config.BotLogin},
-		},
-	}}
+	review := map[string]any{
+		"id":        float64(100 + len(state.submitReviews)),
+		"commit_id": commitID,
+		"body":      reviewBody,
+		"state":     body["event"],
+		"user":      map[string]any{"login": config.BotLogin},
+	}
+	if len(state.listReviewPages) == 0 {
+		state.listReviewPages = [][]map[string]any{{review}}
+	} else {
+		state.listReviewPages[0] = append(state.listReviewPages[0], review)
+	}
 	state.reviewPageIndex = 0
 	if len(comments) > 0 {
 		comment, ok := comments[0].(map[string]any)
@@ -1521,6 +1588,29 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		"body":      body["body"],
 		"user":      map[string]any{"login": config.BotLogin},
 	})
+}
+
+func (state *githubServerState) handleUpdateReview(writer http.ResponseWriter, request *http.Request) {
+	body, err := readJSONBody(request)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	reviewIDText := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for pageIndex, page := range state.listReviewPages {
+		for reviewIndex, item := range page {
+			if fmt.Sprintf("%.0f", item["id"]) != reviewIDText {
+				continue
+			}
+			item["body"] = body["body"]
+			state.listReviewPages[pageIndex][reviewIndex] = item
+			writeJSON(writer, http.StatusOK, item)
+			return
+		}
+	}
+	writeJSON(writer, http.StatusNotFound, map[string]any{"message": "review not found"})
 }
 
 func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, request *http.Request) {

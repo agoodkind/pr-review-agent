@@ -1,6 +1,7 @@
 package marker
 
 import (
+	"strings"
 	"testing"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -113,7 +114,7 @@ func TestMarkerParserRejectsMalformedValues(t *testing.T) {
 	}
 }
 
-func TestFindingBodyRoundTripAndHashVerification(t *testing.T) {
+func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
 	finding := domain.Finding{
 		Path:       "internal/app/handler.go",
@@ -143,13 +144,30 @@ func TestFindingBodyRoundTripAndHashVerification(t *testing.T) {
 		t.Fatalf("decoded finding = %+v, want %+v", decodedFinding, finding)
 	}
 
-	tampered := encoded + "x"
+	tampered := strings.Replace(encoded, "Missing validation", "Different defect", 1)
 	if _, _, err := DecodeFindingBody(domain.ReviewComment{
 		Path:      finding.Path,
 		StartLine: finding.StartLine,
 		EndLine:   finding.EndLine,
 		Body:      tampered,
 	}); err == nil {
-		t.Fatal("tampered body: want error")
+		t.Fatal("changed identity: want error")
+	}
+
+	moved := finding
+	moved.StartLine = 30
+	moved.EndLine = 31
+	moved.Body = "Updated wording after the code moved."
+	moved.Importance = 9
+	originalID, err := FindingID(finding)
+	if err != nil {
+		t.Fatalf("FindingID original: %v", err)
+	}
+	movedID, err := FindingID(moved)
+	if err != nil {
+		t.Fatalf("FindingID moved: %v", err)
+	}
+	if movedID != originalID {
+		t.Fatalf("moved id = %q, want stable id %q", movedID, originalID)
 	}
 }

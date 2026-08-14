@@ -113,7 +113,7 @@ func TestReviewRejectsInvalidFindings(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
 
-	state.completionContent = `{"summary":"ok","coverage_complete":true,"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
+	state.completionContent = `{"coverage_complete":true,"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review with invalid importance: want error")
@@ -249,6 +249,7 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 	}
 
 	cfg := config.Config{
+		MinimumImportance:    7,
 		ClydeBaseURL:         baseURL,
 		ClydeAPIKey:          testAPIKeyValue(),
 		CFAccessClientID:     testCFClientIDValue(),
@@ -258,7 +259,7 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 }
 
 func validReviewContent() string {
-	return `{"summary":"No issues found.","coverage_complete":true,"findings":[]}`
+	return `{"coverage_complete":true,"findings":[]}`
 }
 
 func writeJSON(writer http.ResponseWriter, status int, payload any) {
