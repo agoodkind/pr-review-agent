@@ -49,9 +49,8 @@ func (client *Client) FindCheckRun(
 	head domain.HeadSHA,
 	name string,
 ) (CheckRun, bool, error) {
-	path := client.repoPath(repo, "/check-runs")
+	path := client.repoPath(repo, fmt.Sprintf("/commits/%s/check-runs", url.PathEscape(string(head))))
 	query := url.Values{}
-	query.Set("head_sha", string(head))
 	query.Set("check_name", name)
 
 	body, err := client.doREST(ctx, installationID, "GET", path, query, nil)

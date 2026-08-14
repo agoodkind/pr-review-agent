@@ -476,7 +476,7 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 
 	wantOrder := []string{
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/check-runs",
+		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7/reviews",
@@ -518,7 +518,7 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 
 	wantOrder := []string{
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/check-runs",
+		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7/reviews",
@@ -551,7 +551,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 
 	wantOrder := []string{
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/check-runs",
+		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7/reviews",
@@ -580,7 +580,7 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 
 	wantOrder := []string{
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/check-runs",
+		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7/reviews",
@@ -608,7 +608,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 
 	wantOrder := []string{
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/check-runs",
+		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7/reviews",
@@ -971,9 +971,12 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		return
 	}
 
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/check-runs") {
+	if request.Method == http.MethodGet &&
+		strings.Contains(request.URL.Path, "/commits/") &&
+		strings.HasSuffix(request.URL.Path, "/check-runs") {
 		query := request.URL.Query()
-		headSHA := query.Get("head_sha")
+		pathWithoutSuffix := strings.TrimSuffix(request.URL.Path, "/check-runs")
+		headSHA := pathWithoutSuffix[strings.LastIndex(pathWithoutSuffix, "/")+1:]
 		checkName := query.Get("check_name")
 		matches := make([]map[string]any, 0)
 		for _, item := range state.checkRuns {
