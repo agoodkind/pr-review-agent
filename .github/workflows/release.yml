@@ -18,6 +18,7 @@ jobs:
       attestations: write
     with:
       binary: pr-review-agent
+      platforms: linux/amd64 linux/arm64
     secrets: inherit
 
   container:

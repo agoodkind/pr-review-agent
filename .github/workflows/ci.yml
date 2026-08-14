@@ -28,6 +28,8 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    with:
+      release_platforms: linux/amd64 linux/arm64
     secrets: inherit
 
   container:

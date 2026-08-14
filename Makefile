@@ -13,6 +13,7 @@ VPKG   := goodkind.io/pr-review-agent/internal/version
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before the include bootstrap.mk line.
 GO_MK_MODULES := go-build.mk go-release.mk
+RELEASE_PLATFORMS ?= linux/amd64 linux/arm64
 
 # Optional codegen hook. If this repo generates source before compiling (for
 # example a tree-sitter parser or proto), set GO_MK_GENERATE to the codegen
