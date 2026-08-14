@@ -41,7 +41,8 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 Verify release archives and the container attestation against this repository:
 
 ```bash
-gh attestation verify <archive> --repo agoodkind/pr-review-agent
+gh attestation verify <archive> --repo agoodkind/pr-review-agent \
+    --signer-workflow agoodkind/go-makefile/.github/workflows/_package.yml
 gh attestation verify oci://ghcr.io/agoodkind/pr-review-agent@<digest> \
     --repo agoodkind/pr-review-agent
 ```
