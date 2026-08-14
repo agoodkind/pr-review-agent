@@ -55,7 +55,10 @@ jobs:
           version_output=$(dist/pr-review-agent_linux_amd64/pr-review-agent --version)
           version=${version_output#* }
           version=${version%% *}
-          test -n "${version}"
+          if [[ ! "${version}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "release version is not a valid container tag" >&2
+            exit 1
+          fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
       - uses: docker/setup-buildx-action@v4.2.0
       - name: Build container

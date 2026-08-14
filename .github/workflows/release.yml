@@ -41,8 +41,13 @@ jobs:
             echo "release tag count = ${#tags[@]}, want 1" >&2
             exit 1
           fi
-          test "$(gh release view "${tags[0]}" --json isDraft --jq .isDraft)" = "false"
-          echo "tag=${tags[0]}" >> "${GITHUB_OUTPUT}"
+          release_tag=${tags[0]}
+          if [[ ! "${release_tag}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "release tag is not a valid container tag" >&2
+            exit 1
+          fi
+          test "$(gh release view "${release_tag}" --json isDraft --jq .isDraft)" = "false"
+          echo "tag=${release_tag}" >> "${GITHUB_OUTPUT}"
       - name: Download and verify canonical release assets
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
@@ -67,6 +72,11 @@ jobs:
             mkdir "${directory}"
             tar -xzf "${archive}" -C "${directory}" pr-review-agent
           done
+          version_output=$(pr-review-agent_linux_amd64/pr-review-agent --version)
+          actual_version=${version_output#* }
+          actual_version=${actual_version%% *}
+          test "${actual_version}" = "${RELEASE_TAG}"
+      - uses: docker/setup-qemu-action@v4.2.0
       - uses: docker/setup-buildx-action@v4.2.0
       - uses: docker/login-action@v4.6.0
         with:
@@ -105,10 +115,17 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           docker buildx imagetools inspect --raw "${IMAGE}@${IMAGE_DIGEST}" > manifest.json
+          docker buildx imagetools inspect --raw "${IMAGE}:${EXPECTED_VERSION}" > version-manifest.json
+          cmp manifest.json version-manifest.json
           jq -e '[.manifests[].platform | (.os + "/" + .architecture)] | sort == ["linux/amd64", "linux/arm64"]' manifest.json
-          version_output=$(docker run --rm --platform linux/amd64 "${IMAGE}@${IMAGE_DIGEST}" --version)
-          actual_version=${version_output#* }
-          actual_version=${actual_version%% *}
-          test "${actual_version}" = "${EXPECTED_VERSION}"
-          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${IMAGE}@${IMAGE_DIGEST}")" = "${EXPECTED_VERSION}"
+          for platform in linux/amd64 linux/arm64; do
+            container_id=$(docker create --platform "${platform}" "${IMAGE}@${IMAGE_DIGEST}" --version)
+            test "$(docker container inspect --format '{{.Config.User}}' "${container_id}")" = "65532:65532"
+            test "$(docker container inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${container_id}")" = "${EXPECTED_VERSION}"
+            version_output=$(docker start --attach "${container_id}")
+            docker container rm "${container_id}"
+            actual_version=${version_output#* }
+            actual_version=${actual_version%% *}
+            test "${actual_version}" = "${EXPECTED_VERSION}"
+          done
           gh attestation verify "oci://${IMAGE}@${IMAGE_DIGEST}" --repo "${GITHUB_REPOSITORY}"

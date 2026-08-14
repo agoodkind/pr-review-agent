@@ -160,7 +160,7 @@ func loadClyde(lookup LookupEnv, cfg *Config) []string {
 	if !ok || strings.TrimSpace(clydeBaseURL) == "" {
 		missing = append(missing, "CLYDE_BASE_URL")
 	} else {
-		parsed, err := parseRequiredURL("CLYDE_BASE_URL", clydeBaseURL)
+		parsed, err := parseRequiredHTTPSURL("CLYDE_BASE_URL", clydeBaseURL)
 		if err != nil {
 			missing = append(missing, "CLYDE_BASE_URL")
 		} else {
@@ -192,7 +192,7 @@ func loadClyde(lookup LookupEnv, cfg *Config) []string {
 	return missing
 }
 
-func parseRequiredURL(name string, value string) (*url.URL, error) {
+func parseRequiredHTTPSURL(name string, value string) (*url.URL, error) {
 	parsed, err := url.Parse(value)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not a valid URL", name)
