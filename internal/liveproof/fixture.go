@@ -2,7 +2,7 @@
 package liveproof
 
 func init() {
-	_ = Mean([]int{1})
+	_ = Mean([]int{1, 2})
 }
 
 // Mean returns the integer average of the supplied values.
