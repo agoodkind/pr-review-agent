@@ -776,22 +776,22 @@ func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinC
 					Path:       "main.go",
 					StartLine:  2,
 					EndLine:    2,
-					Title:      "Historical defect",
+					Title:      "Reworded historical defect",
 					Body:       "New wording must not republish this finding.",
 					Importance: 10,
 				},
 				{
 					Path:       "main.go",
-					StartLine:  2,
-					EndLine:    2,
+					StartLine:  3,
+					EndLine:    3,
 					Title:      "Lower importance defect",
 					Body:       "This finding waits because capacity is limited.",
 					Importance: 9,
 				},
 				{
 					Path:       "main.go",
-					StartLine:  2,
-					EndLine:    2,
+					StartLine:  4,
+					EndLine:    4,
 					Title:      "Highest importance defect",
 					Body:       "This finding uses the available capacity.",
 					Importance: 10,
@@ -972,9 +972,11 @@ func (stubCollector) Collect(
 	pullRequest githubapp.PullRequest,
 ) (diff.ReviewInput, error) {
 	patch := strings.Join([]string{
-		"@@ -1,1 +1,2 @@",
+		"@@ -1,1 +1,4 @@",
 		" package main",
 		"+added",
+		"+second",
+		"+third",
 	}, "\n")
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
@@ -986,7 +988,7 @@ func (stubCollector) Collect(
 			Path:              "main.go",
 			Status:            "modified",
 			Patch:             patch,
-			CurrentContent:    "package main\nadded\n",
+			CurrentContent:    "package main\nadded\nsecond\nthird\n",
 			ChangedRightLines: changed,
 			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
