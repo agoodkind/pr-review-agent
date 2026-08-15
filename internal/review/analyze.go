@@ -97,6 +97,8 @@ func Analyze(
 func buildPrompt(chunk diff.Chunk, minimumImportance int) string {
 	var builder strings.Builder
 	builder.WriteString("Review changed lines. Return every concrete defect and assign importance from 1 through 10. ")
+	builder.WriteString("Reserve 9 and 10 for defects that plausibly enable a security compromise, irreversible data loss or corruption, or a broad production outage. ")
+	builder.WriteString("Rate bounded crashes, incorrect responses, maintainability problems, performance costs, and localized failures 8 or lower unless the diff proves severe impact. ")
 	builder.WriteString("The service publishes only findings with importance ")
 	fmt.Fprintf(&builder, "%d", minimumImportance)
 	builder.WriteString(" or higher. Do not omit a real defect because it is below that publication threshold. Review chunk ")
