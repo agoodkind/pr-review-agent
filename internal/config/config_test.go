@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+const testBotLogin = "test-review-agent[bot]"
+
 func TestEndToEndLoadEnablesReviewRuntime(t *testing.T) {
 	cfg, err := loadWithOverrides(map[string]string{})
 	if err != nil {
@@ -37,6 +39,7 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		"GITHUB_APP_ID",
 		"GITHUB_PRIVATE_KEY",
 		"GITHUB_WEBHOOK_SECRET",
+		"GITHUB_BOT_LOGIN",
 		"CLYDE_BASE_URL",
 		"CLYDE_API_KEY",
 		"CF_ACCESS_CLIENT_ID",
@@ -92,7 +95,7 @@ func TestLoadRejectsNonRSAAndMalformedKeys(t *testing.T) {
 	}
 }
 
-func TestLoadUsesPortBotAndGitHubDefaults(t *testing.T) {
+func TestLoadUsesPortAndGitHubURLDefaults(t *testing.T) {
 	cfg, err := loadWithOverrides(map[string]string{})
 	if err != nil {
 		t.Fatalf("Load defaults: %v", err)
@@ -100,8 +103,8 @@ func TestLoadUsesPortBotAndGitHubDefaults(t *testing.T) {
 	if cfg.Port != "3000" {
 		t.Fatalf("Port = %q, want 3000", cfg.Port)
 	}
-	if cfg.GitHubBotLogin != BotLogin {
-		t.Fatalf("GitHubBotLogin = %q, want %q", cfg.GitHubBotLogin, BotLogin)
+	if cfg.GitHubBotLogin != testBotLogin {
+		t.Fatalf("GitHubBotLogin = %q, want %q", cfg.GitHubBotLogin, testBotLogin)
 	}
 	if cfg.GitHubAPIBaseURL.String() != "https://api.github.com" {
 		t.Fatalf("GitHubAPIBaseURL = %q", cfg.GitHubAPIBaseURL)
@@ -184,6 +187,7 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 		"GITHUB_APP_ID":                  "12345",
 		"GITHUB_PRIVATE_KEY":             defaultKey,
 		"GITHUB_WEBHOOK_SECRET":          "fixture-webhook-" + strings.Repeat("a", 8),
+		"GITHUB_BOT_LOGIN":               testBotLogin,
 		"CLYDE_BASE_URL":                 "https://clyde.example",
 		"CLYDE_API_KEY":                  "fixture-clyde-" + strings.Repeat("b", 8),
 		"CF_ACCESS_CLIENT_ID":            "fixture-cf-id",

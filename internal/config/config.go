@@ -19,8 +19,6 @@ const (
 	Model = "gpt-5.6-sol"
 	// ReasoningEffort is the OpenAI reasoning effort for every completion.
 	ReasoningEffort = "high"
-	// BotLogin is the default GitHub App bot login.
-	BotLogin = "agoodkind-pr-review-agent[bot]"
 	// ReviewCheckName is the GitHub check run name for review lifecycle.
 	ReviewCheckName = "PR-Agent Review"
 	// ReviewTimeout bounds one review job execution.
@@ -181,7 +179,7 @@ func loadGitHub(lookup LookupEnv, cfg *Config) []string {
 
 	botLogin, ok := lookup("GITHUB_BOT_LOGIN")
 	if !ok || strings.TrimSpace(botLogin) == "" {
-		cfg.GitHubBotLogin = BotLogin
+		missing = append(missing, "GITHUB_BOT_LOGIN")
 	} else {
 		cfg.GitHubBotLogin = botLogin
 	}
