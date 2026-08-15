@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"sort"
+	"strings"
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -26,6 +28,7 @@ const (
 	checkFailureRender    = "Review failed while rendering inline findings."
 	checkFailureSummary   = "Review failed while updating the visible summary."
 	checkFailurePublish   = "Review failed while publishing the final decision."
+	maxCheckFailureRunes  = 1000
 )
 
 // GitHub loads pull request state and publishes review lifecycle updates.
@@ -35,7 +38,7 @@ type GitHub interface {
 	FindCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, bool, error)
 	CreateCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, error)
 	StartCheckRun(context.Context, int64, domain.Repository, int64, string) error
-	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string) error
+	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string) error
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
 	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
 }
@@ -240,7 +243,7 @@ func (service *Service) ensureCheckRun(
 			job.InstallationID,
 			job.Repository,
 			checkRun.ID,
-			"",
+			repositoryURL(job.Repository),
 		); err != nil {
 			service.logger.ErrorContext(ctx, "start check run", slog.String("err", err.Error()))
 			return githubapp.CheckRun{}, fmt.Errorf("start check run: %w", err)
@@ -256,6 +259,7 @@ func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, check
 		job.Repository,
 		checkRunID,
 		"success",
+		checkSummarySuccess,
 		checkSummarySuccess,
 	); err != nil {
 		service.logger.ErrorContext(ctx, "complete successful check run", slog.String("err", err.Error()))
@@ -282,6 +286,7 @@ func (service *Service) failCheck(
 			checkRunID,
 			"failure",
 			summary,
+			checkFailureDetail(cause),
 		)
 		if completeErr != nil {
 			service.logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
@@ -360,11 +365,35 @@ func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, c
 		checkRunID,
 		"cancelled",
 		checkSummaryCancelled,
+		checkSummaryCancelled,
 	); err != nil {
 		service.logger.ErrorContext(ctx, "complete cancelled check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete cancelled check run: %w", err)
 	}
 	return nil
+}
+
+func repositoryURL(repo domain.Repository) string {
+	return (&url.URL{
+		Scheme: "https",
+		Host:   "github.com",
+		Path:   "/" + repo.Owner + "/" + repo.Name,
+	}).String()
+}
+
+func checkFailureDetail(cause error) string {
+	if cause == nil {
+		return "No failure detail was reported."
+	}
+	detail := strings.Join(strings.Fields(cause.Error()), " ")
+	if detail == "" {
+		return "No failure detail was reported."
+	}
+	detailRunes := []rune(detail)
+	if len(detailRunes) > maxCheckFailureRunes {
+		detail = string(detailRunes[:maxCheckFailureRunes-3]) + "..."
+	}
+	return detail
 }
 
 func hasBotReviewMarker(

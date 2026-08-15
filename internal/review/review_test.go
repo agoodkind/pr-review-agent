@@ -422,6 +422,9 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
+	if fixture.state.checkDetailsURL != "https://github.com/owner/repo" {
+		t.Fatalf("details URL = %q, want repository URL", fixture.state.checkDetailsURL)
+	}
 }
 
 func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
@@ -601,6 +604,28 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+func TestServiceReportsModelFailureCause(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: errors.New("provider rejected response schema")},
+	})
+
+	err := fixture.service.Run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: want error")
+	}
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	if output["title"] != "Review failed during model analysis." {
+		t.Fatalf("title = %v, want model analysis stage", output["title"])
+	}
+	summary, ok := output["summary"].(string)
+	if !ok || !strings.Contains(summary, "provider rejected response schema") {
+		t.Fatalf("summary = %v, want provider failure", output["summary"])
 	}
 }
 
@@ -807,6 +832,7 @@ type serviceServerState struct {
 	lastUpdateReview   map[string]any
 	lastCreateCheckRun map[string]any
 	lastUpdateCheckRun map[string]any
+	checkDetailsURL    string
 	submitReviewStatus int
 }
 
@@ -1142,6 +1168,9 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			return
 		}
 		state.lastUpdateCheckRun = body
+		if body["status"] == "in_progress" {
+			state.checkDetailsURL, _ = body["details_url"].(string)
+		}
 		checkIDText := strings.TrimPrefix(request.URL.Path, "/repos/owner/repo/check-runs/")
 		for index, item := range state.checkRuns {
 			if fmt.Sprintf("%.0f", item["id"]) != checkIDText {

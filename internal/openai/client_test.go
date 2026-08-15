@@ -153,6 +153,11 @@ func TestReviewDoesNotRetryAuthenticationFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want authentication error")
 	}
+	for _, detail := range []string{"HTTP 401 Unauthorized", "request_failed"} {
+		if !strings.Contains(err.Error(), detail) {
+			t.Fatalf("error = %q, want %q", err, detail)
+		}
+	}
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1", state.requestCount)
 	}
