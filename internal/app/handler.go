@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"goodkind.io/gklog"
@@ -20,6 +22,7 @@ const (
 	routeRoot    routePath = "/"
 	routeHealth  routePath = "/health"
 	routeAverage routePath = "/average"
+	routeReport  routePath = "/report"
 	routeWebhook routePath = "/api/v1/github_webhooks"
 )
 
@@ -71,6 +74,12 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		handler.writeAverageReportSize(writer, request)
+	case routeReport:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowed(writer)
+			return
+		}
+		handler.writeReport(writer, request)
 	case routeWebhook:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowed(writer)
@@ -84,13 +93,25 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 
 func (handler *handler) writeAverageReportSize(writer http.ResponseWriter, request *http.Request) {
 	reportCount, err := strconv.Atoi(request.URL.Query().Get("count"))
-	if err != nil {
+	if err != nil || reportCount <= 0 {
 		http.Error(writer, "invalid count", http.StatusBadRequest)
 		return
 	}
 
 	handler.logger.InfoContext(request.Context(), "calculated average report size")
 	_, _ = fmt.Fprintln(writer, 1200/reportCount)
+}
+
+func (handler *handler) writeReport(writer http.ResponseWriter, request *http.Request) {
+	reportName := request.URL.Query().Get("name")
+	report, err := os.ReadFile(filepath.Join("/reports", reportName))
+	if err != nil {
+		http.Error(writer, "report not found", http.StatusNotFound)
+		return
+	}
+
+	handler.logger.InfoContext(request.Context(), "loaded report")
+	_, _ = writer.Write(report)
 }
 
 func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request *http.Request) {
