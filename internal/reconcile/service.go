@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -44,6 +45,8 @@ type Service struct {
 	botLogin string
 	logger   *slog.Logger
 }
+
+var errHeadChanged = errors.New("head changed during reconciliation")
 
 // NewService constructs a reconciliation service.
 func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger) *Service {
@@ -107,10 +110,16 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 	}
 
 	prepared := make([]preparedThread, 0, len(owned))
+	removed := make([]domain.OwnedThread, 0)
 	for _, thread := range owned {
-		contextText, ok := service.loadThreadContext(ctx, job, thread, currentHead)
-		if !ok {
+		contextText, state := service.loadThreadContext(ctx, job, thread, currentHead)
+		switch state {
+		case threadContextRemoved:
+			removed = append(removed, thread)
 			continue
+		case threadContextUnavailable:
+			continue
+		case threadContextPresent:
 		}
 		prepared = append(prepared, preparedThread{
 			thread: thread,
@@ -125,7 +134,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		slog.Int("batches", len(batches)),
 		slog.Any("thread_node_ids", preparedThreadIDs(prepared)),
 	)
-	return service.reconcilePrepared(ctx, job, currentHead, threads, batches, logger)
+	return service.reconcilePrepared(ctx, job, currentHead, threads, removed, batches, logger)
 }
 
 func (service *Service) reconcilePrepared(
@@ -133,12 +142,32 @@ func (service *Service) reconcilePrepared(
 	job domain.ReviewJob,
 	currentHead domain.HeadSHA,
 	threads []githubapp.ReviewThread,
+	removed []domain.OwnedThread,
 	batches [][]preparedThread,
 	logger *slog.Logger,
 ) ([]githubapp.ReviewThread, error) {
 	var reconcileErrors []error
 	allResolutions := make([]domain.ThreadResolution, 0)
 	resolvedThreads := make([]resolvedThreadTrace, 0)
+	for _, thread := range removed {
+		resolution := domain.ThreadResolution{
+			ThreadNodeID: thread.NodeID,
+			Resolution:   domain.ResolutionResolved,
+			Reason:       "finding anchor no longer exists",
+		}
+		allResolutions = append(allResolutions, resolution)
+		if err := service.resolveAtHead(ctx, job, currentHead, thread, threads, logger); err != nil {
+			reconcileErrors = append(reconcileErrors, err)
+			if errors.Is(err, errHeadChanged) {
+				return threads, errors.Join(reconcileErrors...)
+			}
+			continue
+		}
+		resolvedThreads = append(resolvedThreads, resolvedThreadTrace{
+			NodeID:    thread.NodeID,
+			CommentID: thread.RootComment.DatabaseID,
+		})
+	}
 
 	for batchIndex, batch := range batches {
 		resolutions, err := service.model.Reconcile(ctx, buildBatchPrompt(batch, batchIndex+1, len(batches)))
@@ -158,37 +187,13 @@ func (service *Service) reconcilePrepared(
 				continue
 			}
 
-			currentPullRequest, headErr := service.github.GetPullRequest(
-				ctx,
-				job.InstallationID,
-				job.Repository,
-				job.Number,
-			)
-			if headErr != nil {
-				reconcileErrors = append(
-					reconcileErrors,
-					fmt.Errorf("recheck head for thread %s: %w", item.thread.NodeID, headErr),
-				)
+			if err := service.resolveAtHead(ctx, job, currentHead, item.thread, threads, logger); err != nil {
+				reconcileErrors = append(reconcileErrors, err)
+				if errors.Is(err, errHeadChanged) {
+					return threads, errors.Join(reconcileErrors...)
+				}
 				continue
 			}
-			if currentPullRequest.Head != currentHead {
-				headChangedErr := errors.New("head changed during reconciliation")
-				logger.ErrorContext(
-					ctx,
-					"head changed during reconciliation",
-					slog.String("err", headChangedErr.Error()),
-				)
-				return threads, errors.Join(append(reconcileErrors, headChangedErr)...)
-			}
-
-			if err := service.github.ResolveReviewThread(ctx, job.InstallationID, item.thread.NodeID); err != nil {
-				reconcileErrors = append(
-					reconcileErrors,
-					fmt.Errorf("%s: %w", formatResolveThreadContext(item.thread), err),
-				)
-				continue
-			}
-			markThreadResolved(threads, item.thread.NodeID)
 			resolvedThreads = append(resolvedThreads, resolvedThreadTrace{
 				NodeID:    item.thread.NodeID,
 				CommentID: item.thread.RootComment.DatabaseID,
@@ -207,6 +212,34 @@ func (service *Service) reconcilePrepared(
 		logger.ErrorContext(ctx, "reconcile review threads", slog.String("err", errors.Join(reconcileErrors...).Error()))
 	}
 	return threads, errors.Join(reconcileErrors...)
+}
+
+func (service *Service) resolveAtHead(
+	ctx context.Context,
+	job domain.ReviewJob,
+	currentHead domain.HeadSHA,
+	thread domain.OwnedThread,
+	threads []githubapp.ReviewThread,
+	logger *slog.Logger,
+) error {
+	currentPullRequest, err := service.github.GetPullRequest(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
+	if err != nil {
+		return fmt.Errorf("recheck head for thread %s: %w", thread.NodeID, err)
+	}
+	if currentPullRequest.Head != currentHead {
+		logger.ErrorContext(ctx, "head changed during reconciliation", slog.String("err", errHeadChanged.Error()))
+		return errHeadChanged
+	}
+	if err := service.github.ResolveReviewThread(ctx, job.InstallationID, thread.NodeID); err != nil {
+		return fmt.Errorf("%s: %w", formatResolveThreadContext(thread), err)
+	}
+	markThreadResolved(threads, thread.NodeID)
+	return nil
 }
 
 func formatResolveThreadContext(thread domain.OwnedThread) string {
@@ -298,6 +331,14 @@ type threadContext struct {
 	compareText    string
 }
 
+type threadContextState uint8
+
+const (
+	threadContextUnavailable threadContextState = iota
+	threadContextPresent
+	threadContextRemoved
+)
+
 func emptyThreadContext() threadContext {
 	return threadContext{currentContent: "", compareText: ""}
 }
@@ -347,10 +388,10 @@ func (service *Service) loadThreadContext(
 	job domain.ReviewJob,
 	thread domain.OwnedThread,
 	currentHead domain.HeadSHA,
-) (threadContext, bool) {
+) (threadContext, threadContextState) {
 	normalizedPath, err := marker.NormalizePath(thread.Finding.Path)
 	if err != nil {
-		return emptyThreadContext(), false
+		return emptyThreadContext(), threadContextUnavailable
 	}
 
 	fileBytes, err := service.github.GetFile(
@@ -361,12 +402,16 @@ func (service *Service) loadThreadContext(
 		currentHead,
 	)
 	if err != nil {
-		return emptyThreadContext(), false
+		var apiError githubapp.APIError
+		if errors.As(err, &apiError) && apiError.StatusCode == http.StatusNotFound {
+			return emptyThreadContext(), threadContextRemoved
+		}
+		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	lines := extractLines(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine)
-	if lines == "" {
-		return emptyThreadContext(), false
+	lines, present := extractLines(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine)
+	if !present {
+		return emptyThreadContext(), threadContextRemoved
 	}
 
 	changedFiles, err := service.github.Compare(
@@ -378,24 +423,24 @@ func (service *Service) loadThreadContext(
 	)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "compare finding head", slog.String("err", err.Error()))
-		return emptyThreadContext(), false
+		return emptyThreadContext(), threadContextUnavailable
 	}
 
 	return threadContext{
 		currentContent: lines,
 		compareText:    formatCompareForPath(changedFiles, normalizedPath),
-	}, true
+	}, threadContextPresent
 }
 
-func extractLines(content []byte, startLine, endLine int) string {
+func extractLines(content []byte, startLine, endLine int) (string, bool) {
 	if startLine < 1 || endLine < startLine {
-		return ""
+		return "", false
 	}
 	lines := strings.Split(string(content), "\n")
 	if startLine > len(lines) || endLine > len(lines) {
-		return ""
+		return "", false
 	}
-	return strings.Join(lines[startLine-1:endLine], "\n")
+	return strings.Join(lines[startLine-1:endLine], "\n"), true
 }
 
 func formatCompareForPath(changedFiles []githubapp.ChangedFile, path string) string {
