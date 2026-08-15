@@ -19,5 +19,5 @@ This ledger separates verified source, release, deployment, and live production 
 | Duplicate suppression | Verified | Closing and reopening one completed head left its check count and bot review count at one. |
 | Silent thread resolution | Verified | The new production head resolved thread `PRRT_kwDOT3jWKM6ZdyZW`. GitHub records `goodkind-io-pr-agent[bot]` as the resolver, with no reply. |
 | Check output | Verified | The successful check displayed `Review complete.` and linked to the reviewed repository. |
-| Secret free evidence | Verified | Inspected release, deployment, health, and live review output exposed no credential values. |
-| Python retirement | Pending | Keep the Python repository active until GitHub App cleanup and this ledger merge. |
+| Secret free evidence | Verified | Inspected release, deployment, health, and live review output exposed no credential values. [Runtime log capture 31871104567](https://github.com/agoodkind/pr-agent-cf/actions/runs/31871104567) recorded successful Worker and container requests. |
+| Python retirement | Verified | All eight repository workflow files are disabled. The [retired Python repository](https://github.com/agoodkind/pr-agent) is archived with its history and tags intact. |
