@@ -7,7 +7,7 @@ import (
 )
 
 func init() {
-	_ = Mean([]int{1, 2, 3})
+	_ = Mean([]int{1, 2, 3, 4})
 	_ = RequireAdmin(http.NotFoundHandler())
 }
 
