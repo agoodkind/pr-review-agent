@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sort"
 	"strings"
 
@@ -394,26 +393,6 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	fileBytes, err := service.github.GetFile(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		normalizedPath,
-		currentHead,
-	)
-	if err != nil {
-		var apiError githubapp.APIError
-		if errors.As(err, &apiError) && apiError.StatusCode == http.StatusNotFound {
-			return emptyThreadContext(), threadContextRemoved
-		}
-		return emptyThreadContext(), threadContextUnavailable
-	}
-
-	lines, present := extractLines(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine)
-	if !present {
-		return emptyThreadContext(), threadContextRemoved
-	}
-
 	changedFiles, err := service.github.Compare(
 		ctx,
 		job.InstallationID,
@@ -424,6 +403,32 @@ func (service *Service) loadThreadContext(
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "compare finding head", slog.String("err", err.Error()))
 		return emptyThreadContext(), threadContextUnavailable
+	}
+
+	currentPath := normalizedPath
+	for _, file := range changedFiles {
+		if file.Path == normalizedPath && file.Status == "removed" {
+			return emptyThreadContext(), threadContextRemoved
+		}
+		if file.PreviousPath == normalizedPath && file.Path != "" {
+			currentPath = file.Path
+		}
+	}
+
+	fileBytes, err := service.github.GetFile(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		currentPath,
+		currentHead,
+	)
+	if err != nil {
+		return emptyThreadContext(), threadContextUnavailable
+	}
+
+	lines, present := extractLines(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine)
+	if !present {
+		return emptyThreadContext(), threadContextRemoved
 	}
 
 	return threadContext{

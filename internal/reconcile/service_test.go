@@ -381,6 +381,50 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 	}
 }
 
+func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	const renamedPath = "internal/app/server.go"
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-renamed", body, finding, false),
+		},
+		files: map[string][]byte{
+			renamedPath: []byte("line1\nissue line\nline3"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         renamedPath,
+			PreviousPath: finding.Path,
+			Status:       "renamed",
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-renamed",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "defect remains after rename",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 || !strings.Contains(model.prompts[0], "issue line") {
+		t.Fatalf("model prompts = %q, want renamed file context", model.prompts)
+	}
+	if len(github.resolveCalls) != 0 {
+		t.Fatalf("resolve calls = %v, want none", github.resolveCalls)
+	}
+}
+
 func sampleFinding() domain.Finding {
 	return domain.Finding{
 		Path:       "internal/app/handler.go",
