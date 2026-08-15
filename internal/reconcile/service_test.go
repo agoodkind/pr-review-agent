@@ -347,7 +347,7 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 	}
 }
 
-func TestReconcileLeavesMissingContextOpen(t *testing.T) {
+func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 	finding := sampleFinding()
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
@@ -359,15 +359,57 @@ func TestReconcileLeavesMissingContextOpen(t *testing.T) {
 		threads: []githubapp.ReviewThread{
 			ownedThread("thread-missing", body, finding, false),
 		},
-		getFileErrors: map[string]error{
-			finding.Path: errors.New("file not found"),
+		files: map[string][]byte{
+			finding.Path: []byte("line1"),
 		},
+	}
+	model := &fakeModel{}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	threads, err := service.Reconcile(context.Background(), testJob())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 0 {
+		t.Fatalf("model prompt count = %d, want 0 for removed anchor", len(model.prompts))
+	}
+	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-missing" {
+		t.Fatalf("resolve calls = %v, want [thread-missing]", github.resolveCalls)
+	}
+	if !threads[0].Resolved {
+		t.Fatal("thread remains unresolved")
+	}
+}
+
+func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	const renamedPath = "internal/app/server.go"
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-renamed", body, finding, false),
+		},
+		files: map[string][]byte{
+			renamedPath: []byte("line1\nissue line\nline3"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         renamedPath,
+			PreviousPath: finding.Path,
+			Status:       "renamed",
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+			PatchPresent: true,
+		}},
 	}
 	model := &fakeModel{
 		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-missing",
-			Resolution:   domain.ResolutionResolved,
-			Reason:       "fixed",
+			ThreadNodeID: "thread-renamed",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "defect remains after rename",
 		}},
 	}
 
@@ -375,8 +417,8 @@ func TestReconcileLeavesMissingContextOpen(t *testing.T) {
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(model.prompts) != 0 {
-		t.Fatalf("model prompt count = %d, want 0 without context", len(model.prompts))
+	if len(model.prompts) != 1 || !strings.Contains(model.prompts[0], "issue line") {
+		t.Fatalf("model prompts = %q, want renamed file context", model.prompts)
 	}
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none", github.resolveCalls)
