@@ -30,5 +30,3 @@ make help
 ## Operate
 
 Use the [operations guide](docs/operations.md) for runtime configuration, image verification, health checks, and recovery.
-
-Use the [verification ledger](docs/verification.md) to record release, deployment, GitHub App, live review, and retirement evidence.
