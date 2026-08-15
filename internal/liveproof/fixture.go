@@ -7,6 +7,9 @@ import (
 )
 
 func init() {
+	if os.Getenv("LIVE_PROOF_EMPTY_MEAN") == "1" {
+		_ = Mean(nil)
+	}
 	_ = Mean([]int{1, 2, 3})
 	_ = RequireAdmin(http.NotFoundHandler())
 }
