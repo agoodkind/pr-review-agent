@@ -25,7 +25,13 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 	}
 	cache := queue.NewDeliveryCache(100, time.Hour, time.Now)
 	dispatcher := queue.NewDispatcher(1, blockingRunner{release: releaseJob}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	handler := newHandler(cfg, cache, dispatcher, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler := newHandler(
+		cfg,
+		cache,
+		dispatcher,
+		passThroughAdmitter{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -79,6 +85,18 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 
 type blockingRunner struct {
 	release chan struct{}
+}
+
+type passThroughAdmitter struct{}
+
+func (passThroughAdmitter) Admit(_ context.Context, job domain.ReviewJob) (domain.ReviewJob, error) {
+	job.CheckRunID = 1
+	job.CheckRunStatus = "in_progress"
+	return job, nil
+}
+
+func (passThroughAdmitter) Reject(context.Context, domain.ReviewJob, error) error {
+	return nil
 }
 
 func (runner blockingRunner) Run(context.Context, domain.ReviewJob) error {

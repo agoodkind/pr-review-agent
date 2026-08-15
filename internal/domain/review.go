@@ -155,7 +155,10 @@ func findingKey(finding Finding) string {
 
 // ReviewJob is one webhook delivery queued for review work.
 type ReviewJob struct {
-	DeliveryID string
+	DeliveryID         string
+	CheckRunID         int64
+	CheckRunStatus     string
+	CheckRunConclusion string
 	PullRequestRef
 }
 

@@ -1,16 +1,26 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
+
+var errReviewQueueFull = errors.New("review queue full")
+
+type reviewAdmitter interface {
+	Admit(context.Context, domain.ReviewJob) (domain.ReviewJob, error)
+	Reject(context.Context, domain.ReviewJob, error) error
+}
 
 type routePath string
 
@@ -24,6 +34,7 @@ type handler struct {
 	webhookHMACKey []byte
 	cache          *queue.DeliveryCache
 	dispatcher     *queue.Dispatcher
+	admitter       reviewAdmitter
 	logger         *slog.Logger
 }
 
@@ -31,12 +42,14 @@ func newHandler(
 	cfg config.Config,
 	cache *queue.DeliveryCache,
 	dispatcher *queue.Dispatcher,
+	admitter reviewAdmitter,
 	logger *slog.Logger,
 ) *handler {
 	return &handler{
 		webhookHMACKey: cfg.GitHubWebhookSecret, // gitleaks:allow
 		cache:          cache,
 		dispatcher:     dispatcher,
+		admitter:       admitter,
 		logger:         logger,
 	}
 }
@@ -125,9 +138,20 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		return
 	}
 
-	if !handler.dispatcher.Enqueue(event.Job()) {
+	job, err := handler.admitter.Admit(ctx, event.Job())
+	if err != nil {
 		handler.cache.Release(deliveryID)
-		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", "review queue full"))
+		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", err.Error()))
+		http.Error(writer, "review admission failed", http.StatusBadGateway)
+		return
+	}
+
+	if !handler.dispatcher.Enqueue(job) {
+		handler.cache.Release(deliveryID)
+		if err := handler.admitter.Reject(ctx, job, errReviewQueueFull); err != nil {
+			logger.ErrorContext(ctx, "complete rejected review check", slog.String("err", err.Error()))
+		}
+		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", errReviewQueueFull.Error()))
 		http.Error(writer, "queue full", http.StatusServiceUnavailable)
 		return
 	}

@@ -431,7 +431,7 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 		},
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 	fixture.state.reviewPages = [][]map[string]any{{}}
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -500,7 +500,7 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 		}},
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -536,7 +536,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		}},
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		headAfterAnalysis: testStaleHeadSHA,
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -593,7 +593,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		submitReviewStatus: http.StatusInternalServerError,
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: want error")
 	}
@@ -621,7 +621,7 @@ func TestServiceCompletesCheckAfterReviewContextExpires(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 
-	err := fixture.service.Run(ctx, fixture.job())
+	err := fixture.run(ctx, fixture.job())
 	if err == nil {
 		t.Fatal("Run: want timeout error")
 	}
@@ -638,7 +638,7 @@ func TestServiceCompletesCheckAfterModelPanic(t *testing.T) {
 		model: panicModel{},
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: want panic error")
 	}
@@ -655,7 +655,7 @@ func TestServiceCreatesAndCompletesCheckBeforePullRequestLoadFails(t *testing.T)
 		pullRequestStatus: http.StatusInternalServerError,
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: want pull request error")
 	}
@@ -675,7 +675,7 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 		reconcileErr: errors.New("reconcile failed"),
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: want error")
 	}
@@ -695,7 +695,7 @@ func TestServiceReportsModelFailureCause(t *testing.T) {
 		model: &sequenceModel{err: errors.New("provider rejected response schema")},
 	})
 
-	err := fixture.service.Run(context.Background(), fixture.job())
+	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: want error")
 	}
@@ -771,7 +771,7 @@ func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinC
 		}}},
 	})
 
-	if err := fixture.service.Run(context.Background(), fixture.job()); err != nil {
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
@@ -816,7 +816,7 @@ func TestServiceRequestsChangesWithoutPublishingWhenThreadCapIsFull(t *testing.T
 		}},
 	})
 
-	if err := fixture.service.Run(context.Background(), fixture.job()); err != nil {
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
@@ -840,7 +840,7 @@ func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 
 	go func() {
 		defer waitGroup.Done()
-		if err := fixture.service.Run(context.Background(), job); err != nil {
+		if err := fixture.run(context.Background(), job); err != nil {
 			t.Errorf("first Run: %v", err)
 		}
 	}()
@@ -861,7 +861,7 @@ func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 				Head:           job.Head,
 			},
 		}
-		if err := fixture.service.Run(context.Background(), secondJob); err != nil {
+		if err := fixture.run(context.Background(), secondJob); err != nil {
 			t.Errorf("second Run: %v", err)
 		}
 	}()
@@ -1139,6 +1139,14 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		reconciler: reconciler,
 		model:      model,
 	}
+}
+
+func (fixture *serviceFixture) run(ctx context.Context, job domain.ReviewJob) error {
+	admitted, err := fixture.service.Admit(ctx, job)
+	if err != nil {
+		return err
+	}
+	return fixture.service.Run(ctx, admitted)
 }
 
 func (fixture *serviceFixture) job() domain.ReviewJob {
