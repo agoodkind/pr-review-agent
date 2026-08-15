@@ -378,6 +378,19 @@ func (model *sequenceModel) Review(_ context.Context, prompt string) (domain.Rev
 	return result, nil
 }
 
+type contextBlockingModel struct{}
+
+func (contextBlockingModel) Review(ctx context.Context, _ string) (domain.ReviewResult, error) {
+	<-ctx.Done()
+	return domain.ReviewResult{}, ctx.Err()
+}
+
+type panicModel struct{}
+
+func (panicModel) Review(context.Context, string) (domain.ReviewResult, error) {
+	panic("model panic")
+}
+
 func containsTypographicDash(value string) bool {
 	for _, character := range value {
 		switch character {
@@ -441,10 +454,10 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 	}
 
 	wantOrder := []string{
-		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
+		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -483,10 +496,10 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 	}
 
 	wantOrder := []string{
-		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
+		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
@@ -516,10 +529,10 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 	}
 
 	wantOrder := []string{
-		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
+		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -545,10 +558,10 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 	}
 
 	wantOrder := []string{
-		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
+		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/pulls/7",
 		"PATCH /repos/owner/repo/check-runs/77",
@@ -573,16 +586,72 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 	}
 
 	wantOrder := []string{
-		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
+		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+func TestServiceCompletesCheckAfterReviewContextExpires(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: contextBlockingModel{},
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	err := fixture.service.Run(ctx, fixture.job())
+	if err == nil {
+		t.Fatal("Run: want timeout error")
+	}
+	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+func TestServiceCompletesCheckAfterModelPanic(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: panicModel{},
+	})
+
+	err := fixture.service.Run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: want panic error")
+	}
+	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+func TestServiceCreatesAndCompletesCheckBeforePullRequestLoadFails(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		pullRequestStatus: http.StatusInternalServerError,
+	})
+
+	err := fixture.service.Run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: want pull request error")
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1", len(fixture.state.checkRuns))
+	}
+	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
+	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
@@ -805,6 +874,7 @@ func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 type serviceFixtureOptions struct {
 	reviewPages               [][]map[string]any
 	headAfterAnalysis         string
+	pullRequestStatus         int
 	submitReviewStatus        int
 	reconcileErr              error
 	reconcileThreads          []githubapp.ReviewThread
@@ -829,6 +899,7 @@ type serviceServerState struct {
 	headSHA            string
 	headAfterAnalysis  string
 	pullRequestReads   int32
+	pullRequestStatus  int
 	lastSubmitReview   map[string]any
 	lastUpdateReview   map[string]any
 	lastCreateCheckRun map[string]any
@@ -957,6 +1028,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		nextCheckRunID:     77,
 		headSHA:            testHeadSHA,
 		headAfterAnalysis:  options.headAfterAnalysis,
+		pullRequestStatus:  options.pullRequestStatus,
 		submitReviewStatus: options.submitReviewStatus,
 	}
 	if len(options.reviewPages) > 0 {
@@ -964,6 +1036,9 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 	if state.submitReviewStatus == 0 {
 		state.submitReviewStatus = http.StatusOK
+	}
+	if state.pullRequestStatus == 0 {
+		state.pullRequestStatus = http.StatusOK
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -1041,6 +1116,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		testBotLogin,
 		minimumImportance,
 		maximumUnresolvedComments,
+		10*time.Minute,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
@@ -1196,6 +1272,10 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 	}
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
+		if state.pullRequestStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.pullRequestStatus, map[string]any{"message": "pull request load failed"})
+			return
+		}
 		readCount := atomic.AddInt32(&state.pullRequestReads, 1)
 		head := state.headSHA
 		if readCount > 1 && state.headAfterAnalysis != "" {

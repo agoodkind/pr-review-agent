@@ -49,35 +49,31 @@ func (dispatcher *Dispatcher) Start(ctx context.Context) {
 	dispatcher.mu.Unlock()
 
 	dispatcher.wg.Go(func() {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				dispatcher.logger.ErrorContext(
-					ctx,
-					"dispatcher worker panicked",
-					slog.Any("panic", recovered),
-					slog.String("err", "dispatcher worker panicked"),
-				)
-			}
-		}()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case job, ok := <-dispatcher.jobs:
-				if !ok {
-					return
-				}
-				if err := dispatcher.runner.Run(ctx, job); err != nil {
-					dispatcher.logger.ErrorContext(
-						ctx,
-						"review job failed",
-						slog.String("error", err.Error()),
-						slog.String("err", err.Error()),
-					)
-				}
-			}
+		for job := range dispatcher.jobs {
+			dispatcher.runJob(ctx, job)
 		}
 	})
+}
+
+func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			dispatcher.logger.ErrorContext(
+				ctx,
+				"dispatcher job panicked",
+				slog.Any("panic", recovered),
+				slog.String("err", "dispatcher job panicked"),
+			)
+		}
+	}()
+	if err := dispatcher.runner.Run(ctx, job); err != nil {
+		dispatcher.logger.ErrorContext(
+			ctx,
+			"review job failed",
+			slog.String("error", err.Error()),
+			slog.String("err", err.Error()),
+		)
+	}
 }
 
 // Enqueue adds a job without blocking. It returns false when the queue is full.

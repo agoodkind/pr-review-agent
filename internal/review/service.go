@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"runtime/debug"
 	"sort"
 	"strings"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
@@ -18,18 +20,21 @@ import (
 )
 
 const (
-	checkSummarySuccess   = "Review complete."
-	checkSummaryFailure   = "Review failed."
-	checkSummaryCancelled = "Review cancelled."
-	checkFailureReviews   = "Review failed while reading existing reviews."
-	checkFailureReconcile = "Review failed while reconciling existing findings."
-	checkFailureDiff      = "Review failed while collecting the pull request diff."
-	checkFailureAnalysis  = "Review failed during model analysis."
-	checkFailureRefresh   = "Review failed while refreshing the pull request head."
-	checkFailureRender    = "Review failed while rendering inline findings."
-	checkFailureSummary   = "Review failed while updating the visible summary."
-	checkFailurePublish   = "Review failed while publishing the final decision."
-	maxCheckFailureRunes  = 1000
+	checkSummarySuccess      = "Review complete."
+	checkSummaryFailure      = "Review failed."
+	checkSummaryCancelled    = "Review cancelled."
+	checkFailureReviews      = "Review failed while reading existing reviews."
+	checkFailurePullRequest  = "Review failed while loading the pull request."
+	checkFailureReconcile    = "Review failed while reconciling existing findings."
+	checkFailureDiff         = "Review failed while collecting the pull request diff."
+	checkFailureAnalysis     = "Review failed during model analysis."
+	checkFailureRefresh      = "Review failed while refreshing the pull request head."
+	checkFailureRender       = "Review failed while rendering inline findings."
+	checkFailureSummary      = "Review failed while updating the visible summary."
+	checkFailurePublish      = "Review failed while publishing the final decision."
+	checkFailurePanic        = "Review failed after an internal panic."
+	maxCheckFailureRunes     = 1000
+	maximumCompletionTimeout = 30 * time.Second
 )
 
 // GitHub loads pull request state and publishes review lifecycle updates.
@@ -65,6 +70,8 @@ type Service struct {
 	checkName                 string
 	minimumImportance         int
 	maximumUnresolvedComments int
+	reviewTimeout             time.Duration
+	checkCompletionTimeout    time.Duration
 	logger                    *slog.Logger
 }
 
@@ -78,11 +85,13 @@ func NewService(
 	botLogin string,
 	minimumImportance int,
 	maximumUnresolvedComments int,
+	reviewTimeout time.Duration,
 	logger *slog.Logger,
 ) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	completionTimeout := min(reviewTimeout/4, maximumCompletionTimeout)
 	return &Service{
 		github:                    github,
 		collector:                 collector,
@@ -93,13 +102,15 @@ func NewService(
 		checkName:                 config.ReviewCheckName,
 		minimumImportance:         minimumImportance,
 		maximumUnresolvedComments: maximumUnresolvedComments,
+		reviewTimeout:             reviewTimeout - completionTimeout,
+		checkCompletionTimeout:    completionTimeout,
 		logger:                    logger,
 	}
 }
 
 // Run reviews one pull request head and publishes the GitHub review lifecycle.
 func (service *Service) Run(parent context.Context, job domain.ReviewJob) error {
-	ctx, cancel := context.WithTimeout(parent, config.ReviewTimeout)
+	ctx, cancel := context.WithTimeout(parent, service.reviewTimeout)
 	defer cancel()
 	logger := service.logger.With(
 		slog.String("delivery_id", job.DeliveryID),
@@ -116,15 +127,40 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 
 	unlock := service.locker.Lock(job.Key())
 	defer unlock()
-	return service.runLocked(ctx, job)
-}
-
-func (service *Service) runLocked(ctx context.Context, job domain.ReviewJob) error {
-	logger := gklog.L(ctx)
-	pullRequest, head, checkRun, err := service.prepare(ctx, job)
+	admissionCtx, admissionCancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		service.checkCompletionTimeout,
+	)
+	defer admissionCancel()
+	checkRun, err := service.ensureCheckRun(admissionCtx, job, job.Head)
 	if err != nil {
 		return err
 	}
+	return service.runLocked(ctx, job, checkRun)
+}
+
+func (service *Service) runLocked(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRun githubapp.CheckRun,
+) (runErr error) {
+	logger := gklog.L(ctx)
+	head := job.Head
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			return
+		}
+		panicErr := fmt.Errorf("review panic: %v", recovered)
+		logger.ErrorContext(
+			ctx,
+			"review job panicked",
+			slog.Any("panic", recovered),
+			slog.String("stack", string(debug.Stack())),
+			slog.String("err", panicErr.Error()),
+		)
+		runErr = service.failCheck(ctx, job, checkRun.ID, checkFailurePanic, panicErr)
+	}()
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
 	logger.InfoContext(
@@ -137,6 +173,18 @@ func (service *Service) runLocked(ctx context.Context, job domain.ReviewJob) err
 	if checkRun.Status == "completed" && checkRun.Conclusion == "success" {
 		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "completed_check"))
 		return nil
+	}
+	pullRequest, err := service.github.GetPullRequest(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
+	if err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, checkFailurePullRequest, err)
+	}
+	if pullRequest.Head != head {
+		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
 
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
@@ -273,30 +321,6 @@ func (service *Service) publish(
 	return nil
 }
 
-func (service *Service) prepare(
-	ctx context.Context,
-	job domain.ReviewJob,
-) (githubapp.PullRequest, domain.HeadSHA, githubapp.CheckRun, error) {
-	logger := gklog.L(ctx)
-	pullRequest, err := service.github.GetPullRequest(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-	)
-	if err != nil {
-		logger.ErrorContext(ctx, "get pull request", slog.String("err", err.Error()))
-		return githubapp.PullRequest{}, "", githubapp.CheckRun{}, fmt.Errorf("get pull request: %w", err)
-	}
-
-	checkRun, err := service.ensureCheckRun(ctx, job, pullRequest.Head)
-	if err != nil {
-		return githubapp.PullRequest{}, "", githubapp.CheckRun{}, err
-	}
-
-	return pullRequest, pullRequest.Head, checkRun, nil
-}
-
 func (service *Service) ensureCheckRun(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -344,7 +368,7 @@ func (service *Service) ensureCheckRun(
 
 func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
 	logger := gklog.L(ctx)
-	if err := service.github.CompleteCheckRun(
+	if err := service.completeCheckRun(
 		ctx,
 		job.InstallationID,
 		job.Repository,
@@ -371,7 +395,7 @@ func (service *Service) failCheck(
 		summary = checkSummaryFailure
 	}
 	if checkRunID != 0 {
-		completeErr := service.github.CompleteCheckRun(
+		completeErr := service.completeCheckRun(
 			ctx,
 			job.InstallationID,
 			job.Repository,
@@ -454,7 +478,7 @@ func findSummaryReview(reviews []githubapp.Review, botLogin string) (githubapp.R
 
 func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
 	logger := gklog.L(ctx)
-	if err := service.github.CompleteCheckRun(
+	if err := service.completeCheckRun(
 		ctx,
 		job.InstallationID,
 		job.Repository,
@@ -465,6 +489,34 @@ func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, c
 	); err != nil {
 		logger.ErrorContext(ctx, "complete cancelled check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete cancelled check run: %w", err)
+	}
+	return nil
+}
+
+func (service *Service) completeCheckRun(
+	ctx context.Context,
+	installationID int64,
+	repository domain.Repository,
+	checkRunID int64,
+	conclusion string,
+	title string,
+	summary string,
+) error {
+	logger := gklog.L(ctx)
+	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
+	defer cancel()
+	err := service.github.CompleteCheckRun(
+		completionCtx,
+		installationID,
+		repository,
+		checkRunID,
+		conclusion,
+		title,
+		summary,
+	)
+	if err != nil {
+		logger.ErrorContext(ctx, "complete check run", slog.String("err", err.Error()))
+		return fmt.Errorf("complete check run: %w", err)
 	}
 	return nil
 }

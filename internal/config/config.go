@@ -21,8 +21,6 @@ const (
 	ReasoningEffort = "high"
 	// ReviewCheckName is the GitHub check run name for review lifecycle.
 	ReviewCheckName = "PR-Agent Review"
-	// ReviewTimeout bounds one review job execution.
-	ReviewTimeout = 600 * time.Second
 	// QueueCapacity is the maximum number of queued review jobs.
 	QueueCapacity = 100
 	// DeliveryCacheCapacity is the maximum number of cached delivery ids.
@@ -47,6 +45,7 @@ type LookupEnv func(string) (string, bool)
 // Config holds validated service configuration.
 type Config struct {
 	Port                      string
+	ReviewTimeout             time.Duration
 	MinimumImportance         int
 	MaximumUnresolvedComments int
 	GitHubAppID               int64
@@ -92,6 +91,12 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	var missing []string
 
 	cfg.Port = loadPort(lookup)
+	reviewTimeout, ok := loadReviewTimeout(lookup)
+	if !ok {
+		missing = append(missing, "REVIEW_TIMEOUT")
+	} else {
+		cfg.ReviewTimeout = reviewTimeout
+	}
 	minimumImportance, ok := loadMinimumImportance(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_MIN_IMPORTANCE")
@@ -108,6 +113,18 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	missing = append(missing, loadClyde(lookup, &cfg)...)
 
 	return cfg, missing
+}
+
+func loadReviewTimeout(lookup LookupEnv) (time.Duration, bool) {
+	value, ok := lookup("REVIEW_TIMEOUT")
+	if !ok || strings.TrimSpace(value) == "" {
+		return 0, false
+	}
+	timeout, err := time.ParseDuration(value)
+	if err != nil || timeout <= 0 {
+		return 0, false
+	}
+	return timeout, true
 }
 
 func loadMaximumUnresolvedComments(lookup LookupEnv) (int, bool) {

@@ -68,6 +68,7 @@ func run(
 		slog.String("platform", runtime.GOOS+"/"+runtime.GOARCH),
 		slog.String("model", config.Model),
 		slog.String("reasoning_effort", config.ReasoningEffort),
+		slog.Duration("review_timeout", cfg.ReviewTimeout),
 		slog.Int("minimum_importance", cfg.MinimumImportance),
 		slog.Int("maximum_unresolved_comments", cfg.MaximumUnresolvedComments),
 		slog.String("github_bot_login", cfg.GitHubBotLogin),
