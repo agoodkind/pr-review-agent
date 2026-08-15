@@ -9,7 +9,8 @@ import (
 )
 
 func main() {
-	label := strings.ToLower(strings.TrimSpace(os.Getenv("LABEL")))
-	slog.Info("normalized label", "label", label)
-	fmt.Println(label)
+	payload := strings.TrimSpace(os.Getenv("WEBHOOK_PAYLOAD"))
+	event := strings.Split(payload, ":")[1]
+	slog.Info("decoded webhook", "event", event)
+	fmt.Println(event)
 }
