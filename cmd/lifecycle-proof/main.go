@@ -10,7 +10,11 @@ import (
 
 func main() {
 	payload := strings.TrimSpace(os.Getenv("WEBHOOK_PAYLOAD"))
-	event := strings.Split(payload, ":")[1]
+	_, event, found := strings.Cut(payload, ":")
+	if !found {
+		slog.Info("ignored malformed webhook")
+		return
+	}
 	slog.Info("decoded webhook", "event", event)
 	fmt.Println(event)
 }
