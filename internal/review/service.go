@@ -311,7 +311,7 @@ func (service *Service) publish(
 		slog.Int64("review_id", publishedReview.ID),
 		slog.String("event", string(analysis.Decision)),
 		slog.Int("inline_comments", len(comments)),
-		slog.Bool("visible_body", marker.HasSummary(body)),
+		slog.Bool("visible_body", true),
 	)
 
 	if err := service.succeed(ctx, job, checkRun.ID); err != nil {
@@ -422,24 +422,7 @@ func (service *Service) prepareReviewBody(
 ) (string, error) {
 	logger := gklog.L(ctx)
 	summaryReview, found := findSummaryReview(reviews, service.botLogin)
-	if decision == domain.ReviewDecisionApprove {
-		if found && summaryReview.Body != marker.Summary() {
-			if _, err := service.github.UpdateReview(
-				ctx,
-				job.InstallationID,
-				job.Repository,
-				job.Number,
-				summaryReview.ID,
-				marker.Summary(),
-			); err != nil {
-				logger.ErrorContext(ctx, "hide review summary", slog.String("err", err.Error()))
-				return "", fmt.Errorf("hide review summary: %w", err)
-			}
-			logger.InfoContext(ctx, "review summary updated", slog.Int64("review_id", summaryReview.ID), slog.Bool("visible", false))
-		}
-		return marker.Review(head), nil
-	}
-
+	body := RenderBody(head, decision)
 	if found {
 		if _, err := service.github.UpdateReview(
 			ctx,
@@ -447,7 +430,7 @@ func (service *Service) prepareReviewBody(
 			job.Repository,
 			job.Number,
 			summaryReview.ID,
-			RenderBody(head),
+			body,
 		); err != nil {
 			logger.ErrorContext(ctx, "update review summary", slog.String("err", err.Error()))
 			return "", fmt.Errorf("update review summary: %w", err)
@@ -455,7 +438,7 @@ func (service *Service) prepareReviewBody(
 		logger.InfoContext(ctx, "review summary updated", slog.Int64("review_id", summaryReview.ID), slog.Bool("visible", true))
 		return marker.Review(head), nil
 	}
-	return RenderBody(head), nil
+	return body, nil
 }
 
 func findSummaryReview(reviews []githubapp.Review, botLogin string) (githubapp.Review, bool) {

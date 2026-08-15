@@ -279,8 +279,9 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", review["event"])
 	}
-	if review["body"] != marker.Review(domain.HeadSHA(testDefectiveHead)) {
-		t.Fatalf("body = %v, want hidden marker", review["body"])
+	wantBody := reviewcore.RenderBody(domain.HeadSHA(testDefectiveHead), domain.ReviewDecisionApprove)
+	if review["body"] != wantBody {
+		t.Fatalf("body = %v, want %q", review["body"], wantBody)
 	}
 	comments, ok := review["comments"].([]any)
 	if !ok || len(comments) != 0 {
@@ -601,7 +602,8 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 	if fixture.githubState.summaryReviewCount() != 1 {
 		t.Fatalf("summary review count = %d, want 1", fixture.githubState.summaryReviewCount())
 	}
-	if fixture.githubState.summaryReviewBody() != reviewcore.RenderBody(domain.HeadSHA(testCorrectedHead)) {
+	wantBody := reviewcore.RenderBody(domain.HeadSHA(testCorrectedHead), domain.ReviewDecisionRequestChanges)
+	if fixture.githubState.summaryReviewBody() != wantBody {
 		t.Fatalf("summary body = %q, want current findings body", fixture.githubState.summaryReviewBody())
 	}
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
@@ -751,8 +753,9 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if approval["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
 		t.Fatalf("approval body = %v, want hidden marker", approval["body"])
 	}
-	if fixture.githubState.summaryReviewBody() != marker.Summary() {
-		t.Fatalf("summary body = %q, want hidden summary marker", fixture.githubState.summaryReviewBody())
+	wantSummary := reviewcore.RenderBody(domain.HeadSHA(testCorrectedHead), domain.ReviewDecisionApprove)
+	if fixture.githubState.summaryReviewBody() != wantSummary {
+		t.Fatalf("summary body = %q, want %q", fixture.githubState.summaryReviewBody(), wantSummary)
 	}
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {

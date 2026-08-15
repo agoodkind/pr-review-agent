@@ -10,8 +10,12 @@ import (
 )
 
 // RenderBody renders the single visible GitHub review summary.
-func RenderBody(head domain.HeadSHA) string {
-	return "## Findings\n\n" + marker.Summary() + "\n" + marker.Review(head)
+func RenderBody(head domain.HeadSHA, decision domain.ReviewDecision) string {
+	message := "No severe findings."
+	if decision == domain.ReviewDecisionRequestChanges {
+		message = "Severe findings are listed inline."
+	}
+	return "## Review\n\n" + message + "\n\n" + marker.Summary() + "\n" + marker.Review(head)
 }
 
 // RenderInline renders anchored findings as GitHub inline review comments.
