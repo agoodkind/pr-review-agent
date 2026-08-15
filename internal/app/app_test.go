@@ -437,6 +437,42 @@ func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
 }
 
+func TestShutdownCancelsActiveReviewAndCompletesCheck(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeBlockUntilCanceled: true,
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-shutdown",
+		body:       openedPayload(testDefectiveHead),
+	})
+	_ = response.Body.Close()
+	fixture.waitForClydeCalls(t, 1)
+	fixture.githubState.setHead(testCorrectedHead)
+	queued := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-shutdown-queued",
+		body:       synchronizePayload(testCorrectedHead),
+	})
+	_ = queued.Body.Close()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := fixture.application.Shutdown(shutdownCtx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	fixture.application = nil
+	if fixture.githubState.lastCheckConclusion() != "failure" {
+		t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
+	}
+	if fixture.githubState.terminalCheckCount() != 2 {
+		t.Fatalf("terminal checks = %d, want 2", fixture.githubState.terminalCheckCount())
+	}
+}
+
 func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	withIntegrationLock(t)
 	githubState := newGitHubServerState(testDefectiveHead)
@@ -736,6 +772,7 @@ type appFixtureOptions struct {
 	submitReviewStatus      int
 	changedFileCount        int
 	threadCount             int
+	clydeBlockUntilCanceled bool
 }
 
 type appFixture struct {
@@ -813,6 +850,7 @@ func wireAppFixture(
 
 	cfg := config.Config{
 		Port:                      "0",
+		ReviewTimeout:             10 * time.Minute,
 		MinimumImportance:         testMinimumImportance,
 		MaximumUnresolvedComments: 100,
 		GitHubAppID:               12345,
@@ -868,6 +906,7 @@ func newClydeServerState(options appFixtureOptions) *clydeServerState {
 		reconcileResponses: options.clydeReconcileResponses,
 		status:             options.clydeStatus,
 		reconcileStatus:    options.reconcileStatus,
+		blockUntilCanceled: options.clydeBlockUntilCanceled,
 	}
 	if len(state.responses) == 0 && state.status == 0 {
 		state.responses = []string{approveReviewContent()}
@@ -1234,6 +1273,18 @@ func (state *githubServerState) completedCheckCount() int {
 	count := 0
 	for _, item := range state.checkRuns {
 		if item["conclusion"] == "success" {
+			count++
+		}
+	}
+	return count
+}
+
+func (state *githubServerState) terminalCheckCount() int {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	count := 0
+	for _, item := range state.checkRuns {
+		if item["conclusion"] != "" {
 			count++
 		}
 	}
@@ -1766,6 +1817,7 @@ type clydeServerState struct {
 	reconcileStatus    int
 	requests           int32
 	reconcileRequests  int32
+	blockUntilCanceled bool
 }
 
 func (state *clydeServerState) requestCount() int32 {
@@ -1782,6 +1834,10 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	body, err := readJSONBody(request)
 	if err != nil {
 		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if state.blockUntilCanceled {
+		<-request.Context().Done()
 		return
 	}
 

@@ -62,6 +62,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		cfg.GitHubBotLogin,
 		cfg.MinimumImportance,
 		cfg.MaximumUnresolvedComments,
+		cfg.ReviewTimeout,
 		logger,
 	)
 
@@ -127,11 +128,11 @@ func (application *App) Shutdown(ctx context.Context) error {
 			shutdownErr = fmt.Errorf("shutdown http server: %w", err)
 		}
 	}
-	if err := application.dispatcher.Shutdown(ctx); err != nil && shutdownErr == nil {
-		shutdownErr = fmt.Errorf("shutdown dispatcher: %w", err)
-	}
 	if application.runCancel != nil {
 		application.runCancel()
+	}
+	if err := application.dispatcher.Shutdown(ctx); err != nil && shutdownErr == nil {
+		shutdownErr = fmt.Errorf("shutdown dispatcher: %w", err)
 	}
 	return shutdownErr
 }

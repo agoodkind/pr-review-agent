@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"strings"
 	"testing"
+	"time"
 )
 
 const testBotLogin = "test-review-agent[bot]"
@@ -46,6 +47,7 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		"CF_ACCESS_CLIENT_SECRET",
 		"REVIEW_MIN_IMPORTANCE",
 		"REVIEW_MAX_UNRESOLVED_COMMENTS",
+		"REVIEW_TIMEOUT",
 	} {
 		if !strings.Contains(err.Error(), secret) {
 			t.Fatalf("error %q missing %q", err.Error(), secret)
@@ -134,6 +136,16 @@ func TestLoadUsesConfiguredMaximumUnresolvedComments(t *testing.T) {
 	}
 }
 
+func TestLoadUsesConfiguredReviewTimeout(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{"REVIEW_TIMEOUT": "12m30s"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewTimeout != 12*time.Minute+30*time.Second {
+		t.Fatalf("ReviewTimeout = %s, want 12m30s", cfg.ReviewTimeout)
+	}
+}
+
 func TestLoadRejectsInvalidURLsAndAppIDs(t *testing.T) {
 	_, err := loadWithOverrides(map[string]string{
 		"GITHUB_APP_ID":  "0",
@@ -194,6 +206,7 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 		"CF_ACCESS_CLIENT_SECRET":        "fixture-cf-" + strings.Repeat("c", 8),
 		"REVIEW_MIN_IMPORTANCE":          "7",
 		"REVIEW_MAX_UNRESOLVED_COMMENTS": "10",
+		"REVIEW_TIMEOUT":                 "10m",
 	}
 	for key, value := range overrides {
 		values[key] = value
