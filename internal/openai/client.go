@@ -60,7 +60,8 @@ func (client *Client) Review(ctx context.Context, prompt string) (domain.ReviewR
 		return domain.ReviewResult{}, err
 	}
 	var result domain.ReviewResult
-	if err := json.Unmarshal([]byte(content), &result); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(content))
+	if err := decoder.Decode(&result); err != nil {
 		return domain.ReviewResult{}, errors.New("decode structured output: " + err.Error())
 	}
 	if err := result.Validate(); err != nil {
@@ -84,7 +85,8 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 	var response struct {
 		Resolutions []domain.ThreadResolution `json:"resolutions"`
 	}
-	if err := json.Unmarshal([]byte(content), &response); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(content))
+	if err := decoder.Decode(&response); err != nil {
 		return nil, errors.New("decode structured output: " + err.Error())
 	}
 	if err := domain.ValidateThreadResolutions(response.Resolutions); err != nil {
