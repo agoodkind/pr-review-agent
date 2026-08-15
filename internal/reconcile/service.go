@@ -143,7 +143,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 			if err := service.github.ResolveReviewThread(ctx, job.InstallationID, item.thread.NodeID); err != nil {
 				reconcileErrors = append(
 					reconcileErrors,
-					fmt.Errorf("resolve thread %s: %w", item.thread.NodeID, err),
+					fmt.Errorf("%s: %w", formatResolveThreadContext(item.thread), err),
 				)
 				continue
 			}
@@ -155,6 +155,16 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		service.logger.ErrorContext(ctx, "reconcile review threads", slog.String("err", errors.Join(reconcileErrors...).Error()))
 	}
 	return threads, errors.Join(reconcileErrors...)
+}
+
+func formatResolveThreadContext(thread domain.OwnedThread) string {
+	return fmt.Sprintf(
+		"resolve thread %s (outdated=%t, viewer_can_resolve=%t, viewer_can_unresolve=%t)",
+		thread.NodeID,
+		thread.Outdated,
+		thread.ViewerCanResolve,
+		thread.ViewerCanUnresolve,
+	)
 }
 
 func markThreadResolved(threads []githubapp.ReviewThread, nodeID string) {
@@ -204,10 +214,13 @@ func selectOwnedThreads(
 			continue
 		}
 		owned = append(owned, domain.OwnedThread{
-			NodeID:      thread.NodeID,
-			RootComment: thread.RootComment,
-			Finding:     finding,
-			FindingHead: findingHead,
+			NodeID:             thread.NodeID,
+			Outdated:           thread.Outdated,
+			ViewerCanResolve:   thread.ViewerCanResolve,
+			ViewerCanUnresolve: thread.ViewerCanUnresolve,
+			RootComment:        thread.RootComment,
+			Finding:            finding,
+			FindingHead:        findingHead,
 		})
 	}
 
