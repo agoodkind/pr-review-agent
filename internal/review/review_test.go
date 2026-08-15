@@ -449,6 +449,29 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	if output["title"] != "Approved" {
+		t.Fatalf("title = %v, want Approved", output["title"])
+	}
+	summary, ok := output["summary"].(string)
+	if !ok || !strings.Contains(summary, "Minimum importance: `9`") {
+		t.Fatalf("summary = %v, want configured minimum importance", output["summary"])
+	}
+	if !strings.Contains(summary, "Findings observed: `1`") {
+		t.Fatalf("summary = %v, want observed finding count", output["summary"])
+	}
+	if !strings.Contains(summary, "Findings eligible: `0`") {
+		t.Fatalf("summary = %v, want eligible finding count", output["summary"])
+	}
+	if !strings.Contains(summary, "Prior bot review IDs: none") {
+		t.Fatalf("summary = %v, want loaded review identifiers", output["summary"])
+	}
+	if !strings.Contains(summary, "Bot thread IDs: none") {
+		t.Fatalf("summary = %v, want loaded thread identifiers", output["summary"])
+	}
 	if fixture.state.checkDetailsURL != "https://github.com/owner/repo" {
 		t.Fatalf("details URL = %q, want repository URL", fixture.state.checkDetailsURL)
 	}

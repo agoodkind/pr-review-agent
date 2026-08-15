@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	checkSummarySuccess      = "Review complete."
 	checkSummaryFailure      = "Review failed."
 	checkSummaryCancelled    = "Review cancelled."
 	checkFailureReviews      = "Review failed while reading existing reviews."
@@ -237,7 +236,13 @@ func (service *Service) runLocked(
 	)
 	if hasBotReviewMarker(reviews, service.botLogin, head) {
 		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
-		return service.succeed(ctx, job, checkRun.ID)
+		return service.succeed(
+			ctx,
+			job,
+			checkRun.ID,
+			"Already reviewed",
+			"This head already has a PR-Agent review. No duplicate review was published.",
+		)
 	}
 
 	threads, err := service.reconciler.Reconcile(ctx, job)
@@ -353,7 +358,14 @@ func (service *Service) publish(
 		slog.Bool("visible_body", true),
 	)
 
-	if err := service.succeed(ctx, job, checkRun.ID); err != nil {
+	title, summary := successfulCheckOutput(
+		service.minimumImportance,
+		analysis,
+		publishedFindings,
+		traceReviews(reviews, service.botLogin),
+		traceThreads(threads, service.botLogin),
+	)
+	if err := service.succeed(ctx, job, checkRun.ID, title, summary); err != nil {
 		return err
 	}
 	logger.InfoContext(ctx, "review job completed", slog.Int64("check_run_id", checkRun.ID))
@@ -406,7 +418,13 @@ func (service *Service) ensureCheckRun(
 	return checkRun, nil
 }
 
-func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
+func (service *Service) succeed(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRunID int64,
+	title string,
+	summary string,
+) error {
 	logger := gklog.L(ctx)
 	if err := service.completeCheckRun(
 		ctx,
@@ -414,13 +432,69 @@ func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, check
 		job.Repository,
 		checkRunID,
 		"success",
-		checkSummarySuccess,
-		checkSummarySuccess,
+		title,
+		summary,
 	); err != nil {
 		logger.ErrorContext(ctx, "complete successful check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete check run: %w", err)
 	}
 	return nil
+}
+
+func successfulCheckOutput(
+	minimumImportance int,
+	analysis Analysis,
+	publishedFindings []domain.Finding,
+	reviews []reviewTrace,
+	threads []threadTrace,
+) (string, string) {
+	title := "Approved"
+	if analysis.Decision == domain.ReviewDecisionRequestChanges {
+		title = "Changes requested"
+	}
+
+	var summary strings.Builder
+	fmt.Fprintf(&summary, "Decision: `%s`\n\n", analysis.Decision)
+	fmt.Fprintf(&summary, "- Minimum importance: `%d`\n", minimumImportance)
+	fmt.Fprintf(&summary, "- Findings observed: `%d`\n", len(analysis.Observed))
+	fmt.Fprintf(&summary, "- Findings eligible: `%d`\n", len(analysis.Anchored))
+	fmt.Fprintf(&summary, "- Inline findings published: `%d`\n", len(publishedFindings))
+	fmt.Fprintf(&summary, "- Prior bot review IDs: %s\n", formatReviewTraceIDs(reviews))
+	fmt.Fprintf(&summary, "- Bot thread IDs: %s\n", formatThreadTraceIDs(threads))
+	fmt.Fprintf(&summary, "- Bot threads resolved at analysis: `%d`", countResolvedThreadTraces(threads))
+	return title, summary.String()
+}
+
+func formatReviewTraceIDs(reviews []reviewTrace) string {
+	if len(reviews) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(reviews))
+	for _, item := range reviews {
+		ids = append(ids, fmt.Sprintf("`%d`", item.ID))
+	}
+	return strings.Join(ids, ", ")
+}
+
+func formatThreadTraceIDs(threads []threadTrace) string {
+	if len(threads) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(threads))
+	for _, item := range threads {
+		ids = append(ids, "`"+item.NodeID+"`")
+	}
+	return strings.Join(ids, ", ")
+}
+
+func countResolvedThreadTraces(threads []threadTrace) int {
+	count := 0
+	for _, item := range threads {
+		if item.Resolved {
+			count++
+		}
+	}
+	return count
 }
 
 func (service *Service) failCheck(
