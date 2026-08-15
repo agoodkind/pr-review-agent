@@ -9,6 +9,8 @@
 BINARY := pr-review-agent
 CMD    := ./cmd/pr-review-agent
 VPKG   := goodkind.io/pr-review-agent/internal/version
+GKLOG_VPKG := goodkind.io/gklog/version
+GO_BUILD_TAGS := gklog_stamped
 
 # Pipeline modules. Add go-service.mk if this binary ships as a daemon and
 # set LAUNCHD_LABEL, SYSTEMD_UNIT, LOG_PATH before the include bootstrap.mk line.

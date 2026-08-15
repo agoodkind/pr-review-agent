@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/app"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/version"
@@ -48,7 +50,28 @@ func run(
 		return 1
 	}
 
-	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger, closer := gklog.New(gklog.Config{
+		BuildVersion: version.String(),
+		Handlers: []slog.Handler{
+			slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		},
+	})
+	defer func() {
+		if closeErr := closer.Close(); closeErr != nil {
+			logger.Error("close logger", slog.String("err", closeErr.Error()))
+		}
+	}()
+	slog.SetDefault(logger)
+	logger.Info(
+		"pr-review-agent configured",
+		slog.String("version", version.String()),
+		slog.String("platform", runtime.GOOS+"/"+runtime.GOARCH),
+		slog.String("model", config.Model),
+		slog.String("reasoning_effort", config.ReasoningEffort),
+		slog.Int("minimum_importance", cfg.MinimumImportance),
+		slog.Int("maximum_unresolved_comments", cfg.MaximumUnresolvedComments),
+		slog.String("github_bot_login", cfg.GitHubBotLogin),
+	)
 	githubHTTP := &http.Client{Timeout: githubHTTPTimeout}
 	openaiHTTP := &http.Client{Timeout: openaiHTTPTimeout}
 	application := app.New(cfg, githubHTTP, openaiHTTP, logger)

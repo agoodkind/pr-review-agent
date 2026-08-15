@@ -270,7 +270,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 	}
 }
 
-func TestAnalyzePromptRequestsOnlyConfiguredFindingsAndWrapsUntrustedInput(t *testing.T) {
+func TestAnalyzePromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 	patch := strings.Join([]string{
 		"@@ -1,1 +1,2 @@",
 		" package main",
