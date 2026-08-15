@@ -2,9 +2,11 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
@@ -17,6 +19,7 @@ type routePath string
 const (
 	routeRoot    routePath = "/"
 	routeHealth  routePath = "/health"
+	routeAverage routePath = "/average"
 	routeWebhook routePath = "/api/v1/github_webhooks"
 )
 
@@ -62,6 +65,12 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		writeStatusOK(writer)
+	case routeAverage:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowed(writer)
+			return
+		}
+		handler.writeAverageReportSize(writer, request)
 	case routeWebhook:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowed(writer)
@@ -71,6 +80,17 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 	default:
 		http.NotFound(writer, request)
 	}
+}
+
+func (handler *handler) writeAverageReportSize(writer http.ResponseWriter, request *http.Request) {
+	reportCount, err := strconv.Atoi(request.URL.Query().Get("count"))
+	if err != nil {
+		http.Error(writer, "invalid count", http.StatusBadRequest)
+		return
+	}
+
+	handler.logger.InfoContext(request.Context(), "calculated average report size")
+	_, _ = fmt.Fprintln(writer, 1200/reportCount)
 }
 
 func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request *http.Request) {
