@@ -708,10 +708,12 @@ func selectFindingsForPublication(
 }
 
 type publicationState struct {
-	history         map[string]struct{}
-	historyIDs      []string
-	unresolvedCount int
-	capacity        int
+	historyIDs        map[string]struct{}
+	historyIDList     []string
+	historyAnchors    map[string]struct{}
+	historyAnchorList []string
+	unresolvedCount   int
+	capacity          int
 }
 
 func collectPublicationState(
@@ -720,14 +722,15 @@ func collectPublicationState(
 	botLogin string,
 	maximumUnresolvedComments int,
 ) publicationState {
-	history := make(map[string]struct{})
+	historyIDs := make(map[string]struct{})
+	historyAnchors := make(map[string]struct{})
 	for _, item := range reviews {
 		if item.Author != botLogin {
 			continue
 		}
 		findingMarker, ok := marker.FindFinding(item.Body)
 		if ok {
-			history[findingMarker.ID] = struct{}{}
+			historyIDs[findingMarker.ID] = struct{}{}
 		}
 	}
 	unresolvedCount := 0
@@ -740,21 +743,43 @@ func collectPublicationState(
 		}
 		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
 		if ok {
-			history[findingMarker.ID] = struct{}{}
+			historyIDs[findingMarker.ID] = struct{}{}
+			if anchor, valid := findingAnchorKey(
+				thread.RootComment.Path,
+				thread.RootComment.StartLine,
+				thread.RootComment.EndLine,
+			); valid {
+				historyAnchors[anchor] = struct{}{}
+			}
 		}
 	}
-	historyIDs := make([]string, 0, len(history))
-	for findingID := range history {
-		historyIDs = append(historyIDs, findingID)
+	historyIDList := make([]string, 0, len(historyIDs))
+	for findingID := range historyIDs {
+		historyIDList = append(historyIDList, findingID)
 	}
-	sort.Strings(historyIDs)
+	sort.Strings(historyIDList)
+	historyAnchorList := make([]string, 0, len(historyAnchors))
+	for anchor := range historyAnchors {
+		historyAnchorList = append(historyAnchorList, anchor)
+	}
+	sort.Strings(historyAnchorList)
 	capacity := max(maximumUnresolvedComments-unresolvedCount, 0)
 	return publicationState{
-		history:         history,
-		historyIDs:      historyIDs,
-		unresolvedCount: unresolvedCount,
-		capacity:        capacity,
+		historyIDs:        historyIDs,
+		historyIDList:     historyIDList,
+		historyAnchors:    historyAnchors,
+		historyAnchorList: historyAnchorList,
+		unresolvedCount:   unresolvedCount,
+		capacity:          capacity,
 	}
+}
+
+func findingAnchorKey(pathValue string, startLine int, endLine int) (string, bool) {
+	normalizedPath, err := marker.NormalizePath(pathValue)
+	if err != nil || startLine < 1 || endLine < startLine {
+		return "", false
+	}
+	return fmt.Sprintf("%s:%d-%d", normalizedPath, startLine, endLine), true
 }
 
 func partitionFindings(
@@ -771,7 +796,10 @@ func partitionFindings(
 			logger.ErrorContext(ctx, "identify finding", slog.String("err", err.Error()))
 			return nil, nil, nil, fmt.Errorf("identify finding: %w", err)
 		}
-		if _, exists := state.history[findingID]; exists {
+		anchor, anchorValid := findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine)
+		_, foundByID := state.historyIDs[findingID]
+		_, foundByAnchor := state.historyAnchors[anchor]
+		if foundByID || anchorValid && foundByAnchor {
 			historySuppressed = append(historySuppressed, finding)
 			continue
 		}
@@ -825,7 +853,8 @@ func logPublicationSelection(
 		slog.Int("configured_cap", maximumUnresolvedComments),
 		slog.Int("unresolved_before", state.unresolvedCount),
 		slog.Int("capacity", state.capacity),
-		slog.Any("history_finding_ids", state.historyIDs),
+		slog.Any("history_finding_ids", state.historyIDList),
+		slog.Any("history_finding_anchors", state.historyAnchorList),
 		slog.Any("current_findings", currentTrace),
 		slog.Any("history_suppressed_findings", historySuppressedTrace),
 		slog.Any("capacity_deferred_findings", capacityDeferredTrace),
