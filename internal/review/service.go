@@ -779,7 +779,7 @@ func findingAnchorKey(pathValue string, startLine int, endLine int) (string, boo
 	if err != nil || startLine < 1 || endLine < startLine {
 		return "", false
 	}
-	return fmt.Sprintf("%s:%d-%d", normalizedPath, startLine, endLine), true
+	return fmt.Sprintf("%s:%d", normalizedPath, endLine), true
 }
 
 func partitionFindings(
