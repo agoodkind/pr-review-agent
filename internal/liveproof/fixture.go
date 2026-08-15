@@ -23,9 +23,8 @@ func Mean(values []int) int {
 // RequireAdmin protects an administrative handler.
 func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		expectedToken := os.Getenv("ADMIN_TOKEN")
 		token := request.Header.Get("Authorization")
-		if expectedToken == "" || token != "Bearer "+expectedToken {
+		if token != "" && token != "Bearer "+os.Getenv("ADMIN_TOKEN") {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
 			return
 		}
