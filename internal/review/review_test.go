@@ -75,12 +75,24 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 	})
 }
 
-func TestRenderBodyIsOneShortSevereSummaryAndMarker(t *testing.T) {
+func TestRenderBodyIsOneShortSummaryAndMarker(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
-	body := review.RenderBody(head)
-	want := "## Findings\n\n" + marker.Summary() + "\n" + marker.Review(head)
-	if body != want {
-		t.Fatalf("body = %q, want %q", body, want)
+	tests := []struct {
+		name     string
+		decision domain.ReviewDecision
+		message  string
+	}{
+		{name: "approve", decision: domain.ReviewDecisionApprove, message: "No severe findings."},
+		{name: "request changes", decision: domain.ReviewDecisionRequestChanges, message: "Severe findings are listed inline."},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := review.RenderBody(head, test.decision)
+			want := "## Review\n\n" + test.message + "\n\n" + marker.Summary() + "\n" + marker.Review(head)
+			if body != want {
+				t.Fatalf("body = %q, want %q", body, want)
+			}
+		})
 	}
 }
 
@@ -147,7 +159,7 @@ func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 		}},
 	}
 
-	body := review.RenderBody(head)
+	body := review.RenderBody(head, domain.ReviewDecisionApprove)
 	if containsTypographicDash(body) {
 		t.Fatalf("review body still contains typographic dash: %q", body)
 	}
@@ -426,8 +438,9 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
 	}
-	if fixture.state.lastSubmitReview["body"] != marker.Review(domain.HeadSHA(testHeadSHA)) {
-		t.Fatalf("body = %v, want hidden marker", fixture.state.lastSubmitReview["body"])
+	wantBody := review.RenderBody(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionApprove)
+	if fixture.state.lastSubmitReview["body"] != wantBody {
+		t.Fatalf("body = %v, want %q", fixture.state.lastSubmitReview["body"], wantBody)
 	}
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 0 {
