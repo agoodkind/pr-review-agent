@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
 )
@@ -30,6 +31,7 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
               line
               startLine
               author {
+                __typename
                 login
               }
             }
@@ -79,7 +81,8 @@ type reviewCommentNode struct {
 	Line       int    `json:"line"`
 	StartLine  int    `json:"startLine"`
 	Author     struct {
-		Login string `json:"login"`
+		TypeName string `json:"__typename"`
+		Login    string `json:"login"`
 	} `json:"author"`
 }
 
@@ -201,6 +204,10 @@ func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
 		return ReviewThread{}, errors.New("review thread missing root comment")
 	}
 	root := node.Comments.Nodes[0]
+	author := root.Author.Login
+	if root.Author.TypeName == "Bot" && !strings.HasSuffix(author, "[bot]") {
+		author += "[bot]"
+	}
 	startLine := root.Line
 	if root.StartLine > 0 {
 		startLine = root.StartLine
@@ -215,7 +222,7 @@ func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
 		Resolved: node.IsResolved,
 		RootComment: domain.ReviewComment{
 			DatabaseID: root.DatabaseID,
-			Author:     root.Author.Login,
+			Author:     author,
 			Body:       root.Body,
 			Path:       root.Path,
 			StartLine:  startLine,
