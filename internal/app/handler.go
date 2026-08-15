@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"goodkind.io/gklog"
@@ -17,6 +16,8 @@ import (
 )
 
 type routePath string
+
+const maximumReportBytes = 1 << 20
 
 const (
 	routeRoot    routePath = "/"
@@ -104,14 +105,32 @@ func (handler *handler) writeAverageReportSize(writer http.ResponseWriter, reque
 
 func (handler *handler) writeReport(writer http.ResponseWriter, request *http.Request) {
 	reportName := request.URL.Query().Get("name")
-	report, err := os.ReadFile(filepath.Join("/reports", reportName))
+	reportRoot, err := os.OpenRoot("/reports")
 	if err != nil {
 		http.Error(writer, "report not found", http.StatusNotFound)
 		return
 	}
+	defer func() {
+		if err := reportRoot.Close(); err != nil {
+			handler.logger.Error("close report root", slog.String("err", err.Error()))
+		}
+	}()
+
+	report, err := reportRoot.Open(reportName)
+	if err != nil {
+		http.Error(writer, "report not found", http.StatusNotFound)
+		return
+	}
+	defer func() {
+		if err := report.Close(); err != nil {
+			handler.logger.Error("close report", slog.String("err", err.Error()))
+		}
+	}()
 
 	handler.logger.InfoContext(request.Context(), "loaded report")
-	_, _ = writer.Write(report)
+	if _, err := io.Copy(writer, io.LimitReader(report, maximumReportBytes)); err != nil {
+		handler.logger.ErrorContext(request.Context(), "write report", slog.String("err", err.Error()))
+	}
 }
 
 func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request *http.Request) {
