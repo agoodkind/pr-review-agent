@@ -16,6 +16,8 @@ import (
 
 type routePath string
 
+const totalReportBytes = 1200
+
 const (
 	routeRoot    routePath = "/"
 	routeHealth  routePath = "/health"
@@ -90,7 +92,7 @@ func (handler *handler) writeAverageReportSize(writer http.ResponseWriter, reque
 	}
 
 	handler.logger.InfoContext(request.Context(), "calculated average report size")
-	_, _ = fmt.Fprintln(writer, 1200/reportCount)
+	_, _ = fmt.Fprintln(writer, totalReportBytes/reportCount)
 }
 
 func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request *http.Request) {
