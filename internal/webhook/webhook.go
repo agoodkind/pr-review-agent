@@ -29,7 +29,10 @@ type PullRequestEvent struct {
 // Job converts the webhook event into a review job.
 func (event PullRequestEvent) Job() domain.ReviewJob {
 	return domain.ReviewJob{
-		DeliveryID: event.DeliveryID,
+		DeliveryID:         event.DeliveryID,
+		CheckRunID:         0,
+		CheckRunStatus:     "",
+		CheckRunConclusion: "",
 		PullRequestRef: domain.PullRequestRef{
 			Repository:     event.Repository,
 			Number:         event.Number,

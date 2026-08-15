@@ -253,6 +253,30 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	}
 }
 
+func TestWebhookStartsReviewCheckBeforeReturningAccepted(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeBlockUntilCanceled: true,
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-immediate-check",
+		body:       openedPayload(testDefectiveHead),
+	})
+	defer func() {
+		_ = response.Body.Close()
+	}()
+
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	if fixture.githubState.lastCheckStatus() != "in_progress" {
+		t.Fatalf("check status = %q, want in_progress", fixture.githubState.lastCheckStatus())
+	}
+}
+
 func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	withIntegrationLock(t)
 
@@ -1360,6 +1384,16 @@ func (state *githubServerState) lastCheckConclusion() string {
 	}
 	conclusion, _ := state.checkRuns[len(state.checkRuns)-1]["conclusion"].(string)
 	return conclusion
+}
+
+func (state *githubServerState) lastCheckStatus() string {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.checkRuns) == 0 {
+		return ""
+	}
+	status, _ := state.checkRuns[len(state.checkRuns)-1]["status"].(string)
+	return status
 }
 
 func (state *githubServerState) listedFilePages() int32 {

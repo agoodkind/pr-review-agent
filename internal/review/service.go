@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -124,19 +125,57 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		slog.Int("minimum_importance", service.minimumImportance),
 		slog.Int("maximum_unresolved_comments", service.maximumUnresolvedComments),
 	)
+	if job.CheckRunID == 0 {
+		return errors.New("review check was not admitted")
+	}
 
 	unlock := service.locker.Lock(job.Key())
 	defer unlock()
-	admissionCtx, admissionCancel := context.WithTimeout(
-		context.WithoutCancel(ctx),
-		service.checkCompletionTimeout,
-	)
-	defer admissionCancel()
-	checkRun, err := service.ensureCheckRun(admissionCtx, job, job.Head)
-	if err != nil {
-		return err
+	checkRun := githubapp.CheckRun{
+		ID:         job.CheckRunID,
+		Name:       service.checkName,
+		Head:       job.Head,
+		Status:     job.CheckRunStatus,
+		Conclusion: job.CheckRunConclusion,
 	}
 	return service.runLocked(ctx, job, checkRun)
+}
+
+// Admit creates or resumes the visible check before background review work starts.
+func (service *Service) Admit(parent context.Context, job domain.ReviewJob) (domain.ReviewJob, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), service.checkCompletionTimeout)
+	defer cancel()
+	logger := service.logger.With(
+		slog.String("delivery_id", job.DeliveryID),
+		slog.String("repository", job.Repository.Owner+"/"+job.Repository.Name),
+		slog.Int("pull_request", job.Number),
+		slog.String("head", string(job.Head)),
+	)
+	ctx = gklog.WithLogger(ctx, logger)
+
+	checkRun, err := service.ensureCheckRun(ctx, job, job.Head)
+	if err != nil {
+		return job, err
+	}
+	job.CheckRunID = checkRun.ID
+	job.CheckRunStatus = checkRun.Status
+	job.CheckRunConclusion = checkRun.Conclusion
+	logger.InfoContext(
+		ctx,
+		"review check admitted",
+		slog.Int64("check_run_id", checkRun.ID),
+		slog.String("status", checkRun.Status),
+		slog.String("conclusion", checkRun.Conclusion),
+	)
+	return job, nil
+}
+
+// Reject completes an admitted check when background work cannot accept it.
+func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cause error) error {
+	if job.CheckRunID == 0 || job.CheckRunStatus == "completed" {
+		return nil
+	}
+	return service.failCheck(parent, job, job.CheckRunID, checkSummaryFailure, cause)
 }
 
 func (service *Service) runLocked(
@@ -362,6 +401,7 @@ func (service *Service) ensureCheckRun(
 			logger.ErrorContext(ctx, "start check run", slog.String("err", err.Error()))
 			return githubapp.CheckRun{}, fmt.Errorf("start check run: %w", err)
 		}
+		checkRun.Status = "in_progress"
 	}
 	return checkRun, nil
 }
