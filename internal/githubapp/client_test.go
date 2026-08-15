@@ -427,6 +427,54 @@ func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
 	}
 }
 
+func TestListReviewThreadsUsesOriginalLinesForOutdatedComments(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	state.threadPages = []map[string]any{{
+		"repository": map[string]any{
+			"pullRequest": map[string]any{
+				"reviewThreads": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   "",
+					},
+					"nodes": []map[string]any{{
+						"id":         "thread-outdated",
+						"isResolved": false,
+						"isOutdated": true,
+						"comments": map[string]any{
+							"nodes": []map[string]any{{
+								"databaseId":        float64(1),
+								"body":              "body",
+								"path":              "main.go",
+								"line":              nil,
+								"startLine":         nil,
+								"originalLine":      float64(27),
+								"originalStartLine": float64(26),
+								"author": map[string]any{
+									"__typename": "Bot",
+									"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
+								},
+							}},
+						},
+					}},
+				},
+			},
+		},
+	}}
+
+	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 6)
+	if err != nil {
+		t.Fatalf("ListReviewThreads: %v", err)
+	}
+	comment := threads[0].RootComment
+	if comment.StartLine != 26 || comment.EndLine != 27 {
+		t.Fatalf("lines = %d-%d, want 26-27", comment.StartLine, comment.EndLine)
+	}
+}
+
 func TestResolveReviewThreadVerifiesMutationResult(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))

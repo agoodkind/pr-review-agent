@@ -33,6 +33,8 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
               path
               line
               startLine
+              originalLine
+              originalStartLine
               author {
                 __typename
                 login
@@ -81,12 +83,14 @@ type reviewThreadNode struct {
 }
 
 type reviewCommentNode struct {
-	DatabaseID int64  `json:"databaseId"`
-	Body       string `json:"body"`
-	Path       string `json:"path"`
-	Line       int    `json:"line"`
-	StartLine  int    `json:"startLine"`
-	Author     struct {
+	DatabaseID        int64  `json:"databaseId"`
+	Body              string `json:"body"`
+	Path              string `json:"path"`
+	Line              int    `json:"line"`
+	StartLine         int    `json:"startLine"`
+	OriginalLine      int    `json:"originalLine"`
+	OriginalStartLine int    `json:"originalStartLine"`
+	Author            struct {
 		TypeName string `json:"__typename"`
 		Login    string `json:"login"`
 	} `json:"author"`
@@ -214,11 +218,17 @@ func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
 	if root.Author.TypeName == "Bot" && !strings.HasSuffix(author, "[bot]") {
 		author += "[bot]"
 	}
-	startLine := root.Line
-	if root.StartLine > 0 {
-		startLine = root.StartLine
-	}
 	endLine := root.Line
+	if endLine < 1 {
+		endLine = root.OriginalLine
+	}
+	startLine := root.StartLine
+	if startLine < 1 {
+		startLine = root.OriginalStartLine
+	}
+	if startLine < 1 {
+		startLine = endLine
+	}
 	if endLine < 1 {
 		endLine = startLine
 	}
