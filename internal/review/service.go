@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -100,15 +101,41 @@ func NewService(
 func (service *Service) Run(parent context.Context, job domain.ReviewJob) error {
 	ctx, cancel := context.WithTimeout(parent, config.ReviewTimeout)
 	defer cancel()
+	logger := service.logger.With(
+		slog.String("delivery_id", job.DeliveryID),
+		slog.String("repository", job.Repository.Owner+"/"+job.Repository.Name),
+		slog.Int("pull_request", job.Number),
+	)
+	ctx = gklog.WithLogger(ctx, logger)
+	logger.InfoContext(
+		ctx,
+		"review job started",
+		slog.Int("minimum_importance", service.minimumImportance),
+		slog.Int("maximum_unresolved_comments", service.maximumUnresolvedComments),
+	)
 
 	unlock := service.locker.Lock(job.Key())
 	defer unlock()
+	return service.runLocked(ctx, job)
+}
 
+func (service *Service) runLocked(ctx context.Context, job domain.ReviewJob) error {
+	logger := gklog.L(ctx)
 	pullRequest, head, checkRun, err := service.prepare(ctx, job)
 	if err != nil {
 		return err
 	}
+	logger = logger.With(slog.String("head", string(head)))
+	ctx = gklog.WithLogger(ctx, logger)
+	logger.InfoContext(
+		ctx,
+		"review check loaded",
+		slog.Int64("check_run_id", checkRun.ID),
+		slog.String("status", checkRun.Status),
+		slog.String("conclusion", checkRun.Conclusion),
+	)
 	if checkRun.Status == "completed" && checkRun.Conclusion == "success" {
+		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "completed_check"))
 		return nil
 	}
 
@@ -116,7 +143,13 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureReviews, err)
 	}
+	logger.InfoContext(
+		ctx,
+		"review history loaded",
+		slog.Any("bot_reviews", traceReviews(reviews, service.botLogin)),
+	)
 	if hasBotReviewMarker(reviews, service.botLogin, head) {
+		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
 		return service.succeed(ctx, job, checkRun.ID)
 	}
 
@@ -124,6 +157,11 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureReconcile, err)
 	}
+	logger.InfoContext(
+		ctx,
+		"review threads reconciled",
+		slog.Any("bot_threads", traceThreads(threads, service.botLogin)),
+	)
 
 	input, err := service.collector.Collect(ctx, job.PullRequestRef, pullRequest)
 	if err != nil {
@@ -134,7 +172,46 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureAnalysis, err)
 	}
+	if err := logAnalysis(ctx, analysis); err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, checkFailureAnalysis, err)
+	}
 
+	return service.publish(ctx, job, head, checkRun, reviews, threads, analysis)
+}
+
+func logAnalysis(ctx context.Context, analysis Analysis) error {
+	logger := gklog.L(ctx)
+	observedTrace, err := traceFindings(ctx, analysis.Observed)
+	if err != nil {
+		logger.ErrorContext(ctx, "trace observed findings", slog.String("err", err.Error()))
+		return fmt.Errorf("trace observed findings: %w", err)
+	}
+	eligibleTrace, err := traceFindings(ctx, analysis.Anchored)
+	if err != nil {
+		logger.ErrorContext(ctx, "trace eligible findings", slog.String("err", err.Error()))
+		return fmt.Errorf("trace eligible findings: %w", err)
+	}
+	logger.InfoContext(
+		ctx,
+		"review analysis classified",
+		slog.Bool("coverage_complete", analysis.CoverageComplete),
+		slog.String("decision", string(analysis.Decision)),
+		slog.Any("observed_findings", observedTrace),
+		slog.Any("eligible_findings", eligibleTrace),
+	)
+	return nil
+}
+
+func (service *Service) publish(
+	ctx context.Context,
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	checkRun githubapp.CheckRun,
+	reviews []githubapp.Review,
+	threads []githubapp.ReviewThread,
+	analysis Analysis,
+) error {
+	logger := gklog.L(ctx)
 	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureRefresh, err)
@@ -150,7 +227,6 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		threads,
 		service.botLogin,
 		service.maximumUnresolvedComments,
-		service.logger,
 	)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureRender, err)
@@ -166,7 +242,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureSummary, err)
 	}
 
-	_, err = service.github.SubmitReview(
+	publishedReview, err := service.github.SubmitReview(
 		ctx,
 		job.InstallationID,
 		job.Repository,
@@ -181,14 +257,27 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, checkFailurePublish, err)
 	}
+	logger.InfoContext(
+		ctx,
+		"review published",
+		slog.Int64("review_id", publishedReview.ID),
+		slog.String("event", string(analysis.Decision)),
+		slog.Int("inline_comments", len(comments)),
+		slog.Bool("visible_body", marker.HasSummary(body)),
+	)
 
-	return service.succeed(ctx, job, checkRun.ID)
+	if err := service.succeed(ctx, job, checkRun.ID); err != nil {
+		return err
+	}
+	logger.InfoContext(ctx, "review job completed", slog.Int64("check_run_id", checkRun.ID))
+	return nil
 }
 
 func (service *Service) prepare(
 	ctx context.Context,
 	job domain.ReviewJob,
 ) (githubapp.PullRequest, domain.HeadSHA, githubapp.CheckRun, error) {
+	logger := gklog.L(ctx)
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
 		job.InstallationID,
@@ -196,7 +285,7 @@ func (service *Service) prepare(
 		job.Number,
 	)
 	if err != nil {
-		service.logger.ErrorContext(ctx, "get pull request", slog.String("err", err.Error()))
+		logger.ErrorContext(ctx, "get pull request", slog.String("err", err.Error()))
 		return githubapp.PullRequest{}, "", githubapp.CheckRun{}, fmt.Errorf("get pull request: %w", err)
 	}
 
@@ -213,6 +302,7 @@ func (service *Service) ensureCheckRun(
 	job domain.ReviewJob,
 	head domain.HeadSHA,
 ) (githubapp.CheckRun, error) {
+	logger := gklog.L(ctx)
 	checkRun, found, err := service.github.FindCheckRun(
 		ctx,
 		job.InstallationID,
@@ -221,7 +311,7 @@ func (service *Service) ensureCheckRun(
 		service.checkName,
 	)
 	if err != nil {
-		service.logger.ErrorContext(ctx, "find check run", slog.String("err", err.Error()))
+		logger.ErrorContext(ctx, "find check run", slog.String("err", err.Error()))
 		return githubapp.CheckRun{}, fmt.Errorf("find check run: %w", err)
 	}
 	if !found {
@@ -233,7 +323,7 @@ func (service *Service) ensureCheckRun(
 			service.checkName,
 		)
 		if err != nil {
-			service.logger.ErrorContext(ctx, "create check run", slog.String("err", err.Error()))
+			logger.ErrorContext(ctx, "create check run", slog.String("err", err.Error()))
 			return githubapp.CheckRun{}, fmt.Errorf("create check run: %w", err)
 		}
 	}
@@ -245,7 +335,7 @@ func (service *Service) ensureCheckRun(
 			checkRun.ID,
 			repositoryURL(job.Repository),
 		); err != nil {
-			service.logger.ErrorContext(ctx, "start check run", slog.String("err", err.Error()))
+			logger.ErrorContext(ctx, "start check run", slog.String("err", err.Error()))
 			return githubapp.CheckRun{}, fmt.Errorf("start check run: %w", err)
 		}
 	}
@@ -253,6 +343,7 @@ func (service *Service) ensureCheckRun(
 }
 
 func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
+	logger := gklog.L(ctx)
 	if err := service.github.CompleteCheckRun(
 		ctx,
 		job.InstallationID,
@@ -262,7 +353,7 @@ func (service *Service) succeed(ctx context.Context, job domain.ReviewJob, check
 		checkSummarySuccess,
 		checkSummarySuccess,
 	); err != nil {
-		service.logger.ErrorContext(ctx, "complete successful check run", slog.String("err", err.Error()))
+		logger.ErrorContext(ctx, "complete successful check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete check run: %w", err)
 	}
 	return nil
@@ -275,6 +366,7 @@ func (service *Service) failCheck(
 	summary string,
 	cause error,
 ) error {
+	logger := gklog.L(ctx)
 	if summary == "" {
 		summary = checkSummaryFailure
 	}
@@ -289,11 +381,11 @@ func (service *Service) failCheck(
 			checkFailureDetail(cause),
 		)
 		if completeErr != nil {
-			service.logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
+			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
 			return fmt.Errorf("complete check run: %w", completeErr)
 		}
 	}
-	service.logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
+	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
 	return cause
 }
 
@@ -304,6 +396,7 @@ func (service *Service) prepareReviewBody(
 	head domain.HeadSHA,
 	decision domain.ReviewDecision,
 ) (string, error) {
+	logger := gklog.L(ctx)
 	summaryReview, found := findSummaryReview(reviews, service.botLogin)
 	if decision == domain.ReviewDecisionApprove {
 		if found && summaryReview.Body != marker.Summary() {
@@ -315,9 +408,10 @@ func (service *Service) prepareReviewBody(
 				summaryReview.ID,
 				marker.Summary(),
 			); err != nil {
-				service.logger.ErrorContext(ctx, "hide review summary", slog.String("err", err.Error()))
+				logger.ErrorContext(ctx, "hide review summary", slog.String("err", err.Error()))
 				return "", fmt.Errorf("hide review summary: %w", err)
 			}
+			logger.InfoContext(ctx, "review summary updated", slog.Int64("review_id", summaryReview.ID), slog.Bool("visible", false))
 		}
 		return marker.Review(head), nil
 	}
@@ -331,9 +425,10 @@ func (service *Service) prepareReviewBody(
 			summaryReview.ID,
 			RenderBody(head),
 		); err != nil {
-			service.logger.ErrorContext(ctx, "update review summary", slog.String("err", err.Error()))
+			logger.ErrorContext(ctx, "update review summary", slog.String("err", err.Error()))
 			return "", fmt.Errorf("update review summary: %w", err)
 		}
+		logger.InfoContext(ctx, "review summary updated", slog.Int64("review_id", summaryReview.ID), slog.Bool("visible", true))
 		return marker.Review(head), nil
 	}
 	return RenderBody(head), nil
@@ -358,6 +453,7 @@ func findSummaryReview(reviews []githubapp.Review, botLogin string) (githubapp.R
 }
 
 func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
+	logger := gklog.L(ctx)
 	if err := service.github.CompleteCheckRun(
 		ctx,
 		job.InstallationID,
@@ -367,7 +463,7 @@ func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, c
 		checkSummaryCancelled,
 		checkSummaryCancelled,
 	); err != nil {
-		service.logger.ErrorContext(ctx, "complete cancelled check run", slog.String("err", err.Error()))
+		logger.ErrorContext(ctx, "complete cancelled check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete cancelled check run: %w", err)
 	}
 	return nil
@@ -426,8 +522,41 @@ func selectFindingsForPublication(
 	threads []githubapp.ReviewThread,
 	botLogin string,
 	maximumUnresolvedComments int,
-	logger *slog.Logger,
 ) ([]domain.Finding, error) {
+	logger := gklog.L(ctx)
+	state := collectPublicationState(reviews, threads, botLogin, maximumUnresolvedComments)
+	selected, historySuppressed, capacityDeferred, err := partitionFindings(ctx, findings, state)
+	if err != nil {
+		logger.ErrorContext(ctx, "identify current findings", slog.String("err", err.Error()))
+		return nil, err
+	}
+	if err := logPublicationSelection(
+		ctx,
+		findings,
+		selected,
+		historySuppressed,
+		capacityDeferred,
+		state,
+		maximumUnresolvedComments,
+	); err != nil {
+		return nil, err
+	}
+	return selected, nil
+}
+
+type publicationState struct {
+	history         map[string]struct{}
+	historyIDs      []string
+	unresolvedCount int
+	capacity        int
+}
+
+func collectPublicationState(
+	reviews []githubapp.Review,
+	threads []githubapp.ReviewThread,
+	botLogin string,
+	maximumUnresolvedComments int,
+) publicationState {
 	history := make(map[string]struct{})
 	for _, item := range reviews {
 		if item.Author != botLogin {
@@ -438,7 +567,6 @@ func selectFindingsForPublication(
 			history[findingMarker.ID] = struct{}{}
 		}
 	}
-
 	unresolvedCount := 0
 	for _, thread := range threads {
 		if thread.RootComment.Author != botLogin {
@@ -452,33 +580,93 @@ func selectFindingsForPublication(
 			history[findingMarker.ID] = struct{}{}
 		}
 	}
-
-	capacity := maximumUnresolvedComments - unresolvedCount
-	if capacity <= 0 {
-		return []domain.Finding{}, nil
+	historyIDs := make([]string, 0, len(history))
+	for findingID := range history {
+		historyIDs = append(historyIDs, findingID)
 	}
+	sort.Strings(historyIDs)
+	capacity := max(maximumUnresolvedComments-unresolvedCount, 0)
+	return publicationState{
+		history:         history,
+		historyIDs:      historyIDs,
+		unresolvedCount: unresolvedCount,
+		capacity:        capacity,
+	}
+}
 
-	selected := make([]domain.Finding, 0, len(findings))
+func partitionFindings(
+	ctx context.Context,
+	findings []domain.Finding,
+	state publicationState,
+) ([]domain.Finding, []domain.Finding, []domain.Finding, error) {
+	logger := gklog.L(ctx)
+	candidates := make([]domain.Finding, 0, len(findings))
+	historySuppressed := make([]domain.Finding, 0)
 	for _, finding := range findings {
 		findingID, err := marker.FindingID(finding)
 		if err != nil {
 			logger.ErrorContext(ctx, "identify finding", slog.String("err", err.Error()))
-			return nil, fmt.Errorf("identify finding: %w", err)
+			return nil, nil, nil, fmt.Errorf("identify finding: %w", err)
 		}
-		if _, exists := history[findingID]; exists {
+		if _, exists := state.history[findingID]; exists {
+			historySuppressed = append(historySuppressed, finding)
 			continue
 		}
-		selected = append(selected, finding)
+		candidates = append(candidates, finding)
 	}
-
-	sort.SliceStable(selected, func(left, right int) bool {
-		if selected[left].Importance != selected[right].Importance {
-			return selected[left].Importance > selected[right].Importance
+	sort.SliceStable(candidates, func(left, right int) bool {
+		if candidates[left].Importance != candidates[right].Importance {
+			return candidates[left].Importance > candidates[right].Importance
 		}
-		return compareFindings(selected[left], selected[right]) < 0
+		return compareFindings(candidates[left], candidates[right]) < 0
 	})
-	if len(selected) > capacity {
-		selected = selected[:capacity]
+	selectedCount := min(len(candidates), state.capacity)
+	selected := append([]domain.Finding{}, candidates[:selectedCount]...)
+	capacityDeferred := append([]domain.Finding{}, candidates[selectedCount:]...)
+	return selected, historySuppressed, capacityDeferred, nil
+}
+
+func logPublicationSelection(
+	ctx context.Context,
+	current []domain.Finding,
+	selected []domain.Finding,
+	historySuppressed []domain.Finding,
+	capacityDeferred []domain.Finding,
+	state publicationState,
+	maximumUnresolvedComments int,
+) error {
+	logger := gklog.L(ctx)
+	currentTrace, err := traceFindings(ctx, current)
+	if err != nil {
+		logger.ErrorContext(ctx, "trace current findings", slog.String("err", err.Error()))
+		return fmt.Errorf("trace current findings: %w", err)
 	}
-	return selected, nil
+	historySuppressedTrace, err := traceFindings(ctx, historySuppressed)
+	if err != nil {
+		logger.ErrorContext(ctx, "trace history suppressed findings", slog.String("err", err.Error()))
+		return fmt.Errorf("trace history suppressed findings: %w", err)
+	}
+	capacityDeferredTrace, err := traceFindings(ctx, capacityDeferred)
+	if err != nil {
+		logger.ErrorContext(ctx, "trace capacity deferred findings", slog.String("err", err.Error()))
+		return fmt.Errorf("trace capacity deferred findings: %w", err)
+	}
+	selectedTrace, err := traceFindings(ctx, selected)
+	if err != nil {
+		logger.ErrorContext(ctx, "trace selected findings", slog.String("err", err.Error()))
+		return fmt.Errorf("trace selected findings: %w", err)
+	}
+	logger.InfoContext(
+		ctx,
+		"review findings selected",
+		slog.Int("configured_cap", maximumUnresolvedComments),
+		slog.Int("unresolved_before", state.unresolvedCount),
+		slog.Int("capacity", state.capacity),
+		slog.Any("history_finding_ids", state.historyIDs),
+		slog.Any("current_findings", currentTrace),
+		slog.Any("history_suppressed_findings", historySuppressedTrace),
+		slog.Any("capacity_deferred_findings", capacityDeferredTrace),
+		slog.Any("selected_findings", selectedTrace),
+	)
+	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -13,7 +14,13 @@ import (
 )
 
 // Analyze reviews every deterministic chunk and aggregates the model output.
-func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumImportance int) (Analysis, error) {
+func Analyze(
+	ctx context.Context,
+	model Model,
+	input diff.ReviewInput,
+	minimumImportance int,
+) (Analysis, error) {
+	logger := gklog.L(ctx)
 	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
 	if err != nil {
 		return Analysis{}, fmt.Errorf("chunk input: %w", err)
@@ -29,7 +36,10 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumIm
 
 	fileIndex := buildFileIndex(input.Files)
 	seen := make(map[string]struct{})
+	observed := make([]domain.Finding, 0)
 	anchored := make([]domain.Finding, 0)
+	reportedFindings := 0
+	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
 	for _, chunk := range chunks {
 		result, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
@@ -37,18 +47,16 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumIm
 			return Analysis{}, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
 		}
 		if err := result.Validate(); err != nil {
-			slog.ErrorContext(ctx, "validate review result", slog.String("err", err.Error()))
+			logger.ErrorContext(ctx, "validate review result", slog.String("err", err.Error()))
 			return Analysis{}, fmt.Errorf("validate review result: %w", err)
 		}
 		if !result.CoverageComplete {
 			coverageComplete = false
 		}
+		reportedFindings += len(result.Findings)
 
 		for _, finding := range result.Findings {
 			sanitized := sanitizeFinding(finding)
-			if sanitized.Importance < minimumImportance {
-				continue
-			}
 			normalizedPath, pathErr := marker.NormalizePath(sanitized.Path)
 			if pathErr == nil {
 				sanitized.Path = normalizedPath
@@ -61,15 +69,26 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumIm
 			seen[key] = struct{}{}
 
 			if isAnchored(sanitized, fileIndex) {
-				anchored = append(anchored, sanitized)
+				observed = append(observed, sanitized)
+				if sanitized.Importance >= minimumImportance {
+					anchored = append(anchored, sanitized)
+				}
 			}
 		}
 	}
+	logger.InfoContext(
+		ctx,
+		"review model analysis completed",
+		slog.Int("chunks", len(chunks)),
+		slog.Int("reported_findings", reportedFindings),
+	)
 
+	sortFindings(observed)
 	sortFindings(anchored)
 
 	return Analysis{
 		CoverageComplete: coverageComplete,
+		Observed:         observed,
 		Anchored:         anchored,
 		Decision:         DecisionFor(anchored, minimumImportance),
 	}, nil
@@ -77,9 +96,10 @@ func Analyze(ctx context.Context, model Model, input diff.ReviewInput, minimumIm
 
 func buildPrompt(chunk diff.Chunk, minimumImportance int) string {
 	var builder strings.Builder
-	builder.WriteString("Review changed lines. Return only concrete defects with importance ")
+	builder.WriteString("Review changed lines. Return every concrete defect and assign importance from 1 through 10. ")
+	builder.WriteString("The service publishes only findings with importance ")
 	fmt.Fprintf(&builder, "%d", minimumImportance)
-	builder.WriteString(" or higher. Return no findings when none meet that threshold. Review chunk ")
+	builder.WriteString(" or higher. Do not omit a real defect because it is below that publication threshold. Review chunk ")
 	fmt.Fprintf(&builder, "%d/%d", chunk.Index, chunk.Total)
 	builder.WriteString(".\n")
 	builder.WriteString(WrapUntrusted(chunk.Text))

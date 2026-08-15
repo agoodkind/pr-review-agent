@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/webhook"
@@ -108,17 +109,29 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
+	logger := handler.logger.With(
+		slog.String("delivery_id", deliveryID),
+		slog.String("repository", event.Repository.Owner+"/"+event.Repository.Name),
+		slog.Int("pull_request", event.Number),
+		slog.String("head", string(event.Head)),
+		slog.String("action", event.Action),
+	)
+	ctx := gklog.WithLogger(request.Context(), logger)
+	logger = gklog.L(ctx)
 
 	if !handler.cache.Claim(deliveryID) {
+		logger.InfoContext(ctx, "webhook delivery suppressed", slog.String("reason", "duplicate_delivery"))
 		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
 
 	if !handler.dispatcher.Enqueue(event.Job()) {
 		handler.cache.Release(deliveryID)
+		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", "review queue full"))
 		http.Error(writer, "queue full", http.StatusServiceUnavailable)
 		return
 	}
+	logger.InfoContext(ctx, "webhook delivery accepted")
 
 	writer.WriteHeader(http.StatusAccepted)
 }

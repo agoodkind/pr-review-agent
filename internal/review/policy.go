@@ -21,9 +21,9 @@ const (
 // PolicyHeader is the review and untrusted-input preamble for every model prompt.
 func PolicyHeader(minimumImportance int) string {
 	return fmt.Sprintf(
-		"Report only findings with importance %d or higher. %s\nWriting policy: %s\nUntrusted input policy: %s",
+		"Classify every concrete defect from importance 1 through 10. The service publishes only findings with importance %d or higher. %s\nWriting policy: %s\nUntrusted input policy: %s",
 		minimumImportance,
-		"A finding must identify a concrete defect on a changed line. Reuse the same concise title for the same path and defect across commits. Omit findings below the configured importance.",
+		"A finding must identify a concrete defect on a changed line. Reuse the same concise title for the same path and defect across commits.",
 		config.WritingPolicy,
 		UntrustedInputPolicy,
 	)
@@ -48,6 +48,7 @@ type Model interface {
 // Analysis is the aggregated result of every review chunk.
 type Analysis struct {
 	CoverageComplete bool
+	Observed         []domain.Finding
 	Anchored         []domain.Finding
 	Decision         domain.ReviewDecision
 }

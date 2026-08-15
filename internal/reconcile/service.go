@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
@@ -59,6 +60,12 @@ func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger
 
 // Reconcile evaluates earlier owned findings, resolves those proven fixed, and returns current thread state.
 func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]githubapp.ReviewThread, error) {
+	logger := service.logger.With(
+		slog.String("delivery_id", job.DeliveryID),
+		slog.String("repository", job.Repository.Owner+"/"+job.Repository.Name),
+		slog.Int("pull_request", job.Number),
+	)
+	ctx = gklog.WithLogger(ctx, logger)
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
 		job.InstallationID,
@@ -66,9 +73,12 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		job.Number,
 	)
 	if err != nil {
+		gklog.L(ctx).ErrorContext(ctx, "get pull request for reconciliation", slog.String("err", err.Error()))
 		return nil, fmt.Errorf("get pull request: %w", err)
 	}
 	currentHead := pullRequest.Head
+	logger = logger.With(slog.String("head", string(currentHead)))
+	ctx = gklog.WithLogger(ctx, logger)
 
 	threads, err := service.github.ListReviewThreads(
 		ctx,
@@ -77,10 +87,21 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		job.Number,
 	)
 	if err != nil {
+		logger.ErrorContext(ctx, "list review threads", slog.String("err", err.Error()))
 		return nil, fmt.Errorf("list review threads: %w", err)
 	}
+	logger.InfoContext(
+		ctx,
+		"review threads loaded",
+		slog.Any("bot_threads", traceBotThreads(threads, service.botLogin)),
+	)
 
 	owned := selectOwnedThreads(threads, service.botLogin, currentHead)
+	logger.InfoContext(
+		ctx,
+		"review reconciliation selected",
+		slog.Any("thread_node_ids", ownedThreadIDs(owned)),
+	)
 	if len(owned) == 0 {
 		return threads, nil
 	}
@@ -98,7 +119,26 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 	}
 
 	batches := batchPreparedThreads(prepared, config.MaximumPromptBytes)
+	logger.InfoContext(
+		ctx,
+		"review reconciliation analysis started",
+		slog.Int("batches", len(batches)),
+		slog.Any("thread_node_ids", preparedThreadIDs(prepared)),
+	)
+	return service.reconcilePrepared(ctx, job, currentHead, threads, batches, logger)
+}
+
+func (service *Service) reconcilePrepared(
+	ctx context.Context,
+	job domain.ReviewJob,
+	currentHead domain.HeadSHA,
+	threads []githubapp.ReviewThread,
+	batches [][]preparedThread,
+	logger *slog.Logger,
+) ([]githubapp.ReviewThread, error) {
 	var reconcileErrors []error
+	allResolutions := make([]domain.ThreadResolution, 0)
+	resolvedThreads := make([]resolvedThreadTrace, 0)
 
 	for batchIndex, batch := range batches {
 		resolutions, err := service.model.Reconcile(ctx, buildBatchPrompt(batch, batchIndex+1, len(batches)))
@@ -108,6 +148,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		}
 
 		resolutionIndex := indexResolutions(resolutions)
+		allResolutions = append(allResolutions, resolutions...)
 		for _, item := range batch {
 			resolution, ok := resolutionIndex[item.thread.NodeID]
 			if !ok {
@@ -132,7 +173,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 			}
 			if currentPullRequest.Head != currentHead {
 				headChangedErr := errors.New("head changed during reconciliation")
-				service.logger.ErrorContext(
+				logger.ErrorContext(
 					ctx,
 					"head changed during reconciliation",
 					slog.String("err", headChangedErr.Error()),
@@ -148,11 +189,22 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 				continue
 			}
 			markThreadResolved(threads, item.thread.NodeID)
+			resolvedThreads = append(resolvedThreads, resolvedThreadTrace{
+				NodeID:    item.thread.NodeID,
+				CommentID: item.thread.RootComment.DatabaseID,
+			})
 		}
 	}
+	logger.InfoContext(
+		ctx,
+		"review reconciliation analysis completed",
+		slog.Int("batches", len(batches)),
+		slog.Any("resolutions", allResolutions),
+		slog.Any("resolved_threads", resolvedThreads),
+	)
 
 	if len(reconcileErrors) > 0 {
-		service.logger.ErrorContext(ctx, "reconcile review threads", slog.String("err", errors.Join(reconcileErrors...).Error()))
+		logger.ErrorContext(ctx, "reconcile review threads", slog.String("err", errors.Join(reconcileErrors...).Error()))
 	}
 	return threads, errors.Join(reconcileErrors...)
 }
@@ -179,6 +231,66 @@ func markThreadResolved(threads []githubapp.ReviewThread, nodeID string) {
 type preparedThread struct {
 	thread domain.OwnedThread
 	text   string
+}
+
+type botThreadTrace struct {
+	NodeID      string `json:"node_id"`
+	CommentID   int64  `json:"comment_id"`
+	Resolved    bool   `json:"resolved"`
+	Outdated    bool   `json:"outdated"`
+	FindingID   string `json:"finding_id,omitempty"`
+	FindingHead string `json:"finding_head,omitempty"`
+	Importance  int    `json:"importance,omitempty"`
+}
+
+type resolvedThreadTrace struct {
+	NodeID    string `json:"node_id"`
+	CommentID int64  `json:"comment_id"`
+}
+
+func traceBotThreads(threads []githubapp.ReviewThread, botLogin string) []botThreadTrace {
+	traces := make([]botThreadTrace, 0)
+	for _, thread := range threads {
+		if thread.RootComment.Author != botLogin {
+			continue
+		}
+		trace := botThreadTrace{
+			NodeID:      thread.NodeID,
+			CommentID:   thread.RootComment.DatabaseID,
+			Resolved:    thread.Resolved,
+			Outdated:    thread.Outdated,
+			FindingID:   "",
+			FindingHead: "",
+			Importance:  0,
+		}
+		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
+		if ok {
+			trace.FindingID = findingMarker.ID
+			trace.FindingHead = string(findingMarker.Head)
+			trace.Importance = findingMarker.Importance
+		}
+		traces = append(traces, trace)
+	}
+	sort.Slice(traces, func(left, right int) bool {
+		return traces[left].NodeID < traces[right].NodeID
+	})
+	return traces
+}
+
+func ownedThreadIDs(threads []domain.OwnedThread) []string {
+	ids := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		ids = append(ids, thread.NodeID)
+	}
+	return ids
+}
+
+func preparedThreadIDs(threads []preparedThread) []string {
+	ids := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		ids = append(ids, thread.thread.NodeID)
+	}
+	return ids
 }
 
 type threadContext struct {
@@ -265,7 +377,7 @@ func (service *Service) loadThreadContext(
 		currentHead,
 	)
 	if err != nil {
-		service.logger.ErrorContext(ctx, "compare finding head", slog.String("err", err.Error()))
+		gklog.L(ctx).ErrorContext(ctx, "compare finding head", slog.String("err", err.Error()))
 		return emptyThreadContext(), false
 	}
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -140,8 +141,9 @@ type reviewRunner struct {
 }
 
 func (runner reviewRunner) Run(ctx context.Context, job domain.ReviewJob) error {
+	logger := gklog.L(ctx)
 	if err := runner.service.Run(ctx, job); err != nil {
-		slog.ErrorContext(ctx, "review job", slog.String("err", err.Error()))
+		logger.ErrorContext(ctx, "review job", slog.String("err", err.Error()))
 		return fmt.Errorf("review job: %w", err)
 	}
 	return nil
