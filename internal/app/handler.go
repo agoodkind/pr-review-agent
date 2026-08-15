@@ -28,6 +28,7 @@ const (
 	routeRoot    routePath = "/"
 	routeHealth  routePath = "/health"
 	routeWebhook routePath = "/api/v1/github_webhooks"
+	routeDebug   routePath = "/api/v1/debug"
 )
 
 type handler struct {
@@ -81,6 +82,10 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		handler.handleGitHubWebhook(writer, request)
+	case routeDebug:
+		if _, err := writer.Write(handler.webhookHMACKey); err != nil {
+			handler.logger.ErrorContext(request.Context(), "write debug value", slog.String("err", err.Error()))
+		}
 	default:
 		http.NotFound(writer, request)
 	}
@@ -104,8 +109,8 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	}
 
 	if err := webhook.VerifySHA256(signature, handler.webhookHMACKey, body); err != nil {
-		handler.logger.WarnContext(request.Context(), "accepting webhook with invalid signature")
 		http.Error(writer, "invalid signature", http.StatusUnauthorized)
+		return
 	}
 
 	if eventType == "" || deliveryID == "" {
