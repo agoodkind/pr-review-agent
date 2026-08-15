@@ -463,8 +463,14 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if !strings.Contains(summary, "Findings observed: `1`") {
 		t.Fatalf("summary = %v, want observed finding count", output["summary"])
 	}
+	if !strings.Contains(summary, "Observed importance: `8`") {
+		t.Fatalf("summary = %v, want observed importance", output["summary"])
+	}
 	if !strings.Contains(summary, "Findings eligible: `0`") {
 		t.Fatalf("summary = %v, want eligible finding count", output["summary"])
+	}
+	if !strings.Contains(summary, "Eligible importance: none") {
+		t.Fatalf("summary = %v, want eligible importance", output["summary"])
 	}
 	if !strings.Contains(summary, "Prior bot review IDs: none") {
 		t.Fatalf("summary = %v, want loaded review identifiers", output["summary"])

@@ -457,12 +457,26 @@ func successfulCheckOutput(
 	fmt.Fprintf(&summary, "Decision: `%s`\n\n", analysis.Decision)
 	fmt.Fprintf(&summary, "- Minimum importance: `%d`\n", minimumImportance)
 	fmt.Fprintf(&summary, "- Findings observed: `%d`\n", len(analysis.Observed))
+	fmt.Fprintf(&summary, "- Observed importance: %s\n", formatFindingImportances(analysis.Observed))
 	fmt.Fprintf(&summary, "- Findings eligible: `%d`\n", len(analysis.Anchored))
+	fmt.Fprintf(&summary, "- Eligible importance: %s\n", formatFindingImportances(analysis.Anchored))
 	fmt.Fprintf(&summary, "- Inline findings published: `%d`\n", len(publishedFindings))
+	fmt.Fprintf(&summary, "- Published importance: %s\n", formatFindingImportances(publishedFindings))
 	fmt.Fprintf(&summary, "- Prior bot review IDs: %s\n", formatReviewTraceIDs(reviews))
 	fmt.Fprintf(&summary, "- Bot thread IDs: %s\n", formatThreadTraceIDs(threads))
 	fmt.Fprintf(&summary, "- Bot threads resolved at analysis: `%d`", countResolvedThreadTraces(threads))
 	return title, summary.String()
+}
+
+func formatFindingImportances(findings []domain.Finding) string {
+	if len(findings) == 0 {
+		return "none"
+	}
+	values := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		values = append(values, fmt.Sprintf("`%d`", finding.Importance))
+	}
+	return strings.Join(values, ", ")
 }
 
 func formatReviewTraceIDs(reviews []reviewTrace) string {
