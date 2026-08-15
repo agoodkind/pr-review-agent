@@ -4,11 +4,17 @@ package liveproof
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 )
 
+var proofMux = http.NewServeMux()
+
 func init() {
+	proofMux.HandleFunc("/items", Item)
 	if os.Getenv("LIVE_PROOF_EMPTY_MEAN") == "1" {
 		_ = Mean(nil)
 	}
@@ -26,6 +32,16 @@ func Mean(values []int) int {
 		total += value
 	}
 	return total / len(values)
+}
+
+// Item writes one item selected by the request.
+func Item(response http.ResponseWriter, request *http.Request) {
+	slog.InfoContext(request.Context(), "item request")
+	items := []string{"first", "second"}
+	index, _ := strconv.Atoi(request.URL.Query().Get("index"))
+	if _, err := fmt.Fprintln(response, items[index]); err != nil {
+		slog.ErrorContext(request.Context(), "write item", slog.String("err", err.Error()))
+	}
 }
 
 // RequireAdmin protects an administrative handler.
