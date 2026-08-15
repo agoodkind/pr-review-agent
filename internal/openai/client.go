@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -60,10 +61,10 @@ func (client *Client) Review(ctx context.Context, prompt string) (domain.ReviewR
 	}
 	var result domain.ReviewResult
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
-		return domain.ReviewResult{}, errors.New("decode structured output")
+		return domain.ReviewResult{}, errors.New("decode structured output: " + err.Error())
 	}
 	if err := result.Validate(); err != nil {
-		return domain.ReviewResult{}, errors.New("validate review result")
+		return domain.ReviewResult{}, errors.New("validate review result: " + err.Error())
 	}
 	return result, nil
 }
@@ -84,10 +85,10 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 		Resolutions []domain.ThreadResolution `json:"resolutions"`
 	}
 	if err := json.Unmarshal([]byte(content), &response); err != nil {
-		return nil, errors.New("decode structured output")
+		return nil, errors.New("decode structured output: " + err.Error())
 	}
 	if err := domain.ValidateThreadResolutions(response.Resolutions); err != nil {
-		return nil, errors.New("validate thread resolutions")
+		return nil, errors.New("validate thread resolutions: " + err.Error())
 	}
 	return response.Resolutions, nil
 }
@@ -118,7 +119,7 @@ func (client *Client) complete(
 		},
 	})
 	if err != nil {
-		return "", errors.New("openai chat completion failed")
+		return "", modelProviderError(err)
 	}
 	if len(completion.Choices) == 0 {
 		return "", errors.New("openai response missing choices")
@@ -128,6 +129,31 @@ func (client *Client) complete(
 		return "", errors.New("openai response missing message content")
 	}
 	return content, nil
+}
+
+func modelProviderError(err error) error {
+	var apiError *openaigo.Error
+	if errors.As(err, &apiError) {
+		details := []string{fmt.Sprintf(
+			"model provider returned HTTP %d %s",
+			apiError.StatusCode,
+			http.StatusText(apiError.StatusCode),
+		)}
+		for _, value := range []string{apiError.Type, apiError.Code, apiError.Param} {
+			value = strings.Join(strings.Fields(value), " ")
+			if value != "" {
+				details = append(details, value)
+			}
+		}
+		return errors.New(strings.Join(details, ": "))
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errors.New("model provider request timed out")
+	}
+	if errors.Is(err, context.Canceled) {
+		return errors.New("model provider request was cancelled")
+	}
+	return errors.New("model provider request failed before receiving a response")
 }
 
 func structuredOutputPrompt(policy string, schemaName string, schema json.RawMessage) string {

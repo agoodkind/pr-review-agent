@@ -344,7 +344,7 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 		t.Fatalf("start status = %v", state.lastUpdateCheckRun["status"])
 	}
 
-	if err := client.CompleteCheckRun(context.Background(), 99, testRepo(), created.ID, "success", "done"); err != nil {
+	if err := client.CompleteCheckRun(context.Background(), 99, testRepo(), created.ID, "success", "done", "finished"); err != nil {
 		t.Fatalf("CompleteCheckRun: %v", err)
 	}
 	if state.lastUpdateCheckRun["status"] != "completed" {
@@ -352,6 +352,10 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 	}
 	if state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v", state.lastUpdateCheckRun["conclusion"])
+	}
+	output, ok := state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok || output["title"] != "done" || output["summary"] != "finished" {
+		t.Fatalf("output = %v, want distinct title and summary", state.lastUpdateCheckRun["output"])
 	}
 }
 

@@ -148,6 +148,7 @@ func (client *Client) CompleteCheckRun(
 	repo domain.Repository,
 	checkRunID int64,
 	conclusion string,
+	title string,
 	summary string,
 ) error {
 	path := client.repoPath(repo, fmt.Sprintf("/check-runs/%d", checkRunID))
@@ -156,7 +157,7 @@ func (client *Client) CompleteCheckRun(
 		Conclusion: conclusion,
 		DetailsURL: "",
 		Output: &checkRunOutput{
-			Title:   summary,
+			Title:   title,
 			Summary: summary,
 		},
 	}
