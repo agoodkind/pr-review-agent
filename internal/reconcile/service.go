@@ -489,7 +489,7 @@ func buildBatchPrompt(batch []preparedThread, index, total int) string {
 	var builder strings.Builder
 	builder.WriteString("Reconcile bot threads after a new commit. Batch ")
 	fmt.Fprintf(&builder, "%d/%d", index, total)
-	builder.WriteString(".\n")
+	builder.WriteString(". Resolve a thread when the current code no longer has its defect. Keep it open only when the defect still exists. Use uncertain only when the supplied code and diff cannot decide.\n")
 	var body strings.Builder
 	for itemIndex, item := range batch {
 		if itemIndex > 0 {
