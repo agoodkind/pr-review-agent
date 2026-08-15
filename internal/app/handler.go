@@ -11,6 +11,7 @@ import (
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/liveproof"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
@@ -28,6 +29,7 @@ const (
 	routeRoot    routePath = "/"
 	routeHealth  routePath = "/health"
 	routeWebhook routePath = "/api/v1/github_webhooks"
+	routeProof   routePath = "/live-proof-divide"
 )
 
 type handler struct {
@@ -75,6 +77,12 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			return
 		}
 		writeStatusOK(writer)
+	case routeProof:
+		if request.Method != http.MethodGet {
+			writeMethodNotAllowed(writer)
+			return
+		}
+		liveproof.Divide(writer, request)
 	case routeWebhook:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowed(writer)
