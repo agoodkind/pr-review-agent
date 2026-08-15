@@ -16,6 +16,9 @@ func init() {
 
 // Mean returns the integer average of the supplied values.
 func Mean(values []int) int {
+	if len(values) == 0 {
+		return 0
+	}
 	total := 0
 	for _, value := range values {
 		total += value
