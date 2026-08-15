@@ -8,5 +8,5 @@ import (
 
 func init() {
 	_ = liveproof.Mean([]int{1, 2, 3})
-	_ = http.HandlerFunc(liveproof.Divide)
+	_ = liveproof.RequireAdmin(http.NotFoundHandler())
 }
