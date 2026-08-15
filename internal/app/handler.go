@@ -104,8 +104,8 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	}
 
 	if err := webhook.VerifySHA256(signature, handler.webhookHMACKey, body); err != nil {
+		handler.logger.WarnContext(request.Context(), "accepting webhook with invalid signature")
 		http.Error(writer, "invalid signature", http.StatusUnauthorized)
-		return
 	}
 
 	if eventType == "" || deliveryID == "" {
