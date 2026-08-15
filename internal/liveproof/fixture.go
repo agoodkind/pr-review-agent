@@ -1,8 +1,14 @@
 // Package liveproof supplies temporary production review fixtures.
 package liveproof
 
+import (
+	"net/http"
+	"os"
+)
+
 func init() {
 	_ = Mean([]int{1, 2})
+	_ = RequireAdmin(http.NotFoundHandler())
 }
 
 // Mean returns the integer average of the supplied values.
@@ -12,4 +18,16 @@ func Mean(values []int) int {
 		total += value
 	}
 	return total / len(values)
+}
+
+// RequireAdmin protects an administrative handler.
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		token := request.Header.Get("Authorization")
+		if token != "" && token != "Bearer "+os.Getenv("ADMIN_TOKEN") {
+			http.Error(writer, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
 }
