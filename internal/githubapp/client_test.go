@@ -410,6 +410,22 @@ func TestListReviewThreadsPaginatesBeyondOneHundred(t *testing.T) {
 	}
 }
 
+func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	state.threadPages = buildThreadPages(1)
+
+	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 6)
+	if err != nil {
+		t.Fatalf("ListReviewThreads: %v", err)
+	}
+	if threads[0].RootComment.Author != config.BotLogin {
+		t.Fatalf("author = %q, want %q", threads[0].RootComment.Author, config.BotLogin)
+	}
+}
+
 func TestResolveReviewThreadVerifiesMutationResult(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
@@ -702,7 +718,10 @@ func buildThreadPages(total int) []map[string]any {
 							"path":       "main.go",
 							"line":       float64(10),
 							"startLine":  float64(10),
-							"author":     map[string]any{"login": config.BotLogin},
+							"author": map[string]any{
+								"__typename": "Bot",
+								"login":      strings.TrimSuffix(config.BotLogin, "[bot]"),
+							},
 						},
 					},
 				},
