@@ -82,9 +82,12 @@ type CheckRun struct {
 
 // ReviewThread is one pull request review thread with its root comment.
 type ReviewThread struct {
-	NodeID      string
-	Resolved    bool
-	RootComment domain.ReviewComment
+	NodeID             string
+	Resolved           bool
+	Outdated           bool
+	ViewerCanResolve   bool
+	ViewerCanUnresolve bool
+	RootComment        domain.ReviewComment
 }
 
 // APIError is a sanitized GitHub API failure with an HTTP status code.
@@ -326,7 +329,9 @@ type graphQLRequest struct {
 }
 
 type graphQLError struct {
-	Message string `json:"message"`
+	Message string          `json:"message"`
+	Type    string          `json:"type"`
+	Path    json.RawMessage `json:"path"`
 }
 
 type graphQLEnvelope struct {
@@ -337,7 +342,18 @@ type graphQLEnvelope struct {
 func formatGraphQLErrors(errorsList []graphQLError) string {
 	messages := make([]string, 0, len(errorsList))
 	for _, item := range errorsList {
-		messages = append(messages, item.Message)
+		details := make([]string, 0, 2)
+		if item.Type != "" {
+			details = append(details, "type="+item.Type)
+		}
+		if path := strings.TrimSpace(string(item.Path)); path != "" && path != "null" {
+			details = append(details, "path="+path)
+		}
+		message := item.Message
+		if len(details) > 0 {
+			message += " (" + strings.Join(details, ", ") + ")"
+		}
+		messages = append(messages, message)
 	}
 	return strings.Join(messages, "; ")
 }

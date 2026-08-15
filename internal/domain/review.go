@@ -171,10 +171,13 @@ type ReviewComment struct {
 
 // OwnedThread is one unresolved bot finding eligible for reconciliation.
 type OwnedThread struct {
-	NodeID      string
-	RootComment ReviewComment
-	Finding     Finding
-	FindingHead HeadSHA
+	NodeID             string
+	Outdated           bool
+	ViewerCanResolve   bool
+	ViewerCanUnresolve bool
+	RootComment        ReviewComment
+	Finding            Finding
+	FindingHead        HeadSHA
 }
 
 // ThreadResolution is the model decision for one owned thread.

@@ -110,8 +110,13 @@ func encodeJWTPart(value []byte) string {
 }
 
 type installationTokenResponse struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Token               string    `json:"token"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	RepositorySelection string    `json:"repository_selection"`
+	Permissions         struct {
+		Contents     string `json:"contents"`
+		PullRequests string `json:"pull_requests"`
+	} `json:"permissions"`
 }
 
 func (client *Client) installationToken(ctx context.Context, installationID int64) (string, error) {
@@ -162,6 +167,14 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 	if strings.TrimSpace(parsed.Token) == "" {
 		return "", errors.New("installation token missing")
 	}
+	client.logger.InfoContext(
+		ctx,
+		"installation token granted",
+		slog.Int64("installation_id", installationID),
+		slog.String("repository_selection", parsed.RepositorySelection),
+		slog.String("contents_permission", parsed.Permissions.Contents),
+		slog.String("pull_requests_permission", parsed.Permissions.PullRequests),
+	)
 
 	client.tokens.set(installationID, parsed.Token, parsed.ExpiresAt)
 	return parsed.Token, nil

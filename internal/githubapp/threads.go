@@ -23,6 +23,9 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
         nodes {
           id
           isResolved
+          isOutdated
+          viewerCanResolve
+          viewerCanUnresolve
           comments(first: 1) {
             nodes {
               databaseId
@@ -67,9 +70,12 @@ type reviewThreadsResponse struct {
 }
 
 type reviewThreadNode struct {
-	ID         string `json:"id"`
-	IsResolved bool   `json:"isResolved"`
-	Comments   struct {
+	ID                 string `json:"id"`
+	IsResolved         bool   `json:"isResolved"`
+	IsOutdated         bool   `json:"isOutdated"`
+	ViewerCanResolve   bool   `json:"viewerCanResolve"`
+	ViewerCanUnresolve bool   `json:"viewerCanUnresolve"`
+	Comments           struct {
 		Nodes []reviewCommentNode `json:"nodes"`
 	} `json:"comments"`
 }
@@ -218,8 +224,11 @@ func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
 	}
 
 	return ReviewThread{
-		NodeID:   node.ID,
-		Resolved: node.IsResolved,
+		NodeID:             node.ID,
+		Resolved:           node.IsResolved,
+		Outdated:           node.IsOutdated,
+		ViewerCanResolve:   node.ViewerCanResolve,
+		ViewerCanUnresolve: node.ViewerCanUnresolve,
 		RootComment: domain.ReviewComment{
 			DatabaseID: root.DatabaseID,
 			Author:     author,
