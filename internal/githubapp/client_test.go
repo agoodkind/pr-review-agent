@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	testHeadSHA = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
-	testBaseSHA = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
+	testHeadSHA  = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+	testBaseSHA  = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
+	testBotLogin = "test-review-agent[bot]"
 )
 
 func TestAppJWTContainsExpectedClaimsAndValidSignature(t *testing.T) {
@@ -301,7 +302,7 @@ func TestListReviewsPreservesAuthorForMarkerOwnership(t *testing.T) {
 				"commit_id": testHeadSHA,
 				"state":     "CHANGES_REQUESTED",
 				"body":      "<!-- marker -->",
-				"user":      map[string]any{"login": "agoodkind-pr-review-agent[bot]"},
+				"user":      map[string]any{"login": testBotLogin},
 			},
 		},
 	}
@@ -313,7 +314,7 @@ func TestListReviewsPreservesAuthorForMarkerOwnership(t *testing.T) {
 	if len(reviews) != 1 {
 		t.Fatalf("review count = %d, want 1", len(reviews))
 	}
-	if reviews[0].Author != "agoodkind-pr-review-agent[bot]" {
+	if reviews[0].Author != testBotLogin {
 		t.Fatalf("author = %q", reviews[0].Author)
 	}
 }
@@ -421,8 +422,8 @@ func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListReviewThreads: %v", err)
 	}
-	if threads[0].RootComment.Author != config.BotLogin {
-		t.Fatalf("author = %q, want %q", threads[0].RootComment.Author, config.BotLogin)
+	if threads[0].RootComment.Author != testBotLogin {
+		t.Fatalf("author = %q, want %q", threads[0].RootComment.Author, testBotLogin)
 	}
 }
 
@@ -519,7 +520,7 @@ func newStatefulTestClient(
 		Port:             "3000",
 		GitHubAppID:      12345,
 		GitHubPrivateKey: privateKey, // gitleaks:allow
-		GitHubBotLogin:   config.BotLogin,
+		GitHubBotLogin:   testBotLogin,
 		GitHubAPIBaseURL: apiURL,
 		GitHubGraphQLURL: graphqlURL,
 	}
@@ -569,7 +570,7 @@ func handleTestRequest(writer http.ResponseWriter, request *http.Request, state 
 			"commit_id": body["commit_id"],
 			"state":     "CHANGES_REQUESTED",
 			"body":      body["body"],
-			"user":      map[string]any{"login": config.BotLogin},
+			"user":      map[string]any{"login": testBotLogin},
 		})
 		return
 	}
@@ -720,7 +721,7 @@ func buildThreadPages(total int) []map[string]any {
 							"startLine":  float64(10),
 							"author": map[string]any{
 								"__typename": "Bot",
-								"login":      strings.TrimSuffix(config.BotLogin, "[bot]"),
+								"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
 							},
 						},
 					},

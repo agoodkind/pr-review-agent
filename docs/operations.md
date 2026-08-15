@@ -27,6 +27,7 @@ Set these required environment variables:
 | `GITHUB_APP_ID` | Existing GitHub App numeric identifier |
 | `GITHUB_PRIVATE_KEY` | Existing GitHub App RSA private key |
 | `GITHUB_WEBHOOK_SECRET` | Existing webhook signing secret |
+| `GITHUB_BOT_LOGIN` | Exact GitHub App bot login, including the `[bot]` suffix |
 | `CLYDE_BASE_URL` | HTTPS endpoint for model requests |
 | `CLYDE_API_KEY` | Clyde API credential |
 | `CF_ACCESS_CLIENT_ID` | Cloudflare Access service token identifier |
@@ -34,7 +35,7 @@ Set these required environment variables:
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_MAX_UNRESOLVED_COMMENTS` | Maximum unresolved bot threads, including `0` |
 
-`PORT` defaults to `3000`. `GITHUB_BOT_LOGIN` defaults to `agoodkind-pr-review-agent[bot]`.
+`PORT` defaults to `3000`.
 
 Keep every credential in the deployment secret store. Do not place values in source, commands, logs, or evidence.
 

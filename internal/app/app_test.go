@@ -29,6 +29,7 @@ import (
 
 const (
 	testWebhookSecret     = "test-webhook-secret" // gitleaks:allow
+	testBotLogin          = "test-review-agent[bot]"
 	testDefectiveHead     = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
 	testCorrectedHead     = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
 	testBaseSHA           = "c5e6f3ece9f717de046926d1f4c3f3313852fe54"
@@ -817,7 +818,7 @@ func wireAppFixture(
 		GitHubAppID:               12345,
 		GitHubPrivateKey:          privateKey,                // gitleaks:allow
 		GitHubWebhookSecret:       []byte(testWebhookSecret), // gitleaks:allow
-		GitHubBotLogin:            config.BotLogin,
+		GitHubBotLogin:            testBotLogin,
 		GitHubAPIBaseURL:          apiURL,
 		GitHubGraphQLURL:          graphqlURL,
 		ClydeBaseURL:              clydeURL,
@@ -1096,7 +1097,7 @@ func buildReviewThreads(count int) []map[string]any {
 					"path":       "internal/app/handler.go",
 					"line":       float64(3),
 					"startLine":  float64(3),
-					"author":     map[string]any{"login": config.BotLogin},
+					"author":     map[string]any{"login": testBotLogin},
 				}},
 			},
 		})
@@ -1548,7 +1549,7 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		"commit_id": commitID,
 		"body":      reviewBody,
 		"state":     body["event"],
-		"user":      map[string]any{"login": config.BotLogin},
+		"user":      map[string]any{"login": testBotLogin},
 	}
 	if len(state.listReviewPages) == 0 {
 		state.listReviewPages = [][]map[string]any{{review}}
@@ -1573,7 +1574,7 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 						"path":       comment["path"],
 						"line":       comment["line"],
 						"startLine":  comment["start_line"],
-						"author":     map[string]any{"login": config.BotLogin},
+						"author":     map[string]any{"login": testBotLogin},
 					}},
 				},
 			})
@@ -1586,7 +1587,7 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		"commit_id": body["commit_id"],
 		"state":     body["event"],
 		"body":      body["body"],
-		"user":      map[string]any{"login": config.BotLogin},
+		"user":      map[string]any{"login": testBotLogin},
 	})
 }
 

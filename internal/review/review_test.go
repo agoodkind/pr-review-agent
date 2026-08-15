@@ -33,6 +33,7 @@ const (
 	testBaseSHA           = "c5e6f3ece9f717de046926d1f4c3f3313852fe54"
 	testPRNumber          = 7
 	testMinimumImportance = 7
+	testBotLogin          = "test-review-agent[bot]"
 )
 
 func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
@@ -468,7 +469,7 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 				"commit_id": string(head),
 				"state":     "COMMENTED",
 				"body":      marker.Review(head) + "\nExisting review.",
-				"user":      map[string]any{"login": config.BotLogin},
+				"user":      map[string]any{"login": testBotLogin},
 			},
 		}},
 	})
@@ -650,7 +651,7 @@ func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinC
 			NodeID:   "historical-thread",
 			Resolved: true,
 			RootComment: domain.ReviewComment{
-				Author:    config.BotLogin,
+				Author:    testBotLogin,
 				Body:      historicalBody,
 				Path:      historical.Path,
 				StartLine: historical.StartLine,
@@ -727,7 +728,7 @@ func TestServiceRequestsChangesWithoutPublishingWhenThreadCapIsFull(t *testing.T
 			NodeID:   "existing-thread",
 			Resolved: false,
 			RootComment: domain.ReviewComment{
-				Author: config.BotLogin,
+				Author: testBotLogin,
 				Body:   "existing bot thread",
 			},
 		}},
@@ -991,7 +992,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		Port:             "3000",
 		GitHubAppID:      12345,
 		GitHubPrivateKey: privateKey, // gitleaks:allow
-		GitHubBotLogin:   config.BotLogin,
+		GitHubBotLogin:   testBotLogin,
 		GitHubAPIBaseURL: apiURL,
 		GitHubGraphQLURL: graphqlURL,
 	}
@@ -1037,7 +1038,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		model,
 		reconciler,
 		queue.NewKeyedLocker(),
-		config.BotLogin,
+		testBotLogin,
 		minimumImportance,
 		maximumUnresolvedComments,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1100,7 +1101,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"commit_id": body["commit_id"],
 			"state":     "COMMENTED",
 			"body":      body["body"],
-			"user":      map[string]any{"login": config.BotLogin},
+			"user":      map[string]any{"login": testBotLogin},
 		})
 		return
 	}
@@ -1117,7 +1118,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"commit_id": testHeadSHA,
 			"state":     "CHANGES_REQUESTED",
 			"body":      body["body"],
-			"user":      map[string]any{"login": config.BotLogin},
+			"user":      map[string]any{"login": testBotLogin},
 		})
 		return
 	}

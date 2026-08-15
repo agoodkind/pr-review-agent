@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -17,7 +16,7 @@ import (
 const (
 	testCurrentHead = "c5e6f2dbd8f606cd935815c0e3b2f2202741ed99"
 	testFindingHead = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
-	testBotLogin    = config.BotLogin
+	testBotLogin    = "test-review-agent[bot]"
 	testRepoOwner   = "agoodkind"
 	testRepoName    = "pr-review-agent"
 )
