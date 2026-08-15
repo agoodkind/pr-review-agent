@@ -2,6 +2,8 @@
 package liveproof
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"net/http"
 	"os"
 )
@@ -31,7 +33,10 @@ func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		expectedToken := os.Getenv("ADMIN_TOKEN")
 		token := request.Header.Get("Authorization")
-		if expectedToken == "" || token != "Bearer "+expectedToken {
+		expectedDigest := sha256.Sum256([]byte("Bearer " + expectedToken))
+		actualDigest := sha256.Sum256([]byte(token))
+		tokenMatches := subtle.ConstantTimeCompare(actualDigest[:], expectedDigest[:]) == 1
+		if expectedToken == "" || !tokenMatches {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
 			return
 		}
