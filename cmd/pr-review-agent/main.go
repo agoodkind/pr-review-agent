@@ -16,6 +16,7 @@ import (
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/app"
 	"goodkind.io/pr-review-agent/internal/config"
+	_ "goodkind.io/pr-review-agent/internal/liveproof"
 	"goodkind.io/pr-review-agent/internal/version"
 )
 
