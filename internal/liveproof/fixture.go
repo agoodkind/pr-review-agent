@@ -6,6 +6,21 @@ import (
 	"os"
 )
 
+func init() {
+	if os.Getenv("LIVE_PROOF_EMPTY_MEAN") == "1" {
+		_ = Mean(nil)
+	}
+}
+
+// Mean returns the integer average of the supplied values.
+func Mean(values []int) int {
+	total := 0
+	for _, value := range values {
+		total += value
+	}
+	return total / len(values)
+}
+
 // RequireAdmin protects an administrative handler.
 func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
