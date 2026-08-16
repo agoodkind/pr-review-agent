@@ -48,6 +48,7 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		"REVIEW_MIN_IMPORTANCE",
 		"REVIEW_MAX_UNRESOLVED_COMMENTS",
 		"REVIEW_TIMEOUT",
+		"REVIEW_WORKERS",
 	} {
 		if !strings.Contains(err.Error(), secret) {
 			t.Fatalf("error %q missing %q", err.Error(), secret)
@@ -146,6 +147,16 @@ func TestLoadUsesConfiguredReviewTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadUsesConfiguredReviewWorkers(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{"REVIEW_WORKERS": "4"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewWorkers != 4 {
+		t.Fatalf("ReviewWorkers = %d, want 4", cfg.ReviewWorkers)
+	}
+}
+
 func TestLoadRejectsInvalidURLsAndAppIDs(t *testing.T) {
 	_, err := loadWithOverrides(map[string]string{
 		"GITHUB_APP_ID":  "0",
@@ -207,6 +218,7 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 		"REVIEW_MIN_IMPORTANCE":          "7",
 		"REVIEW_MAX_UNRESOLVED_COMMENTS": "10",
 		"REVIEW_TIMEOUT":                 "10m",
+		"REVIEW_WORKERS":                 "4",
 	}
 	for key, value := range overrides {
 		values[key] = value

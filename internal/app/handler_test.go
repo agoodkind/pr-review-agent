@@ -24,7 +24,7 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 		GitHubWebhookSecret: []byte("test-webhook-secret"), // gitleaks:allow
 	}
 	cache := queue.NewDeliveryCache(100, time.Hour, time.Now)
-	dispatcher := queue.NewDispatcher(1, blockingRunner{release: releaseJob}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dispatcher := queue.NewDispatcher(1, 1, blockingRunner{release: releaseJob}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	handler := newHandler(
 		cfg,
 		cache,

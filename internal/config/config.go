@@ -46,6 +46,7 @@ type LookupEnv func(string) (string, bool)
 type Config struct {
 	Port                      string
 	ReviewTimeout             time.Duration
+	ReviewWorkers             int
 	MinimumImportance         int
 	MaximumUnresolvedComments int
 	GitHubAppID               int64
@@ -91,6 +92,12 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	var missing []string
 
 	cfg.Port = loadPort(lookup)
+	reviewWorkers, ok := loadReviewWorkers(lookup)
+	if !ok {
+		missing = append(missing, "REVIEW_WORKERS")
+	} else {
+		cfg.ReviewWorkers = reviewWorkers
+	}
 	reviewTimeout, ok := loadReviewTimeout(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_TIMEOUT")
@@ -113,6 +120,18 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	missing = append(missing, loadClyde(lookup, &cfg)...)
 
 	return cfg, missing
+}
+
+func loadReviewWorkers(lookup LookupEnv) (int, bool) {
+	value, ok := lookup("REVIEW_WORKERS")
+	if !ok || strings.TrimSpace(value) == "" {
+		return 0, false
+	}
+	workers, err := strconv.Atoi(value)
+	if err != nil || workers <= 0 {
+		return 0, false
+	}
+	return workers, true
 }
 
 func loadReviewTimeout(lookup LookupEnv) (time.Duration, bool) {

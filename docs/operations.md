@@ -34,6 +34,8 @@ Set these required environment variables:
 | `CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token secret |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_MAX_UNRESOLVED_COMMENTS` | Maximum unresolved bot threads, including `0` |
+| `REVIEW_TIMEOUT` | Maximum duration for one active review, such as `10m` |
+| `REVIEW_WORKERS` | Maximum reviews that can run at once |
 
 `PORT` defaults to `3000`.
 

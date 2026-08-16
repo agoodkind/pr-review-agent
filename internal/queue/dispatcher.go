@@ -14,31 +14,37 @@ type Runner interface {
 	Run(context.Context, domain.ReviewJob) error
 }
 
-// Dispatcher runs review jobs on a single worker goroutine.
+// Dispatcher runs review jobs on a bounded worker pool.
 type Dispatcher struct {
-	capacity int
-	runner   Runner
-	logger   *slog.Logger
-	jobs     chan domain.ReviewJob
-	started  bool
-	mu       sync.Mutex
-	wg       sync.WaitGroup
+	capacity  int
+	workers   int
+	runner    Runner
+	logger    *slog.Logger
+	jobs      chan domain.ReviewJob
+	completed chan string
+	started   bool
+	queued    int
+	mu        sync.Mutex
+	wg        sync.WaitGroup
 }
 
-// NewDispatcher creates a bounded single-worker dispatcher.
-func NewDispatcher(capacity int, runner Runner, logger *slog.Logger) *Dispatcher {
+// NewDispatcher creates a bounded worker pool.
+func NewDispatcher(capacity int, workers int, runner Runner, logger *slog.Logger) *Dispatcher {
 	return &Dispatcher{
-		capacity: capacity,
-		runner:   runner,
-		logger:   logger,
-		jobs:     make(chan domain.ReviewJob, capacity),
-		started:  false,
-		mu:       sync.Mutex{},
-		wg:       sync.WaitGroup{},
+		capacity:  capacity,
+		workers:   workers,
+		runner:    runner,
+		logger:    logger,
+		jobs:      make(chan domain.ReviewJob, capacity),
+		completed: make(chan string, workers),
+		started:   false,
+		queued:    0,
+		mu:        sync.Mutex{},
+		wg:        sync.WaitGroup{},
 	}
 }
 
-// Start launches the worker loop until the context is cancelled.
+// Start launches the keyed scheduler.
 func (dispatcher *Dispatcher) Start(ctx context.Context) {
 	dispatcher.mu.Lock()
 	if dispatcher.started {
@@ -49,10 +55,69 @@ func (dispatcher *Dispatcher) Start(ctx context.Context) {
 	dispatcher.mu.Unlock()
 
 	dispatcher.wg.Go(func() {
-		for job := range dispatcher.jobs {
-			dispatcher.runJob(ctx, job)
-		}
+		dispatcher.schedule(ctx)
 	})
+}
+
+func (dispatcher *Dispatcher) schedule(ctx context.Context) {
+	jobs := dispatcher.jobs
+	pending := make([]domain.ReviewJob, 0)
+	activeKeys := make(map[string]struct{})
+	running := 0
+
+	for jobs != nil || running > 0 || len(pending) > 0 {
+		for running < dispatcher.workers {
+			job, remaining, ok := nextRunnableJob(pending, activeKeys)
+			if !ok {
+				break
+			}
+			pending = remaining
+			key := job.Key()
+			activeKeys[key] = struct{}{}
+			running++
+			dispatcher.markStarted()
+			dispatcher.wg.Go(func() {
+				dispatcher.runJob(ctx, job)
+				dispatcher.completed <- key
+			})
+		}
+
+		if jobs == nil && running == 0 {
+			return
+		}
+		select {
+		case job, ok := <-jobs:
+			if !ok {
+				jobs = nil
+				continue
+			}
+			pending = append(pending, job)
+		case key := <-dispatcher.completed:
+			delete(activeKeys, key)
+			running--
+		}
+	}
+}
+
+func nextRunnableJob(
+	pending []domain.ReviewJob,
+	activeKeys map[string]struct{},
+) (domain.ReviewJob, []domain.ReviewJob, bool) {
+	for index, job := range pending {
+		if _, active := activeKeys[job.Key()]; active {
+			continue
+		}
+		pending = append(pending[:index], pending[index+1:]...)
+		return job, pending, true
+	}
+	var empty domain.ReviewJob
+	return empty, pending, false
+}
+
+func (dispatcher *Dispatcher) markStarted() {
+	dispatcher.mu.Lock()
+	dispatcher.queued--
+	dispatcher.mu.Unlock()
 }
 
 func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) {
@@ -78,10 +143,21 @@ func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) 
 
 // Enqueue adds a job without blocking. It returns false when the queue is full.
 func (dispatcher *Dispatcher) Enqueue(job domain.ReviewJob) bool {
+	dispatcher.mu.Lock()
+	if dispatcher.queued >= dispatcher.capacity {
+		dispatcher.mu.Unlock()
+		return false
+	}
+	dispatcher.queued++
+	dispatcher.mu.Unlock()
+
 	select {
 	case dispatcher.jobs <- job:
 		return true
 	default:
+		dispatcher.mu.Lock()
+		dispatcher.queued--
+		dispatcher.mu.Unlock()
 		return false
 	}
 }
