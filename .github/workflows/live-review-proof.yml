@@ -10,4 +10,4 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Live review proof"
+      - run: echo "Live review proof complete"
