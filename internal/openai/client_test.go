@@ -3,6 +3,7 @@ package openai_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -194,13 +195,99 @@ func TestReviewDoesNotRetryAuthenticationFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want authentication error")
 	}
-	for _, detail := range []string{"HTTP 401 Unauthorized", "request_failed"} {
+	for _, detail := range []string{"HTTP 401 Unauthorized", "request_failed", "request failed"} {
 		if !strings.Contains(err.Error(), detail) {
 			t.Fatalf("error = %q, want %q", err, detail)
 		}
 	}
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1", state.requestCount)
+	}
+}
+
+func TestReviewReportsGatewayFoldedUpstreamMessage(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.statusSequence = []int{http.StatusBadRequest}
+	state.errorPayload = map[string]any{
+		"message": "upstream call failed: provider=codex upstream_status=429 " +
+			"upstream_code=usage_limit_reached upstream_message=You have used all included usage.",
+		"type":  "invalid_request_error",
+		"param": "",
+		"code":  "upstream_failed",
+	}
+
+	_, err := client.Review(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("Review: want provider error")
+	}
+	if !strings.Contains(err.Error(), "You have used all included usage.") {
+		t.Fatalf("error = %q, want the folded upstream message", err)
+	}
+
+	var providerError *openai.ProviderError
+	if !errors.As(err, &providerError) {
+		t.Fatalf("error = %q, want a *openai.ProviderError", err)
+	}
+	if !providerError.UsageExceeded() {
+		t.Fatalf("UsageExceeded() = false for %q, want true", err)
+	}
+}
+
+func TestProviderErrorClassifiesUsageExhaustion(t *testing.T) {
+	cases := []struct {
+		name          string
+		providerError openai.ProviderError
+		want          bool
+	}{
+		{
+			name:          "openai insufficient quota",
+			providerError: openai.ProviderError{StatusCode: 429, Type: "insufficient_quota", Code: "insufficient_quota"},
+			want:          true,
+		},
+		{
+			name: "gateway folded usage limit",
+			providerError: openai.ProviderError{
+				StatusCode: 400,
+				Type:       "invalid_request_error",
+				Code:       "upstream_failed",
+				Message:    "upstream call failed: upstream_code=usage_limit_reached",
+			},
+			want: true,
+		},
+		{
+			name:          "payment required",
+			providerError: openai.ProviderError{StatusCode: 402, Code: "upstream_failed"},
+			want:          true,
+		},
+		{
+			name: "plain rate limit",
+			providerError: openai.ProviderError{
+				StatusCode: 429,
+				Type:       "rate_limit_error",
+				Code:       "rate_limit_exceeded",
+				Message:    "Please retry shortly.",
+			},
+			want: false,
+		},
+		{
+			name: "schema violation",
+			providerError: openai.ProviderError{
+				StatusCode: 400,
+				Type:       "invalid_request_error",
+				Code:       "upstream_malformed_request",
+				Message:    "missing_required_parameter",
+			},
+			want: false,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.providerError.UsageExceeded(); got != testCase.want {
+				t.Fatalf("UsageExceeded() = %v, want %v", got, testCase.want)
+			}
+		})
 	}
 }
 
@@ -307,6 +394,7 @@ type testServerState struct {
 	statusIndex       int
 	completionContent string
 	streamResponse    func(http.ResponseWriter)
+	errorPayload      map[string]any
 }
 
 func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerState) {
@@ -334,14 +422,16 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
 			writer.Header().Set("Retry-After-Ms", "0")
-			writeJSON(writer, status, map[string]any{
-				"error": map[string]any{
+			payload := state.errorPayload
+			if payload == nil {
+				payload = map[string]any{
 					"message": "request failed",
 					"type":    "invalid_request_error",
 					"param":   "",
 					"code":    "request_failed",
-				},
-			})
+				}
+			}
+			writeJSON(writer, status, map[string]any{"error": payload})
 			return
 		}
 		if state.streamResponse != nil {

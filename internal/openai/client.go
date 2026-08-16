@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -157,18 +156,13 @@ func (client *Client) complete(
 func modelProviderError(err error) error {
 	var apiError *openaigo.Error
 	if errors.As(err, &apiError) {
-		details := []string{fmt.Sprintf(
-			"model provider returned HTTP %d %s",
-			apiError.StatusCode,
-			http.StatusText(apiError.StatusCode),
-		)}
-		for _, value := range []string{apiError.Type, apiError.Code, apiError.Param} {
-			value = strings.Join(strings.Fields(value), " ")
-			if value != "" {
-				details = append(details, value)
-			}
+		return &ProviderError{
+			StatusCode: apiError.StatusCode,
+			Type:       apiError.Type,
+			Code:       apiError.Code,
+			Param:      apiError.Param,
+			Message:    apiError.Message,
 		}
-		return errors.New(strings.Join(details, ": "))
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errors.New("model provider request timed out")
