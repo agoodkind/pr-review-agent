@@ -96,6 +96,39 @@ func TestRenderBodyIsOneShortSummaryAndMarker(t *testing.T) {
 	}
 }
 
+func TestRenderFailureBodyFencesTheCauseAndOmitsTheReviewMarker(t *testing.T) {
+	t.Run("plain cause", func(t *testing.T) {
+		body := review.RenderFailureBody("Review failed.", "provider refused")
+		want := "## Review\n\nReview failed.\n\n```\nprovider refused\n```\n\n" + marker.Summary()
+		if body != want {
+			t.Fatalf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("cause containing a fence", func(t *testing.T) {
+		detail := "provider said ``` and then ````"
+		body := review.RenderFailureBody("Review failed.", detail)
+		if !strings.Contains(body, "`````\n"+detail+"\n`````") {
+			t.Fatalf("body = %q, want a fence longer than the cause backtick run", body)
+		}
+	})
+
+	t.Run("no cause", func(t *testing.T) {
+		body := review.RenderFailureBody("Review failed.", "   ")
+		want := "## Review\n\nReview failed.\n\n" + marker.Summary()
+		if body != want {
+			t.Fatalf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("never carries a review marker", func(t *testing.T) {
+		body := review.RenderFailureBody("Review failed.", "provider refused")
+		if _, found := marker.FindReview(body); found {
+			t.Fatalf("body = %q, want no review marker", body)
+		}
+	})
+}
+
 func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	findings := []domain.Finding{{

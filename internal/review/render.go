@@ -10,6 +10,9 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
+// minimumFenceLength is the shortest Markdown code fence.
+const minimumFenceLength = 3
+
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(head domain.HeadSHA, decision domain.ReviewDecision) string {
 	message := "No severe findings."
@@ -25,10 +28,33 @@ func RenderBody(head domain.HeadSHA, decision domain.ReviewDecision) string {
 func RenderFailureBody(title string, detail string) string {
 	parts := []string{"## Review", strings.TrimSpace(title)}
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
-		parts = append(parts, "```\n"+trimmedDetail+"\n```")
+		fence := codeFenceFor(trimmedDetail)
+		parts = append(parts, fence+"\n"+trimmedDetail+"\n"+fence)
 	}
 	parts = append(parts, marker.Summary())
 	return strings.Join(parts, "\n\n")
+}
+
+// codeFenceFor returns a fence longer than any backtick run in the content, so
+// a provider message containing backticks cannot break out of the block.
+func codeFenceFor(content string) string {
+	longestRun := 0
+	currentRun := 0
+	for _, character := range content {
+		if character == '`' {
+			currentRun++
+			if currentRun > longestRun {
+				longestRun = currentRun
+			}
+			continue
+		}
+		currentRun = 0
+	}
+	fenceLength := minimumFenceLength
+	if longestRun >= fenceLength {
+		fenceLength = longestRun + 1
+	}
+	return strings.Repeat("`", fenceLength)
 }
 
 // RenderInline renders anchored findings as GitHub inline review comments.

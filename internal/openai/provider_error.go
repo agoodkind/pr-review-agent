@@ -7,9 +7,10 @@ import (
 )
 
 // usageExceededPhrases are the provider wordings that report exhausted usage.
-// The gateway flattens every upstream status onto HTTP 400 and folds the real
-// upstream diagnostic into the message, so the message is the only reliable
-// place to read an exhausted quota from.
+// The gateway flattens every upstream status onto HTTP 400 and keeps the real
+// upstream status and body only inside the message, so the message is the one
+// reliable place to read an exhausted quota from. A bare upstream 429 is
+// deliberately absent: the gateway returns it for plain throttling too.
 var usageExceededPhrases = []string{
 	"insufficient_quota",
 	"usage_limit_reached",
@@ -22,6 +23,7 @@ var usageExceededPhrases = []string{
 	"exceeded your usage",
 	"out of credit",
 	"credit balance",
+	"upstream status 402",
 }
 
 // ProviderError is one structured failure reported by the model provider.
