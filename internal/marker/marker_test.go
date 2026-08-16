@@ -120,8 +120,9 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 		Path:       "internal/app/handler.go",
 		StartLine:  12,
 		EndLine:    14,
-		Title:      "Missing validation",
-		Body:       "Validate the webhook payload before enqueue.",
+		Title:      "Validate `payload` before enqueue",
+		Body:       "An invalid `payload` reaches the queue and breaks processing. Validate `payload` before calling `enqueue`.",
+		Suggestion: "if err := payload.Validate(); err != nil {\n\treturn err\n}",
 		Importance: 7,
 	}
 	encoded, err := EncodeFindingBody(head, finding)
@@ -140,11 +141,36 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	if decodedHead != head {
 		t.Fatalf("head = %q, want %q", decodedHead, head)
 	}
-	if decodedFinding.Title != finding.Title || decodedFinding.Body != finding.Body {
+	if decodedFinding.Title != finding.Title ||
+		decodedFinding.Body != finding.Body ||
+		decodedFinding.Suggestion != finding.Suggestion {
 		t.Fatalf("decoded finding = %+v, want %+v", decodedFinding, finding)
 	}
+	wantSuggestion := "```suggestion\n" + finding.Suggestion + "\n```"
+	if !strings.Contains(encoded, wantSuggestion) {
+		t.Fatalf("encoded body missing suggestion: %q", encoded)
+	}
 
-	tampered := strings.Replace(encoded, "Missing validation", "Different defect", 1)
+	historical := finding
+	historical.Suggestion = ""
+	historicalBody, err := EncodeFindingBody(head, historical)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody historical: %v", err)
+	}
+	_, decodedHistorical, err := DecodeFindingBody(domain.ReviewComment{
+		Path:      historical.Path,
+		StartLine: historical.StartLine,
+		EndLine:   historical.EndLine,
+		Body:      historicalBody,
+	})
+	if err != nil {
+		t.Fatalf("DecodeFindingBody historical: %v", err)
+	}
+	if decodedHistorical.Suggestion != "" {
+		t.Fatalf("historical suggestion = %q, want empty", decodedHistorical.Suggestion)
+	}
+
+	tampered := strings.Replace(encoded, "Validate `payload` before enqueue", "Different defect", 1)
 	if _, _, err := DecodeFindingBody(domain.ReviewComment{
 		Path:      finding.Path,
 		StartLine: finding.StartLine,

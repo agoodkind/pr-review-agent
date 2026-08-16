@@ -102,8 +102,9 @@ func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
 		Path:       "main.go",
 		StartLine:  4,
 		EndLine:    6,
-		Title:      "Range issue",
-		Body:       "Multiline anchor.",
+		Title:      "Validate `rangeEnd`",
+		Body:       "An unchecked `rangeEnd` can exceed the buffer and panic. Reject values above `len(buffer)` before slicing.",
+		Suggestion: "if rangeEnd > len(buffer) {\n\treturn errRange\n}",
 		Importance: 9,
 	}}
 
@@ -130,6 +131,20 @@ func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
 	}
 	if strings.Contains(comment.Body, "Importance:") {
 		t.Fatalf("comment body exposes numeric importance: %q", comment.Body)
+	}
+	if !strings.Contains(comment.Body, "### Validate `rangeEnd`") {
+		t.Fatalf("comment body missing inline code heading: %q", comment.Body)
+	}
+	wantSuggestion := "```suggestion\n" + findings[0].Suggestion + "\n```"
+	if !strings.Contains(comment.Body, wantSuggestion) {
+		t.Fatalf("comment body missing suggestion: %q", comment.Body)
+	}
+	findingMarker, err := marker.Finding(head, findings[0])
+	if err != nil {
+		t.Fatalf("Finding marker: %v", err)
+	}
+	if !strings.HasSuffix(comment.Body, findingMarker) {
+		t.Fatalf("comment body does not end with finding marker: %q", comment.Body)
 	}
 }
 
@@ -321,6 +336,12 @@ func TestAnalyzePromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 	prompt := model.prompts[0]
 	if !strings.Contains(prompt, "importance 9 or higher") {
 		t.Fatalf("prompt missing configured importance: %q", prompt)
+	}
+	if !strings.Contains(prompt, "backticks") {
+		t.Fatalf("prompt missing code formatting rule: %q", prompt)
+	}
+	if !strings.Contains(prompt, "exact replacement") {
+		t.Fatalf("prompt missing suggestion rule: %q", prompt)
 	}
 	if !strings.Contains(prompt, "<<<UNTRUSTED_INPUT>>>") {
 		t.Fatalf("prompt missing untrusted input delimiter: %q", prompt)

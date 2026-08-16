@@ -103,6 +103,7 @@ func normalizedFindingKey(finding domain.Finding) string {
 func sanitizeFinding(finding domain.Finding) domain.Finding {
 	finding.Title = sanitizeProse(strings.TrimSpace(finding.Title))
 	finding.Body = sanitizeProse(strings.TrimSpace(finding.Body))
+	finding.Suggestion = strings.TrimRight(finding.Suggestion, "\r\n")
 	return finding
 }
 
