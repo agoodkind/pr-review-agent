@@ -1,0 +1,13 @@
+name: Live review proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Live review proof"
