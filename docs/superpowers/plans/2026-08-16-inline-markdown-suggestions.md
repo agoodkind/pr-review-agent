@@ -39,7 +39,7 @@
 - Produces: strict model output that requires `suggestion` for every finding.
 - Produces: prompt instructions for exact replacements and inline code formatting.
 
-- [ ] **Step 1: Write the contract tests**
+- [x] **Step 1: Write the contract tests**
 
 Add a domain case that accepts an empty suggestion and rejects a suggestion containing a Markdown fence:
 
@@ -60,7 +60,7 @@ Inspect the actual `json_schema` request in the existing HTTP client test. Asser
 
 Assert that the real review prompt contains both `backticks` and `exact replacement`.
 
-- [ ] **Step 2: Run the focused tests and confirm failure**
+- [x] **Step 2: Run the focused tests and confirm failure**
 
 Run:
 
@@ -70,7 +70,7 @@ go test ./internal/domain ./internal/openai ./internal/review -count=1
 
 Expected: the new field, schema requirement, and prompt assertions fail.
 
-- [ ] **Step 3: Implement the model contract**
+- [x] **Step 3: Implement the model contract**
 
 Extend `domain.Finding`:
 
@@ -98,7 +98,7 @@ Put every code symbol, expression, environment variable, function name, type nam
 
 Repeat the replacement rule in the review chunk prompt. Sanitize title and body prose, but preserve suggestion source exactly except for removing trailing carriage returns and line feeds.
 
-- [ ] **Step 4: Run the focused tests and confirm success**
+- [x] **Step 4: Run the focused tests and confirm success**
 
 Run:
 
@@ -108,7 +108,7 @@ go test ./internal/domain ./internal/openai ./internal/review -count=1
 
 Expected: all packages pass.
 
-- [ ] **Step 5: Commit the contract**
+- [x] **Step 5: Commit the contract**
 
 ```bash
 git add internal/domain/review.go internal/domain/review_test.go internal/openai/schema.go internal/openai/client_test.go internal/config/config.go internal/review/analyze.go internal/review/policy.go internal/review/review_test.go
@@ -130,7 +130,7 @@ git commit -S -m "Add structured review suggestions" -m "Co-authored-by: Codex <
 - Produces: `marker.EncodeFindingBody(domain.HeadSHA, domain.Finding) (string, error)` with an optional native GitHub suggestion block.
 - Produces: `marker.DecodeFindingBody(domain.ReviewComment) (domain.HeadSHA, domain.Finding, error)` that recovers the replacement and still reads comments without one.
 
-- [ ] **Step 1: Write public rendering tests**
+- [x] **Step 1: Write public rendering tests**
 
 Extend the marker round trip with this replacement:
 
@@ -152,7 +152,7 @@ Assert `DecodeFindingBody` returns the same suggestion. Keep a second round trip
 
 Extend the existing `RenderInline` behavior test. Use backticks in its heading and paragraph. Assert the submitted comment body contains the suggestion block and ends with the hidden finding marker.
 
-- [ ] **Step 2: Run the focused tests and confirm failure**
+- [x] **Step 2: Run the focused tests and confirm failure**
 
 Run:
 
@@ -162,7 +162,7 @@ go test ./internal/marker ./internal/review -count=1
 
 Expected: the encoded body lacks the suggestion fence and decoding does not recover the replacement.
 
-- [ ] **Step 3: Implement suggestion rendering and decoding**
+- [x] **Step 3: Implement suggestion rendering and decoding**
 
 Build the visible body in this order:
 
@@ -182,7 +182,7 @@ Decode an optional final `suggestion` fence before the hidden marker. Store its 
 
 Pass `Suggestion` through `RenderInline` after title and body sanitization.
 
-- [ ] **Step 4: Run the focused tests and confirm success**
+- [x] **Step 4: Run the focused tests and confirm success**
 
 Run:
 
@@ -192,7 +192,7 @@ go test ./internal/marker ./internal/review -count=1
 
 Expected: both packages pass.
 
-- [ ] **Step 5: Commit GitHub rendering**
+- [x] **Step 5: Commit GitHub rendering**
 
 ```bash
 git add internal/marker/marker.go internal/marker/marker_test.go internal/review/render.go internal/review/review_test.go
@@ -208,7 +208,7 @@ git commit -S -m "Render GitHub review suggestions" -m "Co-authored-by: Codex <n
 - Consumes: the complete finding contract and renderer.
 - Produces: a branch that passes the canonical consumer gates and contains no temporary proof fixtures.
 
-- [ ] **Step 1: Run all Go tests**
+- [x] **Step 1: Run all Go tests**
 
 ```bash
 go test ./... -count=1
@@ -217,7 +217,7 @@ go test -race ./... -count=1
 
 Expected: both commands pass.
 
-- [ ] **Step 2: Run the required build and canonical check**
+- [x] **Step 2: Run the required build and canonical check**
 
 ```bash
 make build
@@ -226,7 +226,7 @@ make check
 
 Expected: both commands pass.
 
-- [ ] **Step 3: Audit branch scope**
+- [x] **Step 3: Audit branch scope**
 
 ```bash
 git diff --name-status origin/main...HEAD
@@ -234,14 +234,14 @@ git diff --name-status origin/main...HEAD
 
 Expected: only the design, plan, finding contract, prompt, marker, renderer, and their existing tests changed. No `internal/liveproof`, live proof workflow, deployment, Docker, or infrastructure file appears.
 
-- [ ] **Step 4: Commit the completed plan record**
+- [x] **Step 4: Commit the completed plan record**
 
 ```bash
 git add docs/superpowers/plans/2026-08-16-inline-markdown-suggestions.md
 git commit -S -m "Record inline suggestion implementation" -m "Co-authored-by: Codex <noreply@openai.com>"
 ```
 
-- [ ] **Step 5: Verify every branch commit**
+- [x] **Step 5: Verify every branch commit**
 
 ```bash
 git log --format='%H %G?' origin/main..HEAD
