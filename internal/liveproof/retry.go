@@ -2,6 +2,7 @@ package liveproof
 
 import (
 	"fmt"
+	"html"
 	"net/http"
 	"sync/atomic"
 )
@@ -17,7 +18,7 @@ func WithPreview(next http.Handler) http.Handler {
 				http.Error(writer, "missing X-Optional", http.StatusBadRequest)
 				return
 			}
-			_, _ = fmt.Fprintln(writer, values[0])
+			_, _ = fmt.Fprintln(writer, html.EscapeString(values[0]))
 			return
 		}
 		if request.URL.Path == "/record" {
