@@ -179,11 +179,11 @@ jobs:
           PR_REVIEW_AGENT_IMAGE: ghcr.io/agoodkind/pr-review-agent@${{ needs.container.outputs.digest }}
         run: node scripts/configure-image.mjs
         working-directory: deploy/cloudflare
-      - uses: cloudflare/wrangler-action@v4.0.0
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
-          workingDirectory: deploy/cloudflare
+      - name: Deploy Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npm exec wrangler deploy
+        working-directory: deploy/cloudflare
       - run: scripts/probe-health.sh
         working-directory: deploy/cloudflare
