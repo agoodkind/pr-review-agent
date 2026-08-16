@@ -102,7 +102,7 @@ func (client *Client) complete(
 	schemaName string,
 	schema json.RawMessage,
 ) (string, error) {
-	completion, err := client.sdk.Chat.Completions.New(ctx, openaigo.ChatCompletionNewParams{
+	stream := client.sdk.Chat.Completions.NewStreaming(ctx, openaigo.ChatCompletionNewParams{
 		Model:               shared.ChatModel(config.Model),
 		ReasoningEffort:     shared.ReasoningEffort(config.ReasoningEffort),
 		MaxCompletionTokens: openaigo.Int(int64(config.MaximumOutputTokens)),
@@ -120,17 +120,38 @@ func (client *Client) complete(
 			},
 		},
 	})
-	if err != nil {
+	defer func() {
+		_ = stream.Close()
+	}()
+
+	var content strings.Builder
+	finishReason := ""
+	for stream.Next() {
+		chunk := stream.Current()
+		for _, choice := range chunk.Choices {
+			if choice.Index != 0 {
+				continue
+			}
+			content.WriteString(choice.Delta.Content)
+			if choice.FinishReason != "" {
+				finishReason = choice.FinishReason
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
 		return "", modelProviderError(err)
 	}
-	if len(completion.Choices) == 0 {
-		return "", errors.New("openai response missing choices")
+	if finishReason == "" {
+		return "", errors.New("openai response ended without a finish reason")
 	}
-	content := strings.TrimSpace(completion.Choices[0].Message.Content)
-	if content == "" {
+	if finishReason != "stop" {
+		return "", errors.New("openai response stopped with finish reason " + finishReason)
+	}
+	result := strings.TrimSpace(content.String())
+	if result == "" {
 		return "", errors.New("openai response missing message content")
 	}
-	return content, nil
+	return result, nil
 }
 
 func modelProviderError(err error) error {

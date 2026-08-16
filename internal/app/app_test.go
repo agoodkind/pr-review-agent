@@ -878,6 +878,7 @@ func wireAppFixture(
 	cfg := config.Config{
 		Port:                      "0",
 		ReviewTimeout:             10 * time.Minute,
+		ReviewWorkers:             4,
 		MinimumImportance:         testMinimumImportance,
 		MaximumUnresolvedComments: 100,
 		GitHubAppID:               12345,
@@ -1916,13 +1917,7 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 		return
 	}
 
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"choices": []map[string]any{{
-			"message": map[string]any{
-				"content": content,
-			},
-		}},
-	})
+	writeCompletionStream(writer, content)
 }
 
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
@@ -1974,4 +1969,37 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+func writeCompletionStream(writer http.ResponseWriter, content string) {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.WriteHeader(http.StatusOK)
+	chunks := []map[string]any{
+		{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion.chunk",
+			"created": 0,
+			"model":   config.Model,
+			"choices": []map[string]any{{
+				"index": 0,
+				"delta": map[string]any{"role": "assistant", "content": content},
+			}},
+		},
+		{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion.chunk",
+			"created": 0,
+			"model":   config.Model,
+			"choices": []map[string]any{{
+				"index":         0,
+				"delta":         map[string]any{},
+				"finish_reason": "stop",
+			}},
+		},
+	}
+	for _, chunk := range chunks {
+		encoded, _ := json.Marshal(chunk)
+		_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
+	}
+	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 }

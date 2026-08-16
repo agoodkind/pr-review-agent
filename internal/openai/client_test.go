@@ -64,6 +64,9 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if body["max_completion_tokens"] != float64(config.MaximumOutputTokens) {
 		t.Fatalf("max_completion_tokens = %v, want %d", body["max_completion_tokens"], config.MaximumOutputTokens)
 	}
+	if body["stream"] != true {
+		t.Fatalf("stream = %v, want true", body["stream"])
+	}
 
 	messages, ok := body["messages"].([]any)
 	if !ok || len(messages) != 2 {
@@ -163,6 +166,68 @@ func TestReviewDoesNotRetryAuthenticationFailure(t *testing.T) {
 	}
 }
 
+func TestReviewRejectsUnterminatedStream(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = func(writer http.ResponseWriter) {
+		writeStreamFrames(writer, []map[string]any{
+			completionStreamChunk(validReviewContent(), ""),
+		}, false)
+	}
+
+	_, err := client.Review(context.Background(), "prompt")
+	if err == nil || !strings.Contains(err.Error(), "ended without a finish reason") {
+		t.Fatalf("Review error = %v, want missing finish reason", err)
+	}
+}
+
+func TestReviewRejectsIncompleteFinishReason(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = func(writer http.ResponseWriter) {
+		writeStreamFrames(writer, []map[string]any{
+			completionStreamChunk(validReviewContent(), "length"),
+		}, true)
+	}
+
+	_, err := client.Review(context.Background(), "prompt")
+	if err == nil || !strings.Contains(err.Error(), "finish reason length") {
+		t.Fatalf("Review error = %v, want length finish reason", err)
+	}
+}
+
+func TestReviewRejectsMalformedStream(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = func(writer http.ResponseWriter) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("data: {\n\n"))
+	}
+
+	if _, err := client.Review(context.Background(), "prompt"); err == nil {
+		t.Fatal("Review malformed stream: want error")
+	}
+}
+
+func TestReviewRejectsProviderStreamError(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = func(writer http.ResponseWriter) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("data: {\"error\":{\"message\":\"upstream failed\"}}\n\n"))
+	}
+
+	if _, err := client.Review(context.Background(), "prompt"); err == nil {
+		t.Fatal("Review provider stream error: want error")
+	}
+}
+
 func TestReconcileAcceptsOnlyKnownResolutionValues(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
@@ -203,6 +268,7 @@ type testServerState struct {
 	statusSequence    []int
 	statusIndex       int
 	completionContent string
+	streamResponse    func(http.ResponseWriter)
 }
 
 func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerState) {
@@ -240,6 +306,14 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 			})
 			return
 		}
+		if state.streamResponse != nil {
+			state.streamResponse(writer)
+			return
+		}
+		if body["stream"] == true {
+			writeStream(writer, state.completionContent)
+			return
+		}
 
 		writeJSON(writer, status, map[string]any{
 			"id":      "chatcmpl-test",
@@ -271,6 +345,42 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+func writeStream(writer http.ResponseWriter, content string) {
+	writeStreamFrames(writer, []map[string]any{
+		completionStreamChunk(content, ""),
+		completionStreamChunk("", "stop"),
+	}, true)
+}
+
+func completionStreamChunk(content string, finishReason string) map[string]any {
+	choice := map[string]any{
+		"index": 0,
+		"delta": map[string]any{"content": content},
+	}
+	if finishReason != "" {
+		choice["finish_reason"] = finishReason
+	}
+	return map[string]any{
+		"id":      "chatcmpl-test",
+		"object":  "chat.completion.chunk",
+		"created": 0,
+		"model":   config.Model,
+		"choices": []map[string]any{choice},
+	}
+}
+
+func writeStreamFrames(writer http.ResponseWriter, chunks []map[string]any, done bool) {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.WriteHeader(http.StatusOK)
+	for _, chunk := range chunks {
+		encoded, _ := json.Marshal(chunk)
+		_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
+	}
+	if done {
+		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+	}
 }
 
 func readJSONBody(request *http.Request) (map[string]any, error) {

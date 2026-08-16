@@ -15,7 +15,7 @@ import (
 func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
 	cache := NewDeliveryCache(100, time.Hour, time.Now)
 	runner := &recordingRunner{}
-	dispatcher := NewDispatcher(1, runner, slog.Default())
+	dispatcher := NewDispatcher(1, 1, runner, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dispatcher.Start(ctx)
@@ -158,6 +158,23 @@ type recordingRunner struct {
 	err   error
 }
 
+type blockingRunner struct {
+	firstStarted  chan struct{}
+	secondStarted chan struct{}
+	releaseFirst  chan struct{}
+}
+
+func (runner *blockingRunner) Run(_ context.Context, job domain.ReviewJob) error {
+	switch job.DeliveryID {
+	case "same-1":
+		close(runner.firstStarted)
+		<-runner.releaseFirst
+	case "other":
+		close(runner.secondStarted)
+	}
+	return nil
+}
+
 func (runner *recordingRunner) Run(_ context.Context, job domain.ReviewJob) error {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
@@ -175,7 +192,7 @@ func (runner *recordingRunner) snapshot() []string {
 
 func TestDispatcherRejectsWhenFull(t *testing.T) {
 	runner := &recordingRunner{}
-	dispatcher := NewDispatcher(1, runner, slog.Default())
+	dispatcher := NewDispatcher(1, 1, runner, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dispatcher.Start(ctx)
@@ -188,9 +205,60 @@ func TestDispatcherRejectsWhenFull(t *testing.T) {
 	}
 }
 
+func TestDispatcherRunsIndependentJobsConcurrently(t *testing.T) {
+	runner := &blockingRunner{
+		firstStarted:  make(chan struct{}),
+		secondStarted: make(chan struct{}),
+		releaseFirst:  make(chan struct{}),
+	}
+	dispatcher := NewDispatcher(4, 2, runner, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dispatcher.Start(ctx)
+	t.Cleanup(func() {
+		close(runner.releaseFirst)
+	})
+
+	samePullRequest := domain.ReviewJob{
+		PullRequestRef: domain.PullRequestRef{
+			Repository: domain.Repository{Owner: "owner", Name: "repo"},
+			Number:     1,
+		},
+	}
+	independentPullRequest := domain.ReviewJob{
+		DeliveryID: "other",
+		PullRequestRef: domain.PullRequestRef{
+			Repository: domain.Repository{Owner: "owner", Name: "repo"},
+			Number:     2,
+		},
+	}
+	first := samePullRequest
+	first.DeliveryID = "same-1"
+	if !dispatcher.Enqueue(first) {
+		t.Fatal("enqueue same-1")
+	}
+	<-runner.firstStarted
+	for _, deliveryID := range []string{"same-2", "same-3"} {
+		job := samePullRequest
+		job.DeliveryID = deliveryID
+		if !dispatcher.Enqueue(job) {
+			t.Fatalf("enqueue %s", deliveryID)
+		}
+	}
+	if !dispatcher.Enqueue(independentPullRequest) {
+		t.Fatal("enqueue other")
+	}
+
+	select {
+	case <-runner.secondStarted:
+	case <-time.After(time.Second):
+		t.Fatal("second independent job waited for the first job")
+	}
+}
+
 func TestDispatcherRunsJobsInOrder(t *testing.T) {
 	runner := &recordingRunner{}
-	dispatcher := NewDispatcher(3, runner, slog.Default())
+	dispatcher := NewDispatcher(3, 1, runner, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dispatcher.Start(ctx)
@@ -220,7 +288,7 @@ func TestDispatcherRunsJobsInOrder(t *testing.T) {
 
 func TestDispatcherShutdownDrainsAcceptedJobs(t *testing.T) {
 	runner := &recordingRunner{}
-	dispatcher := NewDispatcher(2, runner, slog.Default())
+	dispatcher := NewDispatcher(2, 1, runner, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dispatcher.Start(ctx)
@@ -248,7 +316,7 @@ func TestDispatcherKeepsClaimAfterRunnerFailure(t *testing.T) {
 		t.Fatal("claim delivery-1")
 	}
 	runner := &recordingRunner{err: errors.New("boom")}
-	dispatcher := NewDispatcher(1, runner, slog.Default())
+	dispatcher := NewDispatcher(1, 1, runner, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	dispatcher.Start(ctx)

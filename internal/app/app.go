@@ -73,6 +73,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 	)
 	dispatcher := queue.NewDispatcher(
 		config.QueueCapacity,
+		cfg.ReviewWorkers,
 		reviewRunner{service: reviewService},
 		logger,
 	)
