@@ -1,5 +1,7 @@
 .make/
 dist/
+node_modules/
+.wrangler/
 go.work
 go.work.sum
 !.golangci-lint-baseline.txt
