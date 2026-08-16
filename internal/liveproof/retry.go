@@ -1,8 +1,8 @@
 package liveproof
 
-import "time"
+import "net/http"
 
-// RetryDelay returns the backoff before a provider request is retried.
-func RetryDelay(attempt int) time.Duration {
-	return time.Duration(1 << attempt)
+// OptionalHeader returns the first optional request header value.
+func OptionalHeader(request *http.Request) string {
+	return request.Header.Values("X-Optional")[0]
 }
