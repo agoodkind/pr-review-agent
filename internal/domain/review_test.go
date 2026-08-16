@@ -55,10 +55,20 @@ func TestParseHeadSHARejectsUppercaseNonhexadecimalAndWrongLength(t *testing.T) 
 }
 
 func TestParseReviewDecisionRejectsUnknownValue(t *testing.T) {
-	for _, value := range []string{"COMMENT", "SHIP_IT"} {
+	for _, value := range []string{"MERGE", "SHIP_IT"} {
 		if _, err := ParseReviewDecision(value); err == nil {
 			t.Fatalf("ParseReviewDecision(%q): want error", value)
 		}
+	}
+}
+
+func TestParseReviewDecisionAcceptsCommentEvent(t *testing.T) {
+	decision, err := ParseReviewDecision("COMMENT")
+	if err != nil {
+		t.Fatalf("ParseReviewDecision(COMMENT): %v", err)
+	}
+	if decision != ReviewDecisionComment {
+		t.Fatalf("decision = %q, want %q", decision, ReviewDecisionComment)
 	}
 }
 

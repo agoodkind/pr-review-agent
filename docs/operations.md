@@ -12,6 +12,10 @@ The configured importance threshold controls publication. At least one anchored 
 
 Published findings appear only as concise inline comments on changed lines. One editable top level body identifies the active findings review. Later decisions use hidden markers, so the pull request never gains another visible summary.
 
+When a review cannot finish, the service rewrites that same top level body with the stage that failed and the reported cause, and creates it if the pull request has none yet. It carries no review marker, so the next push still reviews the head. When the model provider reports no remaining usage, the check run and the body both say so instead of naming a stage.
+
+Three failures leave the body untouched, because writing it needs the GitHub call that just failed: reading reviews, updating a review, and submitting a review. The check run still reports those. A body that cannot be written never changes or hides the failure the check reports.
+
 Before each decision, the service reads every prior bot review and thread. It silently resolves fixed threads before publishing new findings.
 
 Stable finding identities prevent republication across pull request history. The configured unresolved thread limit admits the highest importance new findings first. The final decision still considers every current finding.

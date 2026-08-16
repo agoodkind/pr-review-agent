@@ -52,12 +52,14 @@ const (
 	ReviewDecisionApprove ReviewDecision = "APPROVE"
 	// ReviewDecisionRequestChanges blocks merge until findings are addressed.
 	ReviewDecisionRequestChanges ReviewDecision = "REQUEST_CHANGES"
+	// ReviewDecisionComment states the review outcome without gating merge.
+	ReviewDecisionComment ReviewDecision = "COMMENT"
 )
 
 // ParseReviewDecision parses a GitHub review event name.
 func ParseReviewDecision(value string) (ReviewDecision, error) {
 	switch ReviewDecision(value) {
-	case ReviewDecisionApprove, ReviewDecisionRequestChanges:
+	case ReviewDecisionApprove, ReviewDecisionRequestChanges, ReviewDecisionComment:
 		return ReviewDecision(value), nil
 	default:
 		return "", fmt.Errorf("unknown review decision %q", value)
