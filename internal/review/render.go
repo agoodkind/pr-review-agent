@@ -3,6 +3,7 @@ package review
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
@@ -16,6 +17,18 @@ func RenderBody(head domain.HeadSHA, decision domain.ReviewDecision) string {
 		message = "Severe findings are listed inline."
 	}
 	return "## Review\n\n" + message + "\n\n" + marker.Summary() + "\n" + marker.Review(head)
+}
+
+// RenderFailureBody renders the visible summary for a review that could not finish.
+// It omits the review marker so the next attempt on the same head is not
+// suppressed as already reviewed.
+func RenderFailureBody(title string, detail string) string {
+	parts := []string{"## Review", strings.TrimSpace(title)}
+	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
+		parts = append(parts, "```\n"+trimmedDetail+"\n```")
+	}
+	parts = append(parts, marker.Summary())
+	return strings.Join(parts, "\n\n")
 }
 
 // RenderInline renders anchored findings as GitHub inline review comments.

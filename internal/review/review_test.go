@@ -657,6 +657,8 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
+		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /repos/owner/repo/pulls/7/reviews",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
@@ -732,11 +734,19 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 	if fixture.reconciler.callCount != 1 {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
-	if fixture.state.lastSubmitReview != nil {
-		t.Fatal("SubmitReview was called after reconciliation failure")
-	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	notice := fixture.state.lastSubmitReview
+	if notice == nil {
+		t.Fatal("failure notice was not published")
+	}
+	if notice["event"] != string(domain.ReviewDecisionComment) {
+		t.Fatalf("event = %v, want COMMENT", notice["event"])
+	}
+	comments, ok := notice["comments"].([]any)
+	if !ok || len(comments) != 0 {
+		t.Fatalf("comments = %v, want none on a failure notice", notice["comments"])
 	}
 }
 
@@ -760,6 +770,103 @@ func TestServiceReportsModelFailureCause(t *testing.T) {
 	if !ok || !strings.Contains(summary, "provider rejected response schema") {
 		t.Fatalf("summary = %v, want provider failure", output["summary"])
 	}
+}
+
+func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: quotaExhaustedError{}},
+	})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: want error")
+	}
+
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	wantTitle := "Review stopped: the model provider reported no remaining usage."
+	if output["title"] != wantTitle {
+		t.Fatalf("title = %v, want %q", output["title"], wantTitle)
+	}
+
+	notice := fixture.state.lastSubmitReview
+	if notice == nil {
+		t.Fatal("failure notice was not published")
+	}
+	body, ok := notice["body"].(string)
+	if !ok || !strings.Contains(body, wantTitle) {
+		t.Fatalf("notice body = %v, want the usage wording", notice["body"])
+	}
+	if !strings.Contains(body, "usage credits are exhausted") {
+		t.Fatalf("notice body = %q, want the provider detail", body)
+	}
+}
+
+func TestServiceFailureNoticeOmitsReviewMarkerSoTheHeadIsReviewedAgain(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: errors.New("provider rejected response schema")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want error")
+	}
+	notice := fixture.state.lastSubmitReview
+	if notice == nil {
+		t.Fatal("failure notice was not published")
+	}
+	body, ok := notice["body"].(string)
+	if !ok {
+		t.Fatalf("notice body = %v, want string", notice["body"])
+	}
+	if !marker.HasSummary(body) {
+		t.Fatalf("notice body = %q, want the summary marker so a later run edits it", body)
+	}
+	if _, found := marker.FindReview(body); found {
+		t.Fatalf("notice body = %q, want no review marker", body)
+	}
+}
+
+func TestServiceFailureNoticeEditsTheExistingSummary(t *testing.T) {
+	summaryReview := map[string]any{
+		"id":        float64(42),
+		"commit_id": testStaleHeadSHA,
+		"body":      "## Review\n\nNo severe findings.\n\n" + marker.Summary(),
+		"state":     "COMMENTED",
+		"user":      map[string]any{"login": testBotLogin},
+	}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:       &sequenceModel{err: errors.New("provider rejected response schema")},
+		reviewPages: [][]map[string]any{{summaryReview}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want error")
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatal("SubmitReview was called although a summary review already exists")
+	}
+	updated := fixture.state.lastUpdateReview
+	if updated == nil {
+		t.Fatal("the existing summary review was not updated")
+	}
+	body, ok := updated["body"].(string)
+	if !ok || !strings.Contains(body, "Review failed during model analysis.") {
+		t.Fatalf("updated body = %v, want the failure wording", updated["body"])
+	}
+}
+
+// quotaExhaustedError mimics the provider error shape for exhausted usage.
+type quotaExhaustedError struct{}
+
+func (quotaExhaustedError) Error() string {
+	return "model provider returned HTTP 400 Bad Request: invalid_request_error: " +
+		"upstream_failed: upstream call failed: usage credits are exhausted"
+}
+
+func (quotaExhaustedError) UsageExceeded() bool {
+	return true
 }
 
 func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinCap(t *testing.T) {
@@ -1369,9 +1476,10 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 }
 
 func writeServiceReviewPage(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {
+	// GitHub returns the same reviews to every caller, so replay the page set
+	// from the start once a prior read has consumed it.
 	if state.reviewPageIndex >= len(state.reviewPages) {
-		serviceWriteJSON(writer, http.StatusOK, []map[string]any{})
-		return
+		state.reviewPageIndex = 0
 	}
 	page := state.reviewPages[state.reviewPageIndex]
 	state.reviewPageIndex++

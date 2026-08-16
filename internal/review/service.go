@@ -33,6 +33,7 @@ const (
 	checkFailureSummary      = "Review failed while updating the visible summary."
 	checkFailurePublish      = "Review failed while publishing the final decision."
 	checkFailurePanic        = "Review failed after an internal panic."
+	checkFailureUsage        = "Review stopped: the model provider reported no remaining usage."
 	maxCheckFailureRunes     = 1000
 	maximumCompletionTimeout = 30 * time.Second
 )
@@ -522,23 +523,91 @@ func (service *Service) failCheck(
 	if summary == "" {
 		summary = checkSummaryFailure
 	}
+	if usageExceeded(cause) {
+		summary = checkFailureUsage
+	}
+	detail := checkFailureDetail(cause)
+	var completeErr error
 	if checkRunID != 0 {
-		completeErr := service.completeCheckRun(
+		completeErr = service.completeCheckRun(
 			ctx,
 			job.InstallationID,
 			job.Repository,
 			checkRunID,
 			"failure",
 			summary,
-			checkFailureDetail(cause),
+			detail,
 		)
 		if completeErr != nil {
 			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
-			return fmt.Errorf("complete check run: %w", completeErr)
 		}
+	}
+	service.publishFailureNotice(ctx, job, summary, detail)
+	if completeErr != nil {
+		return fmt.Errorf("complete check run: %w", completeErr)
 	}
 	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
 	return cause
+}
+
+// usageExceededError is any provider error that reports exhausted usage.
+type usageExceededError interface {
+	UsageExceeded() bool
+}
+
+func usageExceeded(cause error) bool {
+	var target usageExceededError
+	if !errors.As(cause, &target) {
+		return false
+	}
+	return target.UsageExceeded()
+}
+
+// publishFailureNotice rewrites the single visible summary so the pull request
+// states why the review stopped. A notice failure never masks the review cause.
+func (service *Service) publishFailureNotice(
+	ctx context.Context,
+	job domain.ReviewJob,
+	title string,
+	detail string,
+) {
+	logger := gklog.L(ctx)
+	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
+	defer cancel()
+
+	reviews, err := service.github.ListReviews(noticeCtx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		logger.ErrorContext(noticeCtx, "load reviews for failure notice", slog.String("err", err.Error()))
+		return
+	}
+
+	body := RenderFailureBody(title, detail)
+	updated, err := service.updateSummaryReview(noticeCtx, job, reviews, body)
+	if err != nil {
+		logger.ErrorContext(noticeCtx, "update failure notice", slog.String("err", err.Error()))
+		return
+	}
+	if updated {
+		logger.InfoContext(noticeCtx, "failure notice updated", slog.Bool("visible", true))
+		return
+	}
+
+	if _, err := service.github.SubmitReview(
+		noticeCtx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+		githubapp.SubmitReviewRequest{
+			CommitID: job.Head,
+			Body:     body,
+			Event:    domain.ReviewDecisionComment,
+			Comments: nil,
+		},
+	); err != nil {
+		logger.ErrorContext(noticeCtx, "publish failure notice", slog.String("err", err.Error()))
+		return
+	}
+	logger.InfoContext(noticeCtx, "failure notice published", slog.Bool("visible", true))
 }
 
 func (service *Service) prepareReviewBody(
@@ -548,25 +617,48 @@ func (service *Service) prepareReviewBody(
 	head domain.HeadSHA,
 	decision domain.ReviewDecision,
 ) (string, error) {
-	logger := gklog.L(ctx)
-	summaryReview, found := findSummaryReview(reviews, service.botLogin)
 	body := RenderBody(head, decision)
-	if found {
-		if _, err := service.github.UpdateReview(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			job.Number,
-			summaryReview.ID,
-			body,
-		); err != nil {
-			logger.ErrorContext(ctx, "update review summary", slog.String("err", err.Error()))
-			return "", fmt.Errorf("update review summary: %w", err)
-		}
-		logger.InfoContext(ctx, "review summary updated", slog.Int64("review_id", summaryReview.ID), slog.Bool("visible", true))
+	updated, err := service.updateSummaryReview(ctx, job, reviews, body)
+	if err != nil {
+		return "", err
+	}
+	if updated {
 		return marker.Review(head), nil
 	}
 	return body, nil
+}
+
+// updateSummaryReview replaces the single visible summary body in place and
+// reports whether one existed to replace.
+func (service *Service) updateSummaryReview(
+	ctx context.Context,
+	job domain.ReviewJob,
+	reviews []githubapp.Review,
+	body string,
+) (bool, error) {
+	logger := gklog.L(ctx)
+	summaryReview, found := findSummaryReview(reviews, service.botLogin)
+	if !found {
+		return false, nil
+	}
+	if _, err := service.github.UpdateReview(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+		summaryReview.ID,
+		body,
+	); err != nil {
+		logger.ErrorContext(ctx, "update review summary", slog.String("err", err.Error()))
+		return false, fmt.Errorf("update review summary: %w", err)
+	}
+	logger.InfoContext(
+		ctx,
+		"review summary updated",
+		slog.Int64("review_id", summaryReview.ID),
+		slog.Bool("visible", true),
+	)
+	return true, nil
 }
 
 func findSummaryReview(reviews []githubapp.Review, botLogin string) (githubapp.Review, bool) {
