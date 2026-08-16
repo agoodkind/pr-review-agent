@@ -33,7 +33,7 @@ jobs:
     secrets: inherit
 
   container:
-    name: Container Image
+    name: Build and Verify Linux Container
     needs: go
     if: needs.go.outputs.changed == 'true'
     runs-on: ubuntu-latest
