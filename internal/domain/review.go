@@ -93,6 +93,7 @@ type Finding struct {
 	EndLine    int    `json:"end_line"`
 	Title      string `json:"title"`
 	Body       string `json:"body"`
+	Suggestion string `json:"suggestion"`
 	Importance int    `json:"importance"`
 }
 
@@ -106,6 +107,9 @@ func (finding Finding) Validate() error {
 	}
 	if strings.TrimSpace(finding.Body) == "" {
 		return errors.New("finding body is required")
+	}
+	if strings.Contains(finding.Suggestion, "```") {
+		return errors.New("finding suggestion contains a markdown fence")
 	}
 	if finding.StartLine < 1 {
 		return errors.New("finding start_line must be positive")

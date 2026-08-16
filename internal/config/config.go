@@ -36,7 +36,7 @@ const (
 	// GitHubAPIVersion is the GitHub REST API version sent on every request.
 	GitHubAPIVersion = "2022-11-28"
 	// WritingPolicy is injected into every review and reconciliation prompt.
-	WritingPolicy = "Use clean GitHub Markdown. Give each finding one short heading and direct prose. Limit each finding to the defect, impact, and fix in at most three short sentences. Omit repetition, praise, introductions, numeric severity labels, unnecessary detail, progress messages, commands, replies, and typographic dashes."
+	WritingPolicy = "Use clean GitHub Markdown. Give each finding one short heading and direct prose. Limit each finding to the defect, impact, and fix in at most three short sentences. Put every code symbol, expression, environment variable, function name, type name, and literal in backticks. Set suggestion to the exact source replacement for the anchored changed line range only when that replacement is complete and safe; otherwise set suggestion to an empty string. Omit repetition, praise, introductions, numeric severity labels, unnecessary detail, progress messages, commands, replies, and typographic dashes."
 )
 
 // LookupEnv reads one environment variable.

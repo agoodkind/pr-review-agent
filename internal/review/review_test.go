@@ -322,6 +322,12 @@ func TestAnalyzePromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 	if !strings.Contains(prompt, "importance 9 or higher") {
 		t.Fatalf("prompt missing configured importance: %q", prompt)
 	}
+	if !strings.Contains(prompt, "backticks") {
+		t.Fatalf("prompt missing code formatting rule: %q", prompt)
+	}
+	if !strings.Contains(prompt, "exact replacement") {
+		t.Fatalf("prompt missing suggestion rule: %q", prompt)
+	}
 	if !strings.Contains(prompt, "<<<UNTRUSTED_INPUT>>>") {
 		t.Fatalf("prompt missing untrusted input delimiter: %q", prompt)
 	}

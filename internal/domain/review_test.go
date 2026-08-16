@@ -75,10 +75,17 @@ func TestFindingValidateRejectsEmptyFieldsInvalidLinesAndImportance(t *testing.T
 		EndLine:    12,
 		Title:      "Missing check",
 		Body:       "Validate input before use.",
+		Suggestion: "",
 		Importance: 7,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid finding: %v", err)
+	}
+
+	invalidSuggestion := valid
+	invalidSuggestion.Suggestion = "```go\nunsafe()\n```"
+	if err := invalidSuggestion.Validate(); err == nil {
+		t.Fatal("fenced suggestion: want validation error")
 	}
 
 	cases := []Finding{

@@ -110,6 +110,44 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if jsonSchema["name"] != "review_result" {
 		t.Fatalf("schema name = %v, want review_result", jsonSchema["name"])
 	}
+	schema, ok := jsonSchema["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema = %v, want object", jsonSchema["schema"])
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("schema properties = %v, want object", schema["properties"])
+	}
+	findings, ok := properties["findings"].(map[string]any)
+	if !ok {
+		t.Fatalf("findings schema = %v, want object", properties["findings"])
+	}
+	items, ok := findings["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("finding items = %v, want object", findings["items"])
+	}
+	findingProperties, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("finding properties = %v, want object", items["properties"])
+	}
+	suggestion, ok := findingProperties["suggestion"].(map[string]any)
+	if !ok || suggestion["type"] != "string" {
+		t.Fatalf("suggestion schema = %v, want string", findingProperties["suggestion"])
+	}
+	required, ok := items["required"].([]any)
+	if !ok {
+		t.Fatalf("finding required = %v, want array", items["required"])
+	}
+	suggestionRequired := false
+	for _, field := range required {
+		if field == "suggestion" {
+			suggestionRequired = true
+			break
+		}
+	}
+	if !suggestionRequired {
+		t.Fatalf("finding required = %v, want suggestion", required)
+	}
 }
 
 func TestReviewRejectsInvalidFindings(t *testing.T) {
