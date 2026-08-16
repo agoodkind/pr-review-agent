@@ -1,4 +1,4 @@
 package liveproof
 
-// CancellationProof identifies the first stale-head validation commit.
-const CancellationProof = "first"
+// CancellationProof identifies the replacement stale-head validation commit.
+const CancellationProof = "replacement"
