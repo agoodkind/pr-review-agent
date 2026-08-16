@@ -36,6 +36,7 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			EndLine:    finding.EndLine,
 			Title:      sanitizeProse(finding.Title),
 			Body:       sanitizeProse(finding.Body),
+			Suggestion: finding.Suggestion,
 			Importance: finding.Importance,
 		})
 		if err != nil {

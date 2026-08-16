@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	reviewPrefix  = "<!-- pr-review-agent:review:v1 head="
-	findingPrefix = "<!-- pr-review-agent:finding:v1 head="
-	summaryMarker = "<!-- pr-review-agent:summary:v1 -->"
-	markerSuffix  = " -->"
+	reviewPrefix     = "<!-- pr-review-agent:review:v1 head="
+	findingPrefix    = "<!-- pr-review-agent:finding:v1 head="
+	summaryMarker    = "<!-- pr-review-agent:summary:v1 -->"
+	markerSuffix     = " -->"
+	suggestionPrefix = "```suggestion\n"
+	suggestionSuffix = "\n```"
 )
 
 var (
@@ -106,12 +108,15 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 	}
 	title := strings.TrimSpace(finding.Title)
 	body := strings.TrimSpace(finding.Body)
-	return fmt.Sprintf(
-		"### %s\n\n%s\n\n%s",
-		title,
+	parts := []string{
+		"### " + title,
 		body,
-		markerText,
-	), nil
+	}
+	if finding.Suggestion != "" {
+		parts = append(parts, suggestionPrefix+finding.Suggestion+suggestionSuffix)
+	}
+	parts = append(parts, markerText)
+	return strings.Join(parts, "\n\n"), nil
 }
 
 // DecodeFindingBody parses a finding from a GitHub root review comment body.
@@ -133,6 +138,15 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 	title := strings.TrimSpace(withoutMarker[len("### "):titleEnd])
 	body := strings.TrimSpace(withoutMarker[titleEnd+2:])
+	suggestion := ""
+	suggestionSeparator := "\n\n" + suggestionPrefix
+	if suggestionStart := strings.LastIndex(body, suggestionSeparator); suggestionStart >= 0 {
+		if !strings.HasSuffix(body, suggestionSuffix) {
+			return "", domain.Finding{}, errors.New("finding suggestion format invalid")
+		}
+		suggestion = strings.TrimSuffix(body[suggestionStart+len(suggestionSeparator):], suggestionSuffix)
+		body = strings.TrimSpace(body[:suggestionStart])
+	}
 
 	finding := domain.Finding{
 		Path:       comment.Path,
@@ -140,6 +154,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 		EndLine:    comment.EndLine,
 		Title:      title,
 		Body:       body,
+		Suggestion: suggestion,
 		Importance: marker.Importance,
 	}
 	if err := finding.Validate(); err != nil {
