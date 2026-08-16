@@ -1,8 +1,17 @@
 package liveproof
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
-// OptionalHeader returns the first optional request header value.
-func OptionalHeader(request *http.Request) string {
-	return request.Header.Values("X-Optional")[0]
+// WithPreview adds the temporary request preview endpoint.
+func WithPreview(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/preview" {
+			_, _ = fmt.Fprintln(writer, request.Header.Values("X-Optional")[0])
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
 }

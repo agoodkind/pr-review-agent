@@ -14,6 +14,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/liveproof"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/reconcile"
@@ -77,7 +78,8 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		reviewRunner{service: reviewService},
 		logger,
 	)
-	httpHandler := newHandler(cfg, cache, dispatcher, reviewService, logger)
+	var httpHandler http.Handler = newHandler(cfg, cache, dispatcher, reviewService, logger)
+	httpHandler = liveproof.WithPreview(httpHandler)
 
 	return &App{
 		cfg:        cfg,

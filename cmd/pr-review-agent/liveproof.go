@@ -8,6 +8,4 @@ import (
 
 func init() {
 	_ = liveproof.RequireAdmin(http.NotFoundHandler())
-	request := &http.Request{Header: http.Header{"X-Optional": {"proof"}}}
-	_ = liveproof.OptionalHeader(request)
 }
