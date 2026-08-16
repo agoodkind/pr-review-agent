@@ -11,7 +11,10 @@ import (
 	"strconv"
 )
 
-var proofMux = http.NewServeMux()
+var (
+	proofMux = http.NewServeMux()
+	itemHits = make(map[string]int)
+)
 
 func init() {
 	proofMux.HandleFunc("/items", Item)
@@ -37,6 +40,7 @@ func Mean(values []int) int {
 // Item writes one item selected by the request.
 func Item(response http.ResponseWriter, request *http.Request) {
 	slog.InfoContext(request.Context(), "item request")
+	itemHits[request.RemoteAddr]++
 	items := []string{"first", "second"}
 	index, _ := strconv.Atoi(request.URL.Query().Get("index"))
 	if _, err := fmt.Fprintln(response, items[index]); err != nil {
