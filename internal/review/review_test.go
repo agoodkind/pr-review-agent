@@ -857,6 +857,245 @@ func TestServiceFailureNoticeEditsTheExistingSummary(t *testing.T) {
 	}
 }
 
+func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
+	stages := []struct {
+		name    string
+		title   string
+		options serviceFixtureOptions
+	}{
+		{
+			name:    "pull request load",
+			title:   "Review failed while loading the pull request.",
+			options: serviceFixtureOptions{pullRequestStatus: http.StatusInternalServerError},
+		},
+		{
+			name:    "reconciliation",
+			title:   "Review failed while reconciling existing findings.",
+			options: serviceFixtureOptions{reconcileErr: errors.New("reconcile failed")},
+		},
+		{
+			name:    "diff collection",
+			title:   "Review failed while collecting the pull request diff.",
+			options: serviceFixtureOptions{collector: failingCollector{}},
+		},
+		{
+			name:    "model analysis",
+			title:   "Review failed during model analysis.",
+			options: serviceFixtureOptions{model: &sequenceModel{err: errors.New("provider refused")}},
+		},
+		{
+			name:    "head refresh",
+			title:   "Review failed while refreshing the pull request head.",
+			options: serviceFixtureOptions{pullRequestStatusAfterFirstRead: http.StatusInternalServerError},
+		},
+		{
+			name:    "panic",
+			title:   "Review failed after an internal panic.",
+			options: serviceFixtureOptions{model: panicModel{}},
+		},
+	}
+	for _, stage := range stages {
+		t.Run(stage.name, func(t *testing.T) {
+			fixture := newServiceFixture(t, stage.options)
+
+			if err := fixture.run(context.Background(), fixture.job()); err == nil {
+				t.Fatal("Run: want error")
+			}
+
+			output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+			if !ok {
+				t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+			}
+			if output["title"] != stage.title {
+				t.Fatalf("title = %v, want %q", output["title"], stage.title)
+			}
+
+			notice := fixture.state.lastSubmitReview
+			if notice == nil {
+				t.Fatal("failure notice was not published")
+			}
+			if notice["event"] != string(domain.ReviewDecisionComment) {
+				t.Fatalf("event = %v, want COMMENT", notice["event"])
+			}
+			body, ok := notice["body"].(string)
+			if !ok || !strings.Contains(body, stage.title) {
+				t.Fatalf("notice body = %v, want %q", notice["body"], stage.title)
+			}
+		})
+	}
+}
+
+func TestServiceRejectPublishesAFailureNotice(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+
+	admitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if err := fixture.service.Reject(
+		context.Background(),
+		admitted,
+		errors.New("review queue is full"),
+	); err == nil {
+		t.Fatal("Reject: want the rejection cause")
+	}
+
+	notice := fixture.state.lastSubmitReview
+	if notice == nil {
+		t.Fatal("failure notice was not published")
+	}
+	body, ok := notice["body"].(string)
+	if !ok || !strings.Contains(body, "review queue is full") {
+		t.Fatalf("notice body = %v, want the rejection cause", notice["body"])
+	}
+}
+
+// The notice needs the same GitHub reads that failed in these stages, so it
+// cannot be written. The check run still reports the failure.
+func TestServiceSkipsTheNoticeWhenItsOwnGitHubCallIsTheFailure(t *testing.T) {
+	summaryReview := map[string]any{
+		"id":        float64(42),
+		"commit_id": testStaleHeadSHA,
+		"body":      "## Review\n\nNo severe findings.\n\n" + marker.Summary(),
+		"state":     "COMMENTED",
+		"user":      map[string]any{"login": testBotLogin},
+	}
+	cases := []struct {
+		name    string
+		title   string
+		options serviceFixtureOptions
+	}{
+		{
+			name:    "review reads fail",
+			title:   "Review failed while reading existing reviews.",
+			options: serviceFixtureOptions{reviewListStatus: http.StatusInternalServerError},
+		},
+		{
+			name:  "summary update fails",
+			title: "Review failed while updating the visible summary.",
+			options: serviceFixtureOptions{
+				updateReviewStatus: http.StatusInternalServerError,
+				reviewPages:        [][]map[string]any{{summaryReview}},
+			},
+		},
+		{
+			name:    "review submission fails",
+			title:   "Review failed while publishing the final decision.",
+			options: serviceFixtureOptions{submitReviewStatus: http.StatusInternalServerError},
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newServiceFixture(t, testCase.options)
+
+			if err := fixture.run(context.Background(), fixture.job()); err == nil {
+				t.Fatal("Run: want error")
+			}
+			output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+			if !ok {
+				t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+			}
+			if output["title"] != testCase.title {
+				t.Fatalf("title = %v, want %q", output["title"], testCase.title)
+			}
+			if fixture.state.lastSubmitReview != nil {
+				t.Fatalf("a second visible comment was created: %v", fixture.state.lastSubmitReview)
+			}
+		})
+	}
+}
+
+func TestServiceReturnsTheReviewCauseWhenTheNoticeCannotBeWritten(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:              &sequenceModel{err: errors.New("provider refused the prompt")},
+		submitReviewStatus: http.StatusInternalServerError,
+	})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: want error")
+	}
+	if !strings.Contains(err.Error(), "provider refused the prompt") {
+		t.Fatalf("err = %q, want the review cause", err)
+	}
+	if strings.Contains(err.Error(), "submit review failed") {
+		t.Fatalf("err = %q, want the notice failure kept out of the returned cause", err)
+	}
+}
+
+func TestServiceReviewsTheSameHeadAgainAfterAFailureNotice(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &failThenSucceedModel{err: errors.New("provider refused the prompt")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("first Run: want error")
+	}
+	notice := fixture.state.lastSubmitReview
+	if notice == nil {
+		t.Fatal("failure notice was not published")
+	}
+	noticeBody, ok := notice["body"].(string)
+	if !ok {
+		t.Fatalf("notice body = %v, want string", notice["body"])
+	}
+
+	// The published notice is the pull request state the retry reads back.
+	fixture.state.reviewPages = [][]map[string]any{{{
+		"id":        float64(42),
+		"commit_id": testHeadSHA,
+		"body":      noticeBody,
+		"state":     "COMMENTED",
+		"user":      map[string]any{"login": testBotLogin},
+	}}}
+	fixture.state.reviewPageIndex = 0
+	fixture.state.lastSubmitReview = nil
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want success on the retry", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	if fixture.state.lastUpdateReview == nil {
+		t.Fatal("the retry did not rewrite the existing comment")
+	}
+	rewritten, ok := fixture.state.lastUpdateReview["body"].(string)
+	if !ok || strings.Contains(rewritten, "Review failed") {
+		t.Fatalf("rewritten body = %v, want the normal review summary", fixture.state.lastUpdateReview["body"])
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("the retry did not publish its review")
+	}
+	if fixture.state.lastSubmitReview["event"] == string(domain.ReviewDecisionComment) {
+		t.Fatal("the retry published a second visible comment instead of its review")
+	}
+}
+
+type failingCollector struct{}
+
+func (failingCollector) Collect(
+	context.Context,
+	domain.PullRequestRef,
+	githubapp.PullRequest,
+) (diff.ReviewInput, error) {
+	return diff.ReviewInput{}, errors.New("collect diff failed")
+}
+
+// failThenSucceedModel fails the first review pass and succeeds afterwards.
+type failThenSucceedModel struct {
+	err   error
+	calls int
+}
+
+func (model *failThenSucceedModel) Review(context.Context, string) (domain.ReviewResult, error) {
+	model.calls++
+	if model.calls == 1 {
+		return domain.ReviewResult{}, model.err
+	}
+	return domain.ReviewResult{CoverageComplete: true, Findings: nil}, nil
+}
+
 // quotaExhaustedError mimics the provider error shape for exhausted usage.
 type quotaExhaustedError struct{}
 
@@ -1042,15 +1281,19 @@ func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 }
 
 type serviceFixtureOptions struct {
-	reviewPages               [][]map[string]any
-	headAfterAnalysis         string
-	pullRequestStatus         int
-	submitReviewStatus        int
-	reconcileErr              error
-	reconcileThreads          []githubapp.ReviewThread
-	model                     review.Model
-	minimumImportance         int
-	maximumUnresolvedComments int
+	reviewPages                     [][]map[string]any
+	headAfterAnalysis               string
+	pullRequestStatus               int
+	pullRequestStatusAfterFirstRead int
+	reviewListStatus                int
+	submitReviewStatus              int
+	updateReviewStatus              int
+	reconcileErr                    error
+	reconcileThreads                []githubapp.ReviewThread
+	collector                       review.Collector
+	model                           review.Model
+	minimumImportance               int
+	maximumUnresolvedComments       int
 }
 
 type serviceFixture struct {
@@ -1061,21 +1304,24 @@ type serviceFixture struct {
 }
 
 type serviceServerState struct {
-	requestOrder       []string
-	reviewPages        [][]map[string]any
-	reviewPageIndex    int
-	checkRuns          []map[string]any
-	nextCheckRunID     int64
-	headSHA            string
-	headAfterAnalysis  string
-	pullRequestReads   int32
-	pullRequestStatus  int
-	lastSubmitReview   map[string]any
-	lastUpdateReview   map[string]any
-	lastCreateCheckRun map[string]any
-	lastUpdateCheckRun map[string]any
-	checkDetailsURL    string
-	submitReviewStatus int
+	requestOrder                    []string
+	reviewPages                     [][]map[string]any
+	reviewPageIndex                 int
+	checkRuns                       []map[string]any
+	nextCheckRunID                  int64
+	headSHA                         string
+	headAfterAnalysis               string
+	pullRequestReads                int32
+	pullRequestStatus               int
+	pullRequestStatusAfterFirstRead int
+	reviewListStatus                int
+	lastSubmitReview                map[string]any
+	lastUpdateReview                map[string]any
+	lastCreateCheckRun              map[string]any
+	lastUpdateCheckRun              map[string]any
+	checkDetailsURL                 string
+	submitReviewStatus              int
+	updateReviewStatus              int
 }
 
 type recordingReconciler struct {
@@ -1195,13 +1441,16 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 
 	privateKey := serviceTestPrivateKey(t)
 	state := &serviceServerState{
-		reviewPages:        [][]map[string]any{{}},
-		checkRuns:          []map[string]any{},
-		nextCheckRunID:     77,
-		headSHA:            testHeadSHA,
-		headAfterAnalysis:  options.headAfterAnalysis,
-		pullRequestStatus:  options.pullRequestStatus,
-		submitReviewStatus: options.submitReviewStatus,
+		reviewPages:                     [][]map[string]any{{}},
+		checkRuns:                       []map[string]any{},
+		nextCheckRunID:                  77,
+		headSHA:                         testHeadSHA,
+		headAfterAnalysis:               options.headAfterAnalysis,
+		pullRequestStatus:               options.pullRequestStatus,
+		pullRequestStatusAfterFirstRead: options.pullRequestStatusAfterFirstRead,
+		reviewListStatus:                options.reviewListStatus,
+		submitReviewStatus:              options.submitReviewStatus,
+		updateReviewStatus:              options.updateReviewStatus,
 	}
 	if len(options.reviewPages) > 0 {
 		state.reviewPages = options.reviewPages
@@ -1209,8 +1458,14 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	if state.submitReviewStatus == 0 {
 		state.submitReviewStatus = http.StatusOK
 	}
+	if state.updateReviewStatus == 0 {
+		state.updateReviewStatus = http.StatusOK
+	}
 	if state.pullRequestStatus == 0 {
 		state.pullRequestStatus = http.StatusOK
+	}
+	if state.reviewListStatus == 0 {
+		state.reviewListStatus = http.StatusOK
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -1254,6 +1509,10 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		threads: options.reconcileThreads,
 		err:     options.reconcileErr,
 	}
+	collector := options.collector
+	if collector == nil {
+		collector = stubCollector{}
+	}
 	model := options.model
 	minimumImportance := options.minimumImportance
 	if minimumImportance == 0 {
@@ -1281,7 +1540,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 
 	service := review.NewService(
 		client,
-		stubCollector{},
+		collector,
 		model,
 		reconciler,
 		queue.NewKeyedLocker(),
@@ -1363,6 +1622,12 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 	}
 
 	if request.Method == http.MethodPut && strings.Contains(request.URL.Path, "/pulls/") && strings.Contains(request.URL.Path, "/reviews/") {
+		if state.updateReviewStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.updateReviewStatus, map[string]any{
+				"message": "update review failed",
+			})
+			return
+		}
 		body, err := serviceReadJSONBody(request)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -1457,6 +1722,12 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			return
 		}
 		readCount := atomic.AddInt32(&state.pullRequestReads, 1)
+		if readCount > 1 && state.pullRequestStatusAfterFirstRead != 0 {
+			serviceWriteJSON(writer, state.pullRequestStatusAfterFirstRead, map[string]any{
+				"message": "pull request refresh failed",
+			})
+			return
+		}
 		head := state.headSHA
 		if readCount > 1 && state.headAfterAnalysis != "" {
 			head = state.headAfterAnalysis
@@ -1476,6 +1747,10 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 }
 
 func writeServiceReviewPage(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {
+	if state.reviewListStatus != http.StatusOK {
+		serviceWriteJSON(writer, state.reviewListStatus, map[string]any{"message": "list reviews failed"})
+		return
+	}
 	// GitHub returns the same reviews to every caller, so replay the page set
 	// from the start once a prior read has consumed it.
 	if state.reviewPageIndex >= len(state.reviewPages) {
