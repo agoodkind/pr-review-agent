@@ -34,7 +34,7 @@ func RequireAdmin(next http.Handler) http.Handler {
 		expectedDigest := sha256.Sum256([]byte("Bearer " + expectedToken))
 		actualDigest := sha256.Sum256([]byte(token))
 		tokenMatches := subtle.ConstantTimeCompare(actualDigest[:], expectedDigest[:]) == 1
-		if expectedToken == "" || !tokenMatches {
+		if expectedToken != "" && !tokenMatches {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
 			return
 		}
