@@ -3,9 +3,10 @@ package liveproof
 import (
 	"fmt"
 	"net/http"
+	"sync/atomic"
 )
 
-var requestCounts = map[string]int{}
+var requestCount atomic.Int64
 
 // WithPreview adds the temporary request preview endpoint.
 func WithPreview(next http.Handler) http.Handler {
@@ -20,8 +21,7 @@ func WithPreview(next http.Handler) http.Handler {
 			return
 		}
 		if request.URL.Path == "/record" {
-			requestCounts["all"]++
-			_, _ = fmt.Fprintln(writer, requestCounts["all"])
+			_, _ = fmt.Fprintln(writer, requestCount.Add(1))
 			return
 		}
 		next.ServeHTTP(writer, request)
