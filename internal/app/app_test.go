@@ -39,6 +39,7 @@ const (
 	testPRNumber          = 42
 	testInstallation      = int64(99)
 	testMinimumImportance = 7
+	testReviewModel       = "fixture-review-model"
 )
 
 var integrationTestMu sync.Mutex
@@ -879,6 +880,7 @@ func wireAppFixture(
 		Port:                      "0",
 		ReviewTimeout:             10 * time.Minute,
 		ReviewWorkers:             4,
+		ReviewModel:               testReviewModel,
 		MinimumImportance:         testMinimumImportance,
 		MaximumUnresolvedComments: 100,
 		GitHubAppID:               12345,
@@ -1979,7 +1981,7 @@ func writeCompletionStream(writer http.ResponseWriter, content string) {
 			"id":      "chatcmpl-test",
 			"object":  "chat.completion.chunk",
 			"created": 0,
-			"model":   config.Model,
+			"model":   testReviewModel,
 			"choices": []map[string]any{{
 				"index": 0,
 				"delta": map[string]any{"role": "assistant", "content": content},
@@ -1989,7 +1991,7 @@ func writeCompletionStream(writer http.ResponseWriter, content string) {
 			"id":      "chatcmpl-test",
 			"object":  "chat.completion.chunk",
 			"created": 0,
-			"model":   config.Model,
+			"model":   testReviewModel,
 			"choices": []map[string]any{{
 				"index":         0,
 				"delta":         map[string]any{},

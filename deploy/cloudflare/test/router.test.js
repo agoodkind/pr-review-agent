@@ -97,6 +97,12 @@ test("production configuration reaches the Go service", function () {
     ["CF_ACCESS_CLIENT_ID", "fixture-a"],
     ["CF_ACCESS_CLIENT_SECRET", "fixture-b"],
     ["CLYDE_BASE_URL", "https://model.example/v1"],
+    ["FALLBACK_API_KEY", "fixture-g"],
+    ["FALLBACK_BASE_URL", "https://fallback.example/v1"],
+    ["FALLBACK_CF_ACCESS_CLIENT_ID", "fixture-h"],
+    ["FALLBACK_CF_ACCESS_CLIENT_SECRET", "fixture-i"],
+    ["FALLBACK_MODEL", "fixture-fallback-model"],
+    ["FALLBACK_ON", "usage_exceeded"],
     ["GITHUB_APP_ID", "fixture-c"],
     ["GITHUB_BOT_LOGIN", "fixture-bot[bot]"],
     ["GITHUB_PRIVATE_KEY", "fixture-d"],
@@ -105,16 +111,34 @@ test("production configuration reaches the Go service", function () {
     ["PORT", "3000"],
     ["REVIEW_MAX_UNRESOLVED_COMMENTS", "7"],
     ["REVIEW_MIN_IMPORTANCE", "8"],
+    ["REVIEW_MODEL", "fixture-review-model"],
     ["REVIEW_TIMEOUT", "9m"],
     ["REVIEW_WORKERS", "5"],
   ]);
   const environment = createPrAgentEnvironment(bindings);
 
   assert.equal(environment.CLYDE_API_KEY, bindings.OPENAI_KEY);
-  assert.equal(environment.REVIEW_MIN_IMPORTANCE, "8");
-  assert.equal(environment.REVIEW_MAX_UNRESOLVED_COMMENTS, "7");
-  assert.equal(environment.REVIEW_TIMEOUT, "9m");
-  assert.equal(environment.REVIEW_WORKERS, "5");
+  for (const name of Object.keys(bindings)) {
+    if (name === "OPENAI_KEY") {
+      continue;
+    }
+    assert.equal(environment[name], bindings[name], `${name} did not reach the service`);
+  }
+});
+
+test("an unlisted binding never reaches the Go service", function () {
+  const environment = createPrAgentEnvironment({ UNLISTED_BINDING: "fixture" });
+
+  assert.equal("UNLISTED_BINDING" in environment, false);
+});
+
+test("every wrangler var reaches the Go service", function () {
+  const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
+  const environment = createPrAgentEnvironment(config.vars);
+
+  for (const name of Object.keys(config.vars)) {
+    assert.equal(environment[name], config.vars[name], `${name} is declared but never forwarded`);
+  }
 });
 
 test("release image selection writes the exact immutable digest", async function () {
