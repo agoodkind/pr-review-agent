@@ -19,6 +19,9 @@ const (
 	testBotLogin    = "test-review-agent[bot]"
 	testRepoOwner   = "agoodkind"
 	testRepoName    = "pr-review-agent"
+
+	testPullRequestNumber = 42
+	sampleRootCommentID   = int64(1)
 )
 
 func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
@@ -213,9 +216,12 @@ func TestReconcileLeavesOpenAndUncertainFindingsOpen(t *testing.T) {
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none", github.resolveCalls)
 	}
+	if len(github.replies) != 0 {
+		t.Fatalf("replies = %v, want none on an unresolved thread", github.replies)
+	}
 }
 
-func TestReconcilePostsNoReplies(t *testing.T) {
+func TestReconcileRepliesWithTheReasonOnEveryResolvedThread(t *testing.T) {
 	finding := sampleFinding()
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
@@ -240,7 +246,7 @@ func TestReconcilePostsNoReplies(t *testing.T) {
 		resolutions: []domain.ThreadResolution{{
 			ThreadNodeID: "thread-one",
 			Resolution:   domain.ResolutionResolved,
-			Reason:       "fixed",
+			Reason:       "The changed line replaces the unchecked slice with a bounded copy.",
 		}},
 	}
 
@@ -248,8 +254,103 @@ func TestReconcilePostsNoReplies(t *testing.T) {
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if github.replyCalls != 0 {
-		t.Fatalf("reply calls = %d, want 0", github.replyCalls)
+	if len(github.replies) != 1 {
+		t.Fatalf("replies = %v, want exactly one", github.replies)
+	}
+
+	reply := github.replies[0]
+	wantBody := "Resolved on `" + testCurrentHead[:7] + "`. " +
+		"The changed line replaces the unchecked slice with a bounded copy."
+	if reply.body != wantBody {
+		t.Fatalf("reply body = %q, want %q", reply.body, wantBody)
+	}
+	if reply.commentID != sampleRootCommentID {
+		t.Fatalf("reply comment id = %d, want %d", reply.commentID, sampleRootCommentID)
+	}
+	if reply.number != testPullRequestNumber {
+		t.Fatalf("reply pull request = %d, want %d", reply.number, testPullRequestNumber)
+	}
+}
+
+func TestReconcileResolvesWhenTheReplyFails(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-one", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\nissue line\nline3\n"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+			PatchPresent: true,
+		}},
+		replyError: errors.New("reply failed"),
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-one",
+			Resolution:   domain.ResolutionResolved,
+			Reason:       "fixed on the current head",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	threads, err := service.Reconcile(context.Background(), testJob())
+	if err != nil {
+		t.Fatalf("Reconcile: %v, want the reply failure dropped", err)
+	}
+	if len(github.resolveCalls) != 1 {
+		t.Fatalf("resolve calls = %v, want the thread still resolved", github.resolveCalls)
+	}
+	if !threads[0].Resolved {
+		t.Fatal("thread is not marked resolved after a failed reply")
+	}
+}
+
+func TestReconcilePostsNoReplyWhenTheResolveFails(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-one", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\nissue line\nline3\n"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+			PatchPresent: true,
+		}},
+		resolveErrors: map[string]error{"thread-one": errors.New("resolve failed")},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-one",
+			Resolution:   domain.ResolutionResolved,
+			Reason:       "fixed on the current head",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err == nil {
+		t.Fatal("Reconcile: want the resolve failure")
+	}
+	if len(github.replies) != 0 {
+		t.Fatalf("replies = %v, want none when the resolve failed", github.replies)
 	}
 }
 
@@ -379,6 +480,9 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 	if !threads[0].Resolved {
 		t.Fatal("thread remains unresolved")
 	}
+	if len(github.replies) != 0 {
+		t.Fatalf("replies = %v, want none because no model judged this thread", github.replies)
+	}
 }
 
 func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
@@ -444,7 +548,7 @@ func testJob() domain.ReviewJob {
 				Owner: testRepoOwner,
 				Name:  testRepoName,
 			},
-			Number:         42,
+			Number:         testPullRequestNumber,
 			InstallationID: 99,
 			Head:           domain.HeadSHA(testCurrentHead),
 		},
@@ -466,7 +570,7 @@ func ownedThread(
 
 func botComment(body string, finding domain.Finding) domain.ReviewComment {
 	return domain.ReviewComment{
-		DatabaseID: 1,
+		DatabaseID: sampleRootCommentID,
 		Author:     testBotLogin,
 		Body:       body,
 		Path:       finding.Path,
@@ -491,8 +595,15 @@ type fakeGitHub struct {
 	compareError   error
 	resolveErrors  map[string]error
 	resolveCalls   []string
-	replyCalls     int
+	replies        []recordedReply
+	replyError     error
 	getPullCount   int
+}
+
+type recordedReply struct {
+	number    int
+	commentID int64
+	body      string
 }
 
 func (fake *fakeGitHub) ListReviewThreads(
@@ -544,7 +655,7 @@ func (fake *fakeGitHub) GetPullRequest(
 	if fake.headAfterModel != "" && fake.getPullCount > 1 {
 		head = fake.headAfterModel
 	}
-	return githubapp.PullRequest{Number: 42, Head: head}, nil
+	return githubapp.PullRequest{Number: testPullRequestNumber, Head: head}, nil
 }
 
 func (fake *fakeGitHub) ResolveReviewThread(
@@ -556,6 +667,25 @@ func (fake *fakeGitHub) ResolveReviewThread(
 	if err := fake.resolveErrors[threadNodeID]; err != nil {
 		return err
 	}
+	return nil
+}
+
+func (fake *fakeGitHub) ReplyToReviewThread(
+	_ context.Context,
+	_ int64,
+	_ domain.Repository,
+	number int,
+	rootCommentID int64,
+	body string,
+) error {
+	if fake.replyError != nil {
+		return fake.replyError
+	}
+	fake.replies = append(fake.replies, recordedReply{
+		number:    number,
+		commentID: rootCommentID,
+		body:      body,
+	})
 	return nil
 }
 

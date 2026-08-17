@@ -573,7 +573,7 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 	}
 }
 
-func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
+func TestEndToEndPostsNoIssueCommentsAndRepliesOnlyOnAResolvedThread(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{
@@ -632,6 +632,25 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 	}
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
+	}
+
+	fixture.waitForResolveCalls(t, 1)
+	if fixture.githubState.threadReplyCount() != 1 {
+		t.Fatalf("thread replies = %d, want exactly one on the resolved thread", fixture.githubState.threadReplyCount())
+	}
+	reply := fixture.githubState.lastThreadReply()
+	wantPath := fmt.Sprintf(
+		"/repos/%s/%s/pulls/%d/comments/1/replies",
+		testRepoOwner,
+		testRepoName,
+		testPRNumber,
+	)
+	if reply.path != wantPath {
+		t.Fatalf("reply path = %q, want %q", reply.path, wantPath)
+	}
+	wantReply := reviewcore.RenderResolutionReply(domain.HeadSHA(testCorrectedHead), "fixed")
+	if reply.body != wantReply {
+		t.Fatalf("reply body = %q, want %q", reply.body, wantReply)
 	}
 }
 
@@ -1257,6 +1276,7 @@ type githubServerState struct {
 	threadPageIndex      int
 	resolveCalls         []string
 	lastResolveID        string
+	threadReplies        []threadReply
 	pullRequestReads     int32
 	forbiddenHits        int32
 	filePageFetches      int32
@@ -1361,6 +1381,33 @@ func (state *githubServerState) resolveCallCount() int {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return len(state.resolveCalls)
+}
+
+// threadReply is one reply the service posted under a review thread root comment.
+type threadReply struct {
+	path string
+	body string
+}
+
+func (state *githubServerState) threadReplyCount() int {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return len(state.threadReplies)
+}
+
+func (state *githubServerState) recordThreadReply(reply threadReply) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.threadReplies = append(state.threadReplies, reply)
+}
+
+func (state *githubServerState) lastThreadReply() threadReply {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.threadReplies) == 0 {
+		return threadReply{path: "", body: ""}
+	}
+	return state.threadReplies[len(state.threadReplies)-1]
 }
 
 func (state *githubServerState) lastResolveThreadID() string {
@@ -1469,6 +1516,11 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 
 	if request.Method == http.MethodPatch && strings.Contains(request.URL.Path, "/check-runs/") {
 		state.handleUpdateCheckRun(writer, request)
+		return
+	}
+
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/replies") {
+		state.handleThreadReply(writer, request)
 		return
 	}
 
@@ -1677,6 +1729,20 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		"state":     body["event"],
 		"body":      body["body"],
 		"user":      map[string]any{"login": testBotLogin},
+	})
+}
+
+func (state *githubServerState) handleThreadReply(writer http.ResponseWriter, request *http.Request) {
+	body, err := readJSONBody(request)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	replyBody, _ := body["body"].(string)
+	state.recordThreadReply(threadReply{path: request.URL.Path, body: replyBody})
+	writeJSON(writer, http.StatusCreated, map[string]any{
+		"id":   float64(9001),
+		"body": replyBody,
 	})
 }
 
@@ -1920,13 +1986,12 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	writeCompletionStream(writer, content)
 }
 
+// failForbiddenEndpoint rejects the endpoints the service must never call. The
+// thread reply endpoint is not among them: the service replies on a thread it
+// resolves, and threadReplyCount observes those instead.
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
 	if strings.Contains(request.URL.Path, "/issues/comments") {
 		http.Error(writer, "issue comments forbidden", http.StatusForbidden)
-		return true
-	}
-	if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
-		http.Error(writer, "replies forbidden", http.StatusForbidden)
 		return true
 	}
 	return false

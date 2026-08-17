@@ -489,6 +489,32 @@ func TestResolveReviewThreadVerifiesMutationResult(t *testing.T) {
 	}
 }
 
+func TestReplyToReviewThreadPostsUnderTheRootComment(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	const replyBody = "Resolved on `a3c4f1c`. The bound check now rejects oversized offsets."
+	if err := client.ReplyToReviewThread(
+		context.Background(),
+		99,
+		testRepo(),
+		8,
+		4242,
+		replyBody,
+	); err != nil {
+		t.Fatalf("ReplyToReviewThread: %v", err)
+	}
+
+	wantPath := "/repos/owner/repo/pulls/8/comments/4242/replies"
+	if state.lastReplyPath != wantPath {
+		t.Fatalf("reply path = %q, want %q", state.lastReplyPath, wantPath)
+	}
+	if state.lastReplyBody["body"] != replyBody {
+		t.Fatalf("reply body = %v, want %q", state.lastReplyBody["body"], replyBody)
+	}
+}
+
 func TestGraphQLErrorsRemainVisible(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
@@ -522,6 +548,8 @@ type testServerState struct {
 	resolveThreadID        string
 	graphQLError           string
 	submitReviewStatus     int
+	lastReplyPath          string
+	lastReplyBody          map[string]any
 }
 
 func newTestClient(t *testing.T, privateKey *rsa.PrivateKey, now time.Time) (*githubapp.Client, *httptest.Server) {
@@ -619,6 +647,21 @@ func handleTestRequest(writer http.ResponseWriter, request *http.Request, state 
 			"state":     "CHANGES_REQUESTED",
 			"body":      body["body"],
 			"user":      map[string]any{"login": testBotLogin},
+		})
+		return
+	}
+
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/replies") {
+		body, err := readJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		state.lastReplyPath = request.URL.Path
+		state.lastReplyBody = body
+		writeJSON(writer, http.StatusCreated, map[string]any{
+			"id":   float64(9001),
+			"body": body["body"],
 		})
 		return
 	}
@@ -814,13 +857,12 @@ func emptyThreadPage(hasNext bool) map[string]any {
 	}
 }
 
+// failForbiddenEndpoint rejects the endpoints the service must never call. The
+// thread reply endpoint is not among them: the service replies on a thread it
+// resolves, so that path is exercised rather than forbidden.
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
 	if strings.Contains(request.URL.Path, "/issues/comments") {
 		http.Error(writer, "issue comments forbidden", http.StatusForbidden)
-		return true
-	}
-	if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
-		http.Error(writer, "replies forbidden", http.StatusForbidden)
 		return true
 	}
 	return false

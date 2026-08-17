@@ -16,11 +16,15 @@ When a review cannot finish, the service rewrites that same top level body with 
 
 Three failures leave the body untouched, because writing it needs the GitHub call that just failed: reading reviews, updating a review, and submitting a review. The check run still reports those. A body that cannot be written never changes or hides the failure the check reports.
 
-Before each decision, the service reads every prior bot review and thread. It silently resolves fixed threads before publishing new findings.
+Before each decision, the service reads every prior bot review and thread. It resolves fixed threads before publishing new findings.
+
+When the model judges a finding fixed, the service resolves that thread and then replies on it with the head it checked and the reason the model gave. The reply is posted only after the resolve succeeds, so it never claims a resolution that did not happen. A reply that fails to post is dropped rather than failing the review, and the thread stays resolved.
+
+The service also resolves a thread when the finding anchor no longer exists. That is not a model judgement, so it posts no reply.
 
 Stable finding identities prevent republication across pull request history. The configured unresolved thread limit admits the highest importance new findings first. The final decision still considers every current finding.
 
-The service never posts issue comments, progress messages, replies, or commands.
+The service never posts issue comments, progress messages, or commands. Its only reply is the one it posts on a thread it just resolved.
 
 ## Configure the service
 

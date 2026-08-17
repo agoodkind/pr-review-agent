@@ -30,6 +30,7 @@ type GitHub interface {
 	) ([]githubapp.ChangedFile, error)
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
 	ResolveReviewThread(context.Context, int64, string) error
+	ReplyToReviewThread(context.Context, int64, domain.Repository, int, int64, string) error
 }
 
 // Model performs one structured reconciliation completion for a batch prompt.
@@ -193,6 +194,7 @@ func (service *Service) reconcilePrepared(
 				}
 				continue
 			}
+			service.replyWithReason(ctx, job, currentHead, item.thread, resolution.Reason)
 			resolvedThreads = append(resolvedThreads, resolvedThreadTrace{
 				NodeID:    item.thread.NodeID,
 				CommentID: item.thread.RootComment.DatabaseID,
@@ -239,6 +241,42 @@ func (service *Service) resolveAtHead(
 	}
 	markThreadResolved(threads, thread.NodeID)
 	return nil
+}
+
+// replyWithReason states on the thread why the model judged the finding fixed.
+// The thread is already resolved, so a reply failure is logged and dropped
+// rather than failing the review over a comment.
+func (service *Service) replyWithReason(
+	ctx context.Context,
+	job domain.ReviewJob,
+	currentHead domain.HeadSHA,
+	thread domain.OwnedThread,
+	reason string,
+) {
+	logger := gklog.L(ctx)
+	body := review.RenderResolutionReply(currentHead, reason)
+	if err := service.github.ReplyToReviewThread(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+		thread.RootComment.DatabaseID,
+		body,
+	); err != nil {
+		logger.ErrorContext(
+			ctx,
+			"reply with resolution reason",
+			slog.String("thread_node_id", thread.NodeID),
+			slog.String("err", err.Error()),
+		)
+		return
+	}
+	logger.InfoContext(
+		ctx,
+		"resolution reason published",
+		slog.String("thread_node_id", thread.NodeID),
+		slog.Bool("visible", true),
+	)
 }
 
 func formatResolveThreadContext(thread domain.OwnedThread) string {
