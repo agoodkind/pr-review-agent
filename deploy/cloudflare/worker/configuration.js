@@ -1,8 +1,17 @@
+// The container receives only the bindings named here. A binding that is not
+// destructured and re-emitted never reaches the service, so a new variable must
+// be added in both places.
 export function createPrAgentEnvironment(bindings) {
   const {
     CF_ACCESS_CLIENT_ID,
     CF_ACCESS_CLIENT_SECRET,
     CLYDE_BASE_URL,
+    FALLBACK_API_KEY,
+    FALLBACK_BASE_URL,
+    FALLBACK_CF_ACCESS_CLIENT_ID,
+    FALLBACK_CF_ACCESS_CLIENT_SECRET,
+    FALLBACK_MODEL,
+    FALLBACK_ON,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
@@ -11,6 +20,7 @@ export function createPrAgentEnvironment(bindings) {
     PORT,
     REVIEW_MAX_UNRESOLVED_COMMENTS,
     REVIEW_MIN_IMPORTANCE,
+    REVIEW_MODEL,
     REVIEW_TIMEOUT,
     REVIEW_WORKERS,
   } = bindings;
@@ -20,6 +30,12 @@ export function createPrAgentEnvironment(bindings) {
     CF_ACCESS_CLIENT_SECRET,
     CLYDE_API_KEY: OPENAI_KEY,
     CLYDE_BASE_URL,
+    FALLBACK_API_KEY,
+    FALLBACK_BASE_URL,
+    FALLBACK_CF_ACCESS_CLIENT_ID,
+    FALLBACK_CF_ACCESS_CLIENT_SECRET,
+    FALLBACK_MODEL,
+    FALLBACK_ON,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
@@ -27,6 +43,7 @@ export function createPrAgentEnvironment(bindings) {
     PORT,
     REVIEW_MAX_UNRESOLVED_COMMENTS,
     REVIEW_MIN_IMPORTANCE,
+    REVIEW_MODEL,
     REVIEW_TIMEOUT,
     REVIEW_WORKERS,
   };

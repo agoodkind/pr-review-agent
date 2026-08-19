@@ -49,11 +49,154 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		"REVIEW_MAX_UNRESOLVED_COMMENTS",
 		"REVIEW_TIMEOUT",
 		"REVIEW_WORKERS",
+		"REVIEW_MODEL",
 	} {
 		if !strings.Contains(err.Error(), secret) {
 			t.Fatalf("error %q missing %q", err.Error(), secret)
 		}
 	}
+}
+
+func TestLoadWithoutFallbackLeavesTheFallbackUnset(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HasFallback() {
+		t.Fatal("HasFallback() = true, want false when no fallback is configured")
+	}
+	if cfg.FallbackBaseURL != nil {
+		t.Fatalf("FallbackBaseURL = %v, want nil", cfg.FallbackBaseURL)
+	}
+	if cfg.FallbackModel != "" || cfg.FallbackAPIKey != "" {
+		t.Fatalf("fallback model = %q, key set = %t, want both empty", cfg.FallbackModel, cfg.FallbackAPIKey != "")
+	}
+	if cfg.FallbackOnUsageExceeded {
+		t.Fatal("FallbackOnUsageExceeded = true, want false without a fallback")
+	}
+}
+
+func TestLoadReadsACompleteFallback(t *testing.T) {
+	cfg, err := loadWithOverrides(completeFallback(map[string]string{}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.HasFallback() {
+		t.Fatal("HasFallback() = false, want true")
+	}
+	if cfg.FallbackBaseURL.String() != "https://fallback.example" {
+		t.Fatalf("FallbackBaseURL = %q, want https://fallback.example", cfg.FallbackBaseURL)
+	}
+	if cfg.FallbackModel != "fixture-fallback-model" {
+		t.Fatalf("FallbackModel = %q, want fixture-fallback-model", cfg.FallbackModel)
+	}
+	if cfg.FallbackAPIKey == "" {
+		t.Fatal("FallbackAPIKey is empty")
+	}
+	if !cfg.FallbackOnUsageExceeded {
+		t.Fatal("FallbackOnUsageExceeded = false, want true by default")
+	}
+	if cfg.FallbackCFAccessClientID != "" || cfg.FallbackCFAccessClientSecret != "" {
+		t.Fatal("Cloudflare Access values are set although none were configured")
+	}
+}
+
+func TestLoadRejectsAPartialFallback(t *testing.T) {
+	cases := map[string][]string{
+		"FALLBACK_BASE_URL": {"FALLBACK_MODEL", "FALLBACK_API_KEY"},
+		"FALLBACK_MODEL":    {"FALLBACK_BASE_URL", "FALLBACK_API_KEY"},
+		"FALLBACK_API_KEY":  {"FALLBACK_BASE_URL", "FALLBACK_MODEL"},
+	}
+	for present, wantMissing := range cases {
+		t.Run(present, func(t *testing.T) {
+			only := map[string]string{present: completeFallback(map[string]string{})[present]}
+			_, err := loadWithOverrides(only)
+			if err == nil {
+				t.Fatalf("Load with only %s: want error", present)
+			}
+			for _, name := range wantMissing {
+				if !strings.Contains(err.Error(), name) {
+					t.Fatalf("error %q missing %q", err.Error(), name)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadRejectsAPlaintextFallbackURL(t *testing.T) {
+	_, err := loadWithOverrides(completeFallback(map[string]string{
+		"FALLBACK_BASE_URL": "http://fallback.example",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "FALLBACK_BASE_URL") {
+		t.Fatalf("Load with plaintext fallback URL: err = %v, want FALLBACK_BASE_URL", err)
+	}
+}
+
+func TestLoadRequiresBothFallbackAccessValuesTogether(t *testing.T) {
+	t.Run("both set", func(t *testing.T) {
+		cfg, err := loadWithOverrides(completeFallback(map[string]string{
+			"FALLBACK_CF_ACCESS_CLIENT_ID":     "fixture-fallback-cf-id",
+			"FALLBACK_CF_ACCESS_CLIENT_SECRET": "fixture-fallback-cf-" + strings.Repeat("d", 8),
+		}))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.FallbackCFAccessClientID != "fixture-fallback-cf-id" {
+			t.Fatalf("FallbackCFAccessClientID = %q", cfg.FallbackCFAccessClientID)
+		}
+		if cfg.FallbackCFAccessClientSecret == "" {
+			t.Fatal("FallbackCFAccessClientSecret is empty")
+		}
+	})
+
+	for _, present := range []string{"FALLBACK_CF_ACCESS_CLIENT_ID", "FALLBACK_CF_ACCESS_CLIENT_SECRET"} {
+		t.Run("only "+present, func(t *testing.T) {
+			_, err := loadWithOverrides(completeFallback(map[string]string{present: "fixture-value"}))
+			if err == nil {
+				t.Fatalf("Load with only %s: want error", present)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsAnUnknownFallbackTrigger(t *testing.T) {
+	_, err := loadWithOverrides(completeFallback(map[string]string{"FALLBACK_ON": "any_error"}))
+	if err == nil || !strings.Contains(err.Error(), "FALLBACK_ON") {
+		t.Fatalf("Load with unknown trigger: err = %v, want FALLBACK_ON", err)
+	}
+}
+
+func TestLoadAcceptsTheUsageExceededTrigger(t *testing.T) {
+	cfg, err := loadWithOverrides(completeFallback(map[string]string{"FALLBACK_ON": FallbackOnUsageExceeded}))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.FallbackOnUsageExceeded {
+		t.Fatal("FallbackOnUsageExceeded = false, want true")
+	}
+}
+
+func TestFallbackFailureNeverNamesASecretValue(t *testing.T) {
+	fallbackKey := "fixture-fallback-key-" + strings.Repeat("z", 12)
+	_, err := loadWithOverrides(map[string]string{"FALLBACK_API_KEY": fallbackKey})
+	if err == nil {
+		t.Fatal("Load with only FALLBACK_API_KEY: want error")
+	}
+	if strings.Contains(err.Error(), fallbackKey) {
+		t.Fatal("error names the fallback key value")
+	}
+}
+
+func completeFallback(overrides map[string]string) map[string]string {
+	values := map[string]string{
+		"FALLBACK_BASE_URL": "https://fallback.example",
+		"FALLBACK_MODEL":    "fixture-fallback-model",
+		"FALLBACK_API_KEY":  "fixture-fallback-" + strings.Repeat("e", 8),
+	}
+	for key, value := range overrides {
+		values[key] = value
+	}
+	return values
 }
 
 func TestLoadParsesPKCS1AndPKCS8RSAKeys(t *testing.T) {
@@ -219,6 +362,7 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 		"REVIEW_MAX_UNRESOLVED_COMMENTS": "10",
 		"REVIEW_TIMEOUT":                 "10m",
 		"REVIEW_WORKERS":                 "4",
+		"REVIEW_MODEL":                   "fixture-primary-model",
 	}
 	for key, value := range overrides {
 		values[key] = value

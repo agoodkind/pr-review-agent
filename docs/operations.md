@@ -40,10 +40,34 @@ Set these required environment variables:
 | `REVIEW_MAX_UNRESOLVED_COMMENTS` | Maximum unresolved bot threads, including `0` |
 | `REVIEW_TIMEOUT` | Maximum duration for one active review, such as `10m` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
+| `REVIEW_MODEL` | Model the primary provider serves, such as `gpt-5.6-sol` |
 
 `PORT` defaults to `3000`.
 
 Keep every credential in the deployment secret store. Do not place values in source, commands, logs, or evidence.
+
+## Configure a fallback provider
+
+When the primary provider reports that it has no remaining usage, the service repeats the same request against a second endpoint. A review that succeeds there is published exactly as it would be otherwise, and the pull request never says which provider answered. The fallback appears only in the service log.
+
+The service tries the primary provider on every request and remembers nothing, so it returns to the primary as soon as that provider has usage again.
+
+Leaving every fallback variable unset keeps the service on one provider and changes nothing.
+
+| Variable | Value |
+| --- | --- |
+| `FALLBACK_BASE_URL` | HTTPS endpoint for the fallback provider |
+| `FALLBACK_MODEL` | Model the fallback provider serves |
+| `FALLBACK_API_KEY` | Fallback provider credential |
+| `FALLBACK_CF_ACCESS_CLIENT_ID` | Cloudflare Access service token identifier, only for a fallback behind Access |
+| `FALLBACK_CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token secret, paired with the identifier |
+| `FALLBACK_ON` | Condition that sends a request to the fallback. Only `usage_exceeded` is supported, and that is the default |
+
+Set `FALLBACK_BASE_URL`, `FALLBACK_MODEL`, and `FALLBACK_API_KEY` together. Setting one without the others stops the service from starting, so a half-configured fallback fails at deployment rather than during a review.
+
+The Cloudflare Access pair is optional and also all-or-nothing. Leave both unset for a public endpoint, which then receives no Access headers.
+
+Set every fallback value as a deployment secret, including the two that hold no credential. A Worker deployment replaces its declared variables with the ones in source while secrets persist, so keeping the group in the secret store means a deployment can never leave it half configured.
 
 ## Run the container
 

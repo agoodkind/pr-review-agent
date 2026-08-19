@@ -5,13 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	openaigo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/review"
@@ -19,31 +22,82 @@ import (
 
 const maxRetries = 3
 
-// Client performs structured OpenAI chat completion requests.
-type Client struct {
-	sdk               openaigo.Client
-	minimumImportance int
+// provider is one model endpoint the client can send a completion to.
+type provider struct {
+	sdk   openaigo.Client
+	model shared.ChatModel
 }
 
-// NewClient constructs an OpenAI SDK client from service config.
+// Client performs structured OpenAI chat completion requests.
+type Client struct {
+	primary                 provider
+	fallback                *provider
+	fallbackOnUsageExceeded bool
+	minimumImportance       int
+}
+
+// NewClient constructs an OpenAI SDK client from service config. It builds a
+// second provider when the configuration names a fallback endpoint.
 func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	client := &Client{
+		primary: provider{
+			sdk: newProviderSDK(
+				httpClient,
+				cfg.ClydeBaseURL,
+				cfg.ClydeAPIKey,
+				cfg.CFAccessClientID,
+				cfg.CFAccessClientSecret,
+			),
+			model: cfg.ReviewModel,
+		},
+		fallback:                nil,
+		fallbackOnUsageExceeded: false,
+		minimumImportance:       cfg.MinimumImportance,
+	}
+	if cfg.HasFallback() {
+		client.fallback = &provider{
+			sdk: newProviderSDK(
+				httpClient,
+				cfg.FallbackBaseURL,
+				cfg.FallbackAPIKey,
+				cfg.FallbackCFAccessClientID,
+				cfg.FallbackCFAccessClientSecret,
+			),
+			model: cfg.FallbackModel,
+		}
+		client.fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
+	}
+	return client
+}
+
+// newProviderSDK builds one SDK handle. It sends the Cloudflare Access headers
+// only when both values are present, because a public endpoint needs none.
+func newProviderSDK(
+	httpClient *http.Client,
+	baseURL *url.URL,
+	apiKey string,
+	cfAccessClientID string,
+	cfAccessClientSecret string,
+) openaigo.Client {
 	opts := []option.RequestOption{
-		option.WithAPIKey(cfg.ClydeAPIKey),
+		option.WithAPIKey(apiKey),
 		option.WithHTTPClient(httpClient),
-		option.WithHeader("Cf-Access-Client-Id", cfg.CFAccessClientID),
-		option.WithHeader("Cf-Access-Client-Secret", cfg.CFAccessClientSecret),
 		option.WithMaxRetries(maxRetries),
 	}
-	if cfg.ClydeBaseURL != nil {
-		opts = append(opts, option.WithBaseURL(strings.TrimRight(cfg.ClydeBaseURL.String(), "/")+"/"))
+	if cfAccessClientID != "" && cfAccessClientSecret != "" {
+		opts = append(
+			opts,
+			option.WithHeader("Cf-Access-Client-Id", cfAccessClientID),
+			option.WithHeader("Cf-Access-Client-Secret", cfAccessClientSecret),
+		)
 	}
-	return &Client{
-		sdk:               openaigo.NewClient(opts...),
-		minimumImportance: cfg.MinimumImportance,
+	if baseURL != nil {
+		opts = append(opts, option.WithBaseURL(strings.TrimRight(baseURL.String(), "/")+"/"))
 	}
+	return openaigo.NewClient(opts...)
 }
 
 // Review requests one structured review completion.
@@ -94,6 +148,10 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 	return response.Resolutions, nil
 }
 
+// complete sends one request to the primary provider and repeats it against the
+// fallback when the primary refusal matches the declared fallback condition.
+// It keeps no memory of a refusal, so the primary is used again as soon as it
+// recovers.
 func (client *Client) complete(
 	ctx context.Context,
 	prompt string,
@@ -101,8 +159,53 @@ func (client *Client) complete(
 	schemaName string,
 	schema json.RawMessage,
 ) (string, error) {
-	stream := client.sdk.Chat.Completions.NewStreaming(ctx, openaigo.ChatCompletionNewParams{
-		Model:               shared.ChatModel(config.Model),
+	content, primaryErr := client.completeWith(ctx, client.primary, prompt, policy, schemaName, schema)
+	if primaryErr == nil {
+		return content, nil
+	}
+	if !client.shouldUseFallback(primaryErr) {
+		return "", primaryErr
+	}
+
+	logger := gklog.L(ctx)
+	logger.WarnContext(
+		ctx,
+		"model provider fallback engaged",
+		slog.String("err", primaryErr.Error()),
+	)
+	content, fallbackErr := client.completeWith(ctx, *client.fallback, prompt, policy, schemaName, schema)
+	if fallbackErr != nil {
+		return "", errors.Join(primaryErr, fallbackErr)
+	}
+	return content, nil
+}
+
+// shouldUseFallback reports whether this failure is the declared condition for
+// sending the request to the fallback provider.
+func (client *Client) shouldUseFallback(err error) bool {
+	if client.fallback == nil {
+		return false
+	}
+	if !client.fallbackOnUsageExceeded {
+		return false
+	}
+	var providerError *ProviderError
+	if !errors.As(err, &providerError) {
+		return false
+	}
+	return providerError.UsageExceeded()
+}
+
+func (client *Client) completeWith(
+	ctx context.Context,
+	target provider,
+	prompt string,
+	policy string,
+	schemaName string,
+	schema json.RawMessage,
+) (string, error) {
+	stream := target.sdk.Chat.Completions.NewStreaming(ctx, openaigo.ChatCompletionNewParams{
+		Model:               target.model,
 		ReasoningEffort:     shared.ReasoningEffort(config.ReasoningEffort),
 		MaxCompletionTokens: openaigo.Int(int64(config.MaximumOutputTokens)),
 		Messages: []openaigo.ChatCompletionMessageParamUnion{

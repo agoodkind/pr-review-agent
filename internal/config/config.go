@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	// Model is the OpenAI model used for review and reconciliation.
-	Model = "gpt-5.6-sol"
 	// ReasoningEffort is the OpenAI reasoning effort for every completion.
 	ReasoningEffort = "high"
+	// FallbackOnUsageExceeded is the only supported fallback trigger. It sends
+	// the request to the fallback provider when the primary reports that it has
+	// no remaining usage.
+	FallbackOnUsageExceeded = "usage_exceeded"
 	// ReviewCheckName is the GitHub check run name for review lifecycle.
 	ReviewCheckName = "PR-Agent Review"
 	// QueueCapacity is the maximum number of queued review jobs.
@@ -44,21 +46,33 @@ type LookupEnv func(string) (string, bool)
 
 // Config holds validated service configuration.
 type Config struct {
-	Port                      string
-	ReviewTimeout             time.Duration
-	ReviewWorkers             int
-	MinimumImportance         int
-	MaximumUnresolvedComments int
-	GitHubAppID               int64
-	GitHubPrivateKey          *rsa.PrivateKey
-	GitHubWebhookSecret       []byte
-	GitHubBotLogin            string
-	GitHubAPIBaseURL          *url.URL
-	GitHubGraphQLURL          *url.URL
-	ClydeBaseURL              *url.URL
-	ClydeAPIKey               string
-	CFAccessClientID          string
-	CFAccessClientSecret      string
+	Port                         string
+	ReviewTimeout                time.Duration
+	ReviewWorkers                int
+	ReviewModel                  string
+	MinimumImportance            int
+	MaximumUnresolvedComments    int
+	GitHubAppID                  int64
+	GitHubPrivateKey             *rsa.PrivateKey
+	GitHubWebhookSecret          []byte
+	GitHubBotLogin               string
+	GitHubAPIBaseURL             *url.URL
+	GitHubGraphQLURL             *url.URL
+	ClydeBaseURL                 *url.URL
+	ClydeAPIKey                  string
+	CFAccessClientID             string
+	CFAccessClientSecret         string
+	FallbackBaseURL              *url.URL
+	FallbackModel                string
+	FallbackAPIKey               string
+	FallbackCFAccessClientID     string
+	FallbackCFAccessClientSecret string
+	FallbackOnUsageExceeded      bool
+}
+
+// HasFallback reports whether a fallback model provider is configured.
+func (cfg Config) HasFallback() bool {
+	return cfg.FallbackBaseURL != nil && cfg.FallbackModel != "" && cfg.FallbackAPIKey != ""
 }
 
 // FromEnvironment loads configuration from process environment variables.
@@ -116,10 +130,25 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	} else {
 		cfg.MaximumUnresolvedComments = maximumComments
 	}
+	reviewModel, ok := loadRequiredText(lookup, "REVIEW_MODEL")
+	if !ok {
+		missing = append(missing, "REVIEW_MODEL")
+	} else {
+		cfg.ReviewModel = reviewModel
+	}
 	missing = append(missing, loadGitHub(lookup, &cfg)...)
 	missing = append(missing, loadClyde(lookup, &cfg)...)
+	missing = append(missing, loadFallback(lookup, &cfg)...)
 
 	return cfg, missing
+}
+
+func loadRequiredText(lookup LookupEnv, name string) (string, bool) {
+	value, ok := lookup(name)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", false
+	}
+	return value, true
 }
 
 func loadReviewWorkers(lookup LookupEnv) (int, bool) {
@@ -260,6 +289,102 @@ func loadClyde(lookup LookupEnv, cfg *Config) []string {
 	}
 
 	return missing
+}
+
+// fallbackCoreNames are the fallback variables that stand or fall together.
+var fallbackCoreNames = []string{
+	"FALLBACK_BASE_URL",
+	"FALLBACK_MODEL",
+	"FALLBACK_API_KEY",
+}
+
+// loadFallback reads the optional fallback model provider. Leaving every
+// fallback variable unset keeps the service on one provider. Setting any core
+// variable requires all of them, so a half-configured fallback fails at startup
+// instead of at the moment the primary provider refuses a review.
+func loadFallback(lookup LookupEnv, cfg *Config) []string {
+	present := 0
+	for _, name := range fallbackCoreNames {
+		if _, ok := loadRequiredText(lookup, name); ok {
+			present++
+		}
+	}
+	if present == 0 {
+		return nil
+	}
+
+	var missing []string
+	baseURL, ok := loadRequiredText(lookup, "FALLBACK_BASE_URL")
+	if !ok {
+		missing = append(missing, "FALLBACK_BASE_URL")
+	} else {
+		parsed, err := parseRequiredHTTPSURL("FALLBACK_BASE_URL", baseURL)
+		if err != nil {
+			missing = append(missing, "FALLBACK_BASE_URL")
+		} else {
+			cfg.FallbackBaseURL = parsed
+		}
+	}
+
+	model, ok := loadRequiredText(lookup, "FALLBACK_MODEL")
+	if !ok {
+		missing = append(missing, "FALLBACK_MODEL")
+	} else {
+		cfg.FallbackModel = model
+	}
+
+	apiKey, ok := loadRequiredText(lookup, "FALLBACK_API_KEY")
+	if !ok {
+		missing = append(missing, "FALLBACK_API_KEY")
+	} else {
+		cfg.FallbackAPIKey = apiKey // gitleaks:allow
+	}
+
+	missing = append(missing, loadFallbackAccess(lookup, cfg)...)
+	if !loadFallbackTrigger(lookup, cfg) {
+		missing = append(missing, "FALLBACK_ON")
+	}
+	return missing
+}
+
+// loadFallbackAccess reads the optional Cloudflare Access pair. A public
+// endpoint needs no Access headers, so an unset pair is valid, but one value
+// without the other would send an incomplete credential.
+func loadFallbackAccess(lookup LookupEnv, cfg *Config) []string {
+	clientID, hasClientID := loadRequiredText(lookup, "FALLBACK_CF_ACCESS_CLIENT_ID")
+	clientSecret, hasClientSecret := loadRequiredText(lookup, "FALLBACK_CF_ACCESS_CLIENT_SECRET")
+	if !hasClientID && !hasClientSecret {
+		return nil
+	}
+	var missing []string
+	if !hasClientID {
+		missing = append(missing, "FALLBACK_CF_ACCESS_CLIENT_ID")
+	}
+	if !hasClientSecret {
+		missing = append(missing, "FALLBACK_CF_ACCESS_CLIENT_SECRET")
+	}
+	if len(missing) > 0 {
+		return missing
+	}
+	cfg.FallbackCFAccessClientID = clientID
+	cfg.FallbackCFAccessClientSecret = clientSecret // gitleaks:allow
+	return nil
+}
+
+// loadFallbackTrigger reads the declared fallback condition. An unset value
+// means exhausted usage. An unrecognized value fails, so a typo cannot disable
+// the fallback silently.
+func loadFallbackTrigger(lookup LookupEnv, cfg *Config) bool {
+	value, ok := loadRequiredText(lookup, "FALLBACK_ON")
+	if !ok {
+		cfg.FallbackOnUsageExceeded = true
+		return true
+	}
+	if strings.TrimSpace(value) != FallbackOnUsageExceeded {
+		return false
+	}
+	cfg.FallbackOnUsageExceeded = true
+	return true
 }
 
 func parseRequiredHTTPSURL(name string, value string) (*url.URL, error) {
