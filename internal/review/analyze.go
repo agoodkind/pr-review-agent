@@ -41,15 +41,18 @@ func Analyze(
 	reportedFindings := 0
 	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
+	var models modelSet
 	for _, chunk := range chunks {
-		result, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
+		completion, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
 		if err != nil {
 			return Analysis{}, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
 		}
+		result := completion.Result
 		if err := result.Validate(); err != nil {
 			logger.ErrorContext(ctx, "validate review result", slog.String("err", err.Error()))
 			return Analysis{}, fmt.Errorf("validate review result: %w", err)
 		}
+		models.add(completion.Model)
 		if !result.CoverageComplete {
 			coverageComplete = false
 		}
@@ -91,7 +94,32 @@ func Analyze(
 		Observed:         observed,
 		Anchored:         anchored,
 		Decision:         DecisionFor(anchored, minimumImportance),
+		FilesReviewed:    len(input.Files),
+		Chunks:           len(chunks),
+		Models:           models.names,
 	}, nil
+}
+
+// modelSet records every distinct model that answered, in first use order. A
+// review that starts on the primary provider and finishes on the fallback
+// therefore reports both.
+type modelSet struct {
+	names []string
+	seen  map[string]struct{}
+}
+
+func (set *modelSet) add(name string) {
+	if name == "" {
+		return
+	}
+	if set.seen == nil {
+		set.seen = make(map[string]struct{})
+	}
+	if _, exists := set.seen[name]; exists {
+		return
+	}
+	set.seen[name] = struct{}{}
+	set.names = append(set.names, name)
 }
 
 func buildPrompt(chunk diff.Chunk, minimumImportance int) string {

@@ -8,9 +8,13 @@ The service accepts `opened`, `reopened`, `ready_for_review`, and `synchronize` 
 
 Each head receives one `PR-Agent Review` check. The final decision is `APPROVE` or `REQUEST_CHANGES`.
 
-The configured importance threshold controls publication. At least one anchored finding at or above the threshold requests changes. Otherwise, the service approves the head without visible commentary.
+The configured importance threshold controls publication. At least one anchored finding at or above the threshold requests changes. Otherwise, the service approves the head.
 
 Published findings appear only as concise inline comments on changed lines. One editable top level body identifies the active findings review. Later decisions use hidden markers, so the pull request never gains another visible summary.
+
+That body opens with the verdict, then carries the review details in a collapsed table: the model that answered, how long the review took, the head, the files and diff chunks read, and the finding and thread counts behind the decision. The check run renders the same table from the same values, so the two can never report different numbers.
+
+A review that the fallback provider answers names the fallback model, because the table reports the model that did the work rather than the one configured first.
 
 When a review cannot finish, the service rewrites that same top level body with the stage that failed and the reported cause, and creates it if the pull request has none yet. It carries no review marker, so the next push still reviews the head. When the model provider reports no remaining usage, the check run and the body both say so instead of naming a stage.
 
@@ -48,7 +52,7 @@ Keep every credential in the deployment secret store. Do not place values in sou
 
 ## Configure a fallback provider
 
-When the primary provider reports that it has no remaining usage, the service repeats the same request against a second endpoint. A review that succeeds there is published exactly as it would be otherwise, and the pull request never says which provider answered. The fallback appears only in the service log.
+When the primary provider reports that it has no remaining usage, the service repeats the same request against a second endpoint. A review that succeeds there is published exactly as it would be otherwise, and the review details name the fallback model that answered.
 
 The service tries the primary provider on every request and remembers nothing, so it returns to the primary as soon as that provider has usage again.
 

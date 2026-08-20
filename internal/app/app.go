@@ -63,6 +63,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		cfg.MinimumImportance,
 		cfg.MaximumUnresolvedComments,
 		cfg.ReviewTimeout,
+		time.Now,
 		logger,
 	)
 

@@ -73,6 +73,7 @@ type Service struct {
 	maximumUnresolvedComments int
 	reviewTimeout             time.Duration
 	checkCompletionTimeout    time.Duration
+	now                       func() time.Time
 	logger                    *slog.Logger
 }
 
@@ -87,10 +88,14 @@ func NewService(
 	minimumImportance int,
 	maximumUnresolvedComments int,
 	reviewTimeout time.Duration,
+	now func() time.Time,
 	logger *slog.Logger,
 ) *Service {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if now == nil {
+		now = time.Now
 	}
 	completionTimeout := min(reviewTimeout/4, maximumCompletionTimeout)
 	return &Service{
@@ -105,6 +110,7 @@ func NewService(
 		maximumUnresolvedComments: maximumUnresolvedComments,
 		reviewTimeout:             reviewTimeout - completionTimeout,
 		checkCompletionTimeout:    completionTimeout,
+		now:                       now,
 		logger:                    logger,
 	}
 }
@@ -185,6 +191,7 @@ func (service *Service) runLocked(
 ) (runErr error) {
 	logger := gklog.L(ctx)
 	head := job.Head
+	startedAt := service.now()
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -269,7 +276,7 @@ func (service *Service) runLocked(
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureAnalysis, err)
 	}
 
-	return service.publish(ctx, job, head, checkRun, reviews, threads, analysis)
+	return service.publish(ctx, job, head, checkRun, reviews, threads, analysis, startedAt)
 }
 
 func logAnalysis(ctx context.Context, analysis Analysis) error {
@@ -303,6 +310,7 @@ func (service *Service) publish(
 	reviews []githubapp.Review,
 	threads []githubapp.ReviewThread,
 	analysis Analysis,
+	startedAt time.Time,
 ) error {
 	logger := gklog.L(ctx)
 	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
@@ -330,7 +338,23 @@ func (service *Service) publish(
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureRender, err)
 	}
 
-	body, err := service.prepareReviewBody(ctx, job, reviews, head, analysis.Decision)
+	summary := Summary{
+		Head:              head,
+		Decision:          analysis.Decision,
+		Models:            analysis.Models,
+		Duration:          service.now().Sub(startedAt),
+		FilesReviewed:     analysis.FilesReviewed,
+		Chunks:            analysis.Chunks,
+		CoverageComplete:  analysis.CoverageComplete,
+		MinimumImportance: service.minimumImportance,
+		Observed:          analysis.Observed,
+		Eligible:          analysis.Anchored,
+		Published:         publishedFindings,
+		PriorReviews:      traceReviews(reviews, service.botLogin),
+		Threads:           traceThreads(threads, service.botLogin),
+	}
+
+	body, err := service.prepareReviewBody(ctx, job, reviews, summary)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, checkFailureSummary, err)
 	}
@@ -359,14 +383,7 @@ func (service *Service) publish(
 		slog.Bool("visible_body", true),
 	)
 
-	title, summary := successfulCheckOutput(
-		service.minimumImportance,
-		analysis,
-		publishedFindings,
-		traceReviews(reviews, service.botLogin),
-		traceThreads(threads, service.botLogin),
-	)
-	if err := service.succeed(ctx, job, checkRun.ID, title, summary); err != nil {
+	if err := service.succeed(ctx, job, checkRun.ID, summary.Title(), RenderDetails(summary)); err != nil {
 		return err
 	}
 	logger.InfoContext(ctx, "review job completed", slog.Int64("check_run_id", checkRun.ID))
@@ -440,33 +457,6 @@ func (service *Service) succeed(
 		return fmt.Errorf("complete check run: %w", err)
 	}
 	return nil
-}
-
-func successfulCheckOutput(
-	minimumImportance int,
-	analysis Analysis,
-	publishedFindings []domain.Finding,
-	reviews []reviewTrace,
-	threads []threadTrace,
-) (string, string) {
-	title := "Approved"
-	if analysis.Decision == domain.ReviewDecisionRequestChanges {
-		title = "Changes requested"
-	}
-
-	var summary strings.Builder
-	fmt.Fprintf(&summary, "Decision: `%s`\n\n", analysis.Decision)
-	fmt.Fprintf(&summary, "- Minimum importance: `%d`\n", minimumImportance)
-	fmt.Fprintf(&summary, "- Findings observed: `%d`\n", len(analysis.Observed))
-	fmt.Fprintf(&summary, "- Observed importance: %s\n", formatFindingImportances(analysis.Observed))
-	fmt.Fprintf(&summary, "- Findings eligible: `%d`\n", len(analysis.Anchored))
-	fmt.Fprintf(&summary, "- Eligible importance: %s\n", formatFindingImportances(analysis.Anchored))
-	fmt.Fprintf(&summary, "- Inline findings published: `%d`\n", len(publishedFindings))
-	fmt.Fprintf(&summary, "- Published importance: %s\n", formatFindingImportances(publishedFindings))
-	fmt.Fprintf(&summary, "- Prior bot review IDs: %s\n", formatReviewTraceIDs(reviews))
-	fmt.Fprintf(&summary, "- Bot thread IDs: %s\n", formatThreadTraceIDs(threads))
-	fmt.Fprintf(&summary, "- Bot threads resolved at analysis: `%d`", countResolvedThreadTraces(threads))
-	return title, summary.String()
 }
 
 func formatFindingImportances(findings []domain.Finding) string {
@@ -614,16 +604,15 @@ func (service *Service) prepareReviewBody(
 	ctx context.Context,
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
-	head domain.HeadSHA,
-	decision domain.ReviewDecision,
+	summary Summary,
 ) (string, error) {
-	body := RenderBody(head, decision)
+	body := RenderBody(summary)
 	updated, err := service.updateSummaryReview(ctx, job, reviews, body)
 	if err != nil {
 		return "", err
 	}
 	if updated {
-		return marker.Review(head), nil
+		return marker.Review(summary.Head), nil
 	}
 	return body, nil
 }

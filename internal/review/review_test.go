@@ -34,7 +34,32 @@ const (
 	testPRNumber          = 7
 	testMinimumImportance = 7
 	testBotLogin          = "test-review-agent[bot]"
+	testReviewModel       = "fixture-review-model"
 )
+
+// testClock advances a fixed amount on every read, so a rendered duration is
+// deterministic without any sleeping.
+func testClock(step time.Duration) func() time.Time {
+	current := time.Unix(1_700_000_000, 0).UTC()
+	return func() time.Time {
+		now := current
+		current = current.Add(step)
+		return now
+	}
+}
+
+func testSummary() review.Summary {
+	return review.Summary{
+		Head:              domain.HeadSHA(testHeadSHA),
+		Decision:          domain.ReviewDecisionApprove,
+		Models:            []string{testReviewModel},
+		Duration:          8 * time.Second,
+		FilesReviewed:     3,
+		Chunks:            1,
+		CoverageComplete:  true,
+		MinimumImportance: 9,
+	}
+}
 
 func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 	t.Run("no findings", func(t *testing.T) {
@@ -75,7 +100,7 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 	})
 }
 
-func TestRenderBodyIsOneShortSummaryAndMarker(t *testing.T) {
+func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	tests := []struct {
 		name     string
@@ -87,12 +112,94 @@ func TestRenderBodyIsOneShortSummaryAndMarker(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			body := review.RenderBody(head, test.decision)
-			want := "## Review\n\n" + test.message + "\n\n" + marker.Summary() + "\n" + marker.Review(head)
+			summary := testSummary()
+			summary.Decision = test.decision
+			body := review.RenderBody(summary)
+			want := "## Review\n\n" + test.message + "\n\n" +
+				review.RenderDetails(summary) + "\n\n" +
+				marker.Summary() + "\n" + marker.Review(head)
 			if body != want {
 				t.Fatalf("body = %q, want %q", body, want)
 			}
 		})
+	}
+}
+
+func TestRenderDetailsReportsEveryReviewStatistic(t *testing.T) {
+	summary := testSummary()
+	summary.Observed = []domain.Finding{{Importance: 8}, {Importance: 10}}
+	summary.Eligible = []domain.Finding{{Importance: 10}}
+	summary.Published = []domain.Finding{{Importance: 10}}
+	summary.PriorReviews = nil
+	summary.Threads = nil
+
+	details := review.RenderDetails(summary)
+	for _, want := range []string{
+		"<details>",
+		"<summary>Review details</summary>",
+		"| Model | `" + testReviewModel + "` |",
+		"| Duration | `8` seconds |",
+		"| Head | `a3c4f1c` |",
+		"| Files reviewed | `3` |",
+		"| Diff chunks | `1` |",
+		"| Coverage complete | yes |",
+		"| Minimum importance | `9` |",
+		"| Findings observed | `2` at importance `8`, `10` |",
+		"| Findings eligible | `1` at importance `10` |",
+		"| Findings published inline | `1` at importance `10` |",
+		"| Prior bot review IDs | none |",
+		"| Bot thread IDs | none |",
+		"| Bot threads resolved | `0` |",
+		"</details>",
+	} {
+		if !strings.Contains(details, want) {
+			t.Fatalf("details missing %q:\n%s", want, details)
+		}
+	}
+}
+
+func TestRenderDetailsNamesEveryModelThatAnswered(t *testing.T) {
+	summary := testSummary()
+	summary.Models = []string{"gpt-5.6-sol", "gpt-5.4-nano"}
+
+	details := review.RenderDetails(summary)
+	if !strings.Contains(details, "| Model | `gpt-5.6-sol`, `gpt-5.4-nano` |") {
+		t.Fatalf("details = %q, want both models", details)
+	}
+}
+
+func TestRenderDetailsReportsAnUnknownModelWhenNoneAnswered(t *testing.T) {
+	summary := testSummary()
+	summary.Models = nil
+
+	if !strings.Contains(review.RenderDetails(summary), "| Model | unknown |") {
+		t.Fatalf("details = %q, want an unknown model", review.RenderDetails(summary))
+	}
+}
+
+func TestRenderDetailsWritesOneSecondWithoutAPlural(t *testing.T) {
+	summary := testSummary()
+	summary.Duration = 1400 * time.Millisecond
+
+	if !strings.Contains(review.RenderDetails(summary), "| Duration | `1` second |") {
+		t.Fatalf("details = %q, want one second", review.RenderDetails(summary))
+	}
+}
+
+// A finding marker inside the summary body would be read back by
+// collectPublicationState and would silence that finding forever.
+func TestRenderBodyCarriesTheRequiredMarkersAndNoFindingMarker(t *testing.T) {
+	body := review.RenderBody(testSummary())
+
+	if !marker.HasSummary(body) {
+		t.Fatalf("body = %q, want the summary marker", body)
+	}
+	head, found := marker.FindReview(body)
+	if !found || head != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("body = %q, want the review marker for the head", body)
+	}
+	if _, found := marker.FindFinding(body); found {
+		t.Fatalf("body = %q, want no finding marker", body)
 	}
 }
 
@@ -207,7 +314,7 @@ func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 		}},
 	}
 
-	body := review.RenderBody(head, domain.ReviewDecisionApprove)
+	body := review.RenderBody(testSummary())
 	if containsTypographicDash(body) {
 		t.Fatalf("review body still contains typographic dash: %q", body)
 	}
@@ -426,35 +533,57 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 
 type sequenceModel struct {
 	results   []domain.ReviewResult
+	models    []string
 	prompts   []string
 	callCount int
 	err       error
 }
 
-func (model *sequenceModel) Review(_ context.Context, prompt string) (domain.ReviewResult, error) {
+func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Completion, error) {
 	model.prompts = append(model.prompts, prompt)
 	if model.err != nil {
-		return domain.ReviewResult{}, model.err
+		return review.Completion{}, model.err
 	}
 	if model.callCount >= len(model.results) {
-		return domain.ReviewResult{}, errors.New("unexpected model call")
+		return review.Completion{}, errors.New("unexpected model call")
 	}
 	result := model.results[model.callCount]
+	name := testReviewModel
+	if model.callCount < len(model.models) {
+		name = model.models[model.callCount]
+	}
 	model.callCount++
-	return result, nil
+	return review.Completion{Result: result, Model: name}, nil
 }
 
 type contextBlockingModel struct{}
 
-func (contextBlockingModel) Review(ctx context.Context, _ string) (domain.ReviewResult, error) {
+func (contextBlockingModel) Review(ctx context.Context, _ string) (review.Completion, error) {
 	<-ctx.Done()
-	return domain.ReviewResult{}, ctx.Err()
+	return review.Completion{}, ctx.Err()
 }
 
 type panicModel struct{}
 
-func (panicModel) Review(context.Context, string) (domain.ReviewResult, error) {
+func (panicModel) Review(context.Context, string) (review.Completion, error) {
 	panic("model panic")
+}
+
+// assertCheckAndCommentShareDetails proves the comment and the check run render
+// from one source, so the two can never report different numbers.
+func assertCheckAndCommentShareDetails(t *testing.T, fixture *serviceFixture, body string) {
+	t.Helper()
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("check output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	details, ok := output["summary"].(string)
+	if !ok || !strings.HasPrefix(details, "<details>") {
+		t.Fatalf("check summary = %v, want the rendered detail block", output["summary"])
+	}
+	if !strings.Contains(body, details) {
+		t.Fatalf("comment body does not carry the check run detail block\nbody:\n%s\ncheck:\n%s", body, details)
+	}
 }
 
 func containsTypographicDash(value string) bool {
@@ -492,10 +621,17 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
 	}
-	wantBody := review.RenderBody(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionApprove)
-	if fixture.state.lastSubmitReview["body"] != wantBody {
-		t.Fatalf("body = %v, want %q", fixture.state.lastSubmitReview["body"], wantBody)
+	body, ok := fixture.state.lastSubmitReview["body"].(string)
+	if !ok {
+		t.Fatalf("body = %v, want string", fixture.state.lastSubmitReview["body"])
 	}
+	if !strings.HasPrefix(body, "## Review\n\nNo severe findings.\n\n") {
+		t.Fatalf("body = %q, want the verdict first", body)
+	}
+	if !strings.Contains(body, "| Model | `"+testReviewModel+"` |") {
+		t.Fatalf("body = %q, want the model that answered", body)
+	}
+	assertCheckAndCommentShareDetails(t, fixture, body)
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
@@ -511,26 +647,21 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 		t.Fatalf("title = %v, want Approved", output["title"])
 	}
 	summary, ok := output["summary"].(string)
-	if !ok || !strings.Contains(summary, "Minimum importance: `9`") {
-		t.Fatalf("summary = %v, want configured minimum importance", output["summary"])
+	if !ok {
+		t.Fatalf("summary = %v, want string", output["summary"])
 	}
-	if !strings.Contains(summary, "Findings observed: `1`") {
-		t.Fatalf("summary = %v, want observed finding count", output["summary"])
-	}
-	if !strings.Contains(summary, "Observed importance: `8`") {
-		t.Fatalf("summary = %v, want observed importance", output["summary"])
-	}
-	if !strings.Contains(summary, "Findings eligible: `0`") {
-		t.Fatalf("summary = %v, want eligible finding count", output["summary"])
-	}
-	if !strings.Contains(summary, "Eligible importance: none") {
-		t.Fatalf("summary = %v, want eligible importance", output["summary"])
-	}
-	if !strings.Contains(summary, "Prior bot review IDs: none") {
-		t.Fatalf("summary = %v, want loaded review identifiers", output["summary"])
-	}
-	if !strings.Contains(summary, "Bot thread IDs: none") {
-		t.Fatalf("summary = %v, want loaded thread identifiers", output["summary"])
+	for _, want := range []string{
+		"| Minimum importance | `9` |",
+		"| Findings observed | `1` at importance `8` |",
+		"| Findings eligible | `0` |",
+		"| Findings published inline | `0` |",
+		"| Prior bot review IDs | none |",
+		"| Bot thread IDs | none |",
+		"| Files reviewed | `1` |",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
 	}
 	if fixture.state.checkDetailsURL != "https://github.com/owner/repo" {
 		t.Fatalf("details URL = %q, want repository URL", fixture.state.checkDetailsURL)
@@ -1121,12 +1252,15 @@ type failThenSucceedModel struct {
 	calls int
 }
 
-func (model *failThenSucceedModel) Review(context.Context, string) (domain.ReviewResult, error) {
+func (model *failThenSucceedModel) Review(context.Context, string) (review.Completion, error) {
 	model.calls++
 	if model.calls == 1 {
-		return domain.ReviewResult{}, model.err
+		return review.Completion{}, model.err
 	}
-	return domain.ReviewResult{CoverageComplete: true, Findings: nil}, nil
+	return review.Completion{
+		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
+		Model:  testReviewModel,
+	}, nil
 }
 
 // quotaExhaustedError mimics the provider error shape for exhausted usage.
@@ -1417,7 +1551,7 @@ func newSerialGateModel() *serialGateModel {
 	}
 }
 
-func (model *serialGateModel) Review(context.Context, string) (domain.ReviewResult, error) {
+func (model *serialGateModel) Review(context.Context, string) (review.Completion, error) {
 	model.mu.Lock()
 	model.active++
 	model.calls++
@@ -1432,8 +1566,9 @@ func (model *serialGateModel) Review(context.Context, string) (domain.ReviewResu
 	model.active--
 	model.mu.Unlock()
 
-	return domain.ReviewResult{
-		CoverageComplete: true,
+	return review.Completion{
+		Result: domain.ReviewResult{CoverageComplete: true},
+		Model:  testReviewModel,
 	}, nil
 }
 
@@ -1581,6 +1716,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		minimumImportance,
 		maximumUnresolvedComments,
 		10*time.Minute,
+		testClock(8*time.Second),
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 
