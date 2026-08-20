@@ -24,7 +24,6 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
-	reviewcore "goodkind.io/pr-review-agent/internal/review"
 )
 
 const (
@@ -304,10 +303,7 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", review["event"])
 	}
-	wantBody := reviewcore.RenderBody(domain.HeadSHA(testDefectiveHead), domain.ReviewDecisionApprove)
-	if review["body"] != wantBody {
-		t.Fatalf("body = %v, want %q", review["body"], wantBody)
-	}
+	assertReviewBody(t, review["body"], "No severe findings.", testDefectiveHead)
 	comments, ok := review["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", review["comments"])
@@ -627,10 +623,12 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 	if fixture.githubState.summaryReviewCount() != 1 {
 		t.Fatalf("summary review count = %d, want 1", fixture.githubState.summaryReviewCount())
 	}
-	wantBody := reviewcore.RenderBody(domain.HeadSHA(testCorrectedHead), domain.ReviewDecisionRequestChanges)
-	if fixture.githubState.summaryReviewBody() != wantBody {
-		t.Fatalf("summary body = %q, want current findings body", fixture.githubState.summaryReviewBody())
-	}
+	assertReviewBody(
+		t,
+		fixture.githubState.summaryReviewBody(),
+		"Severe findings are listed inline.",
+		testCorrectedHead,
+	)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -778,10 +776,12 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if approval["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
 		t.Fatalf("approval body = %v, want hidden marker", approval["body"])
 	}
-	wantSummary := reviewcore.RenderBody(domain.HeadSHA(testCorrectedHead), domain.ReviewDecisionApprove)
-	if fixture.githubState.summaryReviewBody() != wantSummary {
-		t.Fatalf("summary body = %q, want %q", fixture.githubState.summaryReviewBody(), wantSummary)
-	}
+	assertReviewBody(
+		t,
+		fixture.githubState.summaryReviewBody(),
+		"No severe findings.",
+		testCorrectedHead,
+	)
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
 		t.Fatalf("resolve count = %d, want 1", fixture.githubState.resolveCallCount())
@@ -1971,6 +1971,31 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+// assertReviewBody checks the published comment leads with the verdict, carries
+// the review details, and keeps the markers the service reads back.
+func assertReviewBody(t *testing.T, value any, verdict string, head string) {
+	t.Helper()
+	body, ok := value.(string)
+	if !ok {
+		t.Fatalf("body = %v, want string", value)
+	}
+	if !strings.HasPrefix(body, "## Review\n\n"+verdict+"\n\n") {
+		t.Fatalf("body = %q, want the verdict %q first", body, verdict)
+	}
+	if !strings.Contains(body, "<summary>Review details</summary>") {
+		t.Fatalf("body = %q, want the review details", body)
+	}
+	if !strings.Contains(body, "| Model | `"+testReviewModel+"` |") {
+		t.Fatalf("body = %q, want the model that answered", body)
+	}
+	if !marker.HasSummary(body) {
+		t.Fatalf("body = %q, want the summary marker", body)
+	}
+	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
+		t.Fatalf("body = %q, want the review marker for %s", body, head)
+	}
 }
 
 func writeCompletionStream(writer http.ResponseWriter, content string) {

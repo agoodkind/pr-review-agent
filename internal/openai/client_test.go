@@ -398,8 +398,12 @@ func TestReconcileRejectsDuplicateThreadIDs(t *testing.T) {
 func TestFallbackStaysUnusedWhenThePrimaryAnswers(t *testing.T) {
 	fixture := newFallbackTestClient(t, false)
 
-	if _, err := fixture.client.Review(context.Background(), "prompt"); err != nil {
+	completion, err := fixture.client.Review(context.Background(), "prompt")
+	if err != nil {
 		t.Fatalf("Review: %v", err)
+	}
+	if completion.Model != testPrimaryModel {
+		t.Fatalf("model = %q, want the primary model %q", completion.Model, testPrimaryModel)
 	}
 	if fixture.primary.requestCount != 1 {
 		t.Fatalf("primary request count = %d, want 1", fixture.primary.requestCount)
@@ -414,12 +418,15 @@ func TestFallbackAnswersWhenThePrimaryReportsExhaustedUsage(t *testing.T) {
 	fixture.primary.statusSequence = []int{http.StatusBadRequest}
 	fixture.primary.errorPayload = gatewayUsageExceededPayload()
 
-	result, err := fixture.client.Review(context.Background(), "prompt")
+	completion, err := fixture.client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	if !result.CoverageComplete {
-		t.Fatalf("result = %+v, want the fallback result", result)
+	if !completion.Result.CoverageComplete {
+		t.Fatalf("result = %+v, want the fallback result", completion.Result)
+	}
+	if completion.Model != testFallbackModel {
+		t.Fatalf("model = %q, want the fallback model %q", completion.Model, testFallbackModel)
 	}
 	if fixture.fallback.requestCount != 1 {
 		t.Fatalf("fallback request count = %d, want 1", fixture.fallback.requestCount)

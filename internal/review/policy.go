@@ -40,9 +40,15 @@ func WrapUntrusted(body string) string {
 	return promptInputBegin + "\n" + body + "\n" + promptInputEnd
 }
 
+// Completion is one model answer and the model that produced it.
+type Completion struct {
+	Result domain.ReviewResult
+	Model  string
+}
+
 // Model performs one structured review completion for a chunk prompt.
 type Model interface {
-	Review(context.Context, string) (domain.ReviewResult, error)
+	Review(context.Context, string) (Completion, error)
 }
 
 // Analysis is the aggregated result of every review chunk.
@@ -51,6 +57,9 @@ type Analysis struct {
 	Observed         []domain.Finding
 	Anchored         []domain.Finding
 	Decision         domain.ReviewDecision
+	FilesReviewed    int
+	Chunks           int
+	Models           []string
 }
 
 // DecisionFor requests changes only when a finding meets the configured level.

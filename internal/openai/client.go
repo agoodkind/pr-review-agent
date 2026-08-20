@@ -100,9 +100,10 @@ func newProviderSDK(
 	return openaigo.NewClient(opts...)
 }
 
-// Review requests one structured review completion.
-func (client *Client) Review(ctx context.Context, prompt string) (domain.ReviewResult, error) {
-	content, err := client.complete(
+// Review requests one structured review completion and reports the model that
+// served it, which is the fallback model whenever the primary refused.
+func (client *Client) Review(ctx context.Context, prompt string) (review.Completion, error) {
+	content, model, err := client.complete(
 		ctx,
 		prompt,
 		review.PolicyHeader(client.minimumImportance),
@@ -110,22 +111,22 @@ func (client *Client) Review(ctx context.Context, prompt string) (domain.ReviewR
 		reviewSchemaJSON,
 	)
 	if err != nil {
-		return domain.ReviewResult{}, err
+		return review.Completion{}, err
 	}
 	var result domain.ReviewResult
 	decoder := json.NewDecoder(strings.NewReader(content))
 	if err := decoder.Decode(&result); err != nil {
-		return domain.ReviewResult{}, errors.New("decode structured output: " + err.Error())
+		return review.Completion{}, errors.New("decode structured output: " + err.Error())
 	}
 	if err := result.Validate(); err != nil {
-		return domain.ReviewResult{}, errors.New("validate review result: " + err.Error())
+		return review.Completion{}, errors.New("validate review result: " + err.Error())
 	}
-	return result, nil
+	return review.Completion{Result: result, Model: model}, nil
 }
 
 // Reconcile requests one structured thread reconciliation completion.
 func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.ThreadResolution, error) {
-	content, err := client.complete(
+	content, _, err := client.complete(
 		ctx,
 		prompt,
 		review.ReconciliationPolicy(),
@@ -150,21 +151,21 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 
 // complete sends one request to the primary provider and repeats it against the
 // fallback when the primary refusal matches the declared fallback condition.
-// It keeps no memory of a refusal, so the primary is used again as soon as it
-// recovers.
+// It returns the content and the model that produced it. It keeps no memory of
+// a refusal, so the primary is used again as soon as it recovers.
 func (client *Client) complete(
 	ctx context.Context,
 	prompt string,
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-) (string, error) {
+) (string, string, error) {
 	content, primaryErr := client.completeWith(ctx, client.primary, prompt, policy, schemaName, schema)
 	if primaryErr == nil {
-		return content, nil
+		return content, client.primary.model, nil
 	}
 	if !client.shouldUseFallback(primaryErr) {
-		return "", primaryErr
+		return "", "", primaryErr
 	}
 
 	logger := gklog.L(ctx)
@@ -175,9 +176,9 @@ func (client *Client) complete(
 	)
 	content, fallbackErr := client.completeWith(ctx, *client.fallback, prompt, policy, schemaName, schema)
 	if fallbackErr != nil {
-		return "", errors.Join(primaryErr, fallbackErr)
+		return "", "", errors.Join(primaryErr, fallbackErr)
 	}
-	return content, nil
+	return content, client.fallback.model, nil
 }
 
 // shouldUseFallback reports whether this failure is the declared condition for
