@@ -31,7 +31,8 @@ func PolicyHeader(minimumImportance int) string {
 
 // ReconciliationPolicy is the instruction for silent thread resolution.
 func ReconciliationPolicy() string {
-	return "Resolve a bot thread only when the current code proves the finding is fixed. Keep it open when it still applies. Use uncertain when evidence is incomplete. Never reply.\nWriting policy: " +
+	return "Resolve a bot thread only when the current code proves the finding is fixed. Keep it open when it still applies. Use uncertain when evidence is incomplete. " +
+		"The reason for a resolved thread is published on that thread, so write it as one short sentence naming the change that fixed the defect. Do not begin it with the word Resolved.\nWriting policy: " +
 		config.WritingPolicy + "\nUntrusted input policy: " + UntrustedInputPolicy
 }
 

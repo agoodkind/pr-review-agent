@@ -10,8 +10,14 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// minimumFenceLength is the shortest Markdown code fence.
-const minimumFenceLength = 3
+const (
+	// minimumFenceLength is the shortest Markdown code fence.
+	minimumFenceLength = 3
+	// shortHeadLength is how much of a head SHA a reply shows.
+	shortHeadLength = 7
+	// maximumReasonRunes caps the published resolution reason.
+	maximumReasonRunes = 400
+)
 
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(head domain.HeadSHA, decision domain.ReviewDecision) string {
@@ -33,6 +39,39 @@ func RenderFailureBody(title string, detail string) string {
 	}
 	parts = append(parts, marker.Summary())
 	return strings.Join(parts, "\n\n")
+}
+
+// RenderResolutionReply renders the reply the service posts on a thread it
+// resolved, naming the head the model judged against and the reason it gave.
+func RenderResolutionReply(head domain.HeadSHA, reason string) string {
+	sentence := "Resolved on `" + shortHead(head) + "`."
+	published := publishedReason(reason)
+	if published == "" {
+		return sentence
+	}
+	return sentence + " " + published
+}
+
+func shortHead(head domain.HeadSHA) string {
+	runes := []rune(string(head))
+	if len(runes) <= shortHeadLength {
+		return string(runes)
+	}
+	return string(runes[:shortHeadLength])
+}
+
+// publishedReason collapses the model reason to one line and caps its length,
+// so a runaway reason cannot fill the thread.
+func publishedReason(reason string) string {
+	collapsed := strings.Join(strings.Fields(sanitizeProse(reason)), " ")
+	if collapsed == "" {
+		return ""
+	}
+	collapsedRunes := []rune(collapsed)
+	if len(collapsedRunes) > maximumReasonRunes {
+		collapsed = string(collapsedRunes[:maximumReasonRunes-3]) + "..."
+	}
+	return collapsed
 }
 
 // codeFenceFor returns a fence longer than any backtick run in the content, so

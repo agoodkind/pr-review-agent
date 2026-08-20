@@ -129,6 +129,59 @@ func TestRenderFailureBodyFencesTheCauseAndOmitsTheReviewMarker(t *testing.T) {
 	})
 }
 
+// typographicDashRunes are the dash code points the writing policy bans from
+// published prose. They are code points rather than literals so this file
+// carries none of them.
+var typographicDashRunes = []rune{0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212}
+
+func TestRenderResolutionReplyNamesTheHeadAndCarriesTheReason(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+
+	t.Run("short head and reason", func(t *testing.T) {
+		body := review.RenderResolutionReply(head, "The bound check now rejects oversized offsets.")
+		want := "Resolved on `a3c4f1c`. The bound check now rejects oversized offsets."
+		if body != want {
+			t.Fatalf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("collapses whitespace", func(t *testing.T) {
+		body := review.RenderResolutionReply(head, "  The bound\n\tcheck  is present.  ")
+		want := "Resolved on `a3c4f1c`. The bound check is present."
+		if body != want {
+			t.Fatalf("body = %q, want %q", body, want)
+		}
+	})
+
+	t.Run("replaces every typographic dash", func(t *testing.T) {
+		for _, dash := range typographicDashRunes {
+			reason := "The caller " + string(dash) + " now bounded " + string(dash) + " is safe."
+			body := review.RenderResolutionReply(head, reason)
+			if strings.ContainsRune(body, dash) {
+				t.Fatalf("body = %q, want dash %U replaced", body, dash)
+			}
+		}
+	})
+
+	t.Run("caps a runaway reason", func(t *testing.T) {
+		body := review.RenderResolutionReply(head, strings.Repeat("word ", 400))
+		if len([]rune(body)) > 500 {
+			t.Fatalf("body length = %d runes, want the reason capped", len([]rune(body)))
+		}
+		if !strings.HasSuffix(body, "...") {
+			t.Fatalf("body = %q, want a truncation marker", body)
+		}
+	})
+
+	t.Run("empty reason still names the head", func(t *testing.T) {
+		body := review.RenderResolutionReply(head, "   ")
+		want := "Resolved on `a3c4f1c`."
+		if body != want {
+			t.Fatalf("body = %q, want %q", body, want)
+		}
+	})
+}
+
 func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	findings := []domain.Finding{{
@@ -1504,10 +1557,6 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if strings.Contains(request.URL.Path, "/issues/comments") {
 			http.Error(writer, "issue comments forbidden", http.StatusForbidden)
-			return
-		}
-		if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
-			http.Error(writer, "replies forbidden", http.StatusForbidden)
 			return
 		}
 		handleServiceRequest(writer, request, state)

@@ -109,6 +109,10 @@ type resolveReviewThreadVariables struct {
 	ThreadID string `json:"threadID"`
 }
 
+type replyToReviewThreadBody struct {
+	Body string `json:"body"`
+}
+
 type reviewThreadsVariables struct {
 	Owner  string  `json:"owner"`
 	Repo   string  `json:"repo"`
@@ -207,6 +211,25 @@ func (client *Client) ResolveReviewThread(
 		return errors.New("resolve review thread did not mark thread resolved")
 	}
 	return nil
+}
+
+// ReplyToReviewThread posts one reply under the root comment of a review thread.
+func (client *Client) ReplyToReviewThread(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	number int,
+	rootCommentID int64,
+	body string,
+) error {
+	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/comments/%d/replies", number, rootCommentID))
+	encoded, err := json.Marshal(replyToReviewThreadBody{Body: body})
+	if err != nil {
+		client.logger.ErrorContext(ctx, "marshal review thread reply body", slog.String("err", err.Error()))
+		return errors.New("marshal review thread reply body")
+	}
+	_, err = client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	return err
 }
 
 func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
