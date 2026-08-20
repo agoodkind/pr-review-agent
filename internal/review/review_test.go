@@ -23,6 +23,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/review"
 )
@@ -327,6 +328,142 @@ func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 		if containsTypographicDash(comment.Body) {
 			t.Fatalf("inline body still contains typographic dash: %q", comment.Body)
 		}
+	}
+}
+
+// truncatedModel truncates the first calls, then answers. It reproduces a model
+// that reaches its completion budget on a chunk carrying too many hunks.
+type truncatedModel struct {
+	truncateCalls int
+	prompts       []string
+	calls         int
+	findings      []domain.Finding
+}
+
+func (model *truncatedModel) Review(_ context.Context, prompt string) (review.Completion, error) {
+	model.calls++
+	model.prompts = append(model.prompts, prompt)
+	if model.calls <= model.truncateCalls {
+		return review.Completion{}, &openai.TruncatedError{Model: testReviewModel}
+	}
+	return review.Completion{
+		Result: domain.ReviewResult{CoverageComplete: true, Findings: model.findings},
+		Model:  testReviewModel,
+	}, nil
+}
+
+// multiHunkInput builds one file whose patch has four hunks, so its chunk can
+// split twice before reaching the one hunk floor.
+func multiHunkInput(t *testing.T) diff.ReviewInput {
+	t.Helper()
+	patch := strings.Join([]string{
+		"@@ -1,2 +1,3 @@",
+		" package main",
+		"+added1",
+		"@@ -20,2 +21,3 @@",
+		" func b() {}",
+		"+added2",
+		"@@ -40,2 +41,3 @@",
+		" func c() {}",
+		"+added3",
+		"@@ -60,2 +61,3 @@",
+		" func d() {}",
+		"+added4",
+	}, "\n")
+	changed, hunks, err := diff.ChangedRightLines(patch)
+	if err != nil {
+		t.Fatalf("ChangedRightLines: %v", err)
+	}
+	return diff.ReviewInput{
+		PullRequest: githubapp.PullRequest{Head: domain.HeadSHA(testHeadSHA)},
+		Files: []diff.FileContext{{
+			Path:              "main.go",
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    "package main\nadded1\nadded2\nadded3\nadded4\n",
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		}},
+	}
+}
+
+func TestAnalyzeSplitsAndRetriesATruncatedChunk(t *testing.T) {
+	input := multiHunkInput(t)
+	model := &truncatedModel{
+		truncateCalls: 1,
+		findings: []domain.Finding{{
+			Path:       "main.go",
+			StartLine:  2,
+			EndLine:    2,
+			Title:      "Defect",
+			Body:       "The changed line breaks behavior.",
+			Importance: 9,
+		}},
+	}
+
+	analysis, err := review.Analyze(context.Background(), model, input, 9)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if model.calls != 3 {
+		t.Fatalf("model calls = %d, want 3: one truncated, then both halves", model.calls)
+	}
+	if len(analysis.Anchored) != 1 {
+		t.Fatalf("anchored = %d, want the finding recovered from the halves", len(analysis.Anchored))
+	}
+	if !analysis.CoverageComplete {
+		t.Fatal("CoverageComplete = false, want true because every hunk was reviewed")
+	}
+}
+
+func TestAnalyzeKeepsSplittingWhileTheAnswerTruncates(t *testing.T) {
+	input := multiHunkInput(t)
+	model := &truncatedModel{truncateCalls: 2}
+
+	analysis, err := review.Analyze(context.Background(), model, input, 9)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	// Four hunks: the whole chunk truncates, its first half truncates again,
+	// then both single hunks answer, then the second half answers.
+	if model.calls != 5 {
+		t.Fatalf("model calls = %d, want 5 as the split recurses twice", model.calls)
+	}
+	if !analysis.CoverageComplete {
+		t.Fatal("CoverageComplete = false, want true because every hunk was eventually reviewed")
+	}
+}
+
+func TestAnalyzeSkipsAHunkThatCannotSplitAndReportsIncompleteCoverage(t *testing.T) {
+	input := multiHunkInput(t)
+	model := &truncatedModel{truncateCalls: 1000}
+
+	analysis, err := review.Analyze(context.Background(), model, input, 9)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if analysis.CoverageComplete {
+		t.Fatal("CoverageComplete = true, want false after skipping unsplittable hunks")
+	}
+	if len(analysis.Observed) != 0 {
+		t.Fatalf("observed = %d, want none", len(analysis.Observed))
+	}
+}
+
+func TestAnalyzeFailsOnAnErrorThatSplittingCannotFix(t *testing.T) {
+	input := multiHunkInput(t)
+	model := &sequenceModel{err: errors.New("provider refused the prompt")}
+
+	_, err := review.Analyze(context.Background(), model, input, 9)
+	if err == nil {
+		t.Fatal("Analyze: want the provider error")
+	}
+	if !strings.Contains(err.Error(), "provider refused the prompt") {
+		t.Fatalf("err = %q, want the provider cause", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model calls = %d, want 1 because splitting cannot fix a refusal", len(model.prompts))
 	}
 }
 

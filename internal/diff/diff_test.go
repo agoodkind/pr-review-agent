@@ -462,6 +462,104 @@ func testRef() domain.PullRequestRef {
 	}
 }
 
+func TestChunkSplitDividesHunksAndKeepsEveryLine(t *testing.T) {
+	patch := strings.Join([]string{
+		"@@ -1,2 +1,3 @@",
+		" package main",
+		"+added1",
+		"@@ -20,2 +21,3 @@",
+		" func b() {}",
+		"+added2",
+		"@@ -40,2 +41,3 @@",
+		" func c() {}",
+		"+added3",
+	}, "\n")
+	changed, hunks, err := diff.ChangedRightLines(patch)
+	if err != nil {
+		t.Fatalf("ChangedRightLines: %v", err)
+	}
+
+	chunks, err := diff.ChunkInput(diff.ReviewInput{
+		PullRequest: testPullRequest(),
+		Files: []diff.FileContext{{
+			Path:              "main.go",
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    "package main\n",
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		}},
+	}, 1_000_000)
+	if err != nil {
+		t.Fatalf("ChunkInput: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("chunk count = %d, want 1", len(chunks))
+	}
+	whole := chunks[0]
+	if len(whole.Pieces) != 3 {
+		t.Fatalf("pieces = %d, want one per hunk", len(whole.Pieces))
+	}
+
+	first, second, ok := whole.Split()
+	if !ok {
+		t.Fatal("Split() reported false for a chunk with three hunks")
+	}
+	if len(first.Pieces)+len(second.Pieces) != len(whole.Pieces) {
+		t.Fatalf("halves hold %d and %d pieces, want %d together",
+			len(first.Pieces), len(second.Pieces), len(whole.Pieces))
+	}
+	for _, piece := range whole.Pieces {
+		if !strings.Contains(first.Text, piece.Text) && !strings.Contains(second.Text, piece.Text) {
+			t.Fatalf("a hunk was lost by the split: %q", piece.Text)
+		}
+	}
+	if first.Index != whole.Index || second.Total != whole.Total {
+		t.Fatal("the halves lost the parent chunk position")
+	}
+}
+
+func TestChunkSplitStopsAtOneHunk(t *testing.T) {
+	single := diff.Chunk{
+		Index:            1,
+		Total:            1,
+		Text:             "one hunk",
+		Pieces:           []diff.Piece{{Path: "main.go", Text: "one hunk", CoverageComplete: true}},
+		Paths:            []string{"main.go"},
+		CoverageComplete: true,
+	}
+
+	if _, _, ok := single.Split(); ok {
+		t.Fatal("Split() reported true for a chunk holding one hunk")
+	}
+}
+
+func TestChunkSplitCarriesIncompleteCoverage(t *testing.T) {
+	chunk := diff.Chunk{
+		Index: 1,
+		Total: 1,
+		Text:  "a\nb",
+		Pieces: []diff.Piece{
+			{Path: "a.go", Text: "a", CoverageComplete: true},
+			{Path: "b.go", Text: "b", CoverageComplete: false},
+		},
+		Paths:            []string{"a.go", "b.go"},
+		CoverageComplete: false,
+	}
+
+	first, second, ok := chunk.Split()
+	if !ok {
+		t.Fatal("Split() reported false for a chunk with two hunks")
+	}
+	if !first.CoverageComplete {
+		t.Fatal("the complete half reports incomplete coverage")
+	}
+	if second.CoverageComplete {
+		t.Fatal("the incomplete half reports complete coverage")
+	}
+}
+
 func testPullRequest() githubapp.PullRequest {
 	head, err := domain.ParseHeadSHA(testHeadSHA)
 	if err != nil {
