@@ -1,0 +1,4802 @@
+Generated sample source for a large live review. Not compiled.
+
+func Check1(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check2(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check3(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check4(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check5(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check6(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check7(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check8(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check9(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check10(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check11(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check12(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check13(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check14(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check15(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check16(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check17(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check18(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check19(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check20(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check21(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check22(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check23(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check24(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check25(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check26(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check27(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check28(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check29(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check30(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check31(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check32(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check33(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check34(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check35(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check36(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check37(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check38(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check39(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check40(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check41(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check42(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check43(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check44(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check45(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check46(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check47(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check48(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check49(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check50(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check51(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check52(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check53(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check54(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check55(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check56(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check57(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check58(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check59(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check60(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check61(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check62(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check63(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check64(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check65(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check66(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check67(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check68(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check69(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check70(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check71(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check72(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check73(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check74(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check75(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check76(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check77(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check78(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check79(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check80(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check81(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check82(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check83(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check84(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check85(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check86(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check87(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check88(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check89(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check90(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check91(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check92(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check93(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check94(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check95(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check96(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check97(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check98(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check99(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check100(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check101(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check102(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check103(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check104(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check105(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check106(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check107(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check108(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check109(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check110(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check111(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check112(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check113(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check114(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check115(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check116(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check117(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check118(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check119(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check120(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check121(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check122(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check123(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check124(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check125(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check126(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check127(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check128(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check129(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check130(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check131(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check132(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check133(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check134(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check135(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check136(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check137(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check138(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check139(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check140(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check141(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check142(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check143(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check144(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check145(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check146(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check147(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check148(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check149(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check150(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check151(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check152(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check153(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check154(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check155(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check156(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check157(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check158(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check159(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check160(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check161(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check162(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check163(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check164(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check165(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check166(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check167(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check168(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check169(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check170(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check171(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check172(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check173(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check174(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check175(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check176(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check177(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check178(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check179(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check180(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check181(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check182(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check183(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check184(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check185(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check186(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check187(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check188(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check189(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check190(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check191(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check192(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check193(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check194(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check195(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check196(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check197(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check198(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check199(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check200(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check201(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check202(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check203(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check204(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check205(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check206(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check207(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check208(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check209(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check210(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check211(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check212(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check213(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check214(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check215(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check216(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check217(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check218(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check219(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check220(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check221(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check222(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check223(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check224(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check225(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check226(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check227(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check228(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check229(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check230(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check231(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check232(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check233(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check234(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check235(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check236(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check237(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check238(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check239(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check240(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check241(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check242(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check243(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check244(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check245(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check246(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check247(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check248(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check249(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check250(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check251(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check252(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check253(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check254(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check255(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check256(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check257(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check258(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check259(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check260(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check261(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check262(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check263(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check264(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check265(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check266(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check267(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check268(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check269(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check270(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check271(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check272(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check273(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check274(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check275(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check276(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check277(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check278(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check279(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check280(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check281(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check282(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check283(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check284(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check285(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check286(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check287(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check288(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check289(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check290(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check291(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check292(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check293(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check294(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check295(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check296(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check297(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check298(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check299(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check300(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check301(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check302(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check303(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check304(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check305(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check306(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check307(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check308(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check309(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check310(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check311(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check312(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check313(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check314(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check315(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check316(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check317(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check318(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check319(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check320(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check321(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check322(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check323(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check324(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check325(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check326(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check327(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check328(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check329(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check330(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check331(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check332(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check333(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check334(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check335(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check336(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check337(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check338(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check339(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check340(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check341(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check342(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check343(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check344(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check345(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check346(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check347(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check348(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check349(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check350(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check351(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check352(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check353(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check354(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check355(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check356(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check357(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check358(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check359(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check360(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check361(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check362(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check363(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check364(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check365(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check366(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check367(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check368(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check369(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check370(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check371(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check372(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check373(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check374(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check375(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check376(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check377(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check378(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check379(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check380(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check381(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check382(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check383(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check384(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check385(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check386(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check387(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check388(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check389(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check390(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check391(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check392(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check393(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check394(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check395(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check396(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check397(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check398(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check399(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check400(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check401(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check402(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check403(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check404(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check405(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check406(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check407(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check408(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check409(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check410(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check411(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check412(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check413(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check414(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check415(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check416(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check417(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check418(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check419(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check420(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check421(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check422(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check423(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check424(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check425(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check426(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check427(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check428(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check429(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check430(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check431(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check432(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check433(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check434(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check435(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check436(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check437(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check438(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check439(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check440(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check441(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check442(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check443(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check444(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check445(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check446(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check447(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check448(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check449(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check450(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check451(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check452(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check453(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check454(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check455(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check456(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check457(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check458(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check459(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check460(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check461(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check462(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check463(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check464(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check465(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check466(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check467(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check468(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check469(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check470(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check471(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check472(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check473(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check474(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check475(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check476(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check477(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check478(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check479(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check480(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check481(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check482(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check483(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check484(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check485(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check486(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check487(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check488(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check489(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check490(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check491(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check492(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check493(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check494(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check495(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check496(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check497(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check498(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check499(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check500(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check501(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check502(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check503(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check504(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check505(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check506(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check507(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check508(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check509(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check510(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check511(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check512(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check513(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check514(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check515(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check516(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check517(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check518(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check519(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check520(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check521(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check522(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check523(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check524(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check525(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check526(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check527(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check528(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check529(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check530(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check531(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check532(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check533(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check534(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check535(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check536(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check537(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check538(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check539(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check540(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check541(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check542(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check543(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check544(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check545(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check546(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check547(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check548(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check549(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check550(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check551(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check552(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check553(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check554(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check555(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check556(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check557(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check558(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check559(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check560(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check561(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check562(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check563(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check564(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check565(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check566(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check567(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check568(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check569(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check570(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check571(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check572(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check573(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check574(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check575(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check576(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check577(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check578(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check579(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check580(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check581(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check582(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check583(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check584(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check585(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check586(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check587(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check588(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check589(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check590(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check591(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check592(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check593(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check594(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check595(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check596(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check597(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check598(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check599(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
+func Check600(buffer []byte, rangeEnd int, scale int) (int, error) {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) * scale
+	}
+	return total / scale, nil
+}
+
