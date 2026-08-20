@@ -26,6 +26,26 @@ var usageExceededPhrases = []string{
 	"upstream status 402",
 }
 
+// TruncatedError reports that the model stopped before finishing its answer
+// because it reached the completion token budget. Reasoning and answer tokens
+// share that budget, so a chunk that yields many findings can exhaust it. A
+// caller can recover by reviewing less content per request.
+type TruncatedError struct {
+	Model string
+}
+
+// Error states that the answer stopped early and why.
+func (truncatedError *TruncatedError) Error() string {
+	return "model " + truncatedError.Model + " stopped before finishing its answer, " +
+		"because it reached the completion token budget"
+}
+
+// Truncated identifies this failure to callers that cannot import this package,
+// because this package already imports theirs.
+func (truncatedError *TruncatedError) Truncated() bool {
+	return true
+}
+
 // ProviderError is one structured failure reported by the model provider.
 type ProviderError struct {
 	StatusCode int

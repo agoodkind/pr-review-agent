@@ -28,13 +28,64 @@ type ReviewInput struct {
 	Files       []FileContext
 }
 
+// Piece is one rendered diff hunk, the smallest unit a chunk can carry.
+type Piece struct {
+	Path             string
+	Text             string
+	CoverageComplete bool
+}
+
 // Chunk is one model input slice with complete hunks from one or more files.
+// It keeps the pieces it was built from, so a caller that cannot process the
+// whole chunk can split it without re-deriving anything from the diff.
 type Chunk struct {
 	Index            int
 	Total            int
 	Text             string
+	Pieces           []Piece
 	Paths            []string
 	CoverageComplete bool
+}
+
+// Split divides one chunk into two smaller chunks and reports whether it could.
+// A chunk holding a single hunk cannot split, because a hunk is the smallest
+// unit the diff is cut into.
+func (chunk Chunk) Split() (Chunk, Chunk, bool) {
+	if len(chunk.Pieces) < 2 {
+		return emptyChunk(), emptyChunk(), false
+	}
+	middle := len(chunk.Pieces) / 2
+	first := chunkFromPieces(chunk.Pieces[:middle], chunk.Index, chunk.Total)
+	second := chunkFromPieces(chunk.Pieces[middle:], chunk.Index, chunk.Total)
+	return first, second, true
+}
+
+func emptyChunk() Chunk {
+	return Chunk{
+		Index:            0,
+		Total:            0,
+		Text:             "",
+		Pieces:           nil,
+		Paths:            nil,
+		CoverageComplete: true,
+	}
+}
+
+func chunkFromPieces(pieces []Piece, index int, total int) Chunk {
+	builder := newChunkBuilder()
+	for _, piece := range pieces {
+		if builder.hasText() {
+			builder.appendSeparator()
+		}
+		builder.appendText(piece.Text)
+		builder.addPiece(piece)
+		builder.markIncomplete(!piece.CoverageComplete)
+		builder.addPath(piece.Path)
+	}
+	chunk, _ := builder.build()
+	chunk.Index = index
+	chunk.Total = total
+	return chunk
 }
 
 // Source loads changed files and repository content for diff collection.
@@ -162,13 +213,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 		maxSize = 1
 	}
 
-	type pendingPiece struct {
-		path             string
-		text             string
-		coverageComplete bool
-	}
-
-	pieces := make([]pendingPiece, 0)
+	pieces := make([]Piece, 0)
 	for _, file := range input.Files {
 		if fileLooksBinary(file.Status, file.Patch) {
 			continue
@@ -188,10 +233,10 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 				text = formatOversizedHunkChunk(file.Path, maxSize)
 				coverageComplete = false
 			}
-			pieces = append(pieces, pendingPiece{
-				path:             file.Path,
-				text:             text,
-				coverageComplete: coverageComplete,
+			pieces = append(pieces, Piece{
+				Path:             file.Path,
+				Text:             text,
+				CoverageComplete: coverageComplete,
 			})
 		}
 	}
@@ -213,17 +258,18 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 	}
 
 	for _, piece := range pieces {
-		if current.hasText() && currentSize+1+len(piece.text) > maxSize {
+		if current.hasText() && currentSize+1+len(piece.Text) > maxSize {
 			flush()
 		}
 		if current.hasText() {
 			current.appendSeparator()
 			currentSize++
 		}
-		current.appendText(piece.text)
-		currentSize += len(piece.text)
-		current.markIncomplete(!piece.coverageComplete)
-		current.addPath(piece.path)
+		current.appendText(piece.Text)
+		currentSize += len(piece.Text)
+		current.addPiece(piece)
+		current.markIncomplete(!piece.CoverageComplete)
+		current.addPath(piece.Path)
 	}
 	flush()
 
@@ -236,6 +282,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 
 type chunkBuilder struct {
 	text             string
+	pieces           []Piece
 	paths            []string
 	coverageComplete bool
 	pathSeen         map[string]struct{}
@@ -244,6 +291,7 @@ type chunkBuilder struct {
 func newChunkBuilder() *chunkBuilder {
 	return &chunkBuilder{
 		text:             "",
+		pieces:           make([]Piece, 0),
 		paths:            make([]string, 0),
 		coverageComplete: true,
 		pathSeen:         make(map[string]struct{}),
@@ -260,6 +308,10 @@ func (builder *chunkBuilder) appendSeparator() {
 
 func (builder *chunkBuilder) appendText(text string) {
 	builder.text += text
+}
+
+func (builder *chunkBuilder) addPiece(piece Piece) {
+	builder.pieces = append(builder.pieces, piece)
 }
 
 func (builder *chunkBuilder) markIncomplete(incomplete bool) {
@@ -282,6 +334,7 @@ func (builder *chunkBuilder) build() (Chunk, bool) {
 			Index:            0,
 			Total:            0,
 			Text:             "",
+			Pieces:           nil,
 			Paths:            nil,
 			CoverageComplete: true,
 		}, false
@@ -290,6 +343,7 @@ func (builder *chunkBuilder) build() (Chunk, bool) {
 		Index:            0,
 		Total:            0,
 		Text:             builder.text,
+		Pieces:           builder.pieces,
 		Paths:            builder.paths,
 		CoverageComplete: builder.coverageComplete,
 	}, true

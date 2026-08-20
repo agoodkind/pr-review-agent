@@ -247,6 +247,9 @@ func (client *Client) completeWith(
 	if finishReason == "" {
 		return "", errors.New("openai response ended without a finish reason")
 	}
+	if finishReason == "length" {
+		return "", &TruncatedError{Model: target.model}
+	}
 	if finishReason != "stop" {
 		return "", errors.New("openai response stopped with finish reason " + finishReason)
 	}

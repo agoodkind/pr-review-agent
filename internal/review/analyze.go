@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -23,6 +24,7 @@ func Analyze(
 	logger := gklog.L(ctx)
 	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
 	if err != nil {
+		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
 		return Analysis{}, fmt.Errorf("chunk input: %w", err)
 	}
 
@@ -34,70 +36,163 @@ func Analyze(
 		}
 	}
 
-	fileIndex := buildFileIndex(input.Files)
-	seen := make(map[string]struct{})
-	observed := make([]domain.Finding, 0)
-	anchored := make([]domain.Finding, 0)
-	reportedFindings := 0
+	collector := newFindingCollector(input.Files, minimumImportance)
 	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
 	var models modelSet
+	requests := 0
 	for _, chunk := range chunks {
-		completion, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
-		if err != nil {
-			return Analysis{}, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
+		results, reviewErr := reviewChunk(ctx, model, chunk, minimumImportance, &models, &requests)
+		if reviewErr != nil {
+			return Analysis{}, reviewErr
 		}
-		result := completion.Result
-		if err := result.Validate(); err != nil {
-			logger.ErrorContext(ctx, "validate review result", slog.String("err", err.Error()))
-			return Analysis{}, fmt.Errorf("validate review result: %w", err)
-		}
-		models.add(completion.Model)
-		if !result.CoverageComplete {
-			coverageComplete = false
-		}
-		reportedFindings += len(result.Findings)
-
-		for _, finding := range result.Findings {
-			sanitized := sanitizeFinding(finding)
-			normalizedPath, pathErr := marker.NormalizePath(sanitized.Path)
-			if pathErr == nil {
-				sanitized.Path = normalizedPath
+		for _, result := range results {
+			if !result.CoverageComplete {
+				coverageComplete = false
 			}
-
-			key := normalizedFindingKey(sanitized)
-			if _, exists := seen[key]; exists {
-				continue
-			}
-			seen[key] = struct{}{}
-
-			if isAnchored(sanitized, fileIndex) {
-				observed = append(observed, sanitized)
-				if sanitized.Importance >= minimumImportance {
-					anchored = append(anchored, sanitized)
-				}
-			}
+			collector.collect(result.Findings)
 		}
 	}
 	logger.InfoContext(
 		ctx,
 		"review model analysis completed",
 		slog.Int("chunks", len(chunks)),
-		slog.Int("reported_findings", reportedFindings),
+		slog.Int("model_requests", requests),
+		slog.Int("reported_findings", collector.reported),
 	)
 
-	sortFindings(observed)
-	sortFindings(anchored)
+	sortFindings(collector.observed)
+	sortFindings(collector.anchored)
 
 	return Analysis{
 		CoverageComplete: coverageComplete,
-		Observed:         observed,
-		Anchored:         anchored,
-		Decision:         DecisionFor(anchored, minimumImportance),
+		Observed:         collector.observed,
+		Anchored:         collector.anchored,
+		Decision:         DecisionFor(collector.anchored, minimumImportance),
 		FilesReviewed:    len(input.Files),
 		Chunks:           len(chunks),
 		Models:           models.names,
 	}, nil
+}
+
+// findingCollector deduplicates model findings and keeps the anchored ones.
+type findingCollector struct {
+	fileIndex         map[string]diff.FileContext
+	minimumImportance int
+	seen              map[string]struct{}
+	observed          []domain.Finding
+	anchored          []domain.Finding
+	reported          int
+}
+
+func newFindingCollector(files []diff.FileContext, minimumImportance int) *findingCollector {
+	return &findingCollector{
+		fileIndex:         buildFileIndex(files),
+		minimumImportance: minimumImportance,
+		seen:              make(map[string]struct{}),
+		observed:          make([]domain.Finding, 0),
+		anchored:          make([]domain.Finding, 0),
+		reported:          0,
+	}
+}
+
+func (collector *findingCollector) collect(findings []domain.Finding) {
+	collector.reported += len(findings)
+	for _, finding := range findings {
+		sanitized := sanitizeFinding(finding)
+		normalizedPath, pathErr := marker.NormalizePath(sanitized.Path)
+		if pathErr == nil {
+			sanitized.Path = normalizedPath
+		}
+
+		key := normalizedFindingKey(sanitized)
+		if _, exists := collector.seen[key]; exists {
+			continue
+		}
+		collector.seen[key] = struct{}{}
+
+		if !isAnchored(sanitized, collector.fileIndex) {
+			continue
+		}
+		collector.observed = append(collector.observed, sanitized)
+		if sanitized.Importance >= collector.minimumImportance {
+			collector.anchored = append(collector.anchored, sanitized)
+		}
+	}
+}
+
+// truncatedError is any model failure that stopped mid answer at the completion
+// token budget.
+type truncatedError interface {
+	Truncated() bool
+}
+
+func truncated(err error) bool {
+	var target truncatedError
+	if !errors.As(err, &target) {
+		return false
+	}
+	return target.Truncated()
+}
+
+// reviewChunk reviews one chunk and returns every result it produced.
+//
+// A model that reaches its completion token budget stops mid answer. Reasoning
+// and answer tokens share that budget, so a chunk yielding many findings can
+// exhaust it. When that happens the chunk is split in half and each half is
+// reviewed instead, which asks for fewer findings per request. A chunk holding
+// one hunk cannot split, so it is skipped and the review reports incomplete
+// coverage rather than failing outright.
+func reviewChunk(
+	ctx context.Context,
+	model Model,
+	chunk diff.Chunk,
+	minimumImportance int,
+	models *modelSet,
+	requests *int,
+) ([]domain.ReviewResult, error) {
+	logger := gklog.L(ctx)
+	*requests++
+	completion, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
+	if err == nil {
+		if validateErr := completion.Result.Validate(); validateErr != nil {
+			logger.ErrorContext(ctx, "validate review result", slog.String("err", validateErr.Error()))
+			return nil, fmt.Errorf("validate review result: %w", validateErr)
+		}
+		models.add(completion.Model)
+		return []domain.ReviewResult{completion.Result}, nil
+	}
+	if !truncated(err) {
+		return nil, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
+	}
+
+	first, second, canSplit := chunk.Split()
+	if !canSplit {
+		logger.WarnContext(
+			ctx,
+			"review chunk skipped after truncation",
+			slog.Int("chunk", chunk.Index),
+			slog.Any("paths", chunk.Paths),
+			slog.String("err", err.Error()),
+		)
+		return []domain.ReviewResult{{CoverageComplete: false, Findings: nil}}, nil
+	}
+
+	logger.InfoContext(
+		ctx,
+		"review chunk split after truncation",
+		slog.Int("chunk", chunk.Index),
+		slog.Int("hunks", len(chunk.Pieces)),
+	)
+	results := make([]domain.ReviewResult, 0, 2)
+	for _, half := range []diff.Chunk{first, second} {
+		halfResults, halfErr := reviewChunk(ctx, model, half, minimumImportance, models, requests)
+		if halfErr != nil {
+			return nil, halfErr
+		}
+		results = append(results, halfResults...)
+	}
+	return results, nil
 }
 
 // modelSet records every distinct model that answered, in first use order. A
