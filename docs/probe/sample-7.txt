@@ -1,0 +1,202 @@
+Sample 7. Generated for a live multi chunk review.
+
+func Scan7_1(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_2(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_3(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_4(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_5(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_6(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_7(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_8(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_9(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_10(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_11(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_12(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_13(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_14(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_15(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_16(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_17(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_18(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_19(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_20(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_21(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_22(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_23(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_24(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan7_25(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+

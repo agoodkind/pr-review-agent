@@ -1,0 +1,202 @@
+Sample 11. Generated for a live multi chunk review.
+
+func Scan11_1(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_2(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_3(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_4(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_5(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_6(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_7(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_8(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_9(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_10(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_11(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_12(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_13(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_14(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_15(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_16(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_17(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_18(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_19(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_20(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_21(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_22(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_23(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_24(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
+func Scan11_25(buffer []byte, rangeEnd int, scale int) int {
+	total := 0
+	for index := 0; index <= rangeEnd; index++ {
+		total += int(buffer[index]) / scale
+	}
+	return total
+}
+
