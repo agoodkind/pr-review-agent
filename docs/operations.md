@@ -16,6 +16,8 @@ That body opens with the verdict, then carries the review details in a collapsed
 
 A review that the fallback provider answers names the fallback model, because the table reports the model that did the work rather than the one configured first.
 
+The service reads the diff in chunks, one request each. A model stops mid answer when it reaches its completion token budget, which reasoning and findings share, so a chunk yielding many findings can exhaust it. The service then splits that chunk in half and reviews each half, repeating while answers keep stopping early. A chunk holding one diff hunk cannot split, so the service skips it and reports incomplete coverage in the review details. One truncated answer never fails the whole review.
+
 When a review cannot finish, the service rewrites that same top level body with the stage that failed and the reported cause, and creates it if the pull request has none yet. It carries no review marker, so the next push still reviews the head. When the model provider reports no remaining usage, the check run and the body both say so instead of naming a stage.
 
 Three failures leave the body untouched, because writing it needs the GitHub call that just failed: reading reviews, updating a review, and submitting a review. The check run still reports those. A body that cannot be written never changes or hides the failure the check reports.

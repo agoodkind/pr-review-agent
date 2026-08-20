@@ -327,8 +327,41 @@ func TestReviewRejectsIncompleteFinishReason(t *testing.T) {
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
-	if err == nil || !strings.Contains(err.Error(), "finish reason length") {
-		t.Fatalf("Review error = %v, want length finish reason", err)
+	if err == nil {
+		t.Fatal("Review: want a truncated answer error")
+	}
+	var truncatedError *openai.TruncatedError
+	if !errors.As(err, &truncatedError) {
+		t.Fatalf("error = %q, want a *openai.TruncatedError", err)
+	}
+	if truncatedError.Model != testPrimaryModel {
+		t.Fatalf("model = %q, want %q", truncatedError.Model, testPrimaryModel)
+	}
+	if !truncatedError.Truncated() {
+		t.Fatalf("Truncated() = false for %q, want true", err)
+	}
+}
+
+// A truncated answer is not a provider refusal, so it must not send the request
+// to the fallback provider. Splitting the chunk is the recovery, not switching.
+func TestTruncatedAnswerDoesNotEngageTheFallback(t *testing.T) {
+	fixture := newFallbackTestClient(t, false)
+	fixture.primary.streamResponse = func(writer http.ResponseWriter) {
+		writeStreamFrames(writer, []map[string]any{
+			completionStreamChunk(validReviewContent(), "length"),
+		}, true)
+	}
+
+	_, err := fixture.client.Review(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("Review: want a truncated answer error")
+	}
+	var truncatedError *openai.TruncatedError
+	if !errors.As(err, &truncatedError) {
+		t.Fatalf("error = %q, want a *openai.TruncatedError", err)
+	}
+	if fixture.fallback.requestCount != 0 {
+		t.Fatalf("fallback request count = %d, want 0", fixture.fallback.requestCount)
 	}
 }
 
