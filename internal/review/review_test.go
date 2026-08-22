@@ -206,8 +206,11 @@ func TestRenderBodyCarriesTheRequiredMarkersAndNoFindingMarker(t *testing.T) {
 
 func TestRenderFailureBodyFencesTheCauseAndOmitsTheReviewMarker(t *testing.T) {
 	t.Run("plain cause", func(t *testing.T) {
-		body := review.RenderFailureBody("Review failed.", "provider refused")
-		want := "## Review\n\nReview failed.\n\n```\nprovider refused\n```\n\n" + marker.Summary()
+		summary := testSummary()
+		body := review.RenderFailureBody(summary, "Review failed.", "provider refused")
+		summary.Failed = true
+		want := "## Review\n\nReview failed.\n\n```\nprovider refused\n```\n\n" +
+			review.RenderDetails(summary) + "\n\n" + marker.Summary()
 		if body != want {
 			t.Fatalf("body = %q, want %q", body, want)
 		}
@@ -215,26 +218,65 @@ func TestRenderFailureBodyFencesTheCauseAndOmitsTheReviewMarker(t *testing.T) {
 
 	t.Run("cause containing a fence", func(t *testing.T) {
 		detail := "provider said ``` and then ````"
-		body := review.RenderFailureBody("Review failed.", detail)
+		body := review.RenderFailureBody(testSummary(), "Review failed.", detail)
 		if !strings.Contains(body, "`````\n"+detail+"\n`````") {
 			t.Fatalf("body = %q, want a fence longer than the cause backtick run", body)
 		}
 	})
 
 	t.Run("no cause", func(t *testing.T) {
-		body := review.RenderFailureBody("Review failed.", "   ")
-		want := "## Review\n\nReview failed.\n\n" + marker.Summary()
+		summary := testSummary()
+		body := review.RenderFailureBody(summary, "Review failed.", "   ")
+		summary.Failed = true
+		want := "## Review\n\nReview failed.\n\n" + review.RenderDetails(summary) + "\n\n" + marker.Summary()
 		if body != want {
 			t.Fatalf("body = %q, want %q", body, want)
 		}
 	})
 
 	t.Run("never carries a review marker", func(t *testing.T) {
-		body := review.RenderFailureBody("Review failed.", "provider refused")
+		body := review.RenderFailureBody(testSummary(), "Review failed.", "provider refused")
 		if _, found := marker.FindReview(body); found {
 			t.Fatalf("body = %q, want no review marker", body)
 		}
 	})
+}
+
+func TestRenderFailureBodyReportsWhatTheReviewLearned(t *testing.T) {
+	summary := testSummary()
+	summary.Reached = "the diff"
+	summary.Models = []string{"gpt-5.6-sol"}
+	summary.FilesReviewed = 4
+	summary.Chunks = 6
+
+	body := review.RenderFailureBody(summary, "Review failed during model analysis.", "provider refused")
+	for _, want := range []string{
+		"| Model | `gpt-5.6-sol` |",
+		"| Duration | `8` seconds |",
+		"| Head | `a3c4f1c` |",
+		"| Files reviewed | `4` |",
+		"| Diff chunks | `6` |",
+		"| Reached | the diff |",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("failure body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "Coverage complete") {
+		t.Fatalf("failure body claims coverage it never established:\n%s", body)
+	}
+}
+
+func TestRenderDetailsReportsNothingReachedWhenTheReviewFailedImmediately(t *testing.T) {
+	summary := review.Summary{Failed: true}
+
+	details := review.RenderDetails(summary)
+	if !strings.Contains(details, "| Reached | nothing |") {
+		t.Fatalf("details = %q, want a nothing reached row", details)
+	}
+	if !strings.Contains(details, "| Model | unknown |") {
+		t.Fatalf("details = %q, want an unknown model", details)
+	}
 }
 
 func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
@@ -1155,6 +1197,77 @@ func TestServiceFailureNoticeEditsTheExistingSummary(t *testing.T) {
 	body, ok := updated["body"].(string)
 	if !ok || !strings.Contains(body, "Review failed during model analysis.") {
 		t.Fatalf("updated body = %v, want the failure wording", updated["body"])
+	}
+}
+
+// A failed review must report the same detail table a successful one does, so a
+// reader can tell which model answered and how far it got.
+func TestServiceFailureReportsProgressInTheCommentAndTheCheck(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: errors.New("provider refused the prompt")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want error")
+	}
+
+	notice := fixture.state.lastSubmitReview
+	if notice == nil {
+		t.Fatal("failure notice was not published")
+	}
+	body, ok := notice["body"].(string)
+	if !ok {
+		t.Fatalf("notice body = %v, want string", notice["body"])
+	}
+	for _, want := range []string{
+		"<summary>Review details</summary>",
+		// No model answered, because the first chunk failed. The table says so
+		// rather than naming the configured model that never replied.
+		"| Model | unknown |",
+		"| Head | `a3c4f1c` |",
+		"| Files reviewed | `1` |",
+		"| Diff chunks | `1` |",
+		"| Reached | the diff |",
+		"provider refused the prompt",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("failure notice missing %q:\n%s", want, body)
+		}
+	}
+
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("check output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	checkSummary, ok := output["summary"].(string)
+	if !ok {
+		t.Fatalf("check summary = %v, want string", output["summary"])
+	}
+	if !strings.Contains(checkSummary, "provider refused the prompt") {
+		t.Fatalf("check summary lost the cause:\n%s", checkSummary)
+	}
+	if !strings.Contains(checkSummary, "| Reached | the diff |") {
+		t.Fatalf("check summary lost the progress:\n%s", checkSummary)
+	}
+}
+
+// A review that fails before it reads anything still says so, rather than
+// reporting an empty table the reader cannot interpret.
+func TestServiceFailureBeforeAnyProgressReportsNothingReached(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		pullRequestStatus: http.StatusInternalServerError,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want error")
+	}
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("check output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	checkSummary, ok := output["summary"].(string)
+	if !ok || !strings.Contains(checkSummary, "| Reached | nothing |") {
+		t.Fatalf("check summary = %v, want a nothing reached row", output["summary"])
 	}
 }
 

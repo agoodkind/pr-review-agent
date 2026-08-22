@@ -35,6 +35,13 @@ type Summary struct {
 	Published         []domain.Finding
 	PriorReviews      []reviewTrace
 	Threads           []threadTrace
+	// Reached names the last stage the review completed. A failed review fills
+	// only the fields it got far enough to learn, so the reader can tell how far
+	// it got rather than seeing zeros with no explanation.
+	Reached string
+	// Failed marks a review that stopped early, so the detail table reports
+	// progress rather than a result.
+	Failed bool
 }
 
 // Verdict states the outcome in one plain sentence.
@@ -53,7 +60,8 @@ func (summary Summary) Title() string {
 	return "Approved"
 }
 
-// RenderDetails renders the collapsed review detail table.
+// RenderDetails renders the collapsed review detail table. A failed review
+// reports how far it got, so the same table explains both outcomes.
 func RenderDetails(summary Summary) string {
 	rows := [][2]string{
 		{"Model", formatModels(summary.Models)},
@@ -61,15 +69,21 @@ func RenderDetails(summary Summary) string {
 		{"Head", "`" + shortHead(summary.Head) + "`"},
 		{"Files reviewed", fmt.Sprintf("`%d`", summary.FilesReviewed)},
 		{"Diff chunks", fmt.Sprintf("`%d`", summary.Chunks)},
-		{"Coverage complete", formatYesNo(summary.CoverageComplete)},
-		{"Minimum importance", fmt.Sprintf("`%d`", summary.MinimumImportance)},
-		{"Findings observed", formatCountAndImportances(summary.Observed)},
-		{"Findings eligible", formatCountAndImportances(summary.Eligible)},
-		{"Findings published inline", formatCountAndImportances(summary.Published)},
-		{"Prior bot review IDs", formatReviewTraceIDs(summary.PriorReviews)},
-		{"Bot thread IDs", formatThreadTraceIDs(summary.Threads)},
-		{"Bot threads resolved", fmt.Sprintf("`%d`", countResolvedThreadTraces(summary.Threads))},
 	}
+	if summary.Failed {
+		rows = append(rows, [2]string{"Reached", formatReached(summary.Reached)})
+	} else {
+		rows = append(rows, [2]string{"Coverage complete", formatYesNo(summary.CoverageComplete)})
+	}
+	rows = append(rows,
+		[2]string{"Minimum importance", fmt.Sprintf("`%d`", summary.MinimumImportance)},
+		[2]string{"Findings observed", formatCountAndImportances(summary.Observed)},
+		[2]string{"Findings eligible", formatCountAndImportances(summary.Eligible)},
+		[2]string{"Findings published inline", formatCountAndImportances(summary.Published)},
+		[2]string{"Prior bot review IDs", formatReviewTraceIDs(summary.PriorReviews)},
+		[2]string{"Bot thread IDs", formatThreadTraceIDs(summary.Threads)},
+		[2]string{"Bot threads resolved", fmt.Sprintf("`%d`", countResolvedThreadTraces(summary.Threads))},
+	)
 
 	var builder strings.Builder
 	builder.WriteString("<details>\n<summary>Review details</summary>\n\n")
@@ -89,6 +103,13 @@ func RenderBody(summary Summary) string {
 		RenderDetails(summary),
 		marker.Summary() + "\n" + marker.Review(summary.Head),
 	}, "\n\n")
+}
+
+func formatReached(reached string) string {
+	if strings.TrimSpace(reached) == "" {
+		return "nothing"
+	}
+	return reached
 }
 
 func shortHead(head domain.HeadSHA) string {
@@ -134,16 +155,18 @@ func formatCountAndImportances(findings []domain.Finding) string {
 	return fmt.Sprintf("`%d` at importance %s", len(findings), formatFindingImportances(findings))
 }
 
-// RenderFailureBody renders the visible summary for a review that could not finish.
-// It omits the review marker so the next attempt on the same head is not
-// suppressed as already reviewed.
-func RenderFailureBody(title string, detail string) string {
+// RenderFailureBody renders the visible summary for a review that could not
+// finish. It carries the same detail table as a successful review, reporting
+// how far the review got, and it omits the review marker so the next attempt on
+// the same head is not suppressed as already reviewed.
+func RenderFailureBody(summary Summary, title string, detail string) string {
+	summary.Failed = true
 	parts := []string{"## Review", strings.TrimSpace(title)}
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
 		fence := codeFenceFor(trimmedDetail)
 		parts = append(parts, fence+"\n"+trimmedDetail+"\n"+fence)
 	}
-	parts = append(parts, marker.Summary())
+	parts = append(parts, RenderDetails(summary), marker.Summary())
 	return strings.Join(parts, "\n\n")
 }
 

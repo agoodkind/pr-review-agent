@@ -181,7 +181,9 @@ func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cau
 	if job.CheckRunID == 0 || job.CheckRunStatus == "completed" {
 		return nil
 	}
-	return service.failCheck(parent, job, job.CheckRunID, checkSummaryFailure, cause)
+	now := service.now()
+	progress := service.newProgress(job.Head, now).summary(now)
+	return service.failCheck(parent, job, job.CheckRunID, progress, checkSummaryFailure, cause)
 }
 
 func (service *Service) runLocked(
@@ -192,6 +194,7 @@ func (service *Service) runLocked(
 	logger := gklog.L(ctx)
 	head := job.Head
 	startedAt := service.now()
+	progress := service.newProgress(head, startedAt)
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -205,19 +208,11 @@ func (service *Service) runLocked(
 			slog.String("stack", string(debug.Stack())),
 			slog.String("err", panicErr.Error()),
 		)
-		runErr = service.failCheck(ctx, job, checkRun.ID, checkFailurePanic, panicErr)
+		runErr = service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePanic, panicErr)
 	}()
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
-	logger.InfoContext(
-		ctx,
-		"review check loaded",
-		slog.Int64("check_run_id", checkRun.ID),
-		slog.String("status", checkRun.Status),
-		slog.String("conclusion", checkRun.Conclusion),
-	)
-	if checkRun.Status == "completed" && checkRun.Conclusion == "success" {
-		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "completed_check"))
+	if service.checkAlreadySucceeded(ctx, checkRun) {
 		return nil
 	}
 	pullRequest, err := service.github.GetPullRequest(
@@ -227,20 +222,23 @@ func (service *Service) runLocked(
 		job.Number,
 	)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailurePullRequest, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePullRequest, err)
 	}
 	if pullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+	progress.reached("the pull request")
 
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureReviews, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err)
 	}
+	progress.priorReviews = traceReviews(reviews, service.botLogin)
+	progress.reached("the review history")
 	logger.InfoContext(
 		ctx,
 		"review history loaded",
-		slog.Any("bot_reviews", traceReviews(reviews, service.botLogin)),
+		slog.Any("bot_reviews", progress.priorReviews),
 	)
 	if hasBotReviewMarker(reviews, service.botLogin, head) {
 		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
@@ -255,28 +253,55 @@ func (service *Service) runLocked(
 
 	threads, err := service.reconciler.Reconcile(ctx, job)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureReconcile, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReconcile, err)
 	}
+	progress.threads = traceThreads(threads, service.botLogin)
+	progress.reached("thread reconciliation")
 	logger.InfoContext(
 		ctx,
 		"review threads reconciled",
-		slog.Any("bot_threads", traceThreads(threads, service.botLogin)),
+		slog.Any("bot_threads", progress.threads),
 	)
 
 	input, err := service.collector.Collect(ctx, job.PullRequestRef, pullRequest)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureDiff, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureDiff, err)
 	}
+	progress.reached("the diff")
 
 	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance)
+	progress.applyAnalysis(analysis)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureAnalysis, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
+	progress.reached("model analysis")
 	if err := logAnalysis(ctx, analysis); err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureAnalysis, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
 
-	return service.publish(ctx, job, head, checkRun, reviews, threads, analysis, startedAt)
+	return service.publish(ctx, job, head, checkRun, reviews, threads, analysis, startedAt, progress)
+}
+
+func (service *Service) newProgress(head domain.HeadSHA, startedAt time.Time) *reviewProgress {
+	return newReviewProgress(head, startedAt, service.minimumImportance)
+}
+
+// checkAlreadySucceeded reports whether this head already carries a completed
+// successful check, which means the review ran and needs no repeat.
+func (service *Service) checkAlreadySucceeded(ctx context.Context, checkRun githubapp.CheckRun) bool {
+	logger := gklog.L(ctx)
+	logger.InfoContext(
+		ctx,
+		"review check loaded",
+		slog.Int64("check_run_id", checkRun.ID),
+		slog.String("status", checkRun.Status),
+		slog.String("conclusion", checkRun.Conclusion),
+	)
+	if checkRun.Status != "completed" || checkRun.Conclusion != "success" {
+		return false
+	}
+	logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "completed_check"))
+	return true
 }
 
 func logAnalysis(ctx context.Context, analysis Analysis) error {
@@ -311,15 +336,17 @@ func (service *Service) publish(
 	threads []githubapp.ReviewThread,
 	analysis Analysis,
 	startedAt time.Time,
+	progress *reviewProgress,
 ) error {
 	logger := gklog.L(ctx)
 	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureRefresh, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, err)
 	}
 	if currentPullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+	progress.reached("the head refresh")
 
 	publishedFindings, err := selectFindingsForPublication(
 		ctx,
@@ -330,13 +357,14 @@ func (service *Service) publish(
 		service.maximumUnresolvedComments,
 	)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureRender, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRender, err)
 	}
 
 	comments, err := RenderInline(head, publishedFindings)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureRender, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRender, err)
 	}
+	progress.reached("finding selection")
 
 	summary := Summary{
 		Head:              head,
@@ -352,11 +380,13 @@ func (service *Service) publish(
 		Published:         publishedFindings,
 		PriorReviews:      traceReviews(reviews, service.botLogin),
 		Threads:           traceThreads(threads, service.botLogin),
+		Reached:           "",
+		Failed:            false,
 	}
 
 	body, err := service.prepareReviewBody(ctx, job, reviews, summary)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailureSummary, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
 	}
 
 	publishedReview, err := service.github.SubmitReview(
@@ -372,7 +402,7 @@ func (service *Service) publish(
 		},
 	)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, checkFailurePublish, err)
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePublish, err)
 	}
 	logger.InfoContext(
 		ctx,
@@ -506,17 +536,22 @@ func (service *Service) failCheck(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRunID int64,
-	summary string,
+	progress Summary,
+	title string,
 	cause error,
 ) error {
 	logger := gklog.L(ctx)
-	if summary == "" {
-		summary = checkSummaryFailure
+	if title == "" {
+		title = checkSummaryFailure
 	}
 	if usageExceeded(cause) {
-		summary = checkFailureUsage
+		title = checkFailureUsage
 	}
+	progress.Failed = true
 	detail := checkFailureDetail(cause)
+	// The check run reports the same cause and the same progress the comment
+	// carries, so both explain the failure rather than only naming a stage.
+	checkSummary := detail + "\n\n" + RenderDetails(progress)
 	var completeErr error
 	if checkRunID != 0 {
 		completeErr = service.completeCheckRun(
@@ -525,14 +560,14 @@ func (service *Service) failCheck(
 			job.Repository,
 			checkRunID,
 			"failure",
-			summary,
-			detail,
+			title,
+			checkSummary,
 		)
 		if completeErr != nil {
 			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
 		}
 	}
-	service.publishFailureNotice(ctx, job, summary, detail)
+	service.publishFailureNotice(ctx, job, progress, title, detail)
 	if completeErr != nil {
 		return fmt.Errorf("complete check run: %w", completeErr)
 	}
@@ -558,6 +593,7 @@ func usageExceeded(cause error) bool {
 func (service *Service) publishFailureNotice(
 	ctx context.Context,
 	job domain.ReviewJob,
+	progress Summary,
 	title string,
 	detail string,
 ) {
@@ -571,7 +607,7 @@ func (service *Service) publishFailureNotice(
 		return
 	}
 
-	body := RenderFailureBody(title, detail)
+	body := RenderFailureBody(progress, title, detail)
 	updated, err := service.updateSummaryReview(noticeCtx, job, reviews, body)
 	if err != nil {
 		logger.ErrorContext(noticeCtx, "update failure notice", slog.String("err", err.Error()))
