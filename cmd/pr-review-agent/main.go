@@ -22,7 +22,9 @@ import (
 const (
 	githubHTTPTimeout = 30 * time.Second
 	openaiHTTPTimeout = 610 * time.Second
-	shutdownTimeout   = 30 * time.Second
+	// shutdownMargin is the drain time added to one review, so a restart can
+	// let an in-flight review finish and publish rather than abort it.
+	shutdownMargin = 60 * time.Second
 )
 
 func main() {
@@ -86,7 +88,7 @@ func run(
 
 	<-ctx.Done()
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ReviewTimeout+shutdownMargin)
 	defer cancel()
 
 	if err := application.Shutdown(shutdownCtx); err != nil {

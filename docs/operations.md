@@ -22,6 +22,12 @@ When a review cannot finish, the service rewrites that same top level body with 
 
 A failed review carries the same detail table as a successful one, filled with what it had learned when it stopped. In place of the coverage row it reports the last stage it finished, and it names no model when none answered. The check run repeats the cause and the same table, so neither output leaves the reader guessing what ran.
 
+Rewriting that body cannot change a review's state, so a failure withdraws every approval the service still holds. The service can hold more than one, because a decision review carries its own approval separately from the review that owns the visible body. An approval that outlived a failed review would otherwise keep satisfying branch protection for a head nobody reviewed. A later successful review approves again. An approval that cannot be withdrawn is named in the check run with the reason GitHub gave.
+
+A restart is not a review outcome. Shutdown waits for the reviews already running and only cancels the ones that outlast the drain budget, which is one review timeout plus a minute. A review that a restart does cancel reports an interrupted check rather than a failed one, writes no failure comment, and leaves no review marker, so the next push reviews that head.
+
+Every reported GitHub failure names the request method, the path, the status, and the reason GitHub gave. A request that never reaches GitHub reports the stage it failed at and the underlying transport error.
+
 Three failures leave the body untouched, because writing it needs the GitHub call that just failed: reading reviews, updating a review, and submitting a review. The check run still reports those. A body that cannot be written never changes or hides the failure the check reports.
 
 Before each decision, the service reads every prior bot review and thread. It silently resolves fixed threads before publishing new findings.

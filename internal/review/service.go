@@ -21,19 +21,21 @@ import (
 )
 
 const (
-	checkSummaryFailure      = "Review failed."
-	checkSummaryCancelled    = "Review cancelled."
-	checkFailureReviews      = "Review failed while reading existing reviews."
-	checkFailurePullRequest  = "Review failed while loading the pull request."
-	checkFailureReconcile    = "Review failed while reconciling existing findings."
-	checkFailureDiff         = "Review failed while collecting the pull request diff."
-	checkFailureAnalysis     = "Review failed during model analysis."
-	checkFailureRefresh      = "Review failed while refreshing the pull request head."
-	checkFailureRender       = "Review failed while rendering inline findings."
-	checkFailureSummary      = "Review failed while updating the visible summary."
-	checkFailurePublish      = "Review failed while publishing the final decision."
-	checkFailurePanic        = "Review failed after an internal panic."
-	checkFailureUsage        = "Review stopped: the model provider reported no remaining usage."
+	checkSummaryFailure     = "Review failed."
+	checkSummaryCancelled   = "Review cancelled."
+	checkFailureReviews     = "Review failed while reading existing reviews."
+	checkFailurePullRequest = "Review failed while loading the pull request."
+	checkFailureReconcile   = "Review failed while reconciling existing findings."
+	checkFailureDiff        = "Review failed while collecting the pull request diff."
+	checkFailureAnalysis    = "Review failed during model analysis."
+	checkFailureRefresh     = "Review failed while refreshing the pull request head."
+	checkFailureRender      = "Review failed while rendering inline findings."
+	checkFailureSummary     = "Review failed while updating the visible summary."
+	checkFailurePublish     = "Review failed while publishing the final decision."
+	checkFailurePanic       = "Review failed after an internal panic."
+	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
+	// checkSummaryInterrupted names a restart rather than a review outcome.
+	checkSummaryInterrupted  = "Review interrupted by a service restart. Push again to review this head."
 	maxCheckFailureRunes     = 1000
 	maximumCompletionTimeout = 30 * time.Second
 )
@@ -48,6 +50,7 @@ type GitHub interface {
 	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string) error
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
 	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
+	DismissReview(context.Context, int64, domain.Repository, int, int64, string) error
 }
 
 // Collector gathers pull request diff input for one review pass.
@@ -541,6 +544,12 @@ func (service *Service) failCheck(
 	cause error,
 ) error {
 	logger := gklog.L(ctx)
+	// A restart aborts every in-flight review. That is not a review outcome, so
+	// it reports as an interrupted check rather than a failed one, and it
+	// publishes no failure notice.
+	if errors.Is(cause, context.Canceled) {
+		return service.interruptCheck(ctx, job, checkRunID, progress, cause)
+	}
 	if title == "" {
 		title = checkSummaryFailure
 	}
@@ -552,6 +561,18 @@ func (service *Service) failCheck(
 	// The check run reports the same cause and the same progress the comment
 	// carries, so both explain the failure rather than only naming a stage.
 	checkSummary := detail + "\n\n" + RenderDetails(progress)
+	// One read serves both the approval withdrawal and the visible notice.
+	reviews, listErr := service.listReviewsForFailure(ctx, job)
+	if listErr != nil {
+		checkSummary += "\n\nThe existing reviews could not be read:\n\n```\n" + listErr.Error() + "\n```"
+	}
+	// Withdraw the approvals before completing the check. An approval that
+	// outlives a failed review keeps satisfying branch protection for a head
+	// the service never reviewed, so a failure to withdraw one is reported with
+	// the reason GitHub gave rather than hidden.
+	if dismissErr := service.dismissStaleApprovals(ctx, job, reviews); dismissErr != nil {
+		checkSummary += "\n\nAn earlier approval still stands:\n\n```\n" + dismissErr.Error() + "\n```"
+	}
 	var completeErr error
 	if checkRunID != 0 {
 		completeErr = service.completeCheckRun(
@@ -567,11 +588,49 @@ func (service *Service) failCheck(
 			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
 		}
 	}
-	service.publishFailureNotice(ctx, job, progress, title, detail)
+	if listErr == nil {
+		service.publishFailureNotice(ctx, job, reviews, progress, title, detail)
+	}
 	if completeErr != nil {
 		return fmt.Errorf("complete check run: %w", completeErr)
 	}
 	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
+	return cause
+}
+
+// interruptCheck ends a review that a service restart aborted. It writes a
+// cancelled conclusion rather than a failure, leaves the visible body alone, and
+// writes no review marker, so the next push reviews this head again.
+func (service *Service) interruptCheck(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRunID int64,
+	progress Summary,
+	cause error,
+) error {
+	logger := gklog.L(ctx)
+	progress.Failed = true
+	logger.WarnContext(
+		ctx,
+		"review interrupted by shutdown",
+		slog.String("reached", progress.Reached),
+		slog.String("err", cause.Error()),
+	)
+	if checkRunID == 0 {
+		return cause
+	}
+	if err := service.completeCheckRun(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		checkRunID,
+		"cancelled",
+		checkSummaryInterrupted,
+		checkSummaryInterrupted+"\n\n"+RenderDetails(progress),
+	); err != nil {
+		logger.ErrorContext(ctx, "complete interrupted check run", slog.String("err", err.Error()))
+		return fmt.Errorf("complete check run: %w", err)
+	}
 	return cause
 }
 
@@ -586,54 +645,6 @@ func usageExceeded(cause error) bool {
 		return false
 	}
 	return target.UsageExceeded()
-}
-
-// publishFailureNotice rewrites the single visible summary so the pull request
-// states why the review stopped. A notice failure never masks the review cause.
-func (service *Service) publishFailureNotice(
-	ctx context.Context,
-	job domain.ReviewJob,
-	progress Summary,
-	title string,
-	detail string,
-) {
-	logger := gklog.L(ctx)
-	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
-	defer cancel()
-
-	reviews, err := service.github.ListReviews(noticeCtx, job.InstallationID, job.Repository, job.Number)
-	if err != nil {
-		logger.ErrorContext(noticeCtx, "load reviews for failure notice", slog.String("err", err.Error()))
-		return
-	}
-
-	body := RenderFailureBody(progress, title, detail)
-	updated, err := service.updateSummaryReview(noticeCtx, job, reviews, body)
-	if err != nil {
-		logger.ErrorContext(noticeCtx, "update failure notice", slog.String("err", err.Error()))
-		return
-	}
-	if updated {
-		logger.InfoContext(noticeCtx, "failure notice updated", slog.Bool("visible", true))
-		return
-	}
-
-	if _, err := service.github.SubmitReview(
-		noticeCtx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-		githubapp.SubmitReviewRequest{
-			CommitID: job.Head,
-			Body:     body,
-			Event:    domain.ReviewDecisionComment,
-			Comments: nil,
-		},
-	); err != nil {
-		logger.ErrorContext(noticeCtx, "publish failure notice", slog.String("err", err.Error()))
-		return
-	}
-	logger.InfoContext(noticeCtx, "failure notice published", slog.Bool("visible", true))
 }
 
 func (service *Service) prepareReviewBody(

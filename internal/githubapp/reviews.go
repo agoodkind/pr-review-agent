@@ -31,6 +31,11 @@ type updateReviewBody struct {
 	Body string `json:"body"`
 }
 
+type dismissReviewBody struct {
+	Message string `json:"message"`
+	Event   string `json:"event"`
+}
+
 // ListReviews returns every review on one pull request.
 func (client *Client) ListReviews(
 	ctx context.Context,
@@ -125,6 +130,27 @@ func (client *Client) UpdateReview(
 		return Review{}, err
 	}
 	return decodeReview(body, "updated", ctx, client)
+}
+
+// DismissReview withdraws one submitted review, so an approval no longer stands
+// for a head the service did not review.
+func (client *Client) DismissReview(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	number int,
+	reviewID int64,
+	message string,
+) error {
+	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews/%d/dismissals", number, reviewID))
+	encoded, err := json.Marshal(dismissReviewBody{Message: message, Event: "DISMISS"})
+	if err != nil {
+		client.logger.ErrorContext(ctx, "marshal dismiss review body", slog.String("err", err.Error()))
+		return errors.New("marshal dismiss review body")
+	}
+
+	_, err = client.doREST(ctx, installationID, "PUT", path, nil, encoded)
+	return err
 }
 
 func decodeReview(body []byte, operation string, ctx context.Context, client *Client) (Review, error) {

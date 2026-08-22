@@ -23,6 +23,8 @@ const (
 	githubAPIVersionHeader = "X-Github-Api-Version"
 	githubAPIVersionValue  = config.GitHubAPIVersion
 	maxResponseBytes       = 16 * 1024 * 1024
+	// graphQLPath names the GraphQL endpoint in a reported failure.
+	graphQLPath = "/graphql"
 )
 
 // PullRequest is the pull request metadata required for review work.
@@ -90,15 +92,25 @@ type ReviewThread struct {
 	RootComment        domain.ReviewComment
 }
 
-// APIError is a sanitized GitHub API failure with an HTTP status code.
+// APIError is a sanitized GitHub API failure. It names the request that failed,
+// because a status alone does not say which endpoint refused it.
 type APIError struct {
+	Method     string
+	Path       string
 	StatusCode int
 	Message    string
 }
 
-// Error returns a sanitized GitHub API failure message.
+// Error names the request, the status, and the reason GitHub gave.
 func (err APIError) Error() string {
-	return fmt.Sprintf("github api status %d: %s", err.StatusCode, err.Message)
+	return fmt.Sprintf(
+		"github %s %s returned %d %s: %s",
+		err.Method,
+		err.Path,
+		err.StatusCode,
+		http.StatusText(err.StatusCode),
+		err.Message,
+	)
 }
 
 // Client performs authenticated GitHub App REST and GraphQL requests.
@@ -165,7 +177,7 @@ func (client *Client) doREST(
 	request, err := http.NewRequestWithContext(ctx, method, target, payload)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "create github request", slog.String("err", err.Error()))
-		return nil, errors.New("create github request")
+		return nil, &requestError{stage: "build the request", method: method, path: path, cause: err}
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", githubAcceptHeader)
@@ -177,7 +189,7 @@ func (client *Client) doREST(
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "github request failed", slog.String("err", err.Error()))
-		return nil, errors.New("github request failed")
+		return nil, &requestError{stage: "reach GitHub", method: method, path: path, cause: err}
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
@@ -187,10 +199,10 @@ func (client *Client) doREST(
 	responseBody, err := readLimitedBody(response.Body)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "read github response", slog.String("err", err.Error()))
-		return nil, errors.New("read github response")
+		return nil, &requestError{stage: "read the response", method: method, path: path, cause: err}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, newAPIError(response.StatusCode, sanitizeErrorBody(responseBody))
+		return nil, newAPIError(method, path, response.StatusCode, sanitizeErrorBody(responseBody))
 	}
 	return responseBody, nil
 }
@@ -217,7 +229,7 @@ func (client *Client) doRESTPaginated(
 		request, err := http.NewRequestWithContext(ctx, method, nextURL, http.NoBody)
 		if err != nil {
 			client.logger.ErrorContext(ctx, "create github request", slog.String("err", err.Error()))
-			return errors.New("create github request")
+			return &requestError{stage: "build the request", method: method, path: path, cause: err}
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Set("Accept", githubAcceptHeader)
@@ -226,21 +238,21 @@ func (client *Client) doRESTPaginated(
 		response, err := client.httpClient.Do(request)
 		if err != nil {
 			client.logger.ErrorContext(ctx, "github request failed", slog.String("err", err.Error()))
-			return errors.New("github request failed")
+			return &requestError{stage: "reach GitHub", method: method, path: path, cause: err}
 		}
 
 		responseBody, readErr := readLimitedBody(response.Body)
 		closeErr := response.Body.Close()
 		if readErr != nil {
 			client.logger.ErrorContext(ctx, "read github response", slog.String("err", readErr.Error()))
-			return errors.New("read github response")
+			return &requestError{stage: "read the response", method: method, path: path, cause: readErr}
 		}
 		if closeErr != nil {
 			client.logger.ErrorContext(ctx, "close github response", slog.String("err", closeErr.Error()))
-			return errors.New("close github response")
+			return &requestError{stage: "close the response", method: method, path: path, cause: closeErr}
 		}
 		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-			return newAPIError(response.StatusCode, sanitizeErrorBody(responseBody))
+			return newAPIError(method, path, response.StatusCode, sanitizeErrorBody(responseBody))
 		}
 
 		if _, err := decodePage(responseBody); err != nil {
@@ -296,7 +308,7 @@ func (client *Client) doGraphQL(
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "graphql request failed", slog.String("err", err.Error()))
-		return nil, errors.New("graphql request failed")
+		return nil, &requestError{stage: "reach GitHub", method: http.MethodPost, path: graphQLPath, cause: err}
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
@@ -306,10 +318,10 @@ func (client *Client) doGraphQL(
 	responseBody, err := readLimitedBody(response.Body)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "read graphql response", slog.String("err", err.Error()))
-		return nil, errors.New("read graphql response")
+		return nil, &requestError{stage: "read the response", method: http.MethodPost, path: graphQLPath, cause: err}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, newAPIError(response.StatusCode, sanitizeErrorBody(responseBody))
+		return nil, newAPIError(http.MethodPost, graphQLPath, response.StatusCode, sanitizeErrorBody(responseBody))
 	}
 
 	var envelope graphQLEnvelope
@@ -370,11 +382,38 @@ func readLimitedBody(reader io.Reader) ([]byte, error) {
 	return body, nil
 }
 
-func newAPIError(statusCode int, message string) APIError {
+func newAPIError(method string, path string, statusCode int, message string) APIError {
 	return APIError{
+		Method:     method,
+		Path:       path,
 		StatusCode: statusCode,
 		Message:    message,
 	}
+}
+
+// requestError describes a GitHub request that never produced a response, and
+// keeps the underlying transport error reachable.
+type requestError struct {
+	stage  string
+	method string
+	path   string
+	cause  error
+}
+
+// Error names the stage, the request, and the underlying failure.
+func (failure *requestError) Error() string {
+	return fmt.Sprintf(
+		"github %s %s failed to %s: %s",
+		failure.method,
+		failure.path,
+		failure.stage,
+		failure.cause.Error(),
+	)
+}
+
+// Unwrap exposes the transport error to [errors.Is] and [errors.As].
+func (failure *requestError) Unwrap() error {
+	return failure.cause
 }
 
 func sanitizeErrorBody(body []byte) string {

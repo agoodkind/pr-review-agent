@@ -143,7 +143,7 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "request installation token", slog.String("err", err.Error()))
-		return "", errors.New("request installation token")
+		return "", &requestError{stage: "reach GitHub", method: http.MethodPost, path: path, cause: err}
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
@@ -153,10 +153,10 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 	body, err := readLimitedBody(response.Body)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "read installation token response", slog.String("err", err.Error()))
-		return "", errors.New("read installation token response")
+		return "", &requestError{stage: "read the response", method: http.MethodPost, path: path, cause: err}
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return "", newAPIError(response.StatusCode, sanitizeErrorBody(body))
+		return "", newAPIError(http.MethodPost, path, response.StatusCode, sanitizeErrorBody(body))
 	}
 
 	var parsed installationTokenResponse

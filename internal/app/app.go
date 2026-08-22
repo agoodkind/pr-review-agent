@@ -130,11 +130,16 @@ func (application *App) Shutdown(ctx context.Context) error {
 			shutdownErr = fmt.Errorf("shutdown http server: %w", err)
 		}
 	}
+	// Drain before cancelling. Cancelling first aborts every in-flight review
+	// mid request, which reports a failed review for a restart the reader had
+	// nothing to do with. Cancelling after the drain only reaches reviews that
+	// outlasted the shutdown budget.
+	drainErr := application.dispatcher.Shutdown(ctx)
 	if application.runCancel != nil {
 		application.runCancel()
 	}
-	if err := application.dispatcher.Shutdown(ctx); err != nil && shutdownErr == nil {
-		shutdownErr = fmt.Errorf("shutdown dispatcher: %w", err)
+	if drainErr != nil && shutdownErr == nil {
+		shutdownErr = fmt.Errorf("shutdown dispatcher: %w", drainErr)
 	}
 	return shutdownErr
 }

@@ -271,15 +271,17 @@ func modelProviderError(err error) error {
 			Message:    apiError.Message,
 		}
 	}
+	// Keep the underlying error reachable, so a caller can tell a cancelled
+	// review apart from a real provider failure and report it as a restart.
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errors.New("model provider request timed out: " + err.Error())
+		return &causeError{description: "model provider request timed out", cause: err}
 	}
 	if errors.Is(err, context.Canceled) {
-		return errors.New("model provider request was cancelled: " + err.Error())
+		return &causeError{description: "model provider request was cancelled", cause: err}
 	}
 	// Keep the underlying error. It is the only description of a transport or
 	// stream failure, and without it the reported cause names nothing to act on.
-	return errors.New("model provider request failed before receiving a response: " + err.Error())
+	return &causeError{description: "model provider request failed before receiving a response", cause: err}
 }
 
 func structuredOutputPrompt(policy string, schemaName string, schema json.RawMessage) string {
