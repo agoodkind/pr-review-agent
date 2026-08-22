@@ -272,12 +272,14 @@ func modelProviderError(err error) error {
 		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errors.New("model provider request timed out")
+		return errors.New("model provider request timed out: " + err.Error())
 	}
 	if errors.Is(err, context.Canceled) {
-		return errors.New("model provider request was cancelled")
+		return errors.New("model provider request was cancelled: " + err.Error())
 	}
-	return errors.New("model provider request failed before receiving a response")
+	// Keep the underlying error. It is the only description of a transport or
+	// stream failure, and without it the reported cause names nothing to act on.
+	return errors.New("model provider request failed before receiving a response: " + err.Error())
 }
 
 func structuredOutputPrompt(policy string, schemaName string, schema json.RawMessage) string {

@@ -20,6 +20,8 @@ The service reads the diff in chunks, one request each. A model stops mid answer
 
 When a review cannot finish, the service rewrites that same top level body with the stage that failed and the reported cause, and creates it if the pull request has none yet. It carries no review marker, so the next push still reviews the head. When the model provider reports no remaining usage, the check run and the body both say so instead of naming a stage.
 
+A failed review carries the same detail table as a successful one, filled with what it had learned when it stopped. In place of the coverage row it reports the last stage it finished, and it names no model when none answered. The check run repeats the cause and the same table, so neither output leaves the reader guessing what ran.
+
 Three failures leave the body untouched, because writing it needs the GitHub call that just failed: reading reviews, updating a review, and submitting a review. The check run still reports those. A body that cannot be written never changes or hides the failure the check reports.
 
 Before each decision, the service reads every prior bot review and thread. It silently resolves fixed threads before publishing new findings.

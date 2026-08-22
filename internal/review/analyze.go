@@ -22,11 +22,24 @@ func Analyze(
 	minimumImportance int,
 ) (Analysis, error) {
 	logger := gklog.L(ctx)
+	// partial reports how far the analysis got. Every error path returns it, so
+	// a failed review can still say which model answered and how much it read.
+	partial := Analysis{
+		CoverageComplete: false,
+		Observed:         nil,
+		Anchored:         nil,
+		Decision:         "",
+		FilesReviewed:    len(input.Files),
+		Chunks:           0,
+		Models:           nil,
+	}
+
 	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
-		return Analysis{}, fmt.Errorf("chunk input: %w", err)
+		return partial, fmt.Errorf("chunk input: %w", err)
 	}
+	partial.Chunks = len(chunks)
 
 	coverageComplete := inputCoverageComplete(input.Files)
 	for _, chunk := range chunks {
@@ -44,7 +57,10 @@ func Analyze(
 	for _, chunk := range chunks {
 		results, reviewErr := reviewChunk(ctx, model, chunk, minimumImportance, &models, &requests)
 		if reviewErr != nil {
-			return Analysis{}, reviewErr
+			partial.Models = models.names
+			partial.Observed = collector.observed
+			partial.Anchored = collector.anchored
+			return partial, reviewErr
 		}
 		for _, result := range results {
 			if !result.CoverageComplete {
