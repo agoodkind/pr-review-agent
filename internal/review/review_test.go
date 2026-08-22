@@ -991,6 +991,9 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		t.Fatal("Run: want error")
 	}
 
+	// The existing reviews are read once before the check completes, so any
+	// approval that outlived the failure can be withdrawn and named in the
+	// check rather than discovered afterwards.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
@@ -999,8 +1002,8 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
-		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"PATCH /repos/owner/repo/check-runs/77",
 		"POST /repos/owner/repo/pulls/7/reviews",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
@@ -1197,6 +1200,111 @@ func TestServiceFailureNoticeEditsTheExistingSummary(t *testing.T) {
 	body, ok := updated["body"].(string)
 	if !ok || !strings.Contains(body, "Review failed during model analysis.") {
 		t.Fatalf("updated body = %v, want the failure wording", updated["body"])
+	}
+}
+
+// approvedSummaryReview is a prior bot review that approved an earlier head and
+// owns the visible summary body.
+func approvedSummaryReview(state string) map[string]any {
+	return map[string]any{
+		"id":        float64(42),
+		"commit_id": testStaleHeadSHA,
+		"body":      "## Review\n\nNo severe findings.\n\n" + marker.Summary(),
+		"state":     state,
+		"user":      map[string]any{"login": testBotLogin},
+	}
+}
+
+// GitHub keeps a review's state when only its body is edited, so a failure that
+// rewrites an approval would otherwise leave the approval standing.
+func TestServiceDismissesAnApprovalItCanNoLongerStandBehind(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:       &sequenceModel{err: errors.New("provider refused the prompt")},
+		reviewPages: [][]map[string]any{{approvedSummaryReview("APPROVED")}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want error")
+	}
+	if fixture.state.lastDismissReview == nil {
+		t.Fatal("the stale approval was not dismissed")
+	}
+	if fixture.state.dismissReviewPath != "/repos/owner/repo/pulls/7/reviews/42/dismissals" {
+		t.Fatalf("dismiss path = %q, want the review dismissals path", fixture.state.dismissReviewPath)
+	}
+	if fixture.state.lastDismissReview["event"] != "DISMISS" {
+		t.Fatalf("event = %v, want DISMISS", fixture.state.lastDismissReview["event"])
+	}
+	message, ok := fixture.state.lastDismissReview["message"].(string)
+	if !ok || !strings.Contains(message, "earlier head") {
+		t.Fatalf("message = %v, want an explanation naming the earlier head", fixture.state.lastDismissReview["message"])
+	}
+}
+
+// Writing the failure body is best effort, but a standing approval satisfies
+// branch protection, so the dismissal must not depend on that write.
+func TestServiceDismissesTheApprovalEvenWhenTheNoticeCannotBeWritten(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:              &sequenceModel{err: errors.New("provider refused the prompt")},
+		reviewPages:        [][]map[string]any{{approvedSummaryReview("APPROVED")}},
+		updateReviewStatus: http.StatusInternalServerError,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want error")
+	}
+	if fixture.state.lastDismissReview == nil {
+		t.Fatal("the stale approval survived a failed notice write")
+	}
+}
+
+func TestServiceLeavesANonApprovalAlone(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:       &sequenceModel{err: errors.New("provider refused the prompt")},
+		reviewPages: [][]map[string]any{{approvedSummaryReview("COMMENTED")}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want error")
+	}
+	if fixture.state.lastDismissReview != nil {
+		t.Fatalf("a review that never approved was dismissed: %v", fixture.state.lastDismissReview)
+	}
+}
+
+func TestServiceReturnsTheReviewCauseWhenTheDismissalFails(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:               &sequenceModel{err: errors.New("provider refused the prompt")},
+		reviewPages:         [][]map[string]any{{approvedSummaryReview("APPROVED")}},
+		dismissReviewStatus: http.StatusInternalServerError,
+	})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: want error")
+	}
+	if !strings.Contains(err.Error(), "provider refused the prompt") {
+		t.Fatalf("err = %q, want the review cause", err)
+	}
+	if strings.Contains(err.Error(), "dismiss review failed") {
+		t.Fatalf("err = %q, want the dismissal failure kept out of the returned cause", err)
+	}
+	if fixture.state.lastUpdateReview == nil {
+		t.Fatal("the failure notice was not written when the dismissal failed")
+	}
+}
+
+// A successful review must never dismiss its own approval.
+func TestServiceDismissesNothingOnASuccessfulReview(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{approvedSummaryReview("APPROVED")}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastDismissReview != nil {
+		t.Fatalf("a successful review dismissed its own approval: %v", fixture.state.lastDismissReview)
 	}
 }
 
@@ -1705,6 +1813,7 @@ type serviceFixtureOptions struct {
 	reviewListStatus                int
 	submitReviewStatus              int
 	updateReviewStatus              int
+	dismissReviewStatus             int
 	reconcileErr                    error
 	reconcileThreads                []githubapp.ReviewThread
 	collector                       review.Collector
@@ -1739,6 +1848,9 @@ type serviceServerState struct {
 	checkDetailsURL                 string
 	submitReviewStatus              int
 	updateReviewStatus              int
+	dismissReviewStatus             int
+	lastDismissReview               map[string]any
+	dismissReviewPath               string
 }
 
 type recordingReconciler struct {
@@ -1869,6 +1981,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		reviewListStatus:                options.reviewListStatus,
 		submitReviewStatus:              options.submitReviewStatus,
 		updateReviewStatus:              options.updateReviewStatus,
+		dismissReviewStatus:             options.dismissReviewStatus,
 	}
 	if len(options.reviewPages) > 0 {
 		state.reviewPages = options.reviewPages
@@ -1878,6 +1991,9 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 	if state.updateReviewStatus == 0 {
 		state.updateReviewStatus = http.StatusOK
+	}
+	if state.dismissReviewStatus == 0 {
+		state.dismissReviewStatus = http.StatusOK
 	}
 	if state.pullRequestStatus == 0 {
 		state.pullRequestStatus = http.StatusOK
@@ -2035,6 +2151,30 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"commit_id": body["commit_id"],
 			"state":     "COMMENTED",
 			"body":      body["body"],
+			"user":      map[string]any{"login": testBotLogin},
+		})
+		return
+	}
+
+	if request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/dismissals") {
+		if state.dismissReviewStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.dismissReviewStatus, map[string]any{
+				"message": "dismiss review failed",
+			})
+			return
+		}
+		body, err := serviceReadJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		state.lastDismissReview = body
+		state.dismissReviewPath = request.URL.Path
+		serviceWriteJSON(writer, http.StatusOK, map[string]any{
+			"id":        float64(42),
+			"commit_id": testHeadSHA,
+			"state":     "DISMISSED",
+			"body":      "",
 			"user":      map[string]any{"login": testBotLogin},
 		})
 		return

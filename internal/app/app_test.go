@@ -459,7 +459,11 @@ func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
 }
 
-func TestShutdownCancelsActiveReviewAndCompletesCheck(t *testing.T) {
+// A restart that cannot drain still ends the review, but it reports an
+// interrupted check rather than a failed review. A container replacement is not
+// a review outcome, and reporting it as one puts a red failure on a pull
+// request whose author changed nothing.
+func TestShutdownThatCannotDrainReportsAnInterruptedCheck(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeBlockUntilCanceled: true,
@@ -481,17 +485,49 @@ func TestShutdownCancelsActiveReviewAndCompletesCheck(t *testing.T) {
 	})
 	_ = queued.Body.Close()
 
+	// The model never returns, so the drain cannot finish and the budget is the
+	// only thing that ends it.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := fixture.application.Shutdown(shutdownCtx)
+	if err == nil {
+		t.Fatal("Shutdown: want the drain budget to be reported")
+	}
+	if !strings.Contains(err.Error(), "shutdown dispatcher") {
+		t.Fatalf("Shutdown error = %q, want the drain failure", err)
+	}
+	fixture.application = nil
+
+	fixture.waitForCheckConclusion(t, "cancelled")
+	if fixture.githubState.lastCheckConclusion() != "cancelled" {
+		t.Fatalf("check conclusion = %q, want cancelled", fixture.githubState.lastCheckConclusion())
+	}
+}
+
+// A review that finishes inside the drain budget must publish normally, because
+// a restart that waits for it has nothing to report.
+func TestShutdownDrainsAnActiveReviewInsteadOfAbortingIt(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-drain",
+		body:       openedPayload(testDefectiveHead),
+	})
+	_ = response.Body.Close()
+	fixture.waitForClydeCalls(t, 1)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := fixture.application.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
 	fixture.application = nil
-	if fixture.githubState.lastCheckConclusion() != "failure" {
-		t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
-	}
-	if fixture.githubState.terminalCheckCount() != 2 {
-		t.Fatalf("terminal checks = %d, want 2", fixture.githubState.terminalCheckCount())
+
+	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "success" {
+		t.Fatalf("check conclusion = %q, want success from a drained review", conclusion)
 	}
 }
 

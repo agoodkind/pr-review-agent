@@ -360,6 +360,73 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 	}
 }
 
+func TestDismissReviewSendsTheDismissalPayload(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	err := client.DismissReview(context.Background(), 99, testRepo(), 4, 42, "no longer stands")
+	if err != nil {
+		t.Fatalf("DismissReview: %v", err)
+	}
+	if state.lastDismissReview == nil {
+		t.Fatal("dismiss review payload missing")
+	}
+	if state.lastDismissPath != "/repos/owner/repo/pulls/4/reviews/42/dismissals" {
+		t.Fatalf("path = %q, want the review dismissals path", state.lastDismissPath)
+	}
+	if state.lastDismissReview["event"] != "DISMISS" {
+		t.Fatalf("event = %v, want DISMISS", state.lastDismissReview["event"])
+	}
+	if state.lastDismissReview["message"] != "no longer stands" {
+		t.Fatalf("message = %v, want the supplied message", state.lastDismissReview["message"])
+	}
+}
+
+// A reported GitHub failure names the request, the status, and the reason
+// GitHub gave. A bare phrase leaves the reader nothing to act on.
+func TestDismissReviewFailureNamesTheRequestAndTheReason(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	state.dismissReviewStatus = http.StatusForbidden
+	err := client.DismissReview(context.Background(), 99, testRepo(), 4, 42, "message")
+	if err == nil {
+		t.Fatal("DismissReview: want error")
+	}
+	for _, want := range []string{
+		"PUT",
+		"/repos/owner/repo/pulls/4/reviews/42/dismissals",
+		"403",
+		"Forbidden",
+		"dismiss review failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// A request that never reaches GitHub reports the transport failure rather than
+// a fixed phrase, and keeps the underlying error matchable.
+func TestUnreachableGitHubReportsTheTransportFailure(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, _ := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	server.Close()
+
+	_, err := client.GetPullRequest(context.Background(), 99, testRepo(), 4)
+	if err == nil {
+		t.Fatal("GetPullRequest: want error")
+	}
+	if !strings.Contains(err.Error(), "reach GitHub") {
+		t.Fatalf("error = %q, want the stage that failed", err)
+	}
+	if !strings.Contains(err.Error(), "connect") && !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("error = %q, want the underlying transport failure", err)
+	}
+}
+
 func TestEndToEndMoreThanOneHundredReviewThreads(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
@@ -522,6 +589,9 @@ type testServerState struct {
 	resolveThreadID        string
 	graphQLError           string
 	submitReviewStatus     int
+	dismissReviewStatus    int
+	lastDismissReview      map[string]any
+	lastDismissPath        string
 }
 
 func newTestClient(t *testing.T, privateKey *rsa.PrivateKey, now time.Time) (*githubapp.Client, *httptest.Server) {
@@ -618,6 +688,30 @@ func handleTestRequest(writer http.ResponseWriter, request *http.Request, state 
 			"commit_id": body["commit_id"],
 			"state":     "CHANGES_REQUESTED",
 			"body":      body["body"],
+			"user":      map[string]any{"login": testBotLogin},
+		})
+		return
+	}
+
+	if request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/dismissals") {
+		body, err := readJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if state.dismissReviewStatus != 0 && state.dismissReviewStatus != http.StatusOK {
+			writeJSON(writer, state.dismissReviewStatus, map[string]any{
+				"message": "dismiss review failed",
+			})
+			return
+		}
+		state.lastDismissReview = body
+		state.lastDismissPath = request.URL.Path
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"id":        float64(42),
+			"commit_id": testHeadSHA,
+			"state":     "DISMISSED",
+			"body":      "",
 			"user":      map[string]any{"login": testBotLogin},
 		})
 		return

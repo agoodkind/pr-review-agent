@@ -46,6 +46,24 @@ func (truncatedError *TruncatedError) Truncated() bool {
 	return true
 }
 
+// causeError describes a model provider failure in plain words while keeping
+// the underlying error reachable, so a caller can still match a sentinel such
+// as [context.Canceled] and tell a restart apart from a real provider failure.
+type causeError struct {
+	description string
+	cause       error
+}
+
+// Error states the description and the underlying error.
+func (wrapped *causeError) Error() string {
+	return wrapped.description + ": " + wrapped.cause.Error()
+}
+
+// Unwrap exposes the underlying error to [errors.Is] and [errors.As].
+func (wrapped *causeError) Unwrap() error {
+	return wrapped.cause
+}
+
 // ProviderError is one structured failure reported by the model provider.
 type ProviderError struct {
 	StatusCode int
