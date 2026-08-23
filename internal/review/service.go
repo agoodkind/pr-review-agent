@@ -276,7 +276,7 @@ func (service *Service) runLocked(
 	}
 	progress.reached("the diff")
 
-	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance)
+	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now)
 	progress.applyAnalysis(analysis)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
