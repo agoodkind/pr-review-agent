@@ -58,28 +58,35 @@ func Analyze(
 	analysisStartedAt := now()
 	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
+	outcomes := reviewChunksConcurrently(ctx, model, chunks, minimumImportance, now)
+
+	// Outcomes fold back in chunk order even though the calls ran together, so
+	// deduplication and finding order stay identical to a serial review.
 	var models modelSet
 	requests := 0
-	for _, chunk := range chunks {
-		results, reviewErr := reviewChunk(ctx, model, chunk, minimumImportance, &models, &requests, now)
-		if reviewErr != nil {
+	for _, outcome := range outcomes {
+		requests += outcome.requests
+		for _, name := range outcome.models {
+			models.add(name)
+		}
+		if outcome.err != nil {
 			// The elapsed total says whether the budget ran out or one call
 			// failed early, which the failing chunk number alone cannot.
 			logger.ErrorContext(
 				ctx,
 				"review model analysis failed",
-				slog.Int("chunk", chunk.Index),
+				slog.Int("chunk", outcome.chunk),
 				slog.Int("chunks", len(chunks)),
 				slog.Int("model_requests", requests),
 				slog.Duration("elapsed", now().Sub(analysisStartedAt)),
-				slog.String("err", reviewErr.Error()),
+				slog.String("err", outcome.err.Error()),
 			)
 			partial.Models = models.names
 			partial.Observed = collector.observed
 			partial.Anchored = collector.anchored
-			return partial, reviewErr
+			return partial, outcome.err
 		}
-		for _, result := range results {
+		for _, result := range outcome.results {
 			if !result.CoverageComplete {
 				coverageComplete = false
 			}

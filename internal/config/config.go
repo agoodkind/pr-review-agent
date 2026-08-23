@@ -35,6 +35,12 @@ const (
 	MaximumPromptBytes = 80000
 	// MaximumOutputTokens is the maximum model completion size.
 	MaximumOutputTokens = 8000
+	// MaximumChunkConcurrency is how many chunks of one diff are reviewed at
+	// once. A review gets a single time budget for the whole diff, so reviewing
+	// chunks one at a time makes a large diff run out of time no matter how fast
+	// each call is. Four keeps the provider's concurrent load modest while
+	// cutting a thirteen chunk review to four waves.
+	MaximumChunkConcurrency = 4
 	// GitHubAPIVersion is the GitHub REST API version sent on every request.
 	GitHubAPIVersion = "2022-11-28"
 	// WritingPolicy is injected into every review and reconciliation prompt.

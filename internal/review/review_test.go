@@ -710,7 +710,10 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 	}
 }
 
+// sequenceModel answers a fixed sequence of results. Chunks are reviewed
+// concurrently, so its call bookkeeping is guarded.
 type sequenceModel struct {
+	mu        sync.Mutex
 	results   []domain.ReviewResult
 	models    []string
 	prompts   []string
@@ -719,6 +722,8 @@ type sequenceModel struct {
 }
 
 func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Completion, error) {
+	model.mu.Lock()
+	defer model.mu.Unlock()
 	model.prompts = append(model.prompts, prompt)
 	if model.err != nil {
 		return review.Completion{}, model.err
@@ -773,6 +778,135 @@ func containsTypographicDash(value string) bool {
 		}
 	}
 	return false
+}
+
+// A review holds one time budget for the whole diff. Reviewing chunks one at a
+// time spends that budget serially, which is how a thirteen chunk review ran
+// out of time on chunk twelve. This proves several chunks are in flight at once.
+func TestChunksAreReviewedConcurrently(t *testing.T) {
+	input := manyChunkInput(t)
+	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
+	if err != nil {
+		t.Fatalf("ChunkInput: %v", err)
+	}
+	if len(chunks) < config.MaximumChunkConcurrency {
+		t.Fatalf("chunk count = %d, want at least %d", len(chunks), config.MaximumChunkConcurrency)
+	}
+
+	model := newConcurrencyProbeModel()
+
+	if _, err := review.Analyze(context.Background(), model, input, 9, time.Now); err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+
+	if model.peak() < 2 {
+		t.Fatalf("peak concurrent model calls = %d, want more than one chunk in flight", model.peak())
+	}
+	if model.peak() > config.MaximumChunkConcurrency {
+		t.Fatalf("peak concurrent model calls = %d, want at most %d", model.peak(), config.MaximumChunkConcurrency)
+	}
+}
+
+// A failing chunk must still fail the whole review, and the cause must survive
+// the concurrent path unchanged.
+func TestOneFailingChunkFailsTheConcurrentReview(t *testing.T) {
+	input := manyChunkInput(t)
+	model := &sequenceModel{err: errors.New("provider refused the prompt")}
+
+	_, err := review.Analyze(context.Background(), model, input, 9, time.Now)
+	if err == nil {
+		t.Fatal("Analyze: want the provider error")
+	}
+	if !strings.Contains(err.Error(), "provider refused the prompt") {
+		t.Fatalf("err = %q, want the provider cause", err)
+	}
+}
+
+// concurrencyProbeModel records how many calls overlap, so a test can prove
+// chunks run together instead of one after another.
+type concurrencyProbeModel struct {
+	mu       sync.Mutex
+	inFlight int
+	highest  int
+	release  chan struct{}
+}
+
+func newConcurrencyProbeModel() *concurrencyProbeModel {
+	return &concurrencyProbeModel{
+		mu:       sync.Mutex{},
+		inFlight: 0,
+		highest:  0,
+		release:  make(chan struct{}),
+	}
+}
+
+func (model *concurrencyProbeModel) Review(context.Context, string) (review.Completion, error) {
+	model.mu.Lock()
+	model.inFlight++
+	if model.inFlight > model.highest {
+		model.highest = model.inFlight
+	}
+	reached := model.inFlight >= config.MaximumChunkConcurrency
+	model.mu.Unlock()
+
+	// The first full wave releases everyone, so the test proves overlap without
+	// depending on wall clock timing.
+	if reached {
+		model.releaseOnce()
+	}
+	<-model.release
+
+	model.mu.Lock()
+	model.inFlight--
+	model.mu.Unlock()
+	return review.Completion{
+		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
+		Model:  testReviewModel,
+	}, nil
+}
+
+func (model *concurrencyProbeModel) releaseOnce() {
+	select {
+	case <-model.release:
+	default:
+		close(model.release)
+	}
+}
+
+func (model *concurrencyProbeModel) peak() int {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return model.highest
+}
+
+// manyChunkInput builds files large enough that each one lands in its own
+// chunk, producing more chunks than the concurrency limit so a full wave and
+// the bound on it are both observable.
+func manyChunkInput(t *testing.T) diff.ReviewInput {
+	t.Helper()
+	const fileCount = 12
+	padding := strings.Repeat("x\n", 30000)
+	files := make([]diff.FileContext, 0, fileCount)
+	for index := range fileCount {
+		patch := fmt.Sprintf("@@ -1,1 +1,2 @@\n line%d\n+added%d\n", index, index)
+		changed, hunks, err := diff.ChangedRightLines(patch)
+		if err != nil {
+			t.Fatalf("ChangedRightLines: %v", err)
+		}
+		files = append(files, diff.FileContext{
+			Path:              fmt.Sprintf("file%d.go", index),
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    padding,
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		})
+	}
+	return diff.ReviewInput{
+		PullRequest: githubapp.PullRequest{Head: domain.HeadSHA(testHeadSHA)},
+		Files:       files,
+	}
 }
 
 // A reader who opens a failed check run must see what the review did, not only

@@ -279,7 +279,13 @@ func (service *Service) runLocked(
 	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now)
 	progress.applyAnalysis(analysis)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		// A chunk that panicked is an internal fault, not a model failure, and
+		// the reported cause has to say so.
+		title := checkFailureAnalysis
+		if isChunkPanic(err) {
+			title = checkFailurePanic
+		}
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), title, err)
 	}
 	progress.reached("model analysis")
 	if err := logAnalysis(ctx, analysis); err != nil {
