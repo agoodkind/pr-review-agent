@@ -345,7 +345,17 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 		t.Fatalf("start status = %v", state.lastUpdateCheckRun["status"])
 	}
 
-	if err := client.CompleteCheckRun(context.Background(), 99, testRepo(), created.ID, "success", "done", "finished"); err != nil {
+	err = client.CompleteCheckRun(
+		context.Background(),
+		99,
+		testRepo(),
+		created.ID,
+		"success",
+		"done",
+		"finished",
+		"## Run log\n\n```\n12:00:00.000 INFO  review job started\n```\n",
+	)
+	if err != nil {
 		t.Fatalf("CompleteCheckRun: %v", err)
 	}
 	if state.lastUpdateCheckRun["status"] != "completed" {
@@ -357,6 +367,28 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 	output, ok := state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok || output["title"] != "done" || output["summary"] != "finished" {
 		t.Fatalf("output = %v, want distinct title and summary", state.lastUpdateCheckRun["output"])
+	}
+	text, ok := output["text"].(string)
+	if !ok || !strings.Contains(text, "review job started") {
+		t.Fatalf("output text = %v, want the run log", output["text"])
+	}
+}
+
+// A log longer than the check run limit must still publish, and must keep the
+// end of the run, because that is where the failure is.
+func TestCompleteCheckRunTruncatesAnOversizeLog(t *testing.T) {
+	oversize := strings.Repeat("noise line\n", 20000) + "final failing line\n"
+
+	truncated := githubapp.TruncateCheckRunText(oversize)
+
+	if len(truncated) > githubapp.MaximumCheckRunTextBytes {
+		t.Fatalf("truncated length = %d, want at most %d", len(truncated), githubapp.MaximumCheckRunTextBytes)
+	}
+	if !strings.Contains(truncated, "final failing line") {
+		t.Fatal("truncated log dropped the end of the run")
+	}
+	if !strings.Contains(truncated, "truncated to fit the check run") {
+		t.Fatal("truncated log does not say it was truncated")
 	}
 }
 
