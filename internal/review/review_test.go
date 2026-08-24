@@ -1906,6 +1906,104 @@ func TestServiceRequestsChangesWithoutPublishingWhenThreadCapIsFull(t *testing.T
 	}
 }
 
+// A finding published once stays suppressed after its thread is resolved, so a
+// later run publishes nothing while the model still reports the same defect.
+// Requesting changes there leaves a blocking review with no open thread and
+// nothing to fix, and only a human dismissal clears it.
+func TestServiceApprovesWhenEveryFindingIsAlreadyResolved(t *testing.T) {
+	resolvedFinding := domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Severe defect",
+		Body:       "The changed line breaks core behavior.",
+		Importance: 9,
+	}
+	findingMarker, err := marker.Finding(domain.HeadSHA(testHeadSHA), resolvedFinding)
+	if err != nil {
+		t.Fatalf("Finding marker: %v", err)
+	}
+
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:         9,
+		maximumUnresolvedComments: 3,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         []domain.Finding{resolvedFinding},
+		}}},
+		reconcileThreads: []githubapp.ReviewThread{{
+			NodeID:   "resolved-thread",
+			Resolved: true,
+			RootComment: domain.ReviewComment{
+				Author:    testBotLogin,
+				Body:      "The changed line breaks core behavior.\n\n" + findingMarker,
+				Path:      resolvedFinding.Path,
+				StartLine: resolvedFinding.StartLine,
+				EndLine:   resolvedFinding.EndLine,
+			},
+		}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE because nothing was published and no thread is open",
+			fixture.state.lastSubmitReview["event"])
+	}
+	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
+	if !ok || len(comments) != 0 {
+		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
+	}
+}
+
+// One open bot thread is a live objection, so the review keeps blocking even
+// when this run publishes no new comment.
+func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
+	openFinding := domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Severe defect",
+		Body:       "The changed line breaks core behavior.",
+		Importance: 9,
+	}
+	findingMarker, err := marker.Finding(domain.HeadSHA(testHeadSHA), openFinding)
+	if err != nil {
+		t.Fatalf("Finding marker: %v", err)
+	}
+
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:         9,
+		maximumUnresolvedComments: 3,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         []domain.Finding{openFinding},
+		}}},
+		reconcileThreads: []githubapp.ReviewThread{{
+			NodeID:   "open-thread",
+			Resolved: false,
+			RootComment: domain.ReviewComment{
+				Author:    testBotLogin,
+				Body:      "The changed line breaks core behavior.\n\n" + findingMarker,
+				Path:      openFinding.Path,
+				StartLine: openFinding.StartLine,
+				EndLine:   openFinding.EndLine,
+			},
+		}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES while a bot thread is open",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
 func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 	gateModel := newSerialGateModel()
 	fixture := newServiceFixture(t, serviceFixtureOptions{
