@@ -1,7 +1,15 @@
+import { SERVICE_LOG_PATH, handleServiceLogs } from "./servicelogs.js";
+
 export async function routeRequest(request, env) {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health") {
     return Response.json({ status: "ok" });
+  }
+
+  // Logs shipped by the container are printed here rather than forwarded on,
+  // because the container is where they came from.
+  if (url.pathname === SERVICE_LOG_PATH) {
+    return handleServiceLogs(request, env.GITHUB_WEBHOOK_SECRET);
   }
 
   const metadata = await readWebhookMetadata(request);

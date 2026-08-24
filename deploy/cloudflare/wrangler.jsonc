@@ -11,9 +11,10 @@
     "CLYDE_BASE_URL": "https://clyde-suburban.goodkind.io/v1",
     "GITHUB_APP_ID": "4571682",
     "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
+    "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",
     "PORT": "3000",
     "REVIEW_MAX_UNRESOLVED_COMMENTS": "3",
-    "REVIEW_MIN_IMPORTANCE": "9",
+    "REVIEW_MIN_IMPORTANCE": "6",
     "REVIEW_MODEL": "gpt-5.6-sol",
     "REVIEW_TIMEOUT": "10m",
     "REVIEW_WORKERS": "4"

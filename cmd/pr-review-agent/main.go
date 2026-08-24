@@ -16,6 +16,7 @@ import (
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/app"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/telemetry"
 	"goodkind.io/pr-review-agent/internal/version"
 )
 
@@ -50,15 +51,30 @@ func run(
 		return 1
 	}
 
+	// Container stdout reaches no log sink, so a forwarder is added as a second
+	// handler when one is configured. Every log the service already writes then
+	// reaches a place a person can read, with no new call sites.
+	handlers := []slog.Handler{
+		slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+	}
+	var forwarder *telemetry.Forwarder
+	if cfg.LogForwardURL != nil {
+		forwarder = telemetry.NewForwarder(cfg.LogForwardURL.String(), cfg.GitHubWebhookSecret, nil)
+		if forwarder != nil {
+			handlers = append(handlers, forwarder)
+		}
+	}
+
 	logger, closer := gklog.New(gklog.Config{
 		BuildVersion: version.String(),
-		Handlers: []slog.Handler{
-			slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
-		},
+		Handlers:     handlers,
 	})
 	defer func() {
 		if closeErr := closer.Close(); closeErr != nil {
 			logger.Error("close logger", slog.String("err", closeErr.Error()))
+		}
+		if closeErr := forwarder.Close(); closeErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "close log forwarder: %v\n", closeErr)
 		}
 	}()
 	slog.SetDefault(logger)

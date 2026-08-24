@@ -74,6 +74,11 @@ type Config struct {
 	FallbackCFAccessClientID     string
 	FallbackCFAccessClientSecret string
 	FallbackOnUsageExceeded      bool
+	// LogForwardURL is where the service ships its own logs so a person can
+	// read them. Container stdout reaches no log sink, so without this the
+	// service is invisible in production. It is optional, and an empty value
+	// leaves the service logging only to stdout.
+	LogForwardURL *url.URL
 }
 
 // HasFallback reports whether a fallback model provider is configured.
@@ -145,8 +150,24 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	missing = append(missing, loadGitHub(lookup, &cfg)...)
 	missing = append(missing, loadClyde(lookup, &cfg)...)
 	missing = append(missing, loadFallback(lookup, &cfg)...)
+	cfg.LogForwardURL = loadLogForwardURL(lookup)
 
 	return cfg, missing
+}
+
+// loadLogForwardURL reads the optional log destination. A malformed value is
+// treated as absent rather than fatal, because losing log shipping must never
+// stop the service from reviewing.
+func loadLogForwardURL(lookup LookupEnv) *url.URL {
+	value, ok := lookup("LOG_FORWARD_URL")
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil
+	}
+	return parsed
 }
 
 func loadRequiredText(lookup LookupEnv, name string) (string, bool) {
