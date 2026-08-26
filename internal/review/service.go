@@ -21,20 +21,22 @@ import (
 )
 
 const (
-	checkSummaryFailure      = "Review failed."
-	checkSummaryCancelled    = "Review cancelled."
-	checkFailureReviews      = "Review failed while reading existing reviews."
-	checkFailurePullRequest  = "Review failed while loading the pull request."
-	checkFailureReconcile    = "Review failed while reconciling existing findings."
-	checkFailureDiff         = "Review failed while collecting the pull request diff."
-	checkFailureAnalysis     = "Review failed during model analysis."
-	checkFailureRefresh      = "Review failed while refreshing the pull request head."
-	checkFailureSummary      = "Review failed while updating the visible summary."
-	checkFailurePublish      = "Review failed while publishing the final decision."
-	checkFailurePanic        = "Review failed after an internal panic."
-	checkFailureUsage        = "Review stopped: the model provider reported no remaining usage."
-	checkFailureDeadline     = "Review stopped: it ran out of time."
-	maxCheckFailureRunes     = 1000
+	checkSummaryFailure     = "Review failed."
+	checkSummaryCancelled   = "Review cancelled."
+	checkFailureReviews     = "Review failed while reading existing reviews."
+	checkFailurePullRequest = "Review failed while loading the pull request."
+	checkFailureReconcile   = "Review failed while reconciling existing findings."
+	checkFailureDiff        = "Review failed while collecting the pull request diff."
+	checkFailureAnalysis    = "Review failed during model analysis."
+	checkFailureRefresh     = "Review failed while refreshing the pull request head."
+	checkFailureSummary     = "Review failed while updating the visible summary."
+	checkFailurePublish     = "Review failed while publishing the final decision."
+	checkFailurePanic       = "Review failed after an internal panic."
+	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
+	checkFailureDeadline    = "Review stopped: it ran out of time."
+	maxCheckFailureRunes    = 1000
+	// maxCheckTitleRunes is the longest title GitHub accepts for check output.
+	maxCheckTitleRunes       = 255
 	maximumCompletionTimeout = 30 * time.Second
 	// maximumPublicationTimeout caps the slice of the review budget reserved for
 	// publishing. Publication is a handful of GitHub calls, so this is generous
@@ -662,49 +664,6 @@ func (service *Service) succeed(
 	return nil
 }
 
-func formatFindingImportances(findings []domain.Finding) string {
-	if len(findings) == 0 {
-		return "none"
-	}
-	values := make([]string, 0, len(findings))
-	for _, finding := range findings {
-		values = append(values, fmt.Sprintf("`%d`", finding.Importance))
-	}
-	return strings.Join(values, ", ")
-}
-
-func formatReviewTraceIDs(reviews []reviewTrace) string {
-	if len(reviews) == 0 {
-		return "none"
-	}
-	ids := make([]string, 0, len(reviews))
-	for _, item := range reviews {
-		ids = append(ids, fmt.Sprintf("`%d`", item.ID))
-	}
-	return strings.Join(ids, ", ")
-}
-
-func formatThreadTraceIDs(threads []threadTrace) string {
-	if len(threads) == 0 {
-		return "none"
-	}
-	ids := make([]string, 0, len(threads))
-	for _, item := range threads {
-		ids = append(ids, "`"+item.NodeID+"`")
-	}
-	return strings.Join(ids, ", ")
-}
-
-func countResolvedThreadTraces(threads []threadTrace) int {
-	count := 0
-	for _, item := range threads {
-		if item.Resolved {
-			count++
-		}
-	}
-	return count
-}
-
 func (service *Service) failCheck(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -790,12 +749,26 @@ func failureTitle(stage string, cause error) string {
 		return checkFailurePanic
 	}
 	if reason := providerReason(cause); reason != "" {
-		return "Review stopped: " + reason
+		return boundTitle("Review stopped: " + reason)
 	}
 	if stage == "" {
 		return checkSummaryFailure
 	}
 	return stage
+}
+
+// boundTitle keeps a title inside the length GitHub accepts for check output.
+//
+// A provider can state a reason of any length, and a check update carrying an
+// over-long title is rejected outright. That would leave the check unfinished
+// and hide the failure it was reporting, which is worse than a shortened
+// sentence.
+func boundTitle(title string) string {
+	runes := []rune(title)
+	if len(runes) <= maxCheckTitleRunes {
+		return title
+	}
+	return string(runes[:maxCheckTitleRunes-3]) + "..."
 }
 
 // usageExceededError is any provider error that reports exhausted usage.

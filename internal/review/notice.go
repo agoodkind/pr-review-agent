@@ -87,6 +87,12 @@ func (service *Service) dismissStaleVerdicts(
 		if item.Author != service.botLogin || !standingVerdict(item.State) {
 			continue
 		}
+		// A verdict on this same head came from a review that finished. This run
+		// failing says nothing about that one, so withdrawing it would discard a
+		// judgment the service still stands behind.
+		if item.CommitID == job.Head {
+			continue
+		}
 		if dismissErr := service.github.DismissReview(
 			ctx,
 			job.InstallationID,
