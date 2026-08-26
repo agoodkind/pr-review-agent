@@ -59,14 +59,7 @@ func Analyze(
 	analysisStartedAt := now()
 	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
-	if sink == nil {
-		sink = discardSink{}
-	}
-	stream := chunkStream{
-		sink:              sink,
-		fileIndex:         collector.fileIndex,
-		minimumImportance: minimumImportance,
-	}
+	stream := newChunkStream(sink, collector.fileIndex, minimumImportance)
 	outcomes := reviewChunksConcurrently(ctx, model, chunks, minimumImportance, now, stream)
 
 	// Outcomes fold back in chunk order even though the calls ran together, so
