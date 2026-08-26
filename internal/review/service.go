@@ -48,6 +48,7 @@ type GitHub interface {
 	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string, string) error
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
 	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
+	DismissReview(context.Context, int64, domain.Repository, int, int64, string) error
 }
 
 // Collector gathers pull request diff input for one review pass.
@@ -581,12 +582,36 @@ func (service *Service) failCheck(
 			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
 		}
 	}
-	service.publishFailureNotice(ctx, job, progress, title, detail)
+	service.clearFailedReviewState(ctx, job, progress, title, detail)
 	if completeErr != nil {
 		return fmt.Errorf("complete check run: %w", completeErr)
 	}
 	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
 	return cause
+}
+
+// clearFailedReviewState leaves the pull request in a state a reader can act
+// on. A failed review has no verdict, so any verdict the service left earlier
+// is withdrawn, and the visible summary says why the review stopped.
+//
+// Neither step can mask the reported cause, so a failure here is logged and the
+// remaining work still runs.
+func (service *Service) clearFailedReviewState(
+	ctx context.Context,
+	job domain.ReviewJob,
+	progress Summary,
+	title string,
+	detail string,
+) {
+	logger := gklog.L(ctx)
+	reviews, err := service.listReviewsForFailure(ctx, job)
+	if err != nil {
+		return
+	}
+	if dismissErr := service.dismissStaleVerdicts(ctx, job, reviews); dismissErr != nil {
+		logger.ErrorContext(ctx, "dismiss stale verdicts", slog.String("err", dismissErr.Error()))
+	}
+	service.publishFailureNotice(ctx, job, reviews, progress, title, detail)
 }
 
 // usageExceededError is any provider error that reports exhausted usage.
@@ -600,54 +625,6 @@ func usageExceeded(cause error) bool {
 		return false
 	}
 	return target.UsageExceeded()
-}
-
-// publishFailureNotice rewrites the single visible summary so the pull request
-// states why the review stopped. A notice failure never masks the review cause.
-func (service *Service) publishFailureNotice(
-	ctx context.Context,
-	job domain.ReviewJob,
-	progress Summary,
-	title string,
-	detail string,
-) {
-	logger := gklog.L(ctx)
-	noticeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
-	defer cancel()
-
-	reviews, err := service.github.ListReviews(noticeCtx, job.InstallationID, job.Repository, job.Number)
-	if err != nil {
-		logger.ErrorContext(noticeCtx, "load reviews for failure notice", slog.String("err", err.Error()))
-		return
-	}
-
-	body := RenderFailureBody(progress, title, detail)
-	updated, err := service.updateSummaryReview(noticeCtx, job, reviews, body)
-	if err != nil {
-		logger.ErrorContext(noticeCtx, "update failure notice", slog.String("err", err.Error()))
-		return
-	}
-	if updated {
-		logger.InfoContext(noticeCtx, "failure notice updated", slog.Bool("visible", true))
-		return
-	}
-
-	if _, err := service.github.SubmitReview(
-		noticeCtx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-		githubapp.SubmitReviewRequest{
-			CommitID: job.Head,
-			Body:     body,
-			Event:    domain.ReviewDecisionComment,
-			Comments: nil,
-		},
-	); err != nil {
-		logger.ErrorContext(noticeCtx, "publish failure notice", slog.String("err", err.Error()))
-		return
-	}
-	logger.InfoContext(noticeCtx, "failure notice published", slog.Bool("visible", true))
 }
 
 func (service *Service) prepareReviewBody(
