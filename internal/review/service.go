@@ -34,6 +34,7 @@ const (
 	checkFailurePublish      = "Review failed while publishing the final decision."
 	checkFailurePanic        = "Review failed after an internal panic."
 	checkFailureUsage        = "Review stopped: the model provider reported no remaining usage."
+	checkFailureDeadline     = "Review stopped: it ran out of time before every chunk answered."
 	maxCheckFailureRunes     = 1000
 	maximumCompletionTimeout = 30 * time.Second
 	// maximumPublicationTimeout caps the slice of the review budget reserved for
@@ -577,12 +578,7 @@ func (service *Service) failCheck(
 	cause error,
 ) error {
 	logger := gklog.L(ctx)
-	if title == "" {
-		title = checkSummaryFailure
-	}
-	if usageExceeded(cause) {
-		title = checkFailureUsage
-	}
+	title = failureTitle(title, cause)
 	progress.Failed = true
 	detail := checkFailureDetail(cause)
 	// The check run reports the same cause and the same progress the comment
@@ -635,9 +631,51 @@ func (service *Service) clearFailedReviewState(
 	service.publishFailureNotice(ctx, job, reviews, progress, title, detail)
 }
 
+// failureTitle names why a review stopped, in the one line a reader sees in the
+// checks list before opening anything.
+//
+// A stage name alone tells the reader where the run was, not what went wrong,
+// so it leaves them no idea whether to retry, wait, or fix something. The cause
+// answers that, and the stage is the fallback for a failure that carries no
+// cause of its own.
+func failureTitle(stage string, cause error) string {
+	switch {
+	case usageExceeded(cause):
+		return checkFailureUsage
+	case errors.Is(cause, context.DeadlineExceeded):
+		return checkFailureDeadline
+	case isChunkPanic(cause):
+		return checkFailurePanic
+	}
+	if reason := providerReason(cause); reason != "" {
+		return "Review stopped: " + reason
+	}
+	if stage == "" {
+		return checkSummaryFailure
+	}
+	return stage
+}
+
 // usageExceededError is any provider error that reports exhausted usage.
 type usageExceededError interface {
 	UsageExceeded() bool
+}
+
+// reasonedError is any failure that can state its own cause in a sentence. The
+// model provider package implements it, and stating the interface here keeps
+// that dependency pointing one way.
+type reasonedError interface {
+	ProviderReason() string
+}
+
+// providerReason returns the cause's own sentence, or an empty string when the
+// failure states none.
+func providerReason(cause error) string {
+	var target reasonedError
+	if !errors.As(cause, &target) {
+		return ""
+	}
+	return target.ProviderReason()
 }
 
 func usageExceeded(cause error) bool {
