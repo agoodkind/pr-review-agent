@@ -444,7 +444,7 @@ func TestAnalyzeSplitsAndRetriesATruncatedChunk(t *testing.T) {
 		}},
 	}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestAnalyzeKeepsSplittingWhileTheAnswerTruncates(t *testing.T) {
 	input := multiHunkInput(t)
 	model := &truncatedModel{truncateCalls: 2}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestAnalyzeSkipsAHunkThatCannotSplitAndReportsIncompleteCoverage(t *testing
 	input := multiHunkInput(t)
 	model := &truncatedModel{truncateCalls: 1000}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestAnalyzeFailsOnAnErrorThatSplittingCannotFix(t *testing.T) {
 	input := multiHunkInput(t)
 	model := &sequenceModel{err: errors.New("provider refused the prompt")}
 
-	_, err := review.Analyze(context.Background(), model, input, 9, time.Now)
+	_, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err == nil {
 		t.Fatal("Analyze: want the provider error")
 	}
@@ -598,7 +598,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 		},
 	}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestAnalyzePromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 		}},
 	}
 
-	_, err = review.Analyze(context.Background(), model, input, 9, time.Now)
+	_, err = review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -704,7 +704,7 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 		}},
 	}
 
-	_, err = review.Analyze(context.Background(), model, input, 9, time.Now)
+	_, err = review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err == nil {
 		t.Fatal("Analyze invalid model result: want error")
 	}
@@ -795,7 +795,7 @@ func TestChunksAreReviewedConcurrently(t *testing.T) {
 
 	model := newConcurrencyProbeModel()
 
-	if _, err := review.Analyze(context.Background(), model, input, 9, time.Now); err != nil {
+	if _, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil); err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
 
@@ -813,7 +813,7 @@ func TestOneFailingChunkFailsTheConcurrentReview(t *testing.T) {
 	input := manyChunkInput(t)
 	model := &sequenceModel{err: errors.New("provider refused the prompt")}
 
-	_, err := review.Analyze(context.Background(), model, input, 9, time.Now)
+	_, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
 	if err == nil {
 		t.Fatal("Analyze: want the provider error")
 	}
@@ -1124,12 +1124,15 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
+	// The finding posts as its chunk answers, before the head refresh and the
+	// review submission that carries the verdict.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
@@ -1205,6 +1208,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
@@ -1234,6 +1238,7 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
@@ -1262,6 +1267,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
@@ -1855,17 +1861,12 @@ func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinC
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
 	}
-	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
-	if !ok || len(comments) != 1 {
-		t.Fatalf("comments = %v, want one", fixture.state.lastSubmitReview["comments"])
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want one", len(fixture.state.streamedComments))
 	}
-	comment, ok := comments[0].(map[string]any)
-	if !ok {
-		t.Fatalf("comment = %T, want object", comments[0])
-	}
-	body, ok := comment["body"].(string)
+	body, ok := fixture.state.streamedComments[0]["body"].(string)
 	if !ok || !strings.Contains(body, "Highest importance defect") {
-		t.Fatalf("comment body = %v, want highest importance finding", comment["body"])
+		t.Fatalf("comment body = %v, want highest importance finding", fixture.state.streamedComments[0]["body"])
 	}
 }
 
@@ -2000,6 +2001,92 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES while a bot thread is open",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// A finding reaches the pull request as soon as its chunk answers, so the run
+// stopping later cannot take it away.
+//
+// This is the whole point of streaming. Before, a review held every finding
+// until the last chunk answered, so a provider refusal or an expired deadline
+// left the reader with nothing even though most of the diff had been read.
+func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:         9,
+		maximumUnresolvedComments: 5,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Severe defect",
+				Body:       "The changed line breaks core behavior.",
+				Importance: 9,
+			}},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want one", len(fixture.state.streamedComments))
+	}
+	// The comment posts before the review that carries the verdict, which is
+	// what makes it survive a run that never reaches that submission.
+	commentIndex := -1
+	submitIndex := -1
+	for index, route := range fixture.state.requestOrder {
+		switch route {
+		case "POST /repos/owner/repo/pulls/7/comments":
+			commentIndex = index
+		case "POST /repos/owner/repo/pulls/7/reviews":
+			if submitIndex < 0 {
+				submitIndex = index
+			}
+		}
+	}
+	if commentIndex < 0 || submitIndex < 0 || commentIndex > submitIndex {
+		t.Fatalf("comment posted at %d and review submitted at %d, want the comment first",
+			commentIndex, submitIndex)
+	}
+	submitted, ok := fixture.state.lastSubmitReview["comments"].([]any)
+	if !ok || len(submitted) != 0 {
+		t.Fatalf("submitted comments = %v, want none because they already posted",
+			fixture.state.lastSubmitReview["comments"])
+	}
+}
+
+// A comment GitHub rejects must not turn a blocking review into an approval.
+// The defect is real whether or not its comment reached the page, so approving
+// there would ship it.
+func TestServiceStillRequestsChangesWhenACommentIsRejected(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:         9,
+		maximumUnresolvedComments: 5,
+		createCommentStatus:       http.StatusUnprocessableEntity,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Severe defect",
+				Body:       "The changed line breaks core behavior.",
+				Importance: 9,
+			}},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES despite the rejected comment",
 			fixture.state.lastSubmitReview["event"])
 	}
 }
@@ -2310,6 +2397,7 @@ type serviceFixtureOptions struct {
 	submitReviewStatus              int
 	updateReviewStatus              int
 	dismissReviewStatus             int
+	createCommentStatus             int
 	reconcileErr                    error
 	reconcileThreads                []githubapp.ReviewThread
 	collector                       review.Collector
@@ -2346,6 +2434,8 @@ type serviceServerState struct {
 	updateReviewStatus              int
 	dismissReviewStatus             int
 	dismissals                      []map[string]any
+	createCommentStatus             int
+	streamedComments                []map[string]any
 }
 
 // failingModel fails every request, which drives the review down its failure
@@ -2487,6 +2577,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		submitReviewStatus:              options.submitReviewStatus,
 		updateReviewStatus:              options.updateReviewStatus,
 		dismissReviewStatus:             options.dismissReviewStatus,
+		createCommentStatus:             options.createCommentStatus,
 	}
 	if len(options.reviewPages) > 0 {
 		state.reviewPages = options.reviewPages
@@ -2499,6 +2590,9 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 	if state.dismissReviewStatus == 0 {
 		state.dismissReviewStatus = http.StatusOK
+	}
+	if state.createCommentStatus == 0 {
+		state.createCommentStatus = http.StatusOK
 	}
 	if state.pullRequestStatus == 0 {
 		state.pullRequestStatus = http.StatusOK
@@ -2635,6 +2729,29 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/reviews") {
 		writeServiceReviewPage(writer, request, state)
+		return
+	}
+
+	// Findings post one at a time as their chunks answer, so this endpoint
+	// carries every inline comment a review produces.
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/comments") {
+		if state.createCommentStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.createCommentStatus, map[string]any{
+				"message": "create review comment failed",
+			})
+			return
+		}
+		body, err := serviceReadJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		state.streamedComments = append(state.streamedComments, body)
+		serviceWriteJSON(writer, http.StatusCreated, map[string]any{
+			"id":   float64(900 + len(state.streamedComments)),
+			"body": body["body"],
+			"user": map[string]any{"login": testBotLogin},
+		})
 		return
 	}
 

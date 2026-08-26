@@ -67,33 +67,36 @@ func hasUnresolvedBotThread(threads []githubapp.ReviewThread, botLogin string) b
 	return false
 }
 
-func selectFindingsForPublication(
+// logPublishedFindings records what the review found against what reached the
+// pull request, so a reader can tell a suppressed finding from a lost one.
+func logPublishedFindings(
 	ctx context.Context,
-	findings []domain.Finding,
-	reviews []githubapp.Review,
-	threads []githubapp.ReviewThread,
-	botLogin string,
-	maximumUnresolvedComments int,
-) ([]domain.Finding, error) {
+	eligible []domain.Finding,
+	published []domain.Finding,
+	posted int,
+	failed int,
+) {
 	logger := gklog.L(ctx)
-	state := collectPublicationState(reviews, threads, botLogin, maximumUnresolvedComments)
-	selected, historySuppressed, capacityDeferred, err := partitionFindings(ctx, findings, state)
+	eligibleTrace, err := traceFindings(ctx, eligible)
 	if err != nil {
-		logger.ErrorContext(ctx, "identify current findings", slog.String("err", err.Error()))
-		return nil, err
+		logger.ErrorContext(ctx, "trace eligible findings", slog.String("err", err.Error()))
+		return
 	}
-	if err := logPublicationSelection(
+	publishedTrace, err := traceFindings(ctx, published)
+	if err != nil {
+		logger.ErrorContext(ctx, "trace published findings", slog.String("err", err.Error()))
+		return
+	}
+	logger.InfoContext(
 		ctx,
-		findings,
-		selected,
-		historySuppressed,
-		capacityDeferred,
-		state,
-		maximumUnresolvedComments,
-	); err != nil {
-		return nil, err
-	}
-	return selected, nil
+		"review findings published",
+		slog.Int("eligible", len(eligible)),
+		slog.Int("published", len(published)),
+		slog.Int("comments_posted", posted),
+		slog.Int("comments_rejected", failed),
+		slog.Any("eligible_findings", eligibleTrace),
+		slog.Any("published_findings", publishedTrace),
+	)
 }
 
 type publicationState struct {
@@ -103,6 +106,86 @@ type publicationState struct {
 	historyAnchorList []string
 	unresolvedCount   int
 	capacity          int
+}
+
+// selectionState applies the publication rules to findings that arrive a chunk
+// at a time rather than all at once.
+//
+// It holds the same history and capacity a single pass holds, and it grows that
+// history as findings are posted, so a finding published from one chunk
+// suppresses the same finding reported by a later chunk. The caller serializes
+// access, because chunks run concurrently.
+type selectionState struct {
+	state publicationState
+}
+
+func newSelectionState(state publicationState) *selectionState {
+	return &selectionState{state: state}
+}
+
+// admit returns the findings this batch may publish and spends their capacity.
+//
+// The highest importance findings go first, which matters once capacity is
+// scarce: the reader should see the worst defects, not whichever chunk happened
+// to answer first.
+func (selection *selectionState) admit(findings []domain.Finding) []domain.Finding {
+	candidates := make([]domain.Finding, 0, len(findings))
+	for _, finding := range findings {
+		if selection.suppressed(finding) {
+			continue
+		}
+		candidates = append(candidates, finding)
+	}
+	sortByImportanceThenPosition(candidates)
+
+	admitted := make([]domain.Finding, 0, len(candidates))
+	for _, finding := range candidates {
+		if selection.state.capacity <= 0 {
+			break
+		}
+		selection.state.capacity--
+		selection.remember(finding)
+		admitted = append(admitted, finding)
+	}
+	return admitted
+}
+
+// suppressed reports whether an earlier review or an earlier chunk already
+// carried this finding.
+func (selection *selectionState) suppressed(finding domain.Finding) bool {
+	findingID, err := marker.FindingID(finding)
+	if err == nil {
+		if _, seen := selection.state.historyIDs[findingID]; seen {
+			return true
+		}
+	}
+	anchor, valid := findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine)
+	if !valid {
+		return false
+	}
+	_, seen := selection.state.historyAnchors[anchor]
+	return seen
+}
+
+// remember records a finding so no later chunk repeats it.
+func (selection *selectionState) remember(finding domain.Finding) {
+	if findingID, err := marker.FindingID(finding); err == nil {
+		selection.state.historyIDs[findingID] = struct{}{}
+	}
+	if anchor, valid := findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine); valid {
+		selection.state.historyAnchors[anchor] = struct{}{}
+	}
+}
+
+// sortByImportanceThenPosition orders findings worst first, breaking ties the
+// same way a single publication pass breaks them.
+func sortByImportanceThenPosition(findings []domain.Finding) {
+	sort.SliceStable(findings, func(left, right int) bool {
+		if findings[left].Importance != findings[right].Importance {
+			return findings[left].Importance > findings[right].Importance
+		}
+		return compareFindings(findings[left], findings[right]) < 0
+	})
 }
 
 func collectPublicationState(
@@ -169,85 +252,4 @@ func findingAnchorKey(pathValue string, startLine int, endLine int) (string, boo
 		return "", false
 	}
 	return fmt.Sprintf("%s:%d", normalizedPath, endLine), true
-}
-
-func partitionFindings(
-	ctx context.Context,
-	findings []domain.Finding,
-	state publicationState,
-) ([]domain.Finding, []domain.Finding, []domain.Finding, error) {
-	logger := gklog.L(ctx)
-	candidates := make([]domain.Finding, 0, len(findings))
-	historySuppressed := make([]domain.Finding, 0)
-	for _, finding := range findings {
-		findingID, err := marker.FindingID(finding)
-		if err != nil {
-			logger.ErrorContext(ctx, "identify finding", slog.String("err", err.Error()))
-			return nil, nil, nil, fmt.Errorf("identify finding: %w", err)
-		}
-		anchor, anchorValid := findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine)
-		_, foundByID := state.historyIDs[findingID]
-		_, foundByAnchor := state.historyAnchors[anchor]
-		if foundByID || anchorValid && foundByAnchor {
-			historySuppressed = append(historySuppressed, finding)
-			continue
-		}
-		candidates = append(candidates, finding)
-	}
-	sort.SliceStable(candidates, func(left, right int) bool {
-		if candidates[left].Importance != candidates[right].Importance {
-			return candidates[left].Importance > candidates[right].Importance
-		}
-		return compareFindings(candidates[left], candidates[right]) < 0
-	})
-	selectedCount := min(len(candidates), state.capacity)
-	selected := append([]domain.Finding{}, candidates[:selectedCount]...)
-	capacityDeferred := append([]domain.Finding{}, candidates[selectedCount:]...)
-	return selected, historySuppressed, capacityDeferred, nil
-}
-
-func logPublicationSelection(
-	ctx context.Context,
-	current []domain.Finding,
-	selected []domain.Finding,
-	historySuppressed []domain.Finding,
-	capacityDeferred []domain.Finding,
-	state publicationState,
-	maximumUnresolvedComments int,
-) error {
-	logger := gklog.L(ctx)
-	currentTrace, err := traceFindings(ctx, current)
-	if err != nil {
-		logger.ErrorContext(ctx, "trace current findings", slog.String("err", err.Error()))
-		return fmt.Errorf("trace current findings: %w", err)
-	}
-	historySuppressedTrace, err := traceFindings(ctx, historySuppressed)
-	if err != nil {
-		logger.ErrorContext(ctx, "trace history suppressed findings", slog.String("err", err.Error()))
-		return fmt.Errorf("trace history suppressed findings: %w", err)
-	}
-	capacityDeferredTrace, err := traceFindings(ctx, capacityDeferred)
-	if err != nil {
-		logger.ErrorContext(ctx, "trace capacity deferred findings", slog.String("err", err.Error()))
-		return fmt.Errorf("trace capacity deferred findings: %w", err)
-	}
-	selectedTrace, err := traceFindings(ctx, selected)
-	if err != nil {
-		logger.ErrorContext(ctx, "trace selected findings", slog.String("err", err.Error()))
-		return fmt.Errorf("trace selected findings: %w", err)
-	}
-	logger.InfoContext(
-		ctx,
-		"review findings selected",
-		slog.Int("configured_cap", maximumUnresolvedComments),
-		slog.Int("unresolved_before", state.unresolvedCount),
-		slog.Int("capacity", state.capacity),
-		slog.Any("history_finding_ids", state.historyIDList),
-		slog.Any("history_finding_anchors", state.historyAnchorList),
-		slog.Any("current_findings", currentTrace),
-		slog.Any("history_suppressed_findings", historySuppressedTrace),
-		slog.Any("capacity_deferred_findings", capacityDeferredTrace),
-		slog.Any("selected_findings", selectedTrace),
-	)
-	return nil
 }
