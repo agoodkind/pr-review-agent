@@ -62,29 +62,22 @@ func Analyze(
 
 	// Outcomes fold back in chunk order even though the calls ran together, so
 	// deduplication and finding order stay identical to a serial review.
+	//
+	// A chunk that failed does not end the analysis. Its slice of the diff goes
+	// unread, which makes coverage incomplete, while every finding the other
+	// chunks produced stays valid and reaches the pull request.
 	var models modelSet
 	requests := 0
+	failures := make([]chunkFailure, 0)
 	for _, outcome := range outcomes {
 		requests += outcome.requests
 		for _, name := range outcome.models {
 			models.add(name)
 		}
 		if outcome.err != nil {
-			// The elapsed total says whether the budget ran out or one call
-			// failed early, which the failing chunk number alone cannot.
-			logger.ErrorContext(
-				ctx,
-				"review model analysis failed",
-				slog.Int("chunk", outcome.chunk),
-				slog.Int("chunks", len(chunks)),
-				slog.Int("model_requests", requests),
-				slog.Duration("elapsed", now().Sub(analysisStartedAt)),
-				slog.String("err", outcome.err.Error()),
-			)
-			partial.Models = models.names
-			partial.Observed = collector.observed
-			partial.Anchored = collector.anchored
-			return partial, outcome.err
+			coverageComplete = false
+			failures = append(failures, chunkFailure{chunk: outcome.chunk, err: outcome.err})
+			continue
 		}
 		for _, result := range outcome.results {
 			if !result.CoverageComplete {
@@ -93,13 +86,26 @@ func Analyze(
 			collector.collect(result.Findings)
 		}
 	}
+
+	elapsed := now().Sub(analysisStartedAt)
+	logChunkFailures(ctx, failures, len(chunks), requests, elapsed)
+	// Every chunk failing means nothing was read, so there is no partial answer
+	// to publish and the first cause becomes the analysis failure.
+	if len(chunks) > 0 && len(failures) == len(chunks) {
+		partial.Models = models.names
+		partial.Observed = collector.observed
+		partial.Anchored = collector.anchored
+		return partial, failures[0].err
+	}
 	logger.InfoContext(
 		ctx,
 		"review model analysis completed",
 		slog.Int("chunks", len(chunks)),
+		slog.Int("chunks_failed", len(failures)),
 		slog.Int("model_requests", requests),
 		slog.Int("reported_findings", collector.reported),
-		slog.Duration("elapsed", now().Sub(analysisStartedAt)),
+		slog.Bool("coverage_complete", coverageComplete),
+		slog.Duration("elapsed", elapsed),
 	)
 
 	sortFindings(collector.observed)
@@ -114,6 +120,39 @@ func Analyze(
 		Chunks:           len(chunks),
 		Models:           models.names,
 	}, nil
+}
+
+// chunkFailure records one chunk the analysis could not read.
+type chunkFailure struct {
+	chunk int
+	err   error
+}
+
+// logChunkFailures reports every chunk that failed in one line, so a reader can
+// tell how much of the diff went unread and why without opening each chunk.
+func logChunkFailures(
+	ctx context.Context,
+	failures []chunkFailure,
+	chunks int,
+	requests int,
+	elapsed time.Duration,
+) {
+	if len(failures) == 0 {
+		return
+	}
+	reasons := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		reasons = append(reasons, fmt.Sprintf("%d: %s", failure.chunk, failure.err.Error()))
+	}
+	gklog.L(ctx).ErrorContext(
+		ctx,
+		"review chunks unread",
+		slog.Int("chunks", chunks),
+		slog.Int("chunks_failed", len(failures)),
+		slog.Int("model_requests", requests),
+		slog.Duration("elapsed", elapsed),
+		slog.Any("causes", reasons),
+	)
 }
 
 // findingCollector deduplicates model findings and keeps the anchored ones.

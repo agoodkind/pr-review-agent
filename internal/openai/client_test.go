@@ -531,6 +531,50 @@ func TestFallbackStaysUnusedForAFailureThatIsNotExhaustedUsage(t *testing.T) {
 	}
 }
 
+// The gateway reports one refusal two ways. Sometimes it answers with an HTTP
+// status, and sometimes it opens the stream and writes the refusal into it.
+// Only the first path used to build a structured error, so a quota exhausted
+// mid-stream never reached the fallback and the review failed with a stage name
+// instead of a cause. Both transports must classify identically.
+func TestFallbackEngagesForUsageExhaustionReportedInAStream(t *testing.T) {
+	fixture := newFallbackTestClient(t, false)
+	fixture.primary.streamResponse = func(writer http.ResponseWriter) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(`data: {"error":{"message":"scan codex SSE events: ` +
+			`The usage limit has been reached","type":"invalid_request_error",` +
+			`"code":"upstream_failed"}}` + "\n\n"))
+	}
+	fixture.fallback.completionContent = validReviewContent()
+
+	if _, err := fixture.client.Review(context.Background(), "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got := atomic.LoadInt32(&fixture.fallback.requestCount); got != 1 {
+		t.Fatalf("fallback request count = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&fixture.primary.requestCount); got != 1 {
+		t.Fatalf("primary request count = %d, want 1 without a retry", got)
+	}
+}
+
+// A dropped connection is not a refusal, so the primary keeps the request and
+// retries it rather than spending the fallback on a transient failure.
+func TestFallbackStaysUnusedForADroppedStream(t *testing.T) {
+	fixture := newFallbackTestClient(t, false)
+	fixture.primary.streamResponse = breakStreamThenSucceed(1)
+
+	if _, err := fixture.client.Review(context.Background(), "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got := atomic.LoadInt32(&fixture.fallback.requestCount); got != 0 {
+		t.Fatalf("fallback request count = %d, want 0", got)
+	}
+	if got := atomic.LoadInt32(&fixture.primary.requestCount); got != 2 {
+		t.Fatalf("primary request count = %d, want 2", got)
+	}
+}
+
 func TestBothProvidersFailingReportsBothCauses(t *testing.T) {
 	fixture := newFallbackTestClient(t, false)
 	fixture.primary.statusSequence = []int{http.StatusBadRequest}
