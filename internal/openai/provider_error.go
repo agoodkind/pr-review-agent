@@ -26,6 +26,45 @@ var usageExceededPhrases = []string{
 	"upstream status 402",
 }
 
+// StreamError reports that a completion stream ended before the model finished
+// answering, because the connection carrying it broke.
+//
+// The gateway reports a broken upstream stream as an error frame inside the
+// stream itself, not as an HTTP status, so the SDK's own retry never sees it
+// and the request is lost after the answer was already underway. Nothing about
+// the request caused it, so sending the same request again is the recovery.
+type StreamError struct {
+	Model string
+	Cause error
+}
+
+// Error states that the stream broke and keeps the underlying description,
+// which is the only account of what broke.
+func (streamError *StreamError) Error() string {
+	return "model " + streamError.Model + " stream ended before the answer finished: " +
+		streamError.Cause.Error()
+}
+
+// Unwrap exposes the underlying failure so a caller can still match on it.
+func (streamError *StreamError) Unwrap() error {
+	return streamError.Cause
+}
+
+// Retryable reports whether repeating the identical request can succeed.
+//
+// A broken connection is transient. An exhausted quota reported through the
+// same stream is not, and repeating that request only spends the review's
+// remaining time on a refusal it will get again.
+func (streamError *StreamError) Retryable() bool {
+	lowered := strings.ToLower(streamError.Cause.Error())
+	for _, phrase := range usageExceededPhrases {
+		if strings.Contains(lowered, phrase) {
+			return false
+		}
+	}
+	return true
+}
+
 // TruncatedError reports that the model stopped before finishing its answer
 // because it reached the completion token budget. Reasoning and answer tokens
 // share that budget, so a chunk that yields many findings can exhaust it. A

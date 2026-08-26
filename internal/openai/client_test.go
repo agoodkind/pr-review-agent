@@ -579,6 +579,158 @@ func TestPrimaryErrorIsUnchangedWithoutAFallback(t *testing.T) {
 	}
 }
 
+// brokenStreamPayload is the error frame the deployed gateway wrote into the
+// stream when the upstream connection dropped mid answer, taken from the
+// failure on pull request 66.
+func brokenStreamPayload() string {
+	return `{"error":{"message":"scan codex SSE events: websocket: close 1006 ` +
+		`(abnormal closure): unexpected EOF (Clyde request_id=chatcmpl-6e7a0301385b5acf47b2614a)",` +
+		`"type":"invalid_request_error","code":"upstream_failed"}}`
+}
+
+// writeBrokenStream sends an answer that starts and then dies, which is how a
+// dropped upstream connection reaches this client.
+func writeBrokenStream(writer http.ResponseWriter) {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.WriteHeader(http.StatusOK)
+	encoded, _ := json.Marshal(completionStreamChunk(`{"coverage_complete":`, ""))
+	_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
+	_, _ = writer.Write([]byte("data: " + brokenStreamPayload() + "\n\n"))
+}
+
+// breakStreamThenSucceed fails the first breakCount attempts with a dropped
+// stream and answers normally after that.
+func breakStreamThenSucceed(breakCount int) func(http.ResponseWriter) {
+	var seen int32
+	return func(writer http.ResponseWriter) {
+		if int(atomic.AddInt32(&seen, 1)) <= breakCount {
+			writeBrokenStream(writer)
+			return
+		}
+		writeStream(writer, validReviewContent())
+	}
+}
+
+// A dropped connection loses a request the model was already answering. The
+// gateway reports it inside the stream rather than as an HTTP status, so the
+// SDK's own retry never sees it, and one drop used to end a whole review.
+func TestReviewRetriesABrokenStream(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = breakStreamThenSucceed(1)
+
+	if _, err := client.Review(context.Background(), "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got := atomic.LoadInt32(&state.requestCount); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+}
+
+// A drop that clears only on the last allowed attempt still recovers, so the
+// review completes rather than reporting nothing.
+func TestReviewRecoversOnTheLastStreamAttempt(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = breakStreamThenSucceed(2)
+
+	if _, err := client.Review(context.Background(), "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if got := atomic.LoadInt32(&state.requestCount); got != 3 {
+		t.Fatalf("request count = %d, want 3", got)
+	}
+}
+
+// Retrying is bounded, so a provider that keeps dropping cannot spend the whole
+// review budget on one chunk.
+func TestReviewStopsRetryingAfterTheStreamAttemptBudget(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = writeBrokenStream
+
+	_, err := client.Review(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("Review: want the stream failure")
+	}
+	var streamError *openai.StreamError
+	if !errors.As(err, &streamError) {
+		t.Fatalf("error = %q, want a *openai.StreamError", err)
+	}
+	if streamError.Model != testPrimaryModel {
+		t.Fatalf("model = %q, want %q", streamError.Model, testPrimaryModel)
+	}
+	if got := atomic.LoadInt32(&state.requestCount); got != 3 {
+		t.Fatalf("request count = %d, want 3 attempts then a stop", got)
+	}
+}
+
+// An exhausted quota reported through the stream is not transient. Repeating it
+// only spends the review's remaining time on a refusal it will get again.
+func TestReviewDoesNotRetryUsageExhaustionReportedInAStream(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = func(writer http.ResponseWriter) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(`data: {"error":{"message":"scan codex SSE events: ` +
+			`upstream_code=usage_limit_reached","type":"invalid_request_error",` +
+			`"code":"upstream_failed"}}` + "\n\n"))
+	}
+
+	if _, err := client.Review(context.Background(), "prompt"); err == nil {
+		t.Fatal("Review: want the usage failure")
+	}
+	if got := atomic.LoadInt32(&state.requestCount); got != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", got)
+	}
+}
+
+// A cancelled review must not keep retrying, because the work it would finish
+// has no one left to publish it.
+func TestReviewStopsRetryingWhenTheReviewDeadlinePasses(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = writeBrokenStream
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := client.Review(ctx, "prompt"); err == nil {
+		t.Fatal("Review: want an error")
+	}
+	if got := atomic.LoadInt32(&state.requestCount); got > 1 {
+		t.Fatalf("request count = %d, want at most 1 on a cancelled review", got)
+	}
+}
+
+// A truncated answer is the model filling its budget, not a broken connection,
+// so splitting the chunk stays the recovery instead of repeating the request.
+func TestReviewDoesNotRetryATruncatedAnswer(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = func(writer http.ResponseWriter) {
+		writeStreamFrames(writer, []map[string]any{
+			completionStreamChunk(validReviewContent(), "length"),
+		}, true)
+	}
+
+	_, err := client.Review(context.Background(), "prompt")
+	var truncatedError *openai.TruncatedError
+	if !errors.As(err, &truncatedError) {
+		t.Fatalf("error = %q, want a *openai.TruncatedError", err)
+	}
+	if got := atomic.LoadInt32(&state.requestCount); got != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", got)
+	}
+}
+
 type testServerState struct {
 	requestCount      int32
 	lastRequest       *http.Request
