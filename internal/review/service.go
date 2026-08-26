@@ -18,6 +18,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/queue"
+	"goodkind.io/pr-review-agent/internal/runlog"
 )
 
 const (
@@ -45,7 +46,7 @@ type GitHub interface {
 	FindCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, bool, error)
 	CreateCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, error)
 	StartCheckRun(context.Context, int64, domain.Repository, int64, string) error
-	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string) error
+	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string, string) error
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
 	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
 }
@@ -116,15 +117,21 @@ func NewService(
 }
 
 // Run reviews one pull request head and publishes the GitHub review lifecycle.
+//
+// Every log line this run writes is captured alongside the service log, and the
+// capture is published in the check run body. A reader who opens a failed check
+// therefore sees what the review did, not only the stage that failed.
 func (service *Service) Run(parent context.Context, job domain.ReviewJob) error {
 	ctx, cancel := context.WithTimeout(parent, service.reviewTimeout)
 	defer cancel()
-	logger := service.logger.With(
+	recorder := runlog.NewRecorder()
+	logger := slog.New(runlog.Tee(service.logger.Handler(), recorder)).With(
 		slog.String("delivery_id", job.DeliveryID),
 		slog.String("repository", job.Repository.Owner+"/"+job.Repository.Name),
 		slog.Int("pull_request", job.Number),
 	)
 	ctx = gklog.WithLogger(ctx, logger)
+	ctx = withRecorder(ctx, recorder)
 	logger.InfoContext(
 		ctx,
 		"review job started",
@@ -733,6 +740,8 @@ func (service *Service) completeCheckRun(
 	logger := gklog.L(ctx)
 	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
 	defer cancel()
+	// The log is rendered before the completion call, so the published text is
+	// everything the run recorded up to the moment it finished.
 	err := service.github.CompleteCheckRun(
 		completionCtx,
 		installationID,
@@ -741,6 +750,7 @@ func (service *Service) completeCheckRun(
 		conclusion,
 		title,
 		summary,
+		renderRunLog(ctx),
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "complete check run", slog.String("err", err.Error()))

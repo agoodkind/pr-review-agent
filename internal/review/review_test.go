@@ -775,6 +775,66 @@ func containsTypographicDash(value string) bool {
 	return false
 }
 
+// A reader who opens a failed check run must see what the review did, not only
+// the stage that failed. Before this, "Review failed during model analysis."
+// was the whole explanation and the per-chunk detail existed nowhere readable.
+func TestFailedReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model:             &sequenceModel{err: errors.New("model provider request timed out")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the model failure to surface")
+	}
+
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	text, ok := output["text"].(string)
+	if !ok {
+		t.Fatalf("output text = %v, want the run log", output["text"])
+	}
+	for _, want := range []string{
+		"## Run log",
+		"review job started",
+		"review model analysis started",
+		"delivery_id=delivery-1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("run log missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// A successful review publishes its log too, so a slow run that still passed
+// can be read the same way as one that failed.
+func TestSuccessfulReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+		},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	text, ok := output["text"].(string)
+	if !ok || !strings.Contains(text, "review model analysis completed") {
+		t.Fatalf("output text = %v, want the completed analysis line", output["text"])
+	}
+}
+
 func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,

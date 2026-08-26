@@ -7,9 +7,30 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
 )
+
+// MaximumCheckRunTextBytes is the largest text body GitHub accepts on a check
+// run output. A longer log is cut from the front, because the end of a run
+// holds the failure and the front holds setup.
+const MaximumCheckRunTextBytes = 65535
+
+const checkRunTextTruncationNotice = "_Earlier lines omitted; this log was truncated to fit the check run._\n\n"
+
+// TruncateCheckRunText keeps the tail of a log within the check run text limit.
+func TruncateCheckRunText(text string) string {
+	if len(text) <= MaximumCheckRunTextBytes {
+		return text
+	}
+	budget := MaximumCheckRunTextBytes - len(checkRunTextTruncationNotice)
+	tail := text[len(text)-budget:]
+	if newline := strings.IndexByte(tail, '\n'); newline >= 0 && newline+1 < len(tail) {
+		tail = tail[newline+1:]
+	}
+	return checkRunTextTruncationNotice + tail
+}
 
 type checkRunResponse struct {
 	ID         int64  `json:"id"`
@@ -29,9 +50,13 @@ type createCheckRunBody struct {
 	Status  string `json:"status"`
 }
 
+// checkRunOutput carries what GitHub renders inside the check run. Text holds
+// the run's own log, so a failed review explains itself where the reader
+// clicked instead of only naming the stage that failed.
 type checkRunOutput struct {
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
+	Text    string `json:"text,omitempty"`
 }
 
 type updateCheckRunBody struct {
@@ -141,7 +166,8 @@ func (client *Client) StartCheckRun(
 	return err
 }
 
-// CompleteCheckRun marks one check run completed with a conclusion.
+// CompleteCheckRun marks one check run completed with a conclusion. The text
+// argument carries the run's own log and is truncated to what GitHub accepts.
 func (client *Client) CompleteCheckRun(
 	ctx context.Context,
 	installationID int64,
@@ -150,6 +176,7 @@ func (client *Client) CompleteCheckRun(
 	conclusion string,
 	title string,
 	summary string,
+	text string,
 ) error {
 	path := client.repoPath(repo, fmt.Sprintf("/check-runs/%d", checkRunID))
 	payload := updateCheckRunBody{
@@ -159,6 +186,7 @@ func (client *Client) CompleteCheckRun(
 		Output: &checkRunOutput{
 			Title:   title,
 			Summary: summary,
+			Text:    TruncateCheckRunText(text),
 		},
 	}
 	encoded, err := json.Marshal(payload)
