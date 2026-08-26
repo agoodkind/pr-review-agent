@@ -2004,6 +2004,173 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 	}
 }
 
+// dismissedStates reports the review states this run withdrew, in call order.
+func dismissedStates(dismissals []map[string]any) []string {
+	states := make([]string, 0, len(dismissals))
+	for _, item := range dismissals {
+		message, _ := item["message"].(string)
+		switch {
+		case strings.Contains(message, "approval no longer stands"):
+			states = append(states, "APPROVED")
+		case strings.Contains(message, "request no longer stands"):
+			states = append(states, "CHANGES_REQUESTED")
+		default:
+			states = append(states, "UNKNOWN:"+message)
+		}
+	}
+	return states
+}
+
+// botReviewPage builds one page of existing reviews for the fixture server.
+func botReviewPage(states ...string) [][]map[string]any {
+	page := make([]map[string]any, 0, len(states))
+	for index, state := range states {
+		page = append(page, map[string]any{
+			"id":        float64(500 + index),
+			"commit_id": testHeadSHA,
+			"state":     state,
+			"body":      "earlier verdict",
+			"user":      map[string]any{"login": testBotLogin},
+		})
+	}
+	return [][]map[string]any{page}
+}
+
+// A failed review has no verdict, so the changes-requested it left on an
+// earlier head must not keep blocking the pull request.
+//
+// Editing a review body cannot change its state, and the failure notice is a
+// comment review, which GitHub never treats as replacing an earlier verdict.
+// Branch protection here also leaves stale reviews standing across a push. So
+// without this dismissal the pull request stays blocked by a review whose
+// threads are all resolved, with nothing to fix and nothing to dismiss but the
+// review itself.
+func TestServiceDismissesItsBlockingReviewWhenTheReviewFails(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: botReviewPage("CHANGES_REQUESTED"),
+		model:       &failingModel{err: errors.New("provider exploded")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the model failure")
+	}
+
+	states := dismissedStates(fixture.state.dismissals)
+	if len(states) != 1 || states[0] != "CHANGES_REQUESTED" {
+		t.Fatalf("dismissed = %v, want one CHANGES_REQUESTED withdrawal", states)
+	}
+	if fixture.state.dismissals[0]["review_id"] != "500" {
+		t.Fatalf("dismissed review id = %v, want 500", fixture.state.dismissals[0]["review_id"])
+	}
+}
+
+// The same failure withdraws an approval, because a review that did not finish
+// cannot vouch for the head either.
+func TestServiceDismissesItsApprovalWhenTheReviewFails(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: botReviewPage("APPROVED"),
+		model:       &failingModel{err: errors.New("provider exploded")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the model failure")
+	}
+
+	states := dismissedStates(fixture.state.dismissals)
+	if len(states) != 1 || states[0] != "APPROVED" {
+		t.Fatalf("dismissed = %v, want one APPROVED withdrawal", states)
+	}
+}
+
+// The service can hold more than one verdict at once, because the review that
+// owns the visible summary body is separate from the review that carried the
+// last decision. Every one of them counts toward the pull request's review
+// decision, so leaving any behind leaves the pull request blocked.
+func TestServiceDismissesEveryStandingVerdictWhenTheReviewFails(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: botReviewPage("APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"),
+		model:       &failingModel{err: errors.New("provider exploded")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the model failure")
+	}
+
+	states := dismissedStates(fixture.state.dismissals)
+	if len(states) != 2 {
+		t.Fatalf("dismissed = %v, want the approval and the block only", states)
+	}
+	if states[0] != "APPROVED" || states[1] != "CHANGES_REQUESTED" {
+		t.Fatalf("dismissed = %v, want APPROVED then CHANGES_REQUESTED", states)
+	}
+}
+
+// A verdict from another reviewer is theirs to withdraw, so the service leaves
+// it alone even when its own review fails.
+func TestServiceLeavesAnotherReviewersVerdictStandingWhenTheReviewFails(t *testing.T) {
+	page := [][]map[string]any{{
+		{
+			"id":        float64(600),
+			"commit_id": testHeadSHA,
+			"state":     "CHANGES_REQUESTED",
+			"body":      "a human blocked this",
+			"user":      map[string]any{"login": "someone-else"},
+		},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: page,
+		model:       &failingModel{err: errors.New("provider exploded")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the model failure")
+	}
+
+	if len(fixture.state.dismissals) != 0 {
+		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
+	}
+}
+
+// A dismissal that fails must not swallow the reported cause or stop the
+// visible notice, because the notice is what tells a reader why work stopped.
+func TestServiceStillReportsTheCauseWhenDismissalFails(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages:         botReviewPage("CHANGES_REQUESTED"),
+		dismissReviewStatus: http.StatusForbidden,
+		model:               &failingModel{err: errors.New("provider exploded")},
+	})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err == nil || !strings.Contains(err.Error(), "provider exploded") {
+		t.Fatalf("Run error = %v, want the model failure", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	if fixture.state.lastSubmitReview == nil && fixture.state.lastUpdateReview == nil {
+		t.Fatal("no failure notice was written")
+	}
+}
+
+// A successful review keeps its own verdict, so the dismissal runs only on the
+// failure path.
+func TestServiceDismissesNothingWhenTheReviewSucceeds(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: botReviewPage("CHANGES_REQUESTED"),
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+		},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(fixture.state.dismissals) != 0 {
+		t.Fatalf("dismissals = %v, want none on a successful review", fixture.state.dismissals)
+	}
+}
+
 func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 	gateModel := newSerialGateModel()
 	fixture := newServiceFixture(t, serviceFixtureOptions{
@@ -2068,6 +2235,7 @@ type serviceFixtureOptions struct {
 	reviewListStatus                int
 	submitReviewStatus              int
 	updateReviewStatus              int
+	dismissReviewStatus             int
 	reconcileErr                    error
 	reconcileThreads                []githubapp.ReviewThread
 	collector                       review.Collector
@@ -2102,6 +2270,18 @@ type serviceServerState struct {
 	checkDetailsURL                 string
 	submitReviewStatus              int
 	updateReviewStatus              int
+	dismissReviewStatus             int
+	dismissals                      []map[string]any
+}
+
+// failingModel fails every request, which drives the review down its failure
+// path without needing a real provider outage.
+type failingModel struct {
+	err error
+}
+
+func (model *failingModel) Review(context.Context, string) (review.Completion, error) {
+	return review.Completion{}, model.err
 }
 
 type recordingReconciler struct {
@@ -2232,6 +2412,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		reviewListStatus:                options.reviewListStatus,
 		submitReviewStatus:              options.submitReviewStatus,
 		updateReviewStatus:              options.updateReviewStatus,
+		dismissReviewStatus:             options.dismissReviewStatus,
 	}
 	if len(options.reviewPages) > 0 {
 		state.reviewPages = options.reviewPages
@@ -2241,6 +2422,9 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 	if state.updateReviewStatus == 0 {
 		state.updateReviewStatus = http.StatusOK
+	}
+	if state.dismissReviewStatus == 0 {
+		state.dismissReviewStatus = http.StatusOK
 	}
 	if state.pullRequestStatus == 0 {
 		state.pullRequestStatus = http.StatusOK
@@ -2398,6 +2582,33 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"commit_id": body["commit_id"],
 			"state":     "COMMENTED",
 			"body":      body["body"],
+			"user":      map[string]any{"login": testBotLogin},
+		})
+		return
+	}
+
+	// A dismissal is also a PUT under /reviews/, so it is matched before the
+	// update route, which would otherwise swallow it.
+	if request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/dismissals") {
+		if state.dismissReviewStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.dismissReviewStatus, map[string]any{
+				"message": "dismiss review failed",
+			})
+			return
+		}
+		body, err := serviceReadJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		trimmed := strings.TrimSuffix(request.URL.Path, "/dismissals")
+		body["review_id"] = trimmed[strings.LastIndex(trimmed, "/")+1:]
+		state.dismissals = append(state.dismissals, body)
+		serviceWriteJSON(writer, http.StatusOK, map[string]any{
+			"id":        float64(42),
+			"commit_id": testHeadSHA,
+			"state":     "DISMISSED",
+			"body":      "",
 			"user":      map[string]any{"login": testBotLogin},
 		})
 		return
