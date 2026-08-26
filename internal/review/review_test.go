@@ -1190,6 +1190,7 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -1266,6 +1267,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -1296,13 +1298,19 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
-		"POST /repos/owner/repo/pulls/7/comments",
+		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatal("SubmitReview was called after stale head")
+	}
+	// The head moved during analysis, so the findings describe a commit nobody
+	// is looking at any more and none of them post.
+	if len(fixture.state.streamedComments) != 0 {
+		t.Fatalf("streamed comments = %d, want none after the head moved",
+			len(fixture.state.streamedComments))
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "cancelled" {
 		t.Fatalf("conclusion = %v, want cancelled", fixture.state.lastUpdateCheckRun["conclusion"])
@@ -1325,6 +1333,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -2268,12 +2277,16 @@ func dismissedStates(dismissals []map[string]any) []string {
 }
 
 // botReviewPage builds one page of existing reviews for the fixture server.
+//
+// The verdicts sit on an earlier head, which is the case that matters: a
+// verdict on the head under review came from a review that finished, and this
+// run failing says nothing about that one.
 func botReviewPage(states ...string) [][]map[string]any {
 	page := make([]map[string]any, 0, len(states))
 	for index, state := range states {
 		page = append(page, map[string]any{
 			"id":        float64(500 + index),
-			"commit_id": testHeadSHA,
+			"commit_id": testStaleHeadSHA,
 			"state":     state,
 			"body":      "earlier verdict",
 			"user":      map[string]any{"login": testBotLogin},
@@ -2348,6 +2361,33 @@ func TestServiceDismissesEveryStandingVerdictWhenTheReviewFails(t *testing.T) {
 	}
 	if states[0] != "APPROVED" || states[1] != "CHANGES_REQUESTED" {
 		t.Fatalf("dismissed = %v, want APPROVED then CHANGES_REQUESTED", states)
+	}
+}
+
+// A verdict on the head under review came from a review that finished. This run
+// failing says nothing about that one, so withdrawing it would discard a
+// judgment the service still stands behind.
+func TestServiceKeepsItsVerdictForTheCurrentHeadWhenAReviewFails(t *testing.T) {
+	page := [][]map[string]any{{
+		{
+			"id":        float64(700),
+			"commit_id": testHeadSHA,
+			"state":     "APPROVED",
+			"body":      "a finished review of this head",
+			"user":      map[string]any{"login": testBotLogin},
+		},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: page,
+		model:       &failingModel{err: errors.New("provider exploded")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the model failure")
+	}
+
+	if len(fixture.state.dismissals) != 0 {
+		t.Fatalf("dismissals = %v, want none for the current head", fixture.state.dismissals)
 	}
 }
 
