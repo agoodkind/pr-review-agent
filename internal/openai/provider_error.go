@@ -204,6 +204,34 @@ func (providerError *ProviderError) Error() string {
 	return strings.Join(details, ": ")
 }
 
+// ProviderReason returns the provider's own sentence about what went wrong, so
+// a caller can report the cause rather than the stage it happened in. It falls
+// back to the code and type when the provider stated no message.
+func (providerError *ProviderError) ProviderReason() string {
+	for _, field := range []string{providerError.Message, providerError.Code, providerError.Type} {
+		collapsed := strings.Join(strings.Fields(field), " ")
+		if collapsed != "" {
+			return collapsed
+		}
+	}
+	return ""
+}
+
+// ProviderReason returns the refusal the stream frame stated. A dropped
+// connection states none, so it reports the connection failure instead.
+func (streamError *StreamError) ProviderReason() string {
+	if streamError.Provider != nil {
+		return streamError.Provider.ProviderReason()
+	}
+	return "the connection carrying the answer closed early"
+}
+
+// ProviderReason states that the model filled its answer budget, which is a
+// property of the request size rather than a provider fault.
+func (truncatedError *TruncatedError) ProviderReason() string {
+	return "the model reached its completion token budget"
+}
+
 // UsageExceeded reports whether the provider refused the request for lack of
 // remaining usage rather than for a transient or request-shape problem.
 func (providerError *ProviderError) UsageExceeded() bool {
