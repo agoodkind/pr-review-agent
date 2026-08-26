@@ -106,6 +106,24 @@ type chunkStream struct {
 	minimumImportance int
 }
 
+// newChunkStream builds the stream, substituting a sink that publishes nothing
+// when no destination is given. Doing it here rather than at the call site
+// means no later caller can hand the chunk loop a nil sink.
+func newChunkStream(
+	sink FindingSink,
+	fileIndex map[string]diff.FileContext,
+	minimumImportance int,
+) chunkStream {
+	if sink == nil {
+		sink = discardSink{}
+	}
+	return chunkStream{
+		sink:              sink,
+		fileIndex:         fileIndex,
+		minimumImportance: minimumImportance,
+	}
+}
+
 // publish posts the eligible findings from one chunk. A chunk that failed has
 // none, so nothing is posted for it.
 func (stream chunkStream) publish(ctx context.Context, outcome chunkOutcome) {
