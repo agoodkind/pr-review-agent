@@ -37,6 +37,11 @@ type chunkOutcome struct {
 // a time spends that budget serially, so a diff large enough to need many
 // chunks exhausts it no matter how fast each call is. Running a bounded number
 // together spends the same budget in fewer waves.
+//
+// One chunk failing never stops the others. A chunk covers its own slice of the
+// diff, so the findings in the rest stay valid and worth publishing. Cancelling
+// them would throw away work that is already correct and leave the pull request
+// with nothing, which is the worse outcome for the person waiting on a review.
 func reviewChunksConcurrently(
 	ctx context.Context,
 	model Model,
@@ -50,19 +55,14 @@ func reviewChunksConcurrently(
 		return outcomes
 	}
 
-	// The first failure cancels the calls still in flight, so a review that is
-	// going to fail stops spending its remaining budget.
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
 	slots := make(chan struct{}, limit)
 	var waitGroup sync.WaitGroup
 	for index, chunk := range chunks {
 		waitGroup.Go(func() {
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					gklog.L(runCtx).ErrorContext(
-						runCtx,
+					gklog.L(ctx).ErrorContext(
+						ctx,
 						"review chunk panicked",
 						slog.Int("chunk", chunk.Index),
 						slog.Any("panic", recovered),
@@ -76,15 +76,11 @@ func reviewChunksConcurrently(
 						err:      nil,
 						panicked: fmt.Sprint(recovered),
 					}
-					cancel()
 				}
 			}()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			outcomes[index] = reviewOneChunk(runCtx, model, chunk, minimumImportance, now)
-			if outcomes[index].err != nil {
-				cancel()
-			}
+			outcomes[index] = reviewOneChunk(ctx, model, chunk, minimumImportance, now)
 		})
 	}
 	waitGroup.Wait()
