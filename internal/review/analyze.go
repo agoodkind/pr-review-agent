@@ -25,6 +25,7 @@ func Analyze(
 	input diff.ReviewInput,
 	minimumImportance int,
 	now func() time.Time,
+	sink FindingSink,
 ) (Analysis, error) {
 	logger := gklog.L(ctx)
 	// partial reports how far the analysis got. Every error path returns it, so
@@ -58,7 +59,15 @@ func Analyze(
 	analysisStartedAt := now()
 	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
-	outcomes := reviewChunksConcurrently(ctx, model, chunks, minimumImportance, now)
+	if sink == nil {
+		sink = discardSink{}
+	}
+	stream := chunkStream{
+		sink:              sink,
+		fileIndex:         collector.fileIndex,
+		minimumImportance: minimumImportance,
+	}
+	outcomes := reviewChunksConcurrently(ctx, model, chunks, minimumImportance, now, stream)
 
 	// Outcomes fold back in chunk order even though the calls ran together, so
 	// deduplication and finding order stay identical to a serial review.
@@ -179,11 +188,7 @@ func newFindingCollector(files []diff.FileContext, minimumImportance int) *findi
 func (collector *findingCollector) collect(findings []domain.Finding) {
 	collector.reported += len(findings)
 	for _, finding := range findings {
-		sanitized := sanitizeFinding(finding)
-		normalizedPath, pathErr := marker.NormalizePath(sanitized.Path)
-		if pathErr == nil {
-			sanitized.Path = normalizedPath
-		}
+		sanitized := normalizeFinding(finding)
 
 		key := normalizedFindingKey(sanitized)
 		if _, exists := collector.seen[key]; exists {
@@ -199,6 +204,42 @@ func (collector *findingCollector) collect(findings []domain.Finding) {
 			collector.anchored = append(collector.anchored, sanitized)
 		}
 	}
+}
+
+// normalizeFinding puts one model finding into the shape the rest of the review
+// works with: sanitized text and a path that matches the diff.
+func normalizeFinding(finding domain.Finding) domain.Finding {
+	sanitized := sanitizeFinding(finding)
+	if normalizedPath, err := marker.NormalizePath(sanitized.Path); err == nil {
+		sanitized.Path = normalizedPath
+	}
+	return sanitized
+}
+
+// eligibleFindings returns the findings from one chunk that anchor to changed
+// lines and meet the importance floor.
+//
+// Streaming and the final summary apply the same test, so a finding posted
+// while the review runs is exactly one the review would have published at the
+// end. Duplicates are not removed here, because the two callers track what they
+// have already seen in different ways.
+func eligibleFindings(
+	findings []domain.Finding,
+	fileIndex map[string]diff.FileContext,
+	minimumImportance int,
+) []domain.Finding {
+	eligible := make([]domain.Finding, 0, len(findings))
+	for _, finding := range findings {
+		sanitized := normalizeFinding(finding)
+		if !isAnchored(sanitized, fileIndex) {
+			continue
+		}
+		if sanitized.Importance < minimumImportance {
+			continue
+		}
+		eligible = append(eligible, sanitized)
+	}
+	return eligible
 }
 
 // truncatedError is any model failure that stopped mid answer at the completion

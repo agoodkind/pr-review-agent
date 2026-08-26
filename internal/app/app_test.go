@@ -347,9 +347,8 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
 	}
-	comments, ok := review["comments"].([]any)
-	if !ok || len(comments) != 1 {
-		t.Fatalf("comments = %T(%v), want one inline comment", review["comments"], review["comments"])
+	if comments := fixture.githubState.streamedCommentBodies(); len(comments) != 1 {
+		t.Fatalf("streamed comments = %d, want one inline comment", len(comments))
 	}
 }
 
@@ -392,10 +391,12 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
-	review := fixture.githubState.lastSubmitReview()
-	comments, ok := review["comments"].([]any)
-	if !ok || len(comments) != 1 {
-		t.Fatalf("comments = %T(%v), want one inline comment", review["comments"], review["comments"])
+	comments := fixture.githubState.streamedCommentBodies()
+	if len(comments) != 1 {
+		t.Fatalf("streamed comments = %d, want one inline comment", len(comments))
+	}
+	if comments[0]["start_line"] == nil {
+		t.Fatalf("comment = %v, want a multiline range", comments[0])
 	}
 }
 
@@ -731,9 +732,8 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if firstReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("first event = %v, want REQUEST_CHANGES", firstReview["event"])
 	}
-	comments, ok := firstReview["comments"].([]any)
-	if !ok || len(comments) != 1 {
-		t.Fatalf("first comments = %T(%v), want one inline comment", firstReview["comments"], firstReview["comments"])
+	if comments := fixture.githubState.streamedCommentBodies(); len(comments) != 1 {
+		t.Fatalf("first streamed comments = %d, want one inline comment", len(comments))
 	}
 	if fixture.githubState.completedCheckCount() != 1 {
 		t.Fatalf("completed check count = %d, want 1", fixture.githubState.completedCheckCount())
@@ -1252,6 +1252,7 @@ type githubServerState struct {
 	nextCheckRunID       int64
 	submitReviews        []map[string]any
 	submitReviewStatus   int
+	streamedComments     []map[string]any
 	listReviewPages      [][]map[string]any
 	reviewPageIndex      int
 	threads              []map[string]any
@@ -1319,6 +1320,54 @@ func (state *githubServerState) terminalCheckCount() int {
 		}
 	}
 	return count
+}
+
+func (state *githubServerState) handleCreateReviewComment(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	body, err := readJSONBody(request)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	state.mu.Lock()
+	state.streamedComments = append(state.streamedComments, body)
+	count := len(state.streamedComments)
+	// A posted comment starts a review thread, which is what the next run
+	// reconciles against.
+	threadID := "thread-owned"
+	if len(state.threads) > 0 {
+		threadID = fmt.Sprintf("thread-owned-%d", len(state.threads)+1)
+	}
+	state.threads = append(state.threads, map[string]any{
+		"id":         threadID,
+		"isResolved": false,
+		"comments": map[string]any{
+			"nodes": []map[string]any{{
+				"databaseId": float64(count),
+				"body":       body["body"],
+				"path":       body["path"],
+				"line":       body["line"],
+				"startLine":  body["start_line"],
+				"author":     map[string]any{"login": testBotLogin},
+			}},
+		},
+	})
+	state.mu.Unlock()
+	writeJSON(writer, http.StatusCreated, map[string]any{
+		"id":   float64(900 + count),
+		"body": body["body"],
+		"user": map[string]any{"login": testBotLogin},
+	})
+}
+
+// streamedComments returns every inline comment that reached the pull request
+// while the review ran.
+func (state *githubServerState) streamedCommentBodies() []map[string]any {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return append([]map[string]any{}, state.streamedComments...)
 }
 
 func (state *githubServerState) lastSubmitReview() map[string]any {
@@ -1479,6 +1528,13 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		return
 	}
 
+	// Findings post one at a time as their chunks answer, so this endpoint
+	// carries every inline comment a review produces.
+	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/comments") {
+		state.handleCreateReviewComment(writer, request)
+		return
+	}
+
 	if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/reviews") {
 		state.handleSubmitReview(writer, request)
 		return
@@ -1634,7 +1690,6 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 	state.submitReviews = append(state.submitReviews, body)
 	commitID, _ := body["commit_id"].(string)
 	reviewBody, _ := body["body"].(string)
-	comments, _ := body["comments"].([]any)
 	review := map[string]any{
 		"id":        float64(100 + len(state.submitReviews)),
 		"commit_id": commitID,
@@ -1648,29 +1703,6 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		state.listReviewPages[0] = append(state.listReviewPages[0], review)
 	}
 	state.reviewPageIndex = 0
-	if len(comments) > 0 {
-		comment, ok := comments[0].(map[string]any)
-		if ok {
-			threadID := "thread-owned"
-			if len(state.threads) > 0 {
-				threadID = fmt.Sprintf("thread-owned-%d", len(state.threads)+1)
-			}
-			state.threads = append(state.threads, map[string]any{
-				"id":         threadID,
-				"isResolved": false,
-				"comments": map[string]any{
-					"nodes": []map[string]any{{
-						"databaseId": float64(1),
-						"body":       comment["body"],
-						"path":       comment["path"],
-						"line":       comment["line"],
-						"startLine":  comment["start_line"],
-						"author":     map[string]any{"login": testBotLogin},
-					}},
-				},
-			})
-		}
-	}
 	state.mu.Unlock()
 
 	writeJSON(writer, http.StatusOK, map[string]any{
