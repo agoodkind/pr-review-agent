@@ -79,9 +79,10 @@ func reviewChunksConcurrently(
 					}
 				}
 			}()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			outcomes[index] = reviewOneChunk(ctx, model, chunk, minimumImportance, now)
+			outcomes[index] = reviewOneChunkInSlot(ctx, model, chunk, minimumImportance, now, slots)
+			// Posting runs outside the slot. The slot bounds model requests, and
+			// holding it through a series of GitHub writes would idle a quarter
+			// of the review's model concurrency behind network latency.
 			stream.publish(ctx, outcomes[index])
 		})
 	}
@@ -108,10 +109,14 @@ type chunkStream struct {
 // publish posts the eligible findings from one chunk. A chunk that failed has
 // none, so nothing is posted for it.
 func (stream chunkStream) publish(ctx context.Context, outcome chunkOutcome) {
-	if stream.sink == nil || outcome.err != nil {
+	if outcome.err != nil {
 		return
 	}
-	findings := make([]domain.Finding, 0)
+	total := 0
+	for _, result := range outcome.results {
+		total += len(result.Findings)
+	}
+	findings := make([]domain.Finding, 0, total)
 	for _, result := range outcome.results {
 		findings = append(findings, result.Findings...)
 	}
@@ -138,6 +143,21 @@ func (err *chunkPanicError) Error() string {
 func isChunkPanic(err error) bool {
 	var target *chunkPanicError
 	return errors.As(err, &target)
+}
+
+// reviewOneChunkInSlot reviews one chunk while holding a concurrency slot, and
+// releases the slot before returning even when the chunk panics.
+func reviewOneChunkInSlot(
+	ctx context.Context,
+	model Model,
+	chunk diff.Chunk,
+	minimumImportance int,
+	now func() time.Time,
+	slots chan struct{},
+) chunkOutcome {
+	slots <- struct{}{}
+	defer func() { <-slots }()
+	return reviewOneChunk(ctx, model, chunk, minimumImportance, now)
 }
 
 // reviewOneChunk adapts reviewChunk to per chunk accounting, so each goroutine

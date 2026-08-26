@@ -132,16 +132,12 @@ func (client *Client) UpdateReview(
 	return decodeReview(body, "updated", ctx, client)
 }
 
-// createReviewCommentBody is one standalone review comment. It carries the same
-// anchor an inline comment submitted with a review carries.
+// createReviewCommentBody is one standalone review comment. It is the inline
+// comment a review would carry plus the commit it anchors to, so a field added
+// to the inline comment reaches both ways of posting it.
 type createReviewCommentBody struct {
-	CommitID  string `json:"commit_id"`
-	Path      string `json:"path"`
-	Body      string `json:"body"`
-	Line      int    `json:"line"`
-	Side      string `json:"side"`
-	StartLine int    `json:"start_line,omitempty"`
-	StartSide string `json:"start_side,omitempty"`
+	InlineComment
+	CommitID string `json:"commit_id"`
 }
 
 // CreateReviewComment posts one finding on its own, as soon as it is found.
@@ -160,13 +156,8 @@ func (client *Client) CreateReviewComment(
 ) error {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/comments", number))
 	encoded, err := json.Marshal(createReviewCommentBody{
-		CommitID:  string(head),
-		Path:      comment.Path,
-		Body:      comment.Body,
-		Line:      comment.Line,
-		Side:      comment.Side,
-		StartLine: comment.StartLine,
-		StartSide: comment.StartSide,
+		InlineComment: comment,
+		CommitID:      string(head),
 	})
 	if err != nil {
 		client.logger.ErrorContext(ctx, "marshal review comment body", slog.String("err", err.Error()))

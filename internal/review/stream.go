@@ -12,6 +12,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -19,19 +20,16 @@ import (
 
 // FindingSink receives findings as the review produces them.
 type FindingSink interface {
-	// Publish posts the findings from one chunk that are worth publishing and
-	// reports how many reached the pull request.
-	Publish(ctx context.Context, findings []domain.Finding) int
+	// Publish posts the findings from one chunk that are worth publishing.
+	Publish(ctx context.Context, findings []domain.Finding)
 }
 
 // discardSink accepts findings and publishes nothing. Analysis uses it when no
 // destination is wired, which keeps analysis usable on its own.
 type discardSink struct{}
 
-// Publish reports that nothing was posted.
-func (discardSink) Publish(context.Context, []domain.Finding) int {
-	return 0
-}
+// Publish accepts the findings and posts none of them.
+func (discardSink) Publish(context.Context, []domain.Finding) {}
 
 // streamingSink posts each finding as its own review comment.
 //
@@ -42,11 +40,14 @@ type streamingSink struct {
 	github    GitHub
 	job       domain.ReviewJob
 	head      domain.HeadSHA
-	selection *selectionState
-	mu        sync.Mutex
-	admitted  []domain.Finding
-	posted    int
-	failed    int
+	selection *publicationState
+	// postTimeout bounds one batch of comment posts. Each batch gets its own,
+	// because batches arrive spread across the whole analysis.
+	postTimeout time.Duration
+	mu          sync.Mutex
+	admitted    []domain.Finding
+	posted      int
+	failed      int
 }
 
 // newStreamingSink builds a sink over the publication state a run starts with.
@@ -54,17 +55,19 @@ func newStreamingSink(
 	github GitHub,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
-	selection *selectionState,
+	selection *publicationState,
+	postTimeout time.Duration,
 ) *streamingSink {
 	return &streamingSink{
-		github:    github,
-		job:       job,
-		head:      head,
-		selection: selection,
-		mu:        sync.Mutex{},
-		admitted:  make([]domain.Finding, 0),
-		posted:    0,
-		failed:    0,
+		github:      github,
+		job:         job,
+		head:        head,
+		selection:   selection,
+		postTimeout: postTimeout,
+		mu:          sync.Mutex{},
+		admitted:    make([]domain.Finding, 0),
+		posted:      0,
+		failed:      0,
 	}
 }
 
@@ -73,20 +76,28 @@ func newStreamingSink(
 // A comment GitHub rejects is counted and left alone rather than retried. The
 // review still stands behind the finding, because the defect is real whether or
 // not its comment reached the page, and the next push offers it again.
-func (sink *streamingSink) Publish(ctx context.Context, findings []domain.Finding) int {
+func (sink *streamingSink) Publish(ctx context.Context, findings []domain.Finding) {
 	logger := gklog.L(ctx)
 	admitted := sink.admit(findings)
 	if len(admitted) == 0 {
-		return 0
+		return
 	}
 
 	comments, err := RenderInline(sink.head, admitted)
 	if err != nil {
 		logger.ErrorContext(ctx, "render streamed findings", slog.String("err", err.Error()))
-		return 0
+		return
 	}
 
+	// Posting runs free of the analysis deadline. The last chunk to answer
+	// answers near that deadline, so posting on the analysis context would fail
+	// exactly the findings this whole mechanism exists to deliver, and the
+	// review would then claim comments the reader cannot see.
+	ctx, cancel := detachFromReviewDeadline(ctx, sink.postTimeout)
+	defer cancel()
+
 	posted := 0
+	rejected := 0
 	for _, comment := range comments {
 		if postErr := sink.github.CreateReviewComment(
 			ctx,
@@ -103,20 +114,20 @@ func (sink *streamingSink) Publish(ctx context.Context, findings []domain.Findin
 				slog.Int("line", comment.Line),
 				slog.String("err", postErr.Error()),
 			)
-			sink.count(false)
+			rejected++
 			continue
 		}
-		sink.count(true)
 		posted++
 	}
+	sink.count(posted, rejected)
 	logger.InfoContext(
 		ctx,
 		"review findings streamed",
 		slog.Int("offered", len(findings)),
 		slog.Int("admitted", len(admitted)),
 		slog.Int("posted", posted),
+		slog.Int("rejected", rejected),
 	)
-	return posted
 }
 
 // admit reserves capacity for the findings this chunk may publish, so two
@@ -129,15 +140,13 @@ func (sink *streamingSink) admit(findings []domain.Finding) []domain.Finding {
 	return admitted
 }
 
-// count records whether one comment reached the pull request.
-func (sink *streamingSink) count(posted bool) {
+// count records one chunk's delivery result in a single update, so posting a
+// batch takes the lock once rather than once per comment.
+func (sink *streamingSink) count(posted int, rejected int) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
-	if posted {
-		sink.posted++
-		return
-	}
-	sink.failed++
+	sink.posted += posted
+	sink.failed += rejected
 }
 
 // Objections returns every finding this review stands behind, whether or not
