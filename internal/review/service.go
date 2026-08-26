@@ -36,6 +36,10 @@ const (
 	checkFailureUsage        = "Review stopped: the model provider reported no remaining usage."
 	maxCheckFailureRunes     = 1000
 	maximumCompletionTimeout = 30 * time.Second
+	// maximumPublicationTimeout caps the slice of the review budget reserved for
+	// publishing. Publication is a handful of GitHub calls, so this is generous
+	// for the work while staying small against a ten minute review.
+	maximumPublicationTimeout = 60 * time.Second
 )
 
 // GitHub loads pull request state and publishes review lifecycle updates.
@@ -74,6 +78,7 @@ type Service struct {
 	maximumUnresolvedComments int
 	reviewTimeout             time.Duration
 	checkCompletionTimeout    time.Duration
+	publicationTimeout        time.Duration
 	now                       func() time.Time
 	logger                    *slog.Logger
 }
@@ -98,7 +103,12 @@ func NewService(
 	if now == nil {
 		now = time.Now
 	}
+	// Publishing the review and completing the check each get a reserved slice
+	// of the budget, and analysis gets what remains. Reaching the analysis
+	// deadline then still leaves time to publish what the review already found,
+	// so a slow diff produces a partial review rather than nothing at all.
 	completionTimeout := min(reviewTimeout/4, maximumCompletionTimeout)
+	publicationTimeout := min(reviewTimeout/4, maximumPublicationTimeout)
 	return &Service{
 		github:                    github,
 		collector:                 collector,
@@ -109,8 +119,9 @@ func NewService(
 		checkName:                 config.ReviewCheckName,
 		minimumImportance:         minimumImportance,
 		maximumUnresolvedComments: maximumUnresolvedComments,
-		reviewTimeout:             reviewTimeout - completionTimeout,
+		reviewTimeout:             reviewTimeout - completionTimeout - publicationTimeout,
 		checkCompletionTimeout:    completionTimeout,
+		publicationTimeout:        publicationTimeout,
 		now:                       now,
 		logger:                    logger,
 	}
@@ -351,6 +362,16 @@ func (service *Service) publish(
 	startedAt time.Time,
 	progress *reviewProgress,
 ) error {
+	// Publication runs on its own reserved budget, detached from the analysis
+	// deadline. Analysis is what runs long, and the findings it produced are
+	// worth nothing to the reader until they reach the pull request, so its
+	// deadline must not be able to cancel the publish that follows it.
+	ctx, cancelPublication := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		service.publicationTimeout,
+	)
+	defer cancelPublication()
+
 	logger := gklog.L(ctx)
 	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {

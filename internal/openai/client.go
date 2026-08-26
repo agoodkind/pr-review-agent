@@ -402,10 +402,11 @@ func modelProviderError(model shared.ChatModel, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return errors.New("model provider request was cancelled: " + err.Error())
 	}
-	// Everything left arrived through the stream rather than as a status, so it
-	// is a broken connection. The underlying error is kept because it is the
-	// only description of what broke.
-	return &StreamError{Model: model, Cause: err}
+	// Everything left arrived through the stream rather than as a status. The
+	// frame may still state a refusal, so it is parsed into the same structured
+	// error the status path produces. The underlying error is kept because it
+	// is the only description of a dropped connection.
+	return &StreamError{Model: model, Cause: err, Provider: providerErrorFromStream(err)}
 }
 
 func structuredOutputPrompt(policy string, schemaName string, schema json.RawMessage) string {
