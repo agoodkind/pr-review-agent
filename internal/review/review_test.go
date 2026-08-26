@@ -807,9 +807,9 @@ func TestChunksAreReviewedConcurrently(t *testing.T) {
 	}
 }
 
-// A failing chunk must still fail the whole review, and the cause must survive
-// the concurrent path unchanged.
-func TestOneFailingChunkFailsTheConcurrentReview(t *testing.T) {
+// Every chunk failing means nothing was read, so there is no partial answer to
+// publish and the cause must survive the concurrent path unchanged.
+func TestEveryChunkFailingFailsTheConcurrentReview(t *testing.T) {
 	input := manyChunkInput(t)
 	model := &sequenceModel{err: errors.New("provider refused the prompt")}
 
@@ -820,6 +820,64 @@ func TestOneFailingChunkFailsTheConcurrentReview(t *testing.T) {
 	if !strings.Contains(err.Error(), "provider refused the prompt") {
 		t.Fatalf("err = %q, want the provider cause", err)
 	}
+}
+
+// One chunk failing must not discard what the others found.
+//
+// A chunk covers its own slice of the diff, so the findings in the rest stay
+// valid. Failing the whole review there threw away work that was already
+// correct and left the reader with nothing, which is the worse outcome.
+func TestOneFailingChunkStillReportsWhatTheOthersFound(t *testing.T) {
+	input := manyChunkInput(t)
+	// file1.go line 2 is a changed line in the fixture, so this finding anchors.
+	model := newFlakyChunkModel(domain.Finding{
+		Path:       "file1.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Severe defect",
+		Body:       "The changed line breaks core behavior.",
+		Importance: 9,
+	})
+
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if len(analysis.Anchored) == 0 {
+		t.Fatal("anchored findings = 0, want the findings the answering chunks produced")
+	}
+	if analysis.CoverageComplete {
+		t.Fatal("coverage complete, want incomplete because a chunk went unread")
+	}
+}
+
+// flakyChunkModel fails its first request and answers every later one, which is
+// how a provider drops one chunk of a diff while serving the rest.
+type flakyChunkModel struct {
+	mu      sync.Mutex
+	calls   int
+	finding domain.Finding
+}
+
+func newFlakyChunkModel(finding domain.Finding) *flakyChunkModel {
+	return &flakyChunkModel{finding: finding}
+}
+
+func (model *flakyChunkModel) Review(context.Context, string) (review.Completion, error) {
+	model.mu.Lock()
+	model.calls++
+	first := model.calls == 1
+	model.mu.Unlock()
+	if first {
+		return review.Completion{}, errors.New("provider refused the prompt")
+	}
+	return review.Completion{
+		Result: domain.ReviewResult{
+			CoverageComplete: true,
+			Findings:         []domain.Finding{model.finding},
+		},
+		Model: testReviewModel,
+	}, nil
 }
 
 // concurrencyProbeModel records how many calls overlap, so a test can prove
@@ -2005,6 +2063,33 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 	}
 }
 
+// Publication is freed from the analysis deadline but not from shutdown.
+//
+// Analysis is what runs long, so its deadline must not cancel the publish that
+// follows it, or a slow diff produces no review at all. Shutdown is different:
+// a stopping service must not hold the process open writing to GitHub.
+func TestServiceStopsPublicationWhenTheServiceShutsDown(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	admitted, err := fixture.service.Admit(ctx, fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	cancel()
+
+	if runErr := fixture.service.Run(ctx, admitted); runErr == nil {
+		t.Fatal("Run: want the cancellation to stop the review")
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatal("a review was submitted after the service shut down")
+	}
+}
+
 // A finding reaches the pull request as soon as its chunk answers, so the run
 // stopping later cannot take it away.
 //
@@ -2121,7 +2206,7 @@ func TestCheckTitleNamesTheCauseRatherThanTheStage(t *testing.T) {
 		{
 			name:  "ran out of time",
 			cause: fmt.Errorf("review chunk 3/4: %w", context.DeadlineExceeded),
-			want:  "Review stopped: it ran out of time before every chunk answered.",
+			want:  "Review stopped: it ran out of time.",
 		},
 	}
 
