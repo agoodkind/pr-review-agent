@@ -444,7 +444,7 @@ func TestAnalyzeSplitsAndRetriesATruncatedChunk(t *testing.T) {
 		}},
 	}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestAnalyzeKeepsSplittingWhileTheAnswerTruncates(t *testing.T) {
 	input := multiHunkInput(t)
 	model := &truncatedModel{truncateCalls: 2}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestAnalyzeSkipsAHunkThatCannotSplitAndReportsIncompleteCoverage(t *testing
 	input := multiHunkInput(t)
 	model := &truncatedModel{truncateCalls: 1000}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestAnalyzeFailsOnAnErrorThatSplittingCannotFix(t *testing.T) {
 	input := multiHunkInput(t)
 	model := &sequenceModel{err: errors.New("provider refused the prompt")}
 
-	_, err := review.Analyze(context.Background(), model, input, 9)
+	_, err := review.Analyze(context.Background(), model, input, 9, time.Now)
 	if err == nil {
 		t.Fatal("Analyze: want the provider error")
 	}
@@ -598,7 +598,7 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 		},
 	}
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9)
+	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestAnalyzePromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 		}},
 	}
 
-	_, err = review.Analyze(context.Background(), model, input, 9)
+	_, err = review.Analyze(context.Background(), model, input, 9, time.Now)
 	if err != nil {
 		t.Fatalf("Analyze: %v", err)
 	}
@@ -704,7 +704,7 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 		}},
 	}
 
-	_, err = review.Analyze(context.Background(), model, input, 9)
+	_, err = review.Analyze(context.Background(), model, input, 9, time.Now)
 	if err == nil {
 		t.Fatal("Analyze invalid model result: want error")
 	}
@@ -804,6 +804,77 @@ func TestFailedReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
 		"review job started",
 		"review model analysis started",
 		"delivery_id=delivery-1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("run log missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// PR 282 failed with "review chunk 12/13: model provider request timed out" and
+// nothing said how the 570 second budget was spent. The published log must name
+// each chunk's duration so a slow run and a hung call look different.
+func TestPublishedRunLogNamesEachChunkDuration(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+		},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	text, ok := output["text"].(string)
+	if !ok {
+		t.Fatalf("output text = %v, want the run log", output["text"])
+	}
+	for _, want := range []string{
+		"review chunk completed",
+		"chunk=1",
+		"chunks=1",
+		"elapsed=",
+		"model=" + testReviewModel,
+		"prompt_bytes=",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("run log missing %q:\n%s", want, text)
+		}
+	}
+}
+
+// A truncated request still spends its duration on the review budget. The split
+// and skip lines that follow truncation carry neither the duration nor the
+// prompt size, so without this line the request that caused the split is
+// untimed and a reader cannot tell a slow truncation from a fast one.
+func TestPublishedRunLogTimesATruncatedRequest(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model:             &truncatedModel{truncateCalls: 1},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	text, ok := output["text"].(string)
+	if !ok {
+		t.Fatalf("output text = %v, want the run log", output["text"])
+	}
+	for _, want := range []string{
+		"review chunk request failed",
+		"truncated=true",
+		"elapsed=",
+		"prompt_bytes=",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("run log missing %q:\n%s", want, text)

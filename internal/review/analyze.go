@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
@@ -15,11 +16,15 @@ import (
 )
 
 // Analyze reviews every deterministic chunk and aggregates the model output.
+//
+// The now function supplies the clock used for per-chunk timing, so a test can
+// prove the timing without waiting for real model calls.
 func Analyze(
 	ctx context.Context,
 	model Model,
 	input diff.ReviewInput,
 	minimumImportance int,
+	now func() time.Time,
 ) (Analysis, error) {
 	logger := gklog.L(ctx)
 	// partial reports how far the analysis got. Every error path returns it, so
@@ -50,13 +55,25 @@ func Analyze(
 	}
 
 	collector := newFindingCollector(input.Files, minimumImportance)
+	analysisStartedAt := now()
 	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
 	var models modelSet
 	requests := 0
 	for _, chunk := range chunks {
-		results, reviewErr := reviewChunk(ctx, model, chunk, minimumImportance, &models, &requests)
+		results, reviewErr := reviewChunk(ctx, model, chunk, minimumImportance, &models, &requests, now)
 		if reviewErr != nil {
+			// The elapsed total says whether the budget ran out or one call
+			// failed early, which the failing chunk number alone cannot.
+			logger.ErrorContext(
+				ctx,
+				"review model analysis failed",
+				slog.Int("chunk", chunk.Index),
+				slog.Int("chunks", len(chunks)),
+				slog.Int("model_requests", requests),
+				slog.Duration("elapsed", now().Sub(analysisStartedAt)),
+				slog.String("err", reviewErr.Error()),
+			)
 			partial.Models = models.names
 			partial.Observed = collector.observed
 			partial.Anchored = collector.anchored
@@ -75,6 +92,7 @@ func Analyze(
 		slog.Int("chunks", len(chunks)),
 		slog.Int("model_requests", requests),
 		slog.Int("reported_findings", collector.reported),
+		slog.Duration("elapsed", now().Sub(analysisStartedAt)),
 	)
 
 	sortFindings(collector.observed)
@@ -159,6 +177,11 @@ func truncated(err error) bool {
 // reviewed instead, which asks for fewer findings per request. A chunk holding
 // one hunk cannot split, so it is skipped and the review reports incomplete
 // coverage rather than failing outright.
+//
+// Every chunk records how long its model call took, which model answered, and
+// how many findings came back. Without that, a review that spends its whole
+// budget reports only the chunk it died on, and nobody can tell whether the
+// diff was too large or one call hung.
 func reviewChunk(
 	ctx context.Context,
 	model Model,
@@ -166,18 +189,48 @@ func reviewChunk(
 	minimumImportance int,
 	models *modelSet,
 	requests *int,
+	now func() time.Time,
 ) ([]domain.ReviewResult, error) {
 	logger := gklog.L(ctx)
 	*requests++
+	startedAt := now()
 	completion, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
+	elapsed := now().Sub(startedAt)
 	if err == nil {
 		if validateErr := completion.Result.Validate(); validateErr != nil {
 			logger.ErrorContext(ctx, "validate review result", slog.String("err", validateErr.Error()))
 			return nil, fmt.Errorf("validate review result: %w", validateErr)
 		}
 		models.add(completion.Model)
+		logger.InfoContext(
+			ctx,
+			"review chunk completed",
+			slog.Int("chunk", chunk.Index),
+			slog.Int("chunks", chunk.Total),
+			slog.Duration("elapsed", elapsed),
+			slog.String("model", completion.Model),
+			slog.Int("findings", len(completion.Result.Findings)),
+			slog.Int("paths", len(chunk.Paths)),
+			slog.Int("prompt_bytes", len(chunk.Text)),
+		)
 		return []domain.ReviewResult{completion.Result}, nil
 	}
+	// Every request that failed is timed here, before the truncation branch
+	// decides what to do about it. A truncated request still spent its duration
+	// on the review budget, and the split and skip logs below carry neither the
+	// duration nor the size that caused the split.
+	logger.LogAttrs(
+		ctx,
+		requestFailureLevel(err),
+		"review chunk request failed",
+		slog.Int("chunk", chunk.Index),
+		slog.Int("chunks", chunk.Total),
+		slog.Duration("elapsed", elapsed),
+		slog.Bool("truncated", truncated(err)),
+		slog.Any("paths", chunk.Paths),
+		slog.Int("prompt_bytes", len(chunk.Text)),
+		slog.String("err", err.Error()),
+	)
 	if !truncated(err) {
 		return nil, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
 	}
@@ -202,13 +255,23 @@ func reviewChunk(
 	)
 	results := make([]domain.ReviewResult, 0, 2)
 	for _, half := range []diff.Chunk{first, second} {
-		halfResults, halfErr := reviewChunk(ctx, model, half, minimumImportance, models, requests)
+		halfResults, halfErr := reviewChunk(ctx, model, half, minimumImportance, models, requests, now)
 		if halfErr != nil {
 			return nil, halfErr
 		}
 		results = append(results, halfResults...)
 	}
 	return results, nil
+}
+
+// requestFailureLevel rates one failed model request. Truncation is recoverable
+// because the chunk splits and retries, so it warns; any other failure ends the
+// review and reports as an error.
+func requestFailureLevel(err error) slog.Level {
+	if truncated(err) {
+		return slog.LevelWarn
+	}
+	return slog.LevelError
 }
 
 // modelSet records every distinct model that answered, in first use order. A
