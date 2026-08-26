@@ -5,12 +5,61 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
+
+// formatFindingImportances renders the importance of each finding for the
+// review details table, or the word none when there are no findings.
+func formatFindingImportances(findings []domain.Finding) string {
+	if len(findings) == 0 {
+		return "none"
+	}
+	values := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		values = append(values, fmt.Sprintf("`%d`", finding.Importance))
+	}
+	return strings.Join(values, ", ")
+}
+
+// formatReviewTraceIDs renders the prior bot review ids for the details table.
+func formatReviewTraceIDs(reviews []reviewTrace) string {
+	if len(reviews) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(reviews))
+	for _, item := range reviews {
+		ids = append(ids, fmt.Sprintf("`%d`", item.ID))
+	}
+	return strings.Join(ids, ", ")
+}
+
+// formatThreadTraceIDs renders the bot thread ids for the details table.
+func formatThreadTraceIDs(threads []threadTrace) string {
+	if len(threads) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(threads))
+	for _, item := range threads {
+		ids = append(ids, "`"+item.NodeID+"`")
+	}
+	return strings.Join(ids, ", ")
+}
+
+// countResolvedThreadTraces counts the bot threads already resolved.
+func countResolvedThreadTraces(threads []threadTrace) int {
+	count := 0
+	for _, item := range threads {
+		if item.Resolved {
+			count++
+		}
+	}
+	return count
+}
 
 type findingTrace struct {
 	ID         string `json:"id"`
