@@ -102,13 +102,20 @@ func logPublishedFindings(
 // publicationState decides which findings a run may publish.
 //
 // It starts from what earlier reviews and threads already carried, and it grows
-// as findings post, so a finding published from one chunk suppresses the same
-// finding reported by a later chunk. The caller serializes access, because
-// chunks run concurrently.
+// as findings are confirmed delivered, so a finding published from one chunk
+// suppresses the same finding reported by a later chunk. The caller serializes
+// access, because chunks run concurrently.
+//
+// One slot out of the configured cap is never spent immediately; it is held
+// back for the run's single tail slot, arbitrated in stream.go once every
+// chunk has answered. Without that, whichever chunk happened to answer first
+// could spend the last slot on a low importance finding and leave no room for
+// a more severe one a later chunk reports.
 type publicationState struct {
 	historyIDs     map[string]struct{}
 	historyAnchors map[string]struct{}
 	capacity       int
+	hasTailSlot    bool
 }
 
 // findingKeys are the two identities a finding is suppressed by. Both cost a
@@ -126,34 +133,6 @@ func keysFor(finding domain.Finding) findingKeys {
 	}
 	keys.anchor, keys.anchorValid = findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine)
 	return keys
-}
-
-// admit returns the findings this batch may publish and spends their capacity.
-//
-// The highest importance findings go first, which matters once capacity is
-// scarce: the reader should see the worst defects, not whichever chunk happened
-// to answer first.
-func (state *publicationState) admit(findings []domain.Finding) []domain.Finding {
-	candidates := make([]candidate, 0, len(findings))
-	for _, finding := range findings {
-		keys := keysFor(finding)
-		if state.suppressed(keys) {
-			continue
-		}
-		candidates = append(candidates, candidate{finding: finding, keys: keys})
-	}
-	sortByImportanceThenPosition(candidates)
-
-	admitted := make([]domain.Finding, 0, len(candidates))
-	for _, item := range candidates {
-		if state.capacity <= 0 {
-			break
-		}
-		state.capacity--
-		state.remember(item.keys)
-		admitted = append(admitted, item.finding)
-	}
-	return admitted
 }
 
 // candidate is one finding with the identities used to suppress it, carried
@@ -178,7 +157,9 @@ func (state *publicationState) suppressed(keys findingKeys) bool {
 	return seen
 }
 
-// remember records a finding so no later chunk repeats it.
+// remember records a finding as delivered, so no later chunk repeats it and no
+// future run reports it again. Called only once a comment has actually posted;
+// a reservation that never delivers must never reach here.
 func (state *publicationState) remember(keys findingKeys) {
 	if keys.id != "" {
 		state.historyIDs[keys.id] = struct{}{}
@@ -188,14 +169,20 @@ func (state *publicationState) remember(keys findingKeys) {
 	}
 }
 
+// outranks reports whether one candidate should be shown ahead of another when
+// capacity forces a choice between them.
+func outranks(left candidate, right candidate) bool {
+	if left.finding.Importance != right.finding.Importance {
+		return left.finding.Importance > right.finding.Importance
+	}
+	return compareFindings(left.finding, right.finding) < 0
+}
+
 // sortByImportanceThenPosition orders candidates worst first, so a scarce
 // capacity shows the worst defects rather than the fastest chunk's.
 func sortByImportanceThenPosition(candidates []candidate) {
 	sort.SliceStable(candidates, func(left, right int) bool {
-		if candidates[left].finding.Importance != candidates[right].finding.Importance {
-			return candidates[left].finding.Importance > candidates[right].finding.Importance
-		}
-		return compareFindings(candidates[left].finding, candidates[right].finding) < 0
+		return outranks(candidates[left], candidates[right])
 	})
 }
 
@@ -236,10 +223,12 @@ func collectPublicationState(
 			}
 		}
 	}
+	totalCapacity := max(maximumUnresolvedComments-unresolvedCount, 0)
 	return publicationState{
 		historyIDs:     historyIDs,
 		historyAnchors: historyAnchors,
-		capacity:       max(maximumUnresolvedComments-unresolvedCount, 0),
+		capacity:       max(totalCapacity-1, 0),
+		hasTailSlot:    totalCapacity >= 1,
 	}
 }
 

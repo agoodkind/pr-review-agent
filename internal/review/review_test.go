@@ -1974,6 +1974,44 @@ func TestServiceRequestsChangesWithoutPublishingWhenThreadCapIsFull(t *testing.T
 	}
 }
 
+// A configured cap of exactly one always holds its slot for tail arbitration
+// rather than posting immediately, so nothing streams until every chunk has
+// answered. This proves the run still posts it once analysis finishes, which
+// is the one path none of the other cap tests exercise: they either start with
+// no capacity at all (an existing unresolved thread already spends it), or
+// never come close to exhausting it.
+func TestServiceStillPublishesTheSoleFindingWhenTheCapIsOne(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:         9,
+		maximumUnresolvedComments: 1,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Severe defect",
+				Body:       "The changed line breaks core behavior.",
+				Importance: 9,
+			}},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf(
+			"streamed comments = %d, want the one finding posted once analysis finished",
+			len(fixture.state.streamedComments),
+		)
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	}
+}
+
 // A finding published once stays suppressed after its thread is resolved, so a
 // later run publishes nothing while the model still reports the same defect.
 // Requesting changes there leaves a blocking review with no open thread and
