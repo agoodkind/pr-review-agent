@@ -286,6 +286,10 @@ func (service *Service) runLocked(
 
 	sink := service.newFindingSink(job, head, reviews, threads)
 	analysis, stage, err := service.readAndAnalyze(ctx, job, pullRequest, sink, progress)
+	// Every chunk has answered by the time readAndAnalyze returns, so whichever
+	// finding is holding the run's one contested tail slot can now be posted:
+	// no later arrival can still outrank it.
+	sink.Finalize(ctx)
 	progress.applyPublished(sink.Objections())
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), stage, err)
