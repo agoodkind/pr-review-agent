@@ -198,6 +198,12 @@ func (sink *streamingSink) considerBatch(findings []domain.Finding) []candidate 
 		}
 		candidates = append(candidates, candidate{finding: finding, keys: keys})
 	}
+	// Candidates already waiting contest this batch's slots alongside the new
+	// arrivals. Without that, a slot released by a failed delivery would go to
+	// whoever happened to arrive next, and a finding that had been waiting
+	// longer, possibly a more severe one, would never be offered it.
+	candidates = append(candidates, sink.overflow...)
+	sink.overflow = sink.overflow[:0]
 	sortByImportanceThenPosition(candidates)
 
 	toPostNow := make([]candidate, 0, len(candidates))

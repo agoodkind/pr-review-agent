@@ -308,3 +308,48 @@ func TestStreamingSinkKeepsWaitingOverflowUntilNoSlotComesBack(t *testing.T) {
 		t.Fatalf("posted = %v, want the candidate that was still waiting when the retry freed a slot", github.posted)
 	}
 }
+
+// A slot a failed delivery releases must go to a finding that was already
+// waiting, not to whichever candidate a later Publish call happens to bring.
+//
+// considerBatch spends returned capacity on its own batch's candidates without
+// first checking the overflow pool. A finding waiting since an earlier batch
+// could then lose a released slot to a newer, less important arrival.
+func TestStreamingSinkGivesAReleasedSlotToAnAlreadyWaitingFinding(t *testing.T) {
+	ctx := context.Background()
+	heldSlot := domain.Finding{
+		Path: "a.go", StartLine: 2, EndLine: 2,
+		Title: "Holds the only slot", Body: "Its delivery fails.", Importance: 9,
+	}
+	waitingLonger := domain.Finding{
+		Path: "b.go", StartLine: 3, EndLine: 3,
+		Title: "Has been waiting", Body: "It arrived first and should win the released slot.", Importance: 7,
+	}
+	arrivesLater := domain.Finding{
+		Path: "c.go", StartLine: 4, EndLine: 4,
+		Title: "Arrives in the next batch", Body: "It should not jump the queue.", Importance: 6,
+	}
+	github := &recordingGitHub{
+		failOn: func(comment githubapp.InlineComment) bool {
+			return comment.Path == "a.go"
+		},
+	}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       1,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	sink.Publish(ctx, []domain.Finding{heldSlot, waitingLonger})
+	if len(github.posted) != 0 {
+		t.Fatalf("posted = %v, want none: the only delivery attempted so far failed", github.posted)
+	}
+
+	sink.Publish(ctx, []domain.Finding{arrivesLater})
+
+	if len(github.posted) != 1 || github.posted[0].Path != "b.go" {
+		t.Fatalf("posted = %v, want the finding that had been waiting longer", github.posted)
+	}
+}
