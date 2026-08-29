@@ -42,11 +42,23 @@ body and cannot change state.
 ## 4. The same pull request fails identically, day after day
 
 mlx-swift-lm 8: 2026-08-27 (145 chunks), 2026-08-28 (173 chunks),
-2026-08-29 (173 chunks). Each run re-reviewed the entire diff from zero,
-raced the 10 minute `REVIEW_TIMEOUT`, and timed out. Chunk errors at 2ms
-show the deadline had already expired before those chunks even started.
-Three days, three red checks, zero findings ever delivered, all work
-discarded each time. Nothing adapts, remembers, or resumes.
+2026-08-29 (173 chunks). The measured chain, from the retained logs:
+
+1. Every chunk sends 60 to 80KB of diff to the model. `prompt_bytes` reads
+   60014 to 79879 on each chunk line.
+2. One model call takes 6 seconds to 2 minutes 19 seconds, measured on the
+   22 chunks that completed with recorded durations. That spread is normal
+   reasoning model inference on prompts that size, not a provider fault.
+3. All chunks share one 10 minute `REVIEW_TIMEOUT` across 4 workers. Ten
+   minutes of 4 workers at those durations fits roughly 60 chunks. The run
+   needed 173. The clock ran out mid run by arithmetic.
+4. Once the shared clock expired, every remaining chunk failed in 1.4ms to
+   200ms with `context deadline exceeded`. A request cannot time out in
+   milliseconds, so the parent context was dead before those requests began.
+
+Three days, three red checks, zero findings delivered, all work discarded
+each time. The 31 logged timeouts were never the provider failing. They
+were a fixed total budget colliding with unbounded input, repeated daily.
 
 ## 5. Death loses everything
 

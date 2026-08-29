@@ -26,9 +26,13 @@ no prompt outgrows the model's context.
 3. **Progress checkpoints after every chunk.** A chunk is done when its
    findings are on the page and the checkpoint has advanced. Death loses at
    most one chunk.
-4. **No retry loops and no global deadline.** Each model call carries its own
-   request timeout. A failed chunk stays on the work list. Continuation is
-   resume, not retry.
+4. **One clock per model call, none above it.** Each call carries its own
+   request timeout, sized to the measured worst case of about five minutes
+   (observed completions ran 6 seconds to 2 minutes 19 seconds). No clock
+   spans chunks: total run size is bounded by admission, never by a timer.
+   This is the root fix for the 31 logged timeouts, which were one shared
+   10 minute clock colliding with unbounded input. A failed chunk stays
+   pending and visible.
 5. **The verdict is a pure function of current state**, recomputed at the end
    of every run: `REQUEST_CHANGES` while any of the service's own threads is
    open, `APPROVE` when none is open and the current head has been reviewed.
@@ -76,19 +80,21 @@ small pushes still gets reviewed increment by increment.
    fully reviewed. Replace the verdict review.
 7. Rewrite the top level comment's summary. Complete the check.
 
-An invocation that exhausts its budget mid list simply stops after a
-checkpoint. Nothing is lost and nothing is retried in place.
+A chunk whose model call fails stays pending and visible in the marker. It
+is not retried in place; the next push reviews it along with the new delta.
 
 ## Continuation
 
-The Worker's Durable Object owns liveness. While the marker lists pending
-chunks, it holds an alarm and re-invokes the container until the list is
-empty. A container death, deploy, or reclaim delays the review and never
-loses it. Any webhook for the pull request also triggers continuation.
+None is built. Admission bounds every run to finish in one invocation, so
+there is nothing to continue. The rare real failure, two dropped streams in
+7 days of logs, costs one pending chunk that the next push covers. Whether
+that residue ever earns a reinvocation mechanism is a decision to make
+after the root fixes are live and measured, not before.
 
 ## What this deletes
 
-The global review deadline as a run killer, the truncation split and retry,
+The shared `REVIEW_TIMEOUT` clock entirely, replaced by one timeout per
+model call, the truncation split and retry,
 the comment capacity machinery, the mutable summary held in a review body,
 the failure path's review dismissals, and the in-memory queue as the only
 queue.
@@ -100,8 +106,8 @@ queue.
 2. `last_reviewed_commit` advances only after its chunks' findings are on
    the page.
 3. Killing the process at any point loses at most one chunk of work.
-4. A diff of any size completes across bounded invocations, and no single
-   invocation runs unbounded.
+4. An admitted delta completes in one invocation, and no clock spans more
+   than one model call.
 5. A failed run leaves the check red and every review object untouched.
 6. One top level comment exists per pull request, forever.
 7. The run identifier on the check, the comment, and the log lines is the
@@ -114,5 +120,6 @@ queue.
 mlx-swift-lm 8 is the live acceptance test. Its 173 chunk delta must be
 declined at admission with a visible skip notice and a check that neither
 blocks nor goes red, on the deployed service. A second, normal sized pull
-request must complete its review across invocations after a forced container
-death, with the same run identifier on every artifact.
+request must complete in one run with the same run identifier on the check,
+the comment, and the logs. A run with one induced chunk failure must show
+that chunk pending in the comment and finish on the next push.

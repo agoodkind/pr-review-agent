@@ -4,7 +4,7 @@
 
 **Goal:** Rebuild the review run around remembered state on the pull request, so an oversized delta is declined, a normal one is reviewed in checkpointed chunks that survive death, and the verdict is recomputed from current state on every run.
 
-**Architecture:** All durable state lives on the pull request: one top level issue comment carries an HTML state marker with `last_reviewed`, the run identifier, status, and the pending chunk list. Each invocation reviews the delta since `last_reviewed`, posts findings per chunk, and advances the marker after each chunk. The verdict is a pure function of the service's own open threads plus whether the head is fully reviewed, submitted only when the pending list is empty. A failed run writes its cause into the comment and the check, and touches no review object. The Worker keeps a pending set in Durable Object storage and a cron trigger re-invokes the service when a container died mid review.
+**Architecture:** All durable state lives on the pull request: one top level issue comment carries an HTML state marker with `last_reviewed`, the run identifier, status, and the pending chunk list. Each invocation reviews the delta since `last_reviewed`, posts findings per chunk, and advances the marker after each chunk. The verdict is a pure function of the service's own open threads plus whether the head is fully reviewed, submitted only when the pending list is empty. A failed run writes its cause into the comment and the check, and touches no review object. No clock spans more than one model call: each call gets its own `REVIEW_CHUNK_TIMEOUT` (default 5m, from the measured worst case of 2m19s), the shared `REVIEW_TIMEOUT` is deleted, and admission bounds the run, so an admitted delta completes in one invocation. A chunk whose call fails stays pending in the marker, visibly, and the next push reviews it. No continuation machinery exists.
 
 **Tech Stack:** Go 1.26.6, `goodkind.io/gklog` (already pinned, `correlation` subpackage), GitHub REST and GraphQL, Cloudflare Worker with `@cloudflare/containers` 0.3.7, `node --test` for Worker tests.
 
@@ -39,10 +39,8 @@
 | `internal/review/stream.go`, `stream_test.go` | Deleted |
 | `internal/review/notice.go` | Failure written to comment and check only |
 | `internal/config/config.go` | `ReviewMaxFiles`, `ReviewMaxChunks`; `MaximumUnresolvedComments` removed |
-| `internal/app/handler.go` | Correlation at admission; `/api/v1/continue` route |
-| `deploy/cloudflare/worker/pending.js` (new) | Signed pending set endpoints |
-| `deploy/cloudflare/worker/index.js` | Pending storage methods on the container class; `scheduled` handler |
-| `deploy/cloudflare/wrangler.jsonc` | Cron trigger; new vars; stale var removed |
+| `internal/app/handler.go` | Correlation at admission |
+| `deploy/cloudflare/wrangler.jsonc` | New vars; stale vars removed |
 
 ---
 
@@ -666,6 +664,8 @@ Co-authored-by: Claude <noreply@anthropic.com>"
   - `type admissionVerdict struct { Skip bool; Reason string }`
   - `func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admissionVerdict`
   - Config gains `ReviewMaxFiles int` (env `REVIEW_MAX_FILES`, default `100`) and `ReviewMaxChunks int` (env `REVIEW_MAX_CHUNKS`, default `60`). Both must parse as positive integers; follow the loading and validation pattern the file uses for `REVIEW_WORKERS`.
+  - Config gains `ReviewChunkTimeout time.Duration` (env `REVIEW_CHUNK_TIMEOUT`, default `5m`), the timeout for one model call. The measured worst completed call was 2m19s. `ReviewTimeout` and `REVIEW_TIMEOUT` are deleted in Task 7 along with every use as a run wide deadline; nothing may reintroduce a clock spanning more than one call.
+  - `deploy/cloudflare/wrangler.jsonc` vars: add `"REVIEW_MAX_FILES": "100"`, `"REVIEW_MAX_CHUNKS": "60"`, `"REVIEW_CHUNK_TIMEOUT": "5m"`; remove `"REVIEW_TIMEOUT"` and `"REVIEW_MAX_UNRESOLVED_COMMENTS"`. Verify with `cd deploy/cloudflare && npm run check`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -900,9 +900,9 @@ This is the core task. It replaces the streaming capacity machinery with a loop 
 **Interfaces:**
 - Consumes: everything from Tasks 3 through 6, the existing `Analyze`/`reviewChunk` machinery in `analyze.go` and `concurrency.go`, `RenderInline`, the reconciler.
 - Produces:
-  - `func (service *Service) reviewDelta(ctx context.Context, job domain.ReviewJob, head domain.HeadSHA, chunks []diff.Chunk, state marker.State) (marker.State, []domain.Finding, error)`: reviews the chunks whose ids are pending (or all, on a fresh state), posts each chunk's qualifying findings as inline comments immediately, calls `upsertSummaryComment` with the advanced state after each chunk, honors `service.invocationBudget` (the old `ReviewTimeout`) by stopping after the current chunk and returning with pending remainder, and never fails the whole run for one chunk: a failed chunk stays in `Pending`.
-  - `runLocked` becomes: refresh head, read state, delta, admission (skip path), reviewDelta, reconcile, verdict when `len(state.Pending) == 0`, summary, check completion with status mapped from state (`done` success, `skipped` skipped, pending remainder success with an "in progress, continuing" title).
-  - The global deadline kill is gone: `service.publicationContext` and per model request timeouts stay; nothing cancels the invocation as a whole. Rename the `ReviewTimeout` field usage to an invocation budget check between chunks, not a context deadline.
+  - `func (service *Service) reviewDelta(ctx context.Context, job domain.ReviewJob, head domain.HeadSHA, chunks []diff.Chunk, state marker.State) (marker.State, []domain.Finding, error)`: one pass over the pending chunk ids (or all chunks, on a fresh state). Each chunk gets one model call under its own `ReviewChunkTimeout` context. Qualifying findings post immediately, then the checkpoint advances via `upsertSummaryComment`. A chunk whose call or post fails stays in `Pending` and the pass moves on; nothing retries and nothing fails the run for one chunk.
+  - `runLocked` becomes: refresh head, read state, delta, admission (skip path), reviewDelta, reconcile, verdict when `len(state.Pending) == 0`, summary, check completion mapped from state: `done` is success, `skipped` is skipped, a pending remainder concludes `neutral` with a title naming how many chunks failed and that the next push reviews them.
+  - The shared clock is deleted: remove `ReviewTimeout` from `Service` and config, and every place that derives a run wide deadline from it. The only contexts left are `ReviewChunkTimeout` around one model call and the existing detached publication context around GitHub writes. Admission is what bounds the run.
 
 - [ ] **Step 1: Delete the capacity machinery**
 
@@ -948,10 +948,12 @@ func TestAnOverBudgetDeltaIsSkippedWithoutTouchingReviewState(t *testing.T) {
 	// and the summary comment contains the reason with the measured size.
 }
 
-func TestAnInvocationStopsAtItsBudgetAndKeepsThePendingList(t *testing.T) {
-	// Set the invocation budget to zero so the loop stops after the first
-	// chunk. After the run: at least one chunk id remains in pending, the
-	// check is not red, and no verdict review was submitted.
+func TestAFailedChunkStaysPendingAndTheNextRunFinishesIt(t *testing.T) {
+	// First run: the model fails one specific chunk. After it: that chunk
+	// id is in pending, the check concluded neutral naming one failed
+	// chunk, and no verdict review was submitted. Second run with the
+	// model healthy: pending empties, the verdict is submitted, and no
+	// finding was posted twice.
 }
 ```
 
@@ -985,51 +987,42 @@ func (service *Service) reviewDelta(
 		}
 	}
 
-	started := service.now()
 	admitted := make([]domain.Finding, 0)
-	remaining := append([]string{}, pending...)
-	for len(remaining) > 0 {
-		if service.invocationBudget > 0 && service.now().Sub(started) > service.invocationBudget {
-			logger.InfoContext(ctx, "invocation budget reached, stopping after checkpoint",
-				slog.Int("pending", len(remaining)))
-			break
-		}
-		id := remaining[0]
+	unfinished := append([]string{}, pending...)
+	for _, id := range pending {
 		chunk, ok := byID[id]
 		if !ok {
 			// The delta changed shape since this id was recorded; drop it.
-			remaining = remaining[1:]
+			unfinished = removeChunkID(unfinished, id)
 			continue
 		}
-		findings, err := service.reviewOneChunk(ctx, job, head, chunk)
+		callCtx, cancel := context.WithTimeout(ctx, service.chunkTimeout)
+		findings, err := service.reviewOneChunk(callCtx, job, head, chunk)
+		cancel()
 		if err != nil {
-			// The chunk stays pending; a later invocation resumes it. This
-			// is resume, not retry: nothing loops in place.
+			// The chunk stays pending and visible. Nothing retries it; the
+			// next push reviews it with the new delta.
 			logger.ErrorContext(ctx, "chunk review failed, leaving it pending",
 				slog.String("chunk", id), slog.String("err", err.Error()))
-			remaining = append(remaining[1:], id)
-			if service.everyRemainingChunkJustFailed(remaining) {
-				break
-			}
 			continue
 		}
 		posted, postErr := service.postChunkFindings(ctx, job, head, findings)
 		if postErr != nil {
 			logger.ErrorContext(ctx, "posting chunk findings failed, leaving the chunk pending",
 				slog.String("chunk", id), slog.String("err", postErr.Error()))
-			break
+			continue
 		}
 		admitted = append(admitted, posted...)
-		remaining = remaining[1:]
-		state.Pending = remaining
+		unfinished = removeChunkID(unfinished, id)
+		state.Pending = unfinished
 		state.RunID = job.DeliveryID
 		state.Status = marker.StateReviewing
 		if err := service.upsertSummaryComment(ctx, job, service.renderProgressBody(job, head, state)); err != nil {
 			return state, admitted, fmt.Errorf("advance checkpoint: %w", err)
 		}
 	}
-	state.Pending = remaining
-	if len(remaining) == 0 {
+	state.Pending = unfinished
+	if len(unfinished) == 0 {
 		state.LastReviewed = head
 		state.Status = marker.StateDone
 	}
@@ -1037,7 +1030,7 @@ func (service *Service) reviewDelta(
 }
 ```
 
-Supporting pieces to write in the same file, reusing existing code: `reviewOneChunk` wraps the existing single chunk review path from `concurrency.go` (one model call, its own request timeout, truncation split allowed within the call since it is bounded); `postChunkFindings` filters by importance and anchoring via `eligibleFindings`, dedupes against suppression, renders with `RenderInline`, posts via `CreateReviewComment`, and returns what posted; `everyRemainingChunkJustFailed` prevents an infinite loop when every chunk fails in one invocation by tracking ids seen failed this invocation; `renderProgressBody` composes prose plus `marker.EncodeState(state)`.
+Supporting pieces to write in the same file, reusing existing code: `reviewOneChunk` wraps the existing single chunk review path from `concurrency.go` under the caller's context (truncation split allowed within the call, since the call is bounded by `ReviewChunkTimeout`); `postChunkFindings` filters by importance and anchoring via `eligibleFindings`, dedupes against suppression, renders with `RenderInline`, posts via `CreateReviewComment`, and returns what posted; `removeChunkID` drops one id from a slice; `renderProgressBody` composes prose plus `marker.EncodeState(state)`. `service.chunkTimeout` comes from `config.ReviewChunkTimeout` (Task 5).
 
 Rewire `runLocked`:
 
@@ -1047,7 +1040,7 @@ Rewire `runLocked`:
 4. Chunk with the existing `diff.ChunkInput`; compute `admitDelta(len(files), len(chunks), service.maxFiles, service.maxChunks)`. On skip: `state.Status = StateSkipped`, upsert comment with the reason, complete check with conclusion `skipped`, return nil. No review object is touched.
 5. Reconcile (existing reconciler call, unchanged position or after review; keep existing order: reconcile first).
 6. `state, findings, err := service.reviewDelta(...)`; on err, fall to the failure path (Task 8).
-7. If `len(state.Pending) > 0`: upsert comment (progress body), complete check success with title "Review in progress, continuing", trigger continuation (Task 9 fills this; leave a `service.requestContinuation(ctx, job)` no-op stub here), return nil. No verdict.
+7. If `len(state.Pending) > 0`: upsert comment (progress body naming the failed chunks), complete the check with conclusion `neutral` and a title naming how many chunks failed and that the next push reviews them, return nil. No verdict, no re-enqueue, no continuation of any kind.
 8. Else: verdict (Task 8's `reviewerDecision`), submit verdict review, upsert comment with the final summary, complete check success.
 
 Remove `maximumUnresolvedComments` from `Service`, `selectFindingsForPublication`'s cap, and `REVIEW_MAX_UNRESOLVED_COMMENTS` from config and its tests. Keep suppression so a finding an earlier run carried is not reposted.
@@ -1058,11 +1051,11 @@ Run the four new tests, then `make fmt && make build && make test`. Existing tes
 
 ```bash
 git add -A internal/
-git commit -S -m "Review the delta in checkpointed chunks with no global deadline
+git commit -S -m "Review the delta in checkpointed chunks with one clock per call
 
-Post each chunk's findings before advancing the marker, stop at the
-invocation budget leaving the remainder pending, skip an over budget
-delta outright, and delete the comment cap machinery.
+Post each chunk's findings before advancing the marker, leave a failed
+chunk pending for the next push, skip an over budget delta outright,
+and delete the shared deadline and the comment cap machinery.
 
 Co-authored-by: Claude <noreply@anthropic.com>"
 ```
@@ -1182,95 +1175,7 @@ Co-authored-by: Claude <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Continuation, service side
-
-**Files:**
-- Modify: `internal/app/handler.go`, `internal/review/service.go`
-- Test: `internal/app/app_test.go` or `handler_test.go`, `internal/review/review_test.go`
-
-**Interfaces:**
-- Consumes: the queue admission path `handleGitHubWebhook` already uses (read it and mirror it), the webhook HMAC verification already in `internal/webhook`, Task 7's `requestContinuation` stub.
-- Produces:
-  - Route `POST /api/v1/continue` on the handler. Body: `{"installation_id": int64, "owner": string, "repo": string, "number": int}`. Verified with the same HMAC scheme and secret as the webhook (`X-Hub-Signature-256` over the raw body). On success it fetches the pull request head via the service and admits a job with `DeliveryID` set to `continue-` plus a fresh UUID, then dispatches exactly as a webhook does. Draft or closed pull requests are answered 200 with nothing enqueued.
-  - `func (service *Service) AdmitContinuation(ctx context.Context, installationID int64, repo domain.Repository, number int, deliveryID string) (domain.ReviewJob, error)`: reads the head with `GetPullRequest`, builds the `domain.ReviewJob`, and calls the existing `Admit`.
-  - In process self continuation: `requestContinuation` re-enqueues the same job through the dispatcher when an invocation ends with pending chunks, so continuation normally never waits for the Worker cron. Guard against a tight loop: re-enqueue only when this invocation completed at least one chunk; otherwise leave continuation to the cron.
-  - Pending report: at the end of every invocation, POST to `cfg.LogForwardURL`'s host at path `/internal/v1/pending` (new config value `PENDING_REPORT_URL`, optional like `LOG_FORWARD_URL`) a signed JSON body `{"installation_id":..,"owner":..,"repo":..,"number":..,"pending":true|false}` using the same HMAC header the log shipper uses (`X-Pr-Agent-Signature-256`). Reuse the telemetry forwarder's signing helper; read `internal/telemetry` first and extract shared signing if needed. `pending` is true when chunks remain, false when the state is done, skipped, or failed. A send failure is logged and never fails the run.
-
-- [ ] **Step 1: Write the failing tests**
-
-Handler test (`package app`): POST a signed continue body, assert a job was admitted with a `continue-` delivery id and the correct ref; POST with a bad signature, assert 401 and nothing admitted. Reuse the app fixture's admitter recording.
-
-Service test: run a fixture whose invocation budget forces a pending remainder, assert the fixture recorded a POST to the pending route with `"pending":true`; run a normal completing fixture, assert `"pending":false`.
-
-- [ ] **Step 2: Implement, verify, gate**
-
-Follow `handleGitHubWebhook` for parsing, verification, and enqueue mechanics. Keep the continue handler small: verify, decode, `AdmitContinuation`, dispatch, 202.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add internal/
-git commit -S -m "Add the continue entry point and the pending report
-
-Accept a signed continue request that re-admits a pull request by ref,
-re-enqueue in process when an invocation checkpoints with work left,
-and report pending state to the Worker at the end of every invocation.
-
-Co-authored-by: Claude <noreply@anthropic.com>"
-```
-
----
-
-### Task 10: Continuation, Worker side
-
-**Files:**
-- Create: `deploy/cloudflare/worker/pending.js`
-- Modify: `deploy/cloudflare/worker/index.js`, `deploy/cloudflare/worker/router.js`, `deploy/cloudflare/wrangler.jsonc`
-- Test: `deploy/cloudflare/test/pending.test.js` (new), following the style of `test/servicelogs.test.js`
-
-**Interfaces:**
-- Consumes: `verifyServiceLogSignature` and `readBoundedText` from `servicelogs.js` (import and reuse; do not duplicate), the `PR_AGENT` Durable Object binding.
-- Produces:
-  - `pending.js` exports `PENDING_PATH = "/internal/v1/pending"` and `handlePending(request, env)`: verify the signature with `GITHUB_WEBHOOK_SECRET`, parse `{installation_id, owner, repo, number, pending}`, and call `env.PR_AGENT.getByName("github-app").setPending(key, ref)` or `clearPending(key)` where `key` is `owner + "/" + repo + "#" + number`.
-  - `PrAgentContainer` gains RPC methods backed by `this.ctx.storage`:
-    `async setPending(key, ref)` storing under `"pending:" + key`,
-    `async clearPending(key)`,
-    `async listPending()` returning the stored refs.
-  - `index.js` default export gains `async scheduled(controller, env)`: list pending refs, and for each, POST a signed continue body to the container (`env.PR_AGENT.getByName("github-app").fetch` with a synthetic request to `http://container/api/v1/continue`), computing the `X-Hub-Signature-256` HMAC with `GITHUB_WEBHOOK_SECRET` over the exact body bytes. Log one line per attempt with the key and response status.
-  - `wrangler.jsonc` gains `"triggers": { "crons": ["*/5 * * * *"] }`, gains vars `"REVIEW_MAX_FILES": "100"` and `"REVIEW_MAX_CHUNKS": "60"` and `"PENDING_REPORT_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/pending"`, and drops `"REVIEW_MAX_UNRESOLVED_COMMENTS"`.
-  - `router.js` routes `PENDING_PATH` to `handlePending` before the container forward, exactly as it routes `SERVICE_LOG_PATH`.
-
-- [ ] **Step 1: Write the failing tests**
-
-`test/pending.test.js` with `node --test`: signature rejection returns 401 and stores nothing; a valid `pending:true` body calls `setPending` with the composed key; a valid `pending:false` calls `clearPending`. Stub the DO with a plain object recording calls, passed through a fake `env`. For the HMAC, reuse the signing helper the servicelogs test uses to build valid signatures; read `test/servicelogs.test.js` first.
-
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `cd deploy/cloudflare && npm test`
-Expected: the new file fails, existing tests stay green.
-
-- [ ] **Step 3: Implement, verify, dry run**
-
-Run: `cd deploy/cloudflare && npm run check`
-Expected: tests pass and `wrangler deploy --dry-run` accepts the config with the cron trigger.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add deploy/cloudflare/
-git commit -S -m "Store pending reviews in the Durable Object and continue them on a cron
-
-Accept the service's signed pending reports into Durable Object
-storage, and every five minutes re-invoke the container with a signed
-continue request for each ref still pending, so a died container delays
-a review instead of losing it.
-
-Co-authored-by: Claude <noreply@anthropic.com>"
-```
-
----
-
-### Task 11: The invariant suite
+### Task 9: The invariant suite
 
 **Files:**
 - Create: `internal/review/invariants_test.go` (`package review_test`)
@@ -1283,12 +1188,12 @@ The spec lists eight invariants. Five already have homes: invariant 1 (Task 8's 
 - [ ] **Step 1: Write the tests**
 
 1. `TestKillingTheProcessLosesAtMostOneChunk` (invariant 3): run with a fixture that fails hard after the second chunk's checkpoint (make the third chunk's model call panic or make the summary upsert return 500 on the third update). Then run a second fixture invocation against the surviving fixture state and assert every chunk's findings end up posted exactly once, none duplicated, none missing.
-2. `TestADiffOfAnySizeCompletesAcrossBoundedInvocations` (invariant 4): invocation budget forcing one chunk per invocation, a six chunk diff within admission budget, loop `fixture.run` until the state reads done with a hard cap of 10 iterations, assert done in at most 6 plus 1 and all findings posted.
+2. `TestAnAdmittedDeltaCompletesInOneInvocation` (invariant 4): a six chunk diff within the admission budget, one `fixture.run` call, assert the state reads done, every chunk's findings are posted, and no context carried a deadline spanning more than one model call (assert by wiring a model stub that records each call's deadline and checking each is close to `ReviewChunkTimeout`, never shorter because of elapsed run time).
 3. `TestTheRunIdentifierIsTheSameStringEverywhere` (invariant 7): after one completed run, read the run id from the summary comment marker, the check run output text, and assert both equal `job.DeliveryID`. Extend the check completion in Task 7 to include `Run ID: <id>` in the check output text if it does not already; that line is this invariant's carrier.
 
 - [ ] **Step 2: Run and fix what fails**
 
-Any failure here is a real gap in Tasks 1 through 10. Fix the implementation, never the invariant.
+Any failure here is a real gap in Tasks 1 through 8. Fix the implementation, never the invariant.
 
 - [ ] **Step 3: Gate and commit**
 
@@ -1297,23 +1202,23 @@ make fmt && make build && make test
 git add internal/review/invariants_test.go internal/
 git commit -S -m "Lock the durable review invariants
 
-Prove at most one chunk is lost to a death, any admitted diff completes
-across bounded invocations, and one run identifier reaches every
-artifact.
+Prove at most one chunk is lost to a death, an admitted delta completes
+in one invocation with no clock spanning calls, and one run identifier
+reaches every artifact.
 
 Co-authored-by: Claude <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 12: Operations documentation
+### Task 10: Operations documentation
 
 **Files:**
 - Modify: `docs/operations.md`
 
 - [ ] **Step 1: Rewrite the review lifecycle section**
 
-Describe: the delta based loop, the one top level comment and its state marker, admission and the skip experience, the verdict policy, the failure experience, continuation, and the new configuration (`REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS`, `PENDING_REPORT_URL`; `REVIEW_MAX_UNRESOLVED_COMMENTS` removed; `REVIEW_TIMEOUT` now the per invocation budget). Follow `~/.claude/rules/writing.md`: behavior before implementation, one durable home per fact, no filename in prose unless the reader must open it. Delete every sentence describing the comment cap, the mutable summary review, and failure time dismissals.
+Describe: the delta based loop, the one top level comment and its state marker, admission and the skip experience, the verdict policy, the failure experience (a failed chunk stays pending and the next push reviews it), and the configuration (`REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS`, `REVIEW_CHUNK_TIMEOUT`; `REVIEW_MAX_UNRESOLVED_COMMENTS` and `REVIEW_TIMEOUT` removed). Follow `~/.claude/rules/writing.md`: behavior before implementation, one durable home per fact, no filename in prose unless the reader must open it. Delete every sentence describing the comment cap, the mutable summary review, failure time dismissals, and the global deadline.
 
 - [ ] **Step 2: Commit**
 
@@ -1328,10 +1233,10 @@ Co-authored-by: Claude <noreply@anthropic.com>"
 
 ## Self-Review
 
-**Spec coverage.** Admission gate: Task 5 plus the Task 7 skip path. Marker state: Tasks 3 and 4. Incremental delta: Task 6. Checkpoints and no global deadline: Task 7. Verdict recomputation and failure isolation: Task 8. Continuation: Tasks 9 and 10. Invariants 1 through 8: Tasks 4, 7, 8, 11 as mapped in Task 11. Run identifier: Tasks 1 and 11. Deletions: Tasks 7 and 8. Live acceptance (mlx-swift-lm 8 declined, a normal pull request resuming after a forced death) is a deploy time proof and deliberately not a plan task; it runs after merge and deploy.
+**Spec coverage.** Admission gate: Task 5 plus the Task 7 skip path. Marker state: Tasks 3 and 4. Incremental delta: Task 6. Checkpoints, the per call clock, and the `REVIEW_TIMEOUT` deletion: Task 7 (config in Task 5). Verdict recomputation and failure isolation: Task 8. Continuation: none exists, by design; a failed chunk waits for the next push, which is Task 6's delta logic plus Task 7's pending list. Invariants 1 through 8: Tasks 4, 7, 8, and 9 as mapped in Task 9. Run identifier: Tasks 1 and 9. Deletions: Tasks 7 and 8. The live acceptance in the spec runs after merge, and only with the operator's explicit go ahead; nothing in this plan deploys.
 
 **Placeholders.** Task 7 Step 2 sketches four tests with comment bodies; each names its exact assertions and observation points, and the implementer fleshes them against the fixture. Task 8 Step 1 names the two failure path tests and their forcing functions. No TBDs remain.
 
-**Type consistency.** `marker.State` (Task 3) is consumed by Tasks 4, 6, 7, 8. `chunkID` (Task 5) is consumed by Task 7. `deltaFiles` (Task 6) is consumed by Task 7. `upsertSummaryComment` and `readState` (Task 4) are consumed by Tasks 7 and 8. `reviewerDecision(threads, botLogin, headFullyReviewed)` matches between Tasks 8 and 11. `AdmitContinuation` (Task 9) is invoked by the Worker's continue POST from Task 10.
+**Type consistency.** `marker.State` (Task 3) is consumed by Tasks 4, 6, 7, 8. `chunkID` (Task 5) is consumed by Task 7. `deltaFiles` (Task 6) is consumed by Task 7. `upsertSummaryComment` and `readState` (Task 4) are consumed by Tasks 7 and 8. `reviewerDecision(threads, botLogin, headFullyReviewed)` matches between Tasks 8 and 9. `ReviewChunkTimeout` (Task 5) is `service.chunkTimeout` in Task 7's loop.
 
-**Known integration risks, named for the executor.** The `review_test.go` fixture is large; Tasks 4, 6, 7 each extend it, so later tasks must read the file as it stands, not as this plan quotes it. The `Container` class owns the Durable Object alarm for its idle timer; Task 10 therefore uses a Worker cron trigger and never overrides `alarm()`. GitHub counts only each reviewer's latest APPROVE or REQUEST_CHANGES toward the merge decision, which is what makes replacing the verdict by submitting a new review sufficient.
+**Known integration risks, named for the executor.** The `review_test.go` fixture is large; Tasks 4, 6, 7 each extend it, so later tasks must read the file as it stands, not as this plan quotes it. GitHub counts only each reviewer's latest APPROVE or REQUEST_CHANGES toward the merge decision, which is what makes replacing the verdict by submitting a new review sufficient.
