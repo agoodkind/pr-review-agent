@@ -267,3 +267,44 @@ func TestStreamingSinkPostsTheRestOfABatchWhenOneFindingCannotRender(t *testing.
 		t.Fatalf("delivery = (%d posted, %d failed), want (1, 1)", posted, failed)
 	}
 }
+
+// A candidate the overflow pass could not fit must stay in the pool, because a
+// delivery in that same pass can fail and hand its slot back.
+func TestStreamingSinkKeepsWaitingOverflowUntilNoSlotComesBack(t *testing.T) {
+	ctx := context.Background()
+	holdsTheSlot := domain.Finding{
+		Path: "a.go", StartLine: 2, EndLine: 2,
+		Title: "Holds the only slot", Body: "Its delivery fails.", Importance: 9,
+	}
+	firstWaiting := domain.Finding{
+		Path: "b.go", StartLine: 3, EndLine: 3,
+		Title: "Tried first", Body: "It fails too, so its slot comes back.", Importance: 9,
+	}
+	secondWaiting := domain.Finding{
+		Path: "c.go", StartLine: 4, EndLine: 4,
+		Title: "Waits its turn", Body: "It should get the slot the retry released.", Importance: 8,
+	}
+	github := &recordingGitHub{
+		failOn: func(comment githubapp.InlineComment) bool {
+			return comment.Path == "a.go" || comment.Path == "b.go"
+		},
+	}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       1,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	github.duringPost = func() {
+		sink.Publish(ctx, []domain.Finding{firstWaiting, secondWaiting})
+	}
+	sink.Publish(ctx, []domain.Finding{holdsTheSlot})
+
+	sink.Finalize(ctx)
+
+	if len(github.posted) != 1 || github.posted[0].Path != "c.go" {
+		t.Fatalf("posted = %v, want the candidate that was still waiting when the retry freed a slot", github.posted)
+	}
+}
