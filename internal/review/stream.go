@@ -54,6 +54,16 @@ type streamingSink struct {
 	posted      int
 	failed      int
 	finalist    *heldFinalist
+	// pending holds the keys of every reservation made but not yet settled, so
+	// a duplicate finding arriving while an earlier reservation for the same
+	// key is still being posted is recognized and skipped, rather than being
+	// admitted a second time and posted twice.
+	pending map[findingKeys]struct{}
+	// overflow holds every eligible candidate that found no slot when it
+	// arrived, because capacity was fully committed to reservations still
+	// being settled. Nothing here is discarded mid-run: Finalize retries the
+	// whole pool once every chunk has answered and nothing is still pending.
+	overflow []candidate
 }
 
 // heldFinalist is the run's one reservation not yet posted, and where its
@@ -82,6 +92,8 @@ func newStreamingSink(
 		posted:      0,
 		failed:      0,
 		finalist:    nil,
+		pending:     make(map[findingKeys]struct{}),
+		overflow:    make([]candidate, 0),
 	}
 }
 
@@ -96,20 +108,58 @@ func (sink *streamingSink) Publish(ctx context.Context, findings []domain.Findin
 	sink.deliver(ctx, toPostNow)
 }
 
-// Finalize posts the finding holding the run's tail slot, once every chunk has
-// answered and no later arrival can still outrank it.
+// Finalize closes out publication once every chunk has answered.
+//
+// It posts the finding holding the run's tail slot, which no later arrival can
+// outrank now, and then gives every candidate that found no slot on arrival one
+// last chance at whatever capacity a failed delivery released.
 func (sink *streamingSink) Finalize(ctx context.Context) {
+	if item := sink.takeFinalist(); item != nil {
+		sink.deliver(ctx, []candidate{*item})
+	}
+	// The finalist has settled by now, so a failure there has already released
+	// its slot and this pass can see it. Nothing re-enters the pool, so one pass
+	// drains it.
+	if batch := sink.takeOverflow(); len(batch) > 0 {
+		sink.deliver(ctx, batch)
+	}
+}
+
+// takeFinalist hands the tail slot holder to the caller for delivery.
+func (sink *streamingSink) takeFinalist() *candidate {
 	sink.mu.Lock()
-	var pending *candidate
-	if sink.finalist != nil {
-		item := sink.finalist.item
-		pending = &item
+	defer sink.mu.Unlock()
+	if sink.finalist == nil {
+		return nil
 	}
-	sink.mu.Unlock()
-	if pending == nil {
-		return
+	item := sink.finalist.item
+	return &item
+}
+
+// takeOverflow reserves as much of the overflow pool as capacity now allows,
+// worst findings first, and hands those reservations to the caller.
+func (sink *streamingSink) takeOverflow() []candidate {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.overflow) == 0 || sink.selection.capacity <= 0 {
+		return nil
 	}
-	sink.deliver(ctx, []candidate{*pending})
+	sortByImportanceThenPosition(sink.overflow)
+
+	taken := make([]candidate, 0, sink.selection.capacity)
+	for _, item := range sink.overflow {
+		if sink.selection.capacity <= 0 {
+			break
+		}
+		sink.selection.capacity--
+		sink.pending[item.keys] = struct{}{}
+		sink.admitted = append(sink.admitted, item.finding)
+		taken = append(taken, item)
+	}
+	// Nothing returns to the pool: a candidate that still finds no slot here had
+	// its last chance, and one that fails to deliver is counted as rejected.
+	sink.overflow = nil
+	return taken
 }
 
 // considerBatch decides which findings from one chunk post immediately, and
@@ -120,6 +170,10 @@ func (sink *streamingSink) Finalize(ctx context.Context) {
 // turns out most important, decided only once every chunk has answered, so a
 // low importance finding that happens to answer first cannot take the slot a
 // more severe finding, arriving later, would have won.
+//
+// A candidate that finds no slot is kept rather than dropped. Capacity can read
+// as zero only because another chunk's comments are still in flight, and if one
+// of those fails its slot comes back. Finalize gives the pool that slot.
 func (sink *streamingSink) considerBatch(findings []domain.Finding) []candidate {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
@@ -127,7 +181,11 @@ func (sink *streamingSink) considerBatch(findings []domain.Finding) []candidate 
 	candidates := make([]candidate, 0, len(findings))
 	for _, finding := range findings {
 		keys := keysFor(finding)
-		if sink.selection.suppressed(keys) {
+		// A finding already claimed by this run is skipped the same way one an
+		// earlier review carried is. Suppression alone is not enough: it only
+		// records deliveries that finished, so two chunks reporting the same
+		// defect while the first comment is still posting would both admit it.
+		if sink.selection.suppressed(keys) || sink.claimed(keys) {
 			continue
 		}
 		candidates = append(candidates, candidate{finding: finding, keys: keys})
@@ -138,25 +196,47 @@ func (sink *streamingSink) considerBatch(findings []domain.Finding) []candidate 
 	for _, item := range candidates {
 		if sink.selection.capacity > 0 {
 			sink.selection.capacity--
+			sink.pending[item.keys] = struct{}{}
 			sink.admitted = append(sink.admitted, item.finding)
 			toPostNow = append(toPostNow, item)
 			continue
 		}
-		if !sink.selection.hasTailSlot {
-			continue
+		if sink.selection.hasTailSlot {
+			if sink.finalist == nil {
+				sink.admitted = append(sink.admitted, item.finding)
+				sink.finalist = &heldFinalist{item: item, admittedIndex: len(sink.admitted) - 1}
+				continue
+			}
+			if outranks(item, sink.finalist.item) {
+				displaced := sink.finalist.item
+				sink.admitted[sink.finalist.admittedIndex] = item.finding
+				sink.finalist.item = item
+				sink.overflow = append(sink.overflow, displaced)
+				continue
+			}
 		}
-		if sink.finalist == nil {
-			sink.admitted = append(sink.admitted, item.finding)
-			sink.finalist = &heldFinalist{item: item, admittedIndex: len(sink.admitted) - 1}
-			continue
-		}
-		if !outranks(item, sink.finalist.item) {
-			continue
-		}
-		sink.admitted[sink.finalist.admittedIndex] = item.finding
-		sink.finalist.item = item
+		sink.overflow = append(sink.overflow, item)
 	}
 	return toPostNow
+}
+
+// claimed reports whether this run already holds a place for a finding, whether
+// that place is a reservation being posted, the tail slot, or the overflow pool.
+// Every one of those means the finding is accounted for, so a second copy of it
+// must not take a second place.
+func (sink *streamingSink) claimed(keys findingKeys) bool {
+	if _, held := sink.pending[keys]; held {
+		return true
+	}
+	if sink.finalist != nil && sink.finalist.item.keys == keys {
+		return true
+	}
+	for _, item := range sink.overflow {
+		if item.keys == keys {
+			return true
+		}
+	}
+	return false
 }
 
 // postCandidate pairs one reservation with its rendered comment, so posting
@@ -178,19 +258,28 @@ func (sink *streamingSink) deliver(ctx context.Context, items []candidate) {
 	// Rendering one finding at a time and carrying the comment alongside its
 	// candidate avoids depending on two slices staying in lockstep.
 	posts := make([]postCandidate, 0, len(items))
+	unrenderable := make([]candidate, 0)
 	for _, item := range items {
 		rendered, err := RenderInline(sink.head, []domain.Finding{item.finding})
 		if err != nil {
+			// One finding that cannot be rendered says nothing about the others
+			// in the batch, so only it is settled as undelivered.
 			logger.ErrorContext(
 				ctx,
 				"render streamed finding",
 				slog.String("path", item.finding.Path),
 				slog.String("err", err.Error()),
 			)
-			sink.settle(nil, items)
-			return
+			unrenderable = append(unrenderable, item)
+			continue
 		}
 		posts = append(posts, postCandidate{item: item, comment: rendered[0]})
+	}
+	if len(unrenderable) > 0 {
+		sink.settle(nil, unrenderable)
+	}
+	if len(posts) == 0 {
+		return
 	}
 
 	// Posting runs free of the analysis deadline. The last chunk to answer
@@ -203,19 +292,25 @@ func (sink *streamingSink) deliver(ctx context.Context, items []candidate) {
 	// A push during analysis supersedes the commit these findings describe.
 	// Posting them anyway would leave comments on a commit nobody is looking at,
 	// and the reader would see objections to code they have already replaced.
-	// The run's own head check cancels the whole check afterward, so nothing
-	// here needs to release these reservations.
+	// The run's own head check cancels the whole check afterward, so releasing
+	// these reservations changes nothing the reader sees; it only keeps the
+	// sink's own accounting honest about what never reached the page.
 	if !sink.headIsCurrent(ctx) {
+		dropped := make([]candidate, 0, len(posts))
+		for _, post := range posts {
+			dropped = append(dropped, post.item)
+		}
+		sink.settle(nil, dropped)
 		logger.InfoContext(
 			ctx,
 			"streamed findings dropped",
 			slog.String("reason", "head moved during analysis"),
-			slog.Int("findings", len(items)),
+			slog.Int("findings", len(dropped)),
 		)
 		return
 	}
 
-	delivered := make([]candidate, 0, len(items))
+	delivered := make([]candidate, 0, len(posts))
 	undelivered := make([]candidate, 0)
 	for _, post := range posts {
 		if postErr := sink.github.CreateReviewComment(
@@ -244,7 +339,7 @@ func (sink *streamingSink) deliver(ctx context.Context, items []candidate) {
 		"review findings streamed",
 		slog.Int("offered", len(items)),
 		slog.Int("posted", len(delivered)),
-		slog.Int("rejected", len(undelivered)),
+		slog.Int("rejected", len(undelivered)+len(unrenderable)),
 	)
 }
 
@@ -260,19 +355,28 @@ func (sink *streamingSink) settle(delivered []candidate, undelivered []candidate
 	defer sink.mu.Unlock()
 	for _, item := range delivered {
 		sink.selection.remember(item.keys)
-		if sink.finalist != nil && sink.finalist.item.keys == item.keys {
-			sink.finalist = nil
-		}
+		sink.releaseReservation(item, false)
 	}
 	for _, item := range undelivered {
-		if sink.finalist != nil && sink.finalist.item.keys == item.keys {
-			sink.finalist = nil
-			continue
-		}
-		sink.selection.capacity++
+		sink.releaseReservation(item, true)
 	}
 	sink.posted += len(delivered)
 	sink.failed += len(undelivered)
+}
+
+// releaseReservation ends one reservation, returning its slot when the comment
+// never reached the page. The tail slot is accounted for separately from
+// capacity, so releasing it hands its slot back as ordinary capacity for the
+// overflow pool rather than reopening the contest nothing can still enter.
+func (sink *streamingSink) releaseReservation(item candidate, returnSlot bool) {
+	delete(sink.pending, item.keys)
+	if sink.finalist != nil && sink.finalist.item.keys == item.keys {
+		sink.finalist = nil
+		sink.selection.hasTailSlot = false
+	}
+	if returnSlot {
+		sink.selection.capacity++
+	}
 }
 
 // headIsCurrent reports whether the pull request still points at the commit

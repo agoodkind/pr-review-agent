@@ -20,6 +20,9 @@ type recordingGitHub struct {
 	GitHub
 	posted []githubapp.InlineComment
 	failOn func(githubapp.InlineComment) bool
+	// duringPost runs while this comment is still being posted, which is the
+	// only moment a test can act on a reservation that is made but not settled.
+	duringPost func()
 }
 
 func (github *recordingGitHub) CreateReviewComment(
@@ -30,6 +33,10 @@ func (github *recordingGitHub) CreateReviewComment(
 	_ domain.HeadSHA,
 	comment githubapp.InlineComment,
 ) error {
+	if during := github.duringPost; during != nil {
+		github.duringPost = nil
+		during()
+	}
 	if github.failOn != nil && github.failOn(comment) {
 		return errors.New("comment rejected")
 	}
@@ -144,5 +151,119 @@ func TestStreamingSinkReleasesTheSlotWhenDeliveryFails(t *testing.T) {
 	sink.Publish(ctx, []domain.Finding{other})
 	if len(github.posted) != 1 || github.posted[0].Path != "b.go" {
 		t.Fatalf("posted = %v, want the other finding, using the slot the failed delivery released", github.posted)
+	}
+}
+
+// A duplicate finding that arrives while the first copy's comment is still
+// posting must not be admitted a second time.
+//
+// Suppression alone cannot catch it: the sink records a finding as carried only
+// once its comment reaches the page, so during that window the same defect
+// reported by a second chunk looked new, took a second slot, and posted twice.
+func TestStreamingSinkSkipsADuplicateArrivingWhileItsFirstCommentPosts(t *testing.T) {
+	ctx := context.Background()
+	duplicate := domain.Finding{
+		Path: "a.go", StartLine: 2, EndLine: 2,
+		Title: "The same defect", Body: "Two chunks report this one.", Importance: 9,
+	}
+	github := &recordingGitHub{}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       2,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	github.duringPost = func() {
+		sink.Publish(ctx, []domain.Finding{duplicate})
+	}
+	sink.Publish(ctx, []domain.Finding{duplicate})
+
+	if len(github.posted) != 1 {
+		t.Fatalf("posted = %d comments, want 1: the duplicate must not post again", len(github.posted))
+	}
+	if objections := sink.Objections(); len(objections) != 1 {
+		t.Fatalf("objections = %+v, want the finding once", objections)
+	}
+	if state.capacity != 1 {
+		t.Fatalf("capacity = %d, want 1: the duplicate must not spend a second slot", state.capacity)
+	}
+}
+
+// A candidate that finds no free slot is kept, not discarded.
+//
+// Capacity can read as zero only because another chunk's comment is still in
+// flight. When that comment then fails, its slot comes back, and the candidate
+// that arrived during the gap is the one that should use it.
+func TestStreamingSinkPostsAnOverflowCandidateAfterASlotComesBack(t *testing.T) {
+	ctx := context.Background()
+	first := domain.Finding{
+		Path: "a.go", StartLine: 2, EndLine: 2,
+		Title: "Never posts", Body: "This delivery fails.", Importance: 9,
+	}
+	arrivesDuring := domain.Finding{
+		Path: "b.go", StartLine: 3, EndLine: 3,
+		Title: "Arrives with no slot", Body: "It should still be published.", Importance: 8,
+	}
+	github := &recordingGitHub{
+		failOn: func(comment githubapp.InlineComment) bool {
+			return comment.Path == "a.go"
+		},
+	}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       1,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	github.duringPost = func() {
+		sink.Publish(ctx, []domain.Finding{arrivesDuring})
+	}
+	sink.Publish(ctx, []domain.Finding{first})
+	if len(github.posted) != 0 {
+		t.Fatalf("posted = %v, want none yet: the only delivery so far failed", github.posted)
+	}
+
+	sink.Finalize(ctx)
+
+	if len(github.posted) != 1 || github.posted[0].Path != "b.go" {
+		t.Fatalf("posted = %v, want the candidate that arrived while the slot was busy", github.posted)
+	}
+}
+
+// One finding that cannot be rendered must not take the rest of its batch down
+// with it. Every other finding in the batch is still posted.
+func TestStreamingSinkPostsTheRestOfABatchWhenOneFindingCannotRender(t *testing.T) {
+	ctx := context.Background()
+	// An absolute path is rejected when the comment body is built, so this
+	// finding fails to render while its neighbor renders normally.
+	unrenderable := domain.Finding{
+		Path: "/etc/passwd", StartLine: 2, EndLine: 2,
+		Title: "Cannot render", Body: "Its path is rejected.", Importance: 9,
+	}
+	valid := domain.Finding{
+		Path: "b.go", StartLine: 3, EndLine: 3,
+		Title: "Renders normally", Body: "This one should reach the page.", Importance: 9,
+	}
+	github := &recordingGitHub{}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       2,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	sink.Publish(ctx, []domain.Finding{unrenderable, valid})
+
+	if len(github.posted) != 1 || github.posted[0].Path != "b.go" {
+		t.Fatalf("posted = %v, want the finding that rendered", github.posted)
+	}
+	posted, failed := sink.Delivery()
+	if posted != 1 || failed != 1 {
+		t.Fatalf("delivery = (%d posted, %d failed), want (1, 1)", posted, failed)
 	}
 }
