@@ -40,7 +40,7 @@ func (client *Client) ListReviews(
 ) ([]Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews", number))
 	reviews := make([]Review, 0)
-	err := client.doRESTPaginated(ctx, installationID, "GET", path, nil, func(page []byte) (int, error) {
+	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
 		var pageReviews []reviewResponse
 		if err := json.Unmarshal(page, &pageReviews); err != nil {
 			client.logger.ErrorContext(ctx, "decode reviews page", slog.String("err", err.Error()))

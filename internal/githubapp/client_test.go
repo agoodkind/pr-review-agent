@@ -536,6 +536,57 @@ func TestGraphQLErrorsRemainVisible(t *testing.T) {
 	}
 }
 
+func TestCreateAndUpdateIssueComment(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	var lastMethod, lastPath, lastBody string
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
+			writeJSON(writer, http.StatusCreated, map[string]any{
+				"token":      "ghs_installation",
+				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+			})
+			return
+		}
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		lastMethod, lastPath, lastBody = request.Method, request.URL.Path, string(body)
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"id":   float64(4242),
+			"body": "hello",
+			"user": map[string]any{"login": "bot"},
+		})
+	})
+
+	repo := testRepo()
+
+	created, err := client.CreateIssueComment(context.Background(), 99, repo, 7, "hello")
+	if err != nil {
+		t.Fatalf("CreateIssueComment: %v", err)
+	}
+	if created.ID != 4242 {
+		t.Fatalf("id = %d, want 4242", created.ID)
+	}
+	if lastMethod != http.MethodPost || lastPath != "/repos/owner/repo/issues/7/comments" {
+		t.Fatalf("request = %s %s, want POST the issue comments path", lastMethod, lastPath)
+	}
+
+	if _, err := client.UpdateIssueComment(context.Background(), 99, repo, 4242, "second"); err != nil {
+		t.Fatalf("UpdateIssueComment: %v", err)
+	}
+	if lastMethod != http.MethodPatch || lastPath != "/repos/owner/repo/issues/comments/4242" {
+		t.Fatalf("request = %s %s, want PATCH the single comment path", lastMethod, lastPath)
+	}
+	if !strings.Contains(lastBody, "second") {
+		t.Fatalf("body = %q, want the new text", lastBody)
+	}
+}
+
 type testServerState struct {
 	nowValue               time.Time
 	installationTokenCount int32
