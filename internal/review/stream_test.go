@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 
@@ -19,7 +20,12 @@ const streamTestHeadSHA = "0123456789abcdef0123456789abcdef01234567"
 type recordingGitHub struct {
 	GitHub
 	posted []githubapp.InlineComment
+	// failOn simulates GitHub answering and definitely rejecting a comment, the
+	// same shape the real client returns for any non-2xx response.
 	failOn func(githubapp.InlineComment) bool
+	// failAmbiguouslyOn simulates a failure that carries no confirmation either
+	// way, such as a dropped connection, rather than an HTTP error GitHub sent.
+	failAmbiguouslyOn func(githubapp.InlineComment) bool
 	// duringPost runs while this comment is still being posted, which is the
 	// only moment a test can act on a reservation that is made but not settled.
 	duringPost func()
@@ -38,7 +44,10 @@ func (github *recordingGitHub) CreateReviewComment(
 		during()
 	}
 	if github.failOn != nil && github.failOn(comment) {
-		return errors.New("comment rejected")
+		return githubapp.APIError{StatusCode: http.StatusUnprocessableEntity, Message: "comment rejected"}
+	}
+	if github.failAmbiguouslyOn != nil && github.failAmbiguouslyOn(comment) {
+		return errors.New("connection reset by peer")
 	}
 	github.posted = append(github.posted, comment)
 	return nil
@@ -351,5 +360,75 @@ func TestStreamingSinkGivesAReleasedSlotToAnAlreadyWaitingFinding(t *testing.T) 
 
 	if len(github.posted) != 1 || github.posted[0].Path != "b.go" {
 		t.Fatalf("posted = %v, want the finding that had been waiting longer", github.posted)
+	}
+}
+
+// A duplicate finding within one chunk's own reported findings must not post
+// twice. The claimed check alone catches a duplicate across two Publish
+// calls, but not two copies inside a single findings slice, because pending
+// only gains an entry as candidates are admitted below the check.
+func TestStreamingSinkSkipsADuplicateWithinTheSameBatch(t *testing.T) {
+	ctx := context.Background()
+	duplicate := domain.Finding{
+		Path: "a.go", StartLine: 2, EndLine: 2,
+		Title: "Reported twice by the same chunk", Body: "One model answer, two copies.", Importance: 9,
+	}
+	github := &recordingGitHub{}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       5,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	sink.Publish(ctx, []domain.Finding{duplicate, duplicate})
+
+	if len(github.posted) != 1 {
+		t.Fatalf("posted = %d comments, want 1 for two copies of the same finding", len(github.posted))
+	}
+	if state.capacity != 4 {
+		t.Fatalf("capacity = %d, want 4: only one slot should be spent", state.capacity)
+	}
+}
+
+// A post whose error carries no definite HTTP rejection is treated as if it
+// delivered: the slot stays spent and the finding is remembered, because
+// assuming success costs less than a duplicate comment or an exceeded cap
+// would if the post actually did reach GitHub before the error occurred.
+func TestStreamingSinkTreatsAnAmbiguousPostFailureAsDelivered(t *testing.T) {
+	ctx := context.Background()
+	ambiguous := domain.Finding{
+		Path: "a.go", StartLine: 2, EndLine: 2,
+		Title: "Connection drops mid post", Body: "GitHub's answer never arrives.", Importance: 9,
+	}
+	other := domain.Finding{
+		Path: "b.go", StartLine: 3, EndLine: 3,
+		Title: "A different defect", Body: "Must not get the slot the ambiguous post held.", Importance: 8,
+	}
+	github := &recordingGitHub{
+		failAmbiguouslyOn: func(comment githubapp.InlineComment) bool {
+			return comment.Path == "a.go"
+		},
+	}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       1,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	sink.Publish(ctx, []domain.Finding{ambiguous})
+	if len(state.historyIDs) == 0 && len(state.historyAnchors) == 0 {
+		t.Fatal("the ambiguous finding was not remembered, want it treated as delivered")
+	}
+
+	sink.Publish(ctx, []domain.Finding{other})
+	if state.capacity != 0 {
+		t.Fatalf("capacity = %d, want 0: the ambiguous post's slot must stay spent", state.capacity)
+	}
+	if len(sink.overflow) != 1 || sink.overflow[0].finding.Path != "b.go" {
+		t.Fatalf("overflow = %+v, want the other finding waiting, not admitted", sink.overflow)
 	}
 }

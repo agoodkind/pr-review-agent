@@ -10,6 +10,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -187,8 +188,16 @@ func (sink *streamingSink) considerBatch(findings []domain.Finding) []candidate 
 	defer sink.mu.Unlock()
 
 	candidates := make([]candidate, 0, len(findings))
+	// seenInBatch catches a duplicate within this one findings slice. claimed
+	// alone would miss it: pending only gains an entry once a finding is
+	// admitted below, so two copies of the same finding in one model answer
+	// would both pass the claimed check that runs ahead of that.
+	seenInBatch := make(map[findingKeys]struct{}, len(findings))
 	for _, finding := range findings {
 		keys := keysFor(finding)
+		if _, duplicate := seenInBatch[keys]; duplicate {
+			continue
+		}
 		// A finding already claimed by this run is skipped the same way one an
 		// earlier review carried is. Suppression alone is not enough: it only
 		// records deliveries that finished, so two chunks reporting the same
@@ -196,6 +205,7 @@ func (sink *streamingSink) considerBatch(findings []domain.Finding) []candidate 
 		if sink.selection.suppressed(keys) || sink.claimed(keys) {
 			continue
 		}
+		seenInBatch[keys] = struct{}{}
 		candidates = append(candidates, candidate{finding: finding, keys: keys})
 	}
 	// Candidates already waiting contest this batch's slots alongside the new
@@ -290,7 +300,7 @@ func (sink *streamingSink) deliver(ctx context.Context, items []candidate) {
 		posts = append(posts, postCandidate{item: item, comment: rendered[0]})
 	}
 	if len(unrenderable) > 0 {
-		sink.settle(nil, unrenderable)
+		sink.settle(nil, unrenderable, nil)
 	}
 	if len(posts) == 0 {
 		return
@@ -314,7 +324,7 @@ func (sink *streamingSink) deliver(ctx context.Context, items []candidate) {
 		for _, post := range posts {
 			dropped = append(dropped, post.item)
 		}
-		sink.settle(nil, dropped)
+		sink.settle(nil, dropped, nil)
 		logger.InfoContext(
 			ctx,
 			"streamed findings dropped",
@@ -325,57 +335,81 @@ func (sink *streamingSink) deliver(ctx context.Context, items []candidate) {
 	}
 
 	delivered := make([]candidate, 0, len(posts))
-	undelivered := make([]candidate, 0)
+	rejected := make([]candidate, 0)
+	ambiguous := make([]candidate, 0)
 	for _, post := range posts {
-		if postErr := sink.github.CreateReviewComment(
+		postErr := sink.github.CreateReviewComment(
 			ctx,
 			sink.job.InstallationID,
 			sink.job.Repository,
 			sink.job.Number,
 			sink.head,
 			post.comment,
-		); postErr != nil {
-			logger.ErrorContext(
-				ctx,
-				"publish streamed finding",
-				slog.String("path", post.comment.Path),
-				slog.Int("line", post.comment.Line),
-				slog.String("err", postErr.Error()),
-			)
-			undelivered = append(undelivered, post.item)
+		)
+		if postErr == nil {
+			delivered = append(delivered, post.item)
 			continue
 		}
-		delivered = append(delivered, post.item)
+		logger.ErrorContext(
+			ctx,
+			"publish streamed finding",
+			slog.String("path", post.comment.Path),
+			slog.Int("line", post.comment.Line),
+			slog.String("err", postErr.Error()),
+		)
+		// A definite rejection means GitHub answered and refused the comment, so
+		// nothing was posted. Anything else, a dropped connection or a timeout,
+		// leaves no way to tell whether GitHub created the comment before the
+		// answer was lost, and assuming it did costs less than a duplicate
+		// comment or a cap this run already exceeded would.
+		var apiErr githubapp.APIError
+		if errors.As(postErr, &apiErr) {
+			rejected = append(rejected, post.item)
+			continue
+		}
+		ambiguous = append(ambiguous, post.item)
 	}
-	sink.settle(delivered, undelivered)
+	sink.settle(delivered, rejected, ambiguous)
 	logger.InfoContext(
 		ctx,
 		"review findings streamed",
 		slog.Int("offered", len(items)),
 		slog.Int("posted", len(delivered)),
-		slog.Int("rejected", len(undelivered)+len(unrenderable)),
+		slog.Int("rejected", len(rejected)+len(unrenderable)),
+		slog.Int("ambiguous", len(ambiguous)),
 	)
 }
 
 // settle records one batch's delivery outcome under a single lock.
 //
 // A delivered finding is remembered so no later chunk repeats it and no future
-// run reports it again. An undelivered finding releases the slot it reserved,
-// because it was never shown to anyone: a rejected comment must not cost a
-// different, later finding its only chance at that slot, and must not be
+// run reports it again. A rejected finding releases the slot it reserved,
+// because GitHub answered and refused it: nothing was shown, so a different,
+// later finding must get a chance at that slot, and this one must not be
 // suppressed from ever being reported again.
-func (sink *streamingSink) settle(delivered []candidate, undelivered []candidate) {
+//
+// An ambiguous finding, whose post attempt raised something other than a
+// definite rejection, is treated the same as delivered rather than the same as
+// rejected. Nothing confirms the comment reached the page, but assuming it did
+// is the safer guess: assuming it did not risks a duplicate comment on the
+// next run and a second finding here exceeding the cap this run already
+// committed to.
+func (sink *streamingSink) settle(delivered []candidate, rejected []candidate, ambiguous []candidate) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 	for _, item := range delivered {
 		sink.selection.remember(item.keys)
 		sink.releaseReservation(item, false)
 	}
-	for _, item := range undelivered {
+	for _, item := range ambiguous {
+		sink.selection.remember(item.keys)
+		sink.releaseReservation(item, false)
+	}
+	for _, item := range rejected {
 		sink.releaseReservation(item, true)
 	}
 	sink.posted += len(delivered)
-	sink.failed += len(undelivered)
+	sink.failed += len(rejected) + len(ambiguous)
 }
 
 // releaseReservation ends one reservation, returning its slot when the comment
