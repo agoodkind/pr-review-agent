@@ -60,9 +60,9 @@ type streamingSink struct {
 	// admitted a second time and posted twice.
 	pending map[findingKeys]struct{}
 	// overflow holds every eligible candidate that found no slot when it
-	// arrived, because capacity was fully committed to reservations still
-	// being settled. Nothing here is discarded mid-run: Finalize retries the
-	// whole pool once every chunk has answered and nothing is still pending.
+	// arrived, because capacity was fully committed to reservations still being
+	// settled. Nothing here is discarded mid-run: once every chunk has answered,
+	// Finalize offers the pool each slot that comes free until none do.
 	overflow []candidate
 }
 
@@ -117,10 +117,15 @@ func (sink *streamingSink) Finalize(ctx context.Context) {
 	if item := sink.takeFinalist(); item != nil {
 		sink.deliver(ctx, []candidate{*item})
 	}
-	// The finalist has settled by now, so a failure there has already released
-	// its slot and this pass can see it. Nothing re-enters the pool, so one pass
-	// drains it.
-	if batch := sink.takeOverflow(); len(batch) > 0 {
+	// Each pass delivers what capacity allowed and keeps the rest. A delivery
+	// that fails hands its slot back, so the next pass offers that slot to a
+	// candidate still waiting. A pass that reserves nothing ends the loop, and
+	// the pool only shrinks, so this terminates.
+	for {
+		batch := sink.takeOverflow()
+		if len(batch) == 0 {
+			return
+		}
 		sink.deliver(ctx, batch)
 	}
 }
@@ -147,18 +152,21 @@ func (sink *streamingSink) takeOverflow() []candidate {
 	sortByImportanceThenPosition(sink.overflow)
 
 	taken := make([]candidate, 0, sink.selection.capacity)
+	// Whatever capacity cannot cover stays in the pool. One of these deliveries
+	// may still fail and hand its slot back, and a candidate dropped here would
+	// have no way to claim it.
+	waiting := make([]candidate, 0, len(sink.overflow))
 	for _, item := range sink.overflow {
 		if sink.selection.capacity <= 0 {
-			break
+			waiting = append(waiting, item)
+			continue
 		}
 		sink.selection.capacity--
 		sink.pending[item.keys] = struct{}{}
 		sink.admitted = append(sink.admitted, item.finding)
 		taken = append(taken, item)
 	}
-	// Nothing returns to the pool: a candidate that still finds no slot here had
-	// its last chance, and one that fails to deliver is counted as rejected.
-	sink.overflow = nil
+	sink.overflow = waiting
 	return taken
 }
 
