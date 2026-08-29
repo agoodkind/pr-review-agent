@@ -44,19 +44,37 @@ no prompt outgrows the model's context.
 | Verdict review | `APPROVE` or `REQUEST_CHANGES`, nothing else | Replaced by every run's recomputation |
 | Check run | Not started, running, finished, or failed, plus the run identifier | One per head |
 
+## Admission: too large is not attempted
+
+CodeRabbit's measured behavior, docs and live: when a pull request exceeds
+its file budget it skips the review outright rather than produce a slow or
+low quality one, announces the skip with its reason in the one walkthrough
+comment, and offers an explicit on demand override. A hard cap exists above
+which no override runs.
+
+This service does the same. Before any model call, measure the delta. Over
+the configured budget (`REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS`), the run
+posts "review skipped" with the measured size and the reason into the top
+level comment, completes the check as `skipped`, and touches no review
+state. A skipped review never blocks and never goes red. The delta, not the
+whole pull request, is what is measured, so a large pull request built from
+small pushes still gets reviewed increment by increment.
+
 ## The loop, every invocation
 
 1. Read the pull request: head, marker, own threads.
-2. Compute the work: the diff from `last_reviewed_commit` to head (the full
-   diff when no marker exists), chunked, merged with any pending chunks the
+2. Admission: measure the delta from `last_reviewed_commit` to head (the
+   full diff when no marker exists). Over budget, write the skip notice and
+   stop.
+3. Compute the work: that delta, chunked, merged with any pending chunks the
    marker already lists.
-3. For each chunk: one model call with its own timeout. Post qualifying
+4. For each chunk: one model call with its own timeout. Post qualifying
    findings inline immediately. Advance the checkpoint in the marker.
-4. Reconcile: for each own open thread whose lines the delta touched, decide
+5. Reconcile: for each own open thread whose lines the delta touched, decide
    whether the new code fixes it, and resolve the ones it does.
-5. Recompute the verdict from the threads now open and whether the head is
+6. Recompute the verdict from the threads now open and whether the head is
    fully reviewed. Replace the verdict review.
-6. Rewrite the top level comment's summary. Complete the check.
+7. Rewrite the top level comment's summary. Complete the check.
 
 An invocation that exhausts its budget mid list simply stops after a
 checkpoint. Nothing is lost and nothing is retried in place.
@@ -88,9 +106,13 @@ queue.
 6. One top level comment exists per pull request, forever.
 7. The run identifier on the check, the comment, and the log lines is the
    same string, and the logs are retrievable per [logs.md](../../logs.md).
+8. A delta over budget is never attempted: the comment says skipped and why,
+   the check concludes `skipped`, and no review state changes.
 
 ## Acceptance
 
-mlx-swift-lm 8 is the live acceptance test: 173 chunks must complete across
-invocations, deliver findings, and finish green, on the deployed service,
-before this design is called done.
+mlx-swift-lm 8 is the live acceptance test. Its 173 chunk delta must be
+declined at admission with a visible skip notice and a check that neither
+blocks nor goes red, on the deployed service. A second, normal sized pull
+request must complete its review across invocations after a forced container
+death, with the same run identifier on every artifact.
