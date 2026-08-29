@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"goodkind.io/gklog"
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/queue"
@@ -129,7 +130,11 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		slog.String("head", string(event.Head)),
 		slog.String("action", event.Action),
 	)
-	ctx := gklog.WithLogger(request.Context(), logger)
+	// One correlation identifier covers the whole run so every log line this
+	// delivery produces, and later the check run and pull request comment, can
+	// be tied back to it.
+	ctx, _ := correlation.Ensure(request.Context(), deliveryID)
+	ctx = gklog.WithLogger(ctx, logger)
 	logger = gklog.L(ctx)
 
 	if !handler.cache.Claim(deliveryID) {

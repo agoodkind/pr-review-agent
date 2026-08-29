@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"goodkind.io/gklog"
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/pr-review-agent/internal/app"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/telemetry"
@@ -54,14 +55,21 @@ func run(
 	// Container stdout reaches no log sink, so a forwarder is added as a second
 	// handler when one is configured. Every log the service already writes then
 	// reaches a place a person can read, with no new call sites.
+	//
+	// Each handler is wrapped in correlation.SlogHandler so a record written
+	// through a context carrying a correlation.Context gains request_id,
+	// trace_id, and span_id, again with no new call sites.
 	handlers := []slog.Handler{
-		slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		correlation.SlogHandler(
+			slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+			correlation.HandlerOptions{},
+		),
 	}
 	var forwarder *telemetry.Forwarder
 	if cfg.LogForwardURL != nil {
 		forwarder = telemetry.NewForwarder(cfg.LogForwardURL.String(), cfg.GitHubWebhookSecret, nil)
 		if forwarder != nil {
-			handlers = append(handlers, forwarder)
+			handlers = append(handlers, correlation.SlogHandler(forwarder, correlation.HandlerOptions{}))
 		}
 	}
 

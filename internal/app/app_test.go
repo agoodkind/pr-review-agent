@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -21,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/gklog/correlation"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -791,6 +793,35 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	}
 }
 
+func TestWebhookAdmissionMintsOneRunIdentifierPerDelivery(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-run-id",
+		body:       openedPayload(testDefectiveHead),
+	})
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+
+	logged := fixture.logLinesContaining("webhook delivery accepted")
+	if len(logged) == 0 {
+		t.Fatal("no accepted delivery line was logged")
+	}
+	if logged[0]["request_id"] != "delivery-run-id" {
+		t.Fatalf("request_id = %v, want the delivery id", logged[0]["request_id"])
+	}
+	if logged[0]["trace_id"] == "" || logged[0]["trace_id"] == nil {
+		t.Fatalf("trace_id = %v, want a minted trace id", logged[0]["trace_id"])
+	}
+}
+
 type appFixtureOptions struct {
 	clydeResponses          []string
 	clydeReconcileResponses []string
@@ -815,6 +846,26 @@ type appFixture struct {
 	cancel      context.CancelFunc
 	ownsGitHub  bool
 	ownsClyde   bool
+	logs        *syncBuffer
+}
+
+// syncBuffer collects the JSON log lines the fixture's logger writes while
+// the HTTP handler and background review workers run concurrently.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (buffer *syncBuffer) Write(data []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buf.Write(data)
+}
+
+func (buffer *syncBuffer) lines() []string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return strings.Split(strings.TrimRight(buffer.buf.String(), "\n"), "\n")
 }
 
 func newAppFixture(t *testing.T, options appFixtureOptions) *appFixture {
@@ -895,7 +946,14 @@ func wireAppFixture(
 		CFAccessClientSecret:      "fixture-cf-secret", // gitleaks:allow
 	}
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Wrapped in correlation.SlogHandler to match the production handler
+	// chain in cmd/pr-review-agent/main.go, so tests can assert that a
+	// captured log line carries the correlation identifiers a real run would.
+	logs := &syncBuffer{}
+	logger := slog.New(correlation.SlogHandler(
+		slog.NewJSONHandler(logs, nil),
+		correlation.HandlerOptions{},
+	))
 	application := New(cfg, githubServer.Client(), clydeServer.Client(), logger)
 
 	httpServer := httptest.NewServer(application.server.Handler)
@@ -912,7 +970,28 @@ func wireAppFixture(
 		baseURL:     httpServer.URL,
 		client:      httpServer.Client(),
 		cancel:      cancel,
+		logs:        logs,
 	}
+}
+
+// logLinesContaining decodes every captured JSON log line and returns those
+// whose msg field contains substring.
+func (fixture *appFixture) logLinesContaining(substring string) []map[string]any {
+	matches := make([]map[string]any, 0)
+	for _, line := range fixture.logs.lines() {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		msg, _ := record["msg"].(string)
+		if strings.Contains(msg, substring) {
+			matches = append(matches, record)
+		}
+	}
+	return matches
 }
 
 func applyGitHubFixtureOptions(state *githubServerState, options appFixtureOptions) {
