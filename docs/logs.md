@@ -6,13 +6,17 @@ pull them, and it is written so an agent can repeat it without guessing.
 
 ## What you can and cannot get
 
-Cloudflare retains Workers Logs for 7 days on the Workers Paid plan. A dump on
-2026-08-29 returned 1385 events spanning 2026-08-22 to 2026-08-29. Nothing older
-exists to retrieve, so a question about a run from three weeks ago has no answer
-from this source.
+Cloudflare retains Workers Logs for 7 days on the Workers Paid plan. Paging to
+exhaustion on 2026-08-29 returned 1387 events spanning 2026-08-22T18:20:15Z to
+2026-08-29T17:22:17Z. Nothing older exists to retrieve, so a question about a run
+from three weeks ago has no answer from this source.
 
 The API caps one response at 2000 events. Asking for more returns a validation
 error naming `limit` and `too_big`.
+
+A short response does not mean you reached the end. The first page of that
+2026-08-29 dump returned 1385 events, well under the cap, and a second page still
+found 3 more. Page until a request returns zero.
 
 ## Get a credential
 
@@ -50,35 +54,62 @@ curl -s -X DELETE \
     "https://api.cloudflare.com/client/v4/user/tokens/$(<observability.id)"
 ```
 
-## Dump every retained log line
+## Dump one page
 
-One request, no script:
+One request. `timeframe.from` and `timeframe.to` are milliseconds since the
+epoch, and the wide window here asks for everything so retention decides.
 
 ```bash
 curl -s -X POST \
     -H "Authorization: Bearer $(<~/Desktop/cftoken/observability.txt)" \
     -H "Content-Type: application/json" \
-    -d '{"queryId":"dump","timeframe":{"from":1754000000000,"to":1788200000000},"parameters":{"datasets":["cloudflare-workers"]},"limit":2000,"view":"events"}' \
+    -d '{"queryId":"dump","timeframe":{"from":1700000000000,"to":1788300000000},"parameters":{"datasets":["cloudflare-workers"]},"limit":2000,"view":"events"}' \
     "https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query" \
-    > alltime.json
+    > page-1.json
 ```
 
-`timeframe.from` and `timeframe.to` are milliseconds since the epoch. The wide
-window above simply asks for everything and lets retention decide.
+That returns the newest events first and stops. It is one page, not the whole
+set.
 
-Count what came back and see the span it covers:
+## Dump everything
+
+There is no cursor. Page backwards through time: take the oldest timestamp a
+page returned and make it the next page's `to`. Stop when a page returns zero.
 
 ```bash
-jq '.result.events.events | length' alltime.json
-jq -r '.result.events.events | (min_by(.timestamp).timestamp/1000|todate) + " to " + (max_by(.timestamp).timestamp/1000|todate)' alltime.json
+TOKEN=$(<~/Desktop/cftoken/observability.txt)
+URL="https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query"
+TO=1788300000000
+
+for i in $(seq 1 40); do
+    jq -n --argjson to "$TO" '{queryId:"page",timeframe:{from:1700000000000,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > req.json
+    curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @req.json "$URL" > "page-$i.json"
+    N=$(jq '.result.events.events | length' "page-$i.json")
+    echo "page $i: $N events"
+    if [[ "$N" -eq 0 ]]; then rm -f "page-$i.json"; break; fi
+    TO=$(jq '.result.events.events | min_by(.timestamp).timestamp' "page-$i.json")
+done
 ```
+
+Merge the pages into one array. The boundary timestamp repeats across pages, so
+deduplicate on the record identifier:
+
+```bash
+jq -s '[.[].result.events.events[]] | unique_by(.timestamp, .["$metadata"].id)' page-*.json > all-events.json
+jq 'length' all-events.json
+jq -r '(min_by(.timestamp).timestamp/1000|todate) + " to " + (max_by(.timestamp).timestamp/1000|todate)' all-events.json
+```
+
+Every query below reads `all-events.json`, which is a bare array rather than the
+API envelope.
 
 ## Read one record
 
-Each event carries the service's own fields under `.source`:
+The array mixes the Worker's own lines with the service's. A service record
+carries `source: "pr-review-agent"` and its fields sit under `.source`:
 
 ```bash
-jq '.result.events.events[0].source' alltime.json
+jq 'map(select(.source.source=="pr-review-agent")) | .[0].source' all-events.json
 ```
 
 A failed chunk looks like this:
@@ -109,13 +140,19 @@ every line of one run together.
 Filter the dump you already have rather than issuing another request:
 
 ```bash
-jq -r '.result.events.events[].source | select(.level=="ERROR") | (.time + "  " + .repository + " #" + .pull_request + "  " + .message + "  " + .err)' alltime.json
+jq -r '.[].source | select(.level=="ERROR") | (.time + "  " + .repository + " #" + .pull_request + "  " + .message + "  " + .err)' all-events.json
 ```
 
-Follow one run end to end:
+Follow one run:
 
 ```bash
-jq -r --arg run ce224b60-a3b8-11f1-8990-692ed34d72f4 '.result.events.events[].source | select(.delivery_id==$run) | (.time + "  " + .level + "  " + .message)' alltime.json
+jq -r --arg run ce224b60-a3b8-11f1-8990-692ed34d72f4 '.[].source | select(.delivery_id==$run) | (.time + "  " + .level + "  " + .message)' all-events.json
+```
+
+Count failures per repository:
+
+```bash
+jq -r '[.[].source | select(.level=="ERROR") | .repository] | group_by(.) | map({repo: .[0], n: length}) | sort_by(-.n) | .[] | "\(.n)  \(.repo)"' all-events.json
 ```
 
 ## Narrow the request instead
