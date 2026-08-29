@@ -90,11 +90,39 @@ body. It has three gaps.
 3. **Not comprehensive.** The 500-entry cap drops the start of a long run, and
    the start is where admission and configuration are recorded.
 
+### What gklog already provides
+
+The service imports only the root `goodkind.io/gklog` package today, for
+`gklog.L(ctx)`. Two subpackages carry the tracing this needs, and neither is
+wired up. Use the latest release, `v0.4.4`.
+
+`goodkind.io/gklog/correlation` carries request, trace, and span identifiers
+across process boundaries through context, HTTP headers, and gRPC metadata.
+
+- `correlation.Ensure(ctx, requestID)` returns a context carrying a correlation
+  context, minting trace and span identifiers.
+- `correlation.SlogHandler(next, opts)` wraps a handler so every record flowing
+  through such a context gains those identifiers with no new call sites.
+- `correlation.HeaderLine` and `MarkerLine` render the identifiers for a human.
+
+`goodkind.io/gklog/trace` adds OpenTelemetry spans, HTTP middleware, and setup.
+
+- `trace.Setup(opts)` wires the exporter and returns a closer.
+- `trace.Op(ctx, name)` opens a span for one operation and records its error.
+- `trace.StartSpan(ctx, name, opts...)` for nested work.
+- `trace.IDFromContext(ctx)` and `trace.SpanIDFromContext(ctx)` read the current
+  identifiers, which is how a run identifier reaches a GitHub artifact.
+
 ### Requirements
 
-- Mint one run identifier when the job is admitted. Carry it as a permanent
-  `gklog` attribute so every log line the run writes already has it.
-- Write that identifier into three places a person can reach without
+- Take the webhook delivery identifier as the run's request identifier and call
+  `correlation.Ensure` at admission, so one identifier covers the whole run.
+- Add `correlation.SlogHandler` to the handler chain, so every line the review
+  already logs carries the run, trace, and span identifiers without new call
+  sites.
+- Open a span per step of the reviewer loop with `trace.Op`, so a slow or failed
+  step is attributable rather than inferred.
+- Write the run identifier into three places a person can reach without
   credentials: the check run output, the top-level comment, and every shipped
   log line.
 - Give the check run a details link that resolves to that run's logs rather than
