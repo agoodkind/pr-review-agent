@@ -60,6 +60,11 @@ type streamingSink struct {
 	// key is still being posted is recognized and skipped, rather than being
 	// admitted a second time and posted twice.
 	pending map[findingKeys]struct{}
+	// rejected holds the keys GitHub has definitely refused this run. Their
+	// capacity is returned for a different finding to use, but the key itself
+	// stays claimed: retrying the identical content GitHub just refused wastes
+	// another slot on an attempt already known to fail the same way.
+	rejected map[findingKeys]struct{}
 	// overflow holds every eligible candidate that found no slot when it
 	// arrived, because capacity was fully committed to reservations still being
 	// settled. Nothing here is discarded mid-run: once every chunk has answered,
@@ -94,6 +99,7 @@ func newStreamingSink(
 		failed:      0,
 		finalist:    nil,
 		pending:     make(map[findingKeys]struct{}),
+		rejected:    make(map[findingKeys]struct{}),
 		overflow:    make([]candidate, 0),
 	}
 }
@@ -252,6 +258,9 @@ func (sink *streamingSink) claimed(keys findingKeys) bool {
 	if _, held := sink.pending[keys]; held {
 		return true
 	}
+	if _, tried := sink.rejected[keys]; tried {
+		return true
+	}
 	if sink.finalist != nil && sink.finalist.item.keys == keys {
 		return true
 	}
@@ -383,10 +392,12 @@ func (sink *streamingSink) deliver(ctx context.Context, items []candidate) {
 // settle records one batch's delivery outcome under a single lock.
 //
 // A delivered finding is remembered so no later chunk repeats it and no future
-// run reports it again. A rejected finding releases the slot it reserved,
-// because GitHub answered and refused it: nothing was shown, so a different,
-// later finding must get a chance at that slot, and this one must not be
-// suppressed from ever being reported again.
+// run reports it again. A rejected finding releases the slot it reserved for a
+// different, later finding to use, because GitHub answered and refused it, but
+// it stays claimed for the rest of this run: retrying the identical content
+// GitHub just refused would waste another slot repeating the same failure, and
+// it is not remembered past this run since a future push may fix whatever the
+// rejection was actually about.
 //
 // An ambiguous finding, whose post attempt raised something other than a
 // definite rejection, is treated the same as delivered rather than the same as
@@ -406,6 +417,7 @@ func (sink *streamingSink) settle(delivered []candidate, rejected []candidate, a
 		sink.releaseReservation(item, false)
 	}
 	for _, item := range rejected {
+		sink.rejected[item.keys] = struct{}{}
 		sink.releaseReservation(item, true)
 	}
 	sink.posted += len(delivered)

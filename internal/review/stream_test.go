@@ -432,3 +432,38 @@ func TestStreamingSinkTreatsAnAmbiguousPostFailureAsDelivered(t *testing.T) {
 		t.Fatalf("overflow = %+v, want the other finding waiting, not admitted", sink.overflow)
 	}
 }
+
+// A finding GitHub definitely rejected must not be retried within the same
+// run. A later chunk reporting the identical defect wastes the slot it
+// releases repeating a failure GitHub already answered, rather than that slot
+// going to a different finding.
+func TestStreamingSinkDoesNotRetryARejectedFindingWithinTheRun(t *testing.T) {
+	ctx := context.Background()
+	rejected := domain.Finding{
+		Path: "a.go", StartLine: 2, EndLine: 2,
+		Title: "GitHub refuses this one", Body: "It comes back from a second chunk too.", Importance: 9,
+	}
+	different := domain.Finding{
+		Path: "b.go", StartLine: 3, EndLine: 3,
+		Title: "A different defect", Body: "It should get the slot the rejection released.", Importance: 8,
+	}
+	github := &recordingGitHub{
+		failOn: func(comment githubapp.InlineComment) bool {
+			return comment.Path == "a.go"
+		},
+	}
+	state := publicationState{
+		historyIDs:     map[string]struct{}{},
+		historyAnchors: map[string]struct{}{},
+		capacity:       1,
+		hasTailSlot:    false,
+	}
+	sink := newStreamingSink(github, streamTestJob(), domain.HeadSHA(streamTestHeadSHA), &state, time.Second)
+
+	sink.Publish(ctx, []domain.Finding{rejected})
+	sink.Publish(ctx, []domain.Finding{rejected, different})
+
+	if len(github.posted) != 1 || github.posted[0].Path != "b.go" {
+		t.Fatalf("posted = %v, want only the different finding, not a retry of the rejected one", github.posted)
+	}
+}
