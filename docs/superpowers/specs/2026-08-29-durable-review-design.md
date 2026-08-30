@@ -36,6 +36,13 @@ no prompt outgrows the model's context.
 5. **The verdict is a pure function of current state**, recomputed at the end
    of every run: `REQUEST_CHANGES` while any of the service's own threads is
    open, `APPROVE` when none is open and the current head has been reviewed.
+   Both inputs are read after publication, never before. Threads are refetched
+   once this run's findings are posted, because a snapshot taken earlier omits
+   them and would let a run approve over defects it just raised. The head is
+   reloaded and compared with the commit that was analyzed, because a push
+   arriving mid run would otherwise receive an approval earned by the previous
+   commit. When the head moved, the run submits no verdict and leaves the work
+   to the run that push triggers.
 6. **A block always says what is holding it.** When the verdict requests
    changes, the top level comment names the open threads it is waiting on. A
    run that finds nothing new still blocks while an earlier thread is
@@ -140,6 +147,9 @@ queue.
    the check concludes `skipped`, and no review state changes.
 9. Every blocking verdict is explained: whenever the run requests changes, the
    top level comment names the open threads holding it.
+10. No run approves over its own fresh findings, and none approves a commit it
+    did not analyze: the threads and the head that decide the verdict are both
+    read after publication.
 
 ## Acceptance
 
