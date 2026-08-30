@@ -116,10 +116,27 @@ which no override runs.
 This service does the same. Before any model call, measure the delta. Over
 the configured budget (`REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS`), the run
 posts "review skipped" with the measured size and the reason into the top
-level comment, completes the check as `skipped`, and touches no review
-state. A skipped review never blocks and never goes red. The delta, not the
-whole pull request, is what is measured, so a large pull request built from
-small pushes still gets reviewed increment by increment.
+level comment and touches no review state.
+
+Two consequences follow, and both were nearly wrong here.
+
+A skip must not satisfy the gate. GitHub counts a required check concluded
+as `skipped` as passing, so concluding that way would let an oversized and
+entirely unreviewed delta merge, with any earlier approval still standing.
+That is the opposite of what admission is for. The check therefore does not
+reach a passing conclusion on a skip: unreviewed code stays unmerged, and the
+comment says why and what to do about it. A skip is not a failure either, so
+the wording separates "too large to review" from "the review broke", but the
+gate stays shut. Skipping is a refusal to guess, not permission to merge.
+
+A skip also does not advance `last_reviewed_commit`, and nothing later fixes
+that on its own. Once a delta is over budget it stays over budget, so every
+later push measures the same oversized range and skips again. Small later
+pushes do not rescue it. The way out is human: split the pull request, or
+raise the budget for it, or ask for the review explicitly. The design does
+not pretend otherwise, and an earlier draft of this document did, claiming a
+large pull request built from small pushes would still get reviewed piece by
+piece. That is true only when every individual delta fits the budget.
 
 ## The loop, every invocation
 
@@ -170,7 +187,8 @@ queue.
 7. The run identifier on the check, the comment, and the log lines is the
    same string, and the logs are retrievable per [logs.md](../../logs.md).
 8. A delta over budget is never attempted: the comment says skipped and why,
-   the check concludes `skipped`, and no review state changes.
+   no review state changes, and the check does not reach a passing conclusion,
+   so unreviewed code cannot merge on the strength of having been declined.
 9. Every blocking verdict is explained: whenever the run requests changes, the
    top level comment names the open threads holding it.
 10. No run approves over its own fresh findings, and none approves a commit it
