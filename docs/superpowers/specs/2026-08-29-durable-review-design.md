@@ -157,6 +157,14 @@ piece. That is true only when every individual delta fits the budget.
 A chunk whose model call fails stays pending and visible in the marker. It
 is not retried in place; the next push reviews it along with the new delta.
 
+The pending list is bound to the head it was computed against, and the marker
+records that head alongside it. A chunk identifier names a slice of one
+particular delta, so a list carried forward to a different head refers to
+chunks that no longer exist. On resume the run re-derives the delta, keeps the
+pending identifiers that still match a real chunk, and drops the rest rather
+than trusting a stale list. Without that binding, a resumed run could either
+skip work it never did or re-analyze work it already published.
+
 ## Continuation
 
 None is built. Admission bounds every run to finish in one invocation, so
