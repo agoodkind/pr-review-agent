@@ -36,7 +36,14 @@ no prompt outgrows the model's context.
 5. **The verdict is a pure function of current state**, recomputed at the end
    of every run: `REQUEST_CHANGES` while any of the service's own threads is
    open, `APPROVE` when none is open and the current head has been reviewed.
-6. **A failed run never touches review state.** It turns the check red with
+6. **A block always says what is holding it.** When the verdict requests
+   changes, the top level comment names the open threads it is waiting on. A
+   run that finds nothing new still blocks while an earlier thread is
+   unresolved, and without that line it reads as a silent repeat. Live
+   evidence: tack 156 carries three blocking reviews, two of them empty, and
+   no reader can tell from any of them that one unresolved thread is the only
+   cause.
+7. **A failed run never touches review state.** It turns the check red with
    the cause and writes the cause into the top level comment.
 
 ## Durable state, all on the pull request
@@ -114,6 +121,8 @@ queue.
    same string, and the logs are retrievable per [logs.md](../../logs.md).
 8. A delta over budget is never attempted: the comment says skipped and why,
    the check concludes `skipped`, and no review state changes.
+9. Every blocking verdict is explained: whenever the run requests changes, the
+   top level comment names the open threads holding it.
 
 ## Acceptance
 
