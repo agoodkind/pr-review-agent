@@ -12,85 +12,50 @@ package review
 // Identity suppression cannot catch that. A finding's identity is a hash of its
 // path and its normalized title, so a reworded title is a different finding, and
 // the claim moved between two files as well. Nothing about those five is equal
-// to anything, which is why the answer here is semantic rather than an equality
-// test on a stronger key.
+// to anything.
 //
-// It costs no extra model call. The open threads are already loaded for
-// reconciliation, so the same data becomes context in the chunk prompt: what is
-// open, and what the author said back. The model is told not to raise an
-// answered claim again. A model that disobeys is not a defense, so a
-// deterministic backstop drops a finding that restates an open thread's claim on
-// the same file.
+// So the mechanism here is the prompt, and it costs no extra model call. The
+// open threads are already loaded for reconciliation, so the same data becomes
+// context in the chunk prompt: what is open, and what anyone replied. The model
+// is told not to raise an answered claim again.
+//
+// There is deliberately no deterministic backstop beside it. One was built and
+// removed: matching a new finding's evidence line against an open thread's prose
+// withheld valid findings, and the strict identity that replaced it was measured
+// to be a subset of the suppression collectPublicationState already applies, so
+// it decided nothing. A backstop that works needs a durable claim key in the
+// published finding marker, because a published comment carries no evidence to
+// compare against. That is a change to the marker format, not to this file.
 
 import (
-	"context"
-	"log/slog"
 	"strings"
 
-	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// logWithheldFindings reports every claim this chunk raised again and the run
-// withheld, in one line. Without it a finding that never reaches the page is
-// indistinguishable from one the model never made.
-func logWithheldFindings(ctx context.Context, withheld []withheldFinding) {
-	if len(withheld) == 0 {
-		return
-	}
-	gklog.L(ctx).InfoContext(
-		ctx,
-		"findings withheld, already answered on an open thread",
-		slog.Int("withheld", len(withheld)),
-		slog.Any("findings", withheld),
-	)
-}
+// maximumDisputeBytes bounds the open thread context added to one chunk prompt.
+// The chunk itself is already the larger half of the budget, and a pull request
+// with many open threads would otherwise push the code the run is supposed to be
+// reviewing out of the model's input.
+const maximumDisputeBytes = 16000
 
-const (
-	// maximumDisputeBytes bounds the open thread context added to one chunk
-	// prompt. The chunk itself is already the larger half of the budget, and a
-	// pull request with many open threads would otherwise push the code the run
-	// is supposed to be reviewing out of the model's input. Threads that do not
-	// fit are still covered by the deterministic backstop, which reads them all.
-	maximumDisputeBytes = 16000
-	// minimumDisputeEvidenceLength is how much evidence has to be there before
-	// it can suppress anything. A one or two token line such as a closing brace
-	// appears in almost any prose, so matching on it would drop unrelated real
-	// findings. A line long enough to identify the code it came from does not.
-	minimumDisputeEvidenceLength = 16
-	// disputeReasonTitle and disputeReasonEvidence name which arm of the
-	// backstop fired, so the log says why a finding was withheld.
-	disputeReasonTitle    = "same title on an open thread"
-	disputeReasonEvidence = "same evidence line on an open thread"
-)
-
-// disputeContext is what the pull request has already been told, in the two
-// forms the run needs it: prose for the model, and keys for the backstop.
+// disputeContext is what the pull request has already been told, rendered for
+// the chunk prompt.
 //
 // Only unresolved threads are in it. A resolved thread is a settled question,
-// and a defect reintroduced after a fix deserves a new finding rather than
-// silence, so resolving must never suppress.
+// and telling the model about it would argue against raising a defect that has
+// since come back.
 type disputeContext struct {
 	// sections is one block per open thread, already truncated to the budget.
 	sections []string
-	// openIDs are the finding identities the open threads carry, which is path
-	// and normalized title together.
-	openIDs map[string]struct{}
-	// openBodies maps a normalized path to the rendered bodies of the open
-	// threads anchored in that file.
-	openBodies map[string][]string
 }
 
 // collectDisputes reads the open findings of the service's own from the threads
 // the run already loaded for reconciliation.
 func collectDisputes(threads []githubapp.ReviewThread, botLogin string) disputeContext {
-	disputes := disputeContext{
-		sections:   make([]string, 0),
-		openIDs:    make(map[string]struct{}),
-		openBodies: make(map[string][]string),
-	}
+	disputes := disputeContext{sections: make([]string, 0)}
 	budget := maximumDisputeBytes
 	for _, thread := range threads {
 		if thread.Resolved || thread.RootComment.Author != botLogin {
@@ -104,15 +69,8 @@ func collectDisputes(threads []githubapp.ReviewThread, botLogin string) disputeC
 		if err != nil {
 			continue
 		}
-		if findingID, idErr := marker.FindingID(finding); idErr == nil {
-			disputes.openIDs[findingID] = struct{}{}
-		}
-		disputes.openBodies[normalizedPath] = append(
-			disputes.openBodies[normalizedPath],
-			finding.Title+"\n"+finding.Body,
-		)
 
-		section := formatDisputeSection(normalizedPath, finding, thread.Replies)
+		section := formatDisputeSection(normalizedPath, finding, thread.Replies, botLogin)
 		if len(section) <= budget {
 			disputes.sections = append(disputes.sections, section)
 			budget -= len(section)
@@ -122,11 +80,18 @@ func collectDisputes(threads []githubapp.ReviewThread, botLogin string) disputeC
 }
 
 // formatDisputeSection renders one open thread as the model sees it: where the
-// claim was made, what it said, and what the author answered.
+// claim was made, what it said, and what anyone has replied.
+//
+// The replies are not labelled as the author's. Anyone who can comment on a pull
+// request can reply on a thread, so presenting every reply as the author's
+// answer would let a passer by, or this service quoting itself, stand as the
+// authority that withholds a valid finding. Each line names its speaker and the
+// model is left to weigh it.
 func formatDisputeSection(
 	normalizedPath string,
 	finding domain.Finding,
 	replies []domain.ReviewComment,
+	botLogin string,
 ) string {
 	var builder strings.Builder
 	builder.WriteString("Open finding\nPath: ")
@@ -136,17 +101,26 @@ func formatDisputeSection(
 	builder.WriteString("\nBody: ")
 	builder.WriteString(finding.Body)
 	if len(replies) == 0 {
-		builder.WriteString("\nAnswered: no reply yet.")
+		builder.WriteString("\nReplies: none yet.")
 		return builder.String()
 	}
-	builder.WriteString("\nAnswered by the pull request author:")
+	builder.WriteString("\nReplies, oldest first. The name before each one is who wrote it:")
 	for _, reply := range replies {
 		builder.WriteString("\n")
-		builder.WriteString(reply.Author)
+		builder.WriteString(replySpeaker(reply, botLogin))
 		builder.WriteString(": ")
 		builder.WriteString(reply.Body)
 	}
 	return builder.String()
+}
+
+// replySpeaker names who wrote one reply, marking this service's own replies so
+// its own words never read back to it as somebody else's answer.
+func replySpeaker(reply domain.ReviewComment, botLogin string) string {
+	if reply.Author == botLogin {
+		return reply.Author + " (this service, not a reply from a person)"
+	}
+	return reply.Author
 }
 
 // promptSection is the open thread context for one chunk prompt, or an empty
@@ -161,70 +135,12 @@ func (disputes disputeContext) promptSection() string {
 	}
 	var builder strings.Builder
 	builder.WriteString(
-		"These findings are already open on this pull request, with the author's answers where there are any. " +
+		"These findings are already open on this pull request, with any replies they have received. " +
 			"A claim already raised and answered here must not be raised again in any wording, under any title, at any path. " +
-			"If an author's reply is factually wrong, quote the reply and say why it is wrong; do not restate the original claim as though it were unanswered.\n",
+			"Weigh a reply by who wrote it and whether the code bears it out. " +
+			"If a reply is factually wrong, quote it and say why it is wrong; do not restate the original claim as though it were unanswered.\n",
 	)
 	builder.WriteString(WrapUntrusted(strings.Join(disputes.sections, "\n\n")))
 	builder.WriteString("\n")
 	return builder.String()
-}
-
-// withheldFinding is one finding the pull request has already answered, kept
-// with the reason so the run can report the whole set in one line.
-type withheldFinding struct {
-	Path   string `json:"path"`
-	Title  string `json:"title"`
-	Reason string `json:"reason"`
-}
-
-// partition splits findings into the ones still worth raising and the ones this
-// pull request has already answered.
-func (disputes disputeContext) partition(
-	findings []domain.Finding,
-) ([]domain.Finding, []withheldFinding) {
-	unanswered := make([]domain.Finding, 0, len(findings))
-	withheld := make([]withheldFinding, 0)
-	for _, finding := range findings {
-		reason, answered := disputes.answered(finding)
-		if !answered {
-			unanswered = append(unanswered, finding)
-			continue
-		}
-		withheld = append(withheld, withheldFinding{
-			Path:   finding.Path,
-			Title:  finding.Title,
-			Reason: reason,
-		})
-	}
-	return unanswered, withheld
-}
-
-// answered reports whether an open thread already carries this claim, and which
-// arm of the test says so.
-//
-// It is deliberately narrow. Both arms require the same file, because a claim
-// about one file says nothing about the same words in another, and neither arm
-// looks at a resolved thread.
-func (disputes disputeContext) answered(finding domain.Finding) (string, bool) {
-	normalizedPath, err := marker.NormalizePath(finding.Path)
-	if err != nil {
-		return "", false
-	}
-	if findingID, idErr := marker.FindingID(finding); idErr == nil {
-		if _, open := disputes.openIDs[findingID]; open {
-			return disputeReasonTitle, true
-		}
-	}
-
-	evidence := strings.TrimSpace(finding.Evidence)
-	if len(evidence) < minimumDisputeEvidenceLength {
-		return "", false
-	}
-	for _, body := range disputes.openBodies[normalizedPath] {
-		if strings.Contains(body, evidence) {
-			return disputeReasonEvidence, true
-		}
-	}
-	return "", false
 }

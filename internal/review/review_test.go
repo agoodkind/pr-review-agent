@@ -2053,16 +2053,16 @@ func answeredThreadFinding() domain.Finding {
 	}
 }
 
-// rewordedRepeat is the same claim coming back under a new title, which is the
-// shape the live republishes took: a different title, so a different identity,
-// quoting the same line.
-func rewordedRepeat() domain.Finding {
+// newFindingOnTheSameFile is a genuinely different defect on the file the open
+// thread objects to. It must publish: nothing about an open thread on one line
+// answers a separate claim about another.
+func newFindingOnTheSameFile() domain.Finding {
 	return domain.Finding{
 		Path:       "main.go",
 		StartLine:  2,
 		EndLine:    2,
-		Title:      "Publish failure is not handled",
-		Body:       "This call can fail and nothing reacts to it.",
+		Title:      "Publish result is discarded",
+		Body:       "A separate defect on the same file as the open thread.",
 		Evidence:   disputeEvidenceLine,
 		Suggestion: "",
 		Importance: 9,
@@ -2103,8 +2103,8 @@ func answeredThread(t *testing.T, resolved bool, reply string) githubapp.ReviewT
 	return thread
 }
 
-// disputeFixture wires a run whose one chunk answers with the reworded repeat,
-// against one standing thread carrying the original claim.
+// disputeFixture wires a run whose one chunk reports a separate defect on the
+// file an open thread already objects to.
 func disputeFixture(t *testing.T, thread githubapp.ReviewThread) *serviceFixture {
 	t.Helper()
 	fixture := newServiceFixture(t, serviceFixtureOptions{
@@ -2113,31 +2113,31 @@ func disputeFixture(t *testing.T, thread githubapp.ReviewThread) *serviceFixture
 		reconcileThreads:  []githubapp.ReviewThread{thread},
 		model: &sequenceModel{results: []domain.ReviewResult{{
 			CoverageComplete: true,
-			Findings:         []domain.Finding{rewordedRepeat()},
+			Findings:         []domain.Finding{newFindingOnTheSameFile()},
 		}}},
 	})
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{thread})
 	return fixture
 }
 
-// A claim the author has already answered must not come back under a new title.
+// An open thread argues against repeating its own claim, and against nothing
+// else. A separate defect on the same file still reaches the reader.
 //
-// One live pull request received the same ask five times across five pushes,
-// each time after the author disproved it on the thread, and each time as a new
-// thread. Every title differed, so identity suppression caught none of them.
-func TestAClaimAnsweredOnAnOpenThreadIsNotRaisedAgain(t *testing.T) {
+// This is the half of the rule that is easy to lose. Withholding is invisible:
+// the finding never appears, and only a log line records that it existed, so a
+// suppression that is slightly too broad reads exactly like a model that found
+// nothing.
+func TestASeparateDefectOnAnAnsweredFileStillPublishes(t *testing.T) {
 	fixture := disputeFixture(t, answeredThread(t, false, "Declined: publish already logs and retries."))
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(fixture.state.streamedComments) != 0 {
-		t.Fatalf("streamed comments = %v, want none: the claim is already open and answered",
-			bodiesOf(fixture.state.streamedComments))
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the separate defect published: an open thread on one line "+
+			"does not answer a different claim about the same file", len(fixture.state.streamedComments))
 	}
-	// Withholding the repeat must not quietly drop the question. The standing
-	// thread is still open, so it still holds the pull request and the verdict
-	// still names it.
+	// The standing thread is untouched, so it still holds the pull request.
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES while the answered thread is open",
 			fixture.state.lastSubmitReview["event"])
@@ -2149,22 +2149,8 @@ func TestAClaimAnsweredOnAnOpenThreadIsNotRaisedAgain(t *testing.T) {
 	}
 }
 
-// A resolved thread is a settled question, so it suppresses nothing. A defect
-// reintroduced after a fix has to be raised again or nobody hears about it.
-func TestAClaimOnAResolvedThreadIsRaisedAgain(t *testing.T) {
-	fixture := disputeFixture(t, answeredThread(t, true, ""))
-
-	if err := fixture.run(context.Background(), fixture.job()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(fixture.state.streamedComments) != 1 {
-		t.Fatalf("streamed comments = %d, want the finding published: a resolved thread suppresses nothing",
-			len(fixture.state.streamedComments))
-	}
-}
-
 // The model cannot avoid repeating a claim it was never shown, so the open
-// threads and the author's answers go into the chunk prompt.
+// threads and their replies go into the chunk prompt.
 func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
 	const replyText = "Declined: publish already logs and retries."
 	fixture := disputeFixture(t, answeredThread(t, false, replyText))
@@ -2190,6 +2176,40 @@ func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
 		if !strings.Contains(model.prompts[0], want) {
 			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])
 		}
+	}
+}
+
+// Anyone who can comment can reply on a thread, so a reply is not the pull
+// request author speaking and must not be presented as though it were. Calling
+// a passer by's reply an author answer lets it stand as the authority that
+// withholds a valid finding.
+func TestTheChunkPromptDoesNotPresentEveryReplyAsTheAuthors(t *testing.T) {
+	thread := answeredThread(t, false, "Looks fine to me, I skimmed it.")
+	// A reply from the service itself, which must never read back as somebody
+	// answering the finding.
+	thread.Replies = append(thread.Replies, domain.ReviewComment{
+		DatabaseID: 902,
+		Author:     testBotLogin,
+		Body:       "Resolved on the previous head.",
+		Path:       "main.go",
+		StartLine:  1,
+		EndLine:    1,
+	})
+	fixture := disputeFixture(t, thread)
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	model, ok := fixture.model.(*sequenceModel)
+	if !ok {
+		t.Fatalf("model = %T, want the sequence model", fixture.model)
+	}
+	prompt := model.prompts[0]
+	if strings.Contains(prompt, "the pull request author") {
+		t.Fatalf("chunk prompt calls the replies the author's, though anyone can reply:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, testBotLogin+" (this service, not a reply from a person)") {
+		t.Fatalf("chunk prompt does not mark the service's own reply as its own:\n%s", prompt)
 	}
 }
 
