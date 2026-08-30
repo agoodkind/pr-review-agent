@@ -313,12 +313,16 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			slog.Error("normalize finding path", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("normalize finding path: %w", err)
 		}
+		// Evidence stays out of the published comment: it is a publication gate
+		// input, and the reader already sees the anchored lines beside the
+		// comment.
 		body, err := marker.EncodeFindingBody(head, domain.Finding{
 			Path:       normalizedPath,
 			StartLine:  finding.StartLine,
 			EndLine:    finding.EndLine,
 			Title:      sanitizeProse(finding.Title),
 			Body:       sanitizeProse(finding.Body),
+			Evidence:   "",
 			Suggestion: finding.Suggestion,
 			Importance: finding.Importance,
 		})

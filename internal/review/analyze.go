@@ -111,16 +111,19 @@ func normalizeFinding(finding domain.Finding) domain.Finding {
 }
 
 // eligibleFindings returns the findings from one chunk that anchor to changed
-// lines and meet the importance floor.
+// lines, meet the importance floor, and ground their evidence in the source
+// the model was shown.
 //
 // This is the whole publication test. Everything it returns is posted, because
 // the review stands behind every defect it reports and rationing them is how a
 // reader ends up acting on the wrong one. Duplicates stay in, because the
 // caller suppresses them against what the pull request already carries.
 func eligibleFindings(
+	ctx context.Context,
 	findings []domain.Finding,
 	fileIndex map[string]diff.FileContext,
 	minimumImportance int,
+	chunkText string,
 ) []domain.Finding {
 	eligible := make([]domain.Finding, 0, len(findings))
 	for _, finding := range findings {
@@ -131,9 +134,43 @@ func eligibleFindings(
 		if sanitized.Importance < minimumImportance {
 			continue
 		}
+		if !findingGrounded(sanitized, chunkText, fileIndex) {
+			gklog.L(ctx).WarnContext(
+				ctx,
+				"finding discarded, evidence not in the source shown",
+				slog.String("path", sanitized.Path),
+				slog.String("title", sanitized.Title),
+				slog.String("evidence", sanitized.Evidence),
+			)
+			continue
+		}
 		eligible = append(eligible, sanitized)
 	}
 	return eligible
+}
+
+// findingGrounded reports whether the finding's evidence appears verbatim in
+// the source the model was shown: the chunk text it reviewed, or the current
+// content of the file the finding anchors to. A finding without evidence is
+// ungrounded, which is also how an answer from an older schema reads, so a
+// claim quoting code the model never saw cannot pass.
+func findingGrounded(
+	finding domain.Finding,
+	chunkText string,
+	fileIndex map[string]diff.FileContext,
+) bool {
+	evidence := strings.TrimSpace(finding.Evidence)
+	if evidence == "" {
+		return false
+	}
+	if strings.Contains(chunkText, evidence) {
+		return true
+	}
+	file, ok := fileIndex[finding.Path]
+	if !ok {
+		return false
+	}
+	return strings.Contains(file.CurrentContent, evidence)
 }
 
 // truncatedError is any model failure that stopped mid answer at the completion
@@ -283,6 +320,7 @@ func buildPrompt(chunk diff.Chunk, minimumImportance int) string {
 	builder.WriteString("Reserve 9 and 10 for defects that plausibly enable a security compromise, irreversible data loss or corruption, or a broad production outage. ")
 	builder.WriteString("Rate bounded crashes, incorrect responses, maintainability problems, performance costs, and localized failures 8 or lower unless the diff proves severe impact. ")
 	builder.WriteString("Put every code reference in backticks. Return suggestion as the exact replacement for the anchored changed line range only when it is complete and safe; otherwise return an empty string. ")
+	builder.WriteString("Copy into evidence one line from the supplied source, verbatim and unmodified, that the finding relies on. A finding whose evidence does not appear in the supplied source is discarded. ")
 	builder.WriteString("The service publishes only findings with importance ")
 	fmt.Fprintf(&builder, "%d", minimumImportance)
 	builder.WriteString(" or higher. Do not omit a real defect because it is below that publication threshold. Review chunk ")

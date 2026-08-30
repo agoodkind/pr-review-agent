@@ -90,11 +90,17 @@ func ParseResolution(value string) (Resolution, error) {
 
 // Finding is one validated review finding anchored to changed code.
 type Finding struct {
-	Path       string `json:"path"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-	Title      string `json:"title"`
-	Body       string `json:"body"`
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	// Evidence is the exact source line the finding relies on, copied verbatim
+	// from the code the model was shown. Publication drops a finding whose
+	// evidence does not appear in that source, so a claim about code the model
+	// never saw cannot reach the pull request. An answer without it decodes,
+	// and the missing evidence makes the finding ungrounded.
+	Evidence   string `json:"evidence"`
 	Suggestion string `json:"suggestion"`
 	Importance int    `json:"importance"`
 }

@@ -1353,6 +1353,12 @@ func synchronizePayload(head string) []byte {
 }
 
 func defectiveReviewContent(finding domain.Finding) string {
+	evidence := finding.Evidence
+	if evidence == "" {
+		// The line the defective fixture diff adds, so the finding passes the
+		// evidence grounding gate the way an honest model answer does.
+		evidence = "// missing validation"
+	}
 	payload := map[string]any{
 		"coverage_complete": true,
 		"findings": []map[string]any{{
@@ -1361,6 +1367,7 @@ func defectiveReviewContent(finding domain.Finding) string {
 			"end_line":   finding.EndLine,
 			"title":      finding.Title,
 			"body":       finding.Body,
+			"evidence":   evidence,
 			"importance": finding.Importance,
 		}},
 	}
@@ -1376,7 +1383,7 @@ func approveReviewContent() string {
 }
 
 func typographicReviewContent() string {
-	return `{"summary":"Issue — details","coverage_complete":true,"findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","importance":9}]}`
+	return `{"summary":"Issue — details","coverage_complete":true,"findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","evidence":"// missing validation","importance":9}]}`
 }
 
 func buildChangedFiles(count int) []map[string]any {

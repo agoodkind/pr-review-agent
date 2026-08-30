@@ -235,10 +235,17 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		now:                time.Now,
 	}
 	findings := []domain.Finding{
-		{Path: "main.go", StartLine: 2, EndLine: 2, Title: "First defect", Body: "body one", Importance: 8},
-		{Path: "main.go", StartLine: 3, EndLine: 3, Title: "Second defect", Body: "body two", Importance: 8},
+		{Path: "main.go", StartLine: 2, EndLine: 2, Title: "First defect", Body: "body one", Evidence: "two", Importance: 8},
+		{Path: "main.go", StartLine: 3, EndLine: 3, Title: "Second defect", Body: "body two", Evidence: "three", Importance: 8},
 	}
-	return service.postChunkFindings(context.Background(), summaryCommentTestJob(), postHead, findings, pass)
+	return service.postChunkFindings(
+		context.Background(),
+		summaryCommentTestJob(),
+		postHead,
+		"context\n+two\n+three\n",
+		findings,
+		pass,
+	)
 }
 
 // Each failed post is classified by its own error, never by the batch it

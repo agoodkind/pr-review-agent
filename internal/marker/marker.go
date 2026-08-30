@@ -149,11 +149,14 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 
 	finding := domain.Finding{
-		Path:       comment.Path,
-		StartLine:  comment.StartLine,
-		EndLine:    comment.EndLine,
-		Title:      title,
-		Body:       body,
+		Path:      comment.Path,
+		StartLine: comment.StartLine,
+		EndLine:   comment.EndLine,
+		Title:     title,
+		Body:      body,
+		// The published comment never carries evidence, so a decoded finding
+		// has none to recover.
+		Evidence:   "",
 		Suggestion: suggestion,
 		Importance: marker.Importance,
 	}

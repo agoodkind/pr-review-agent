@@ -565,7 +565,7 @@ func (service *Service) reviewOneChunk(
 	for _, result := range results {
 		findings = append(findings, result.Findings...)
 	}
-	return service.postChunkFindings(ctx, job, head, findings, pass)
+	return service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
 }
 
 // postCandidate pairs one finding with its rendered comment, so ordering
@@ -588,11 +588,12 @@ func (service *Service) postChunkFindings(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
+	chunkText string,
 	findings []domain.Finding,
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
-	posts := service.renderChunkFindings(ctx, head, findings, pass)
+	posts := service.renderChunkFindings(ctx, head, chunkText, findings, pass)
 	if len(posts) == 0 {
 		return nil
 	}
@@ -710,6 +711,7 @@ func (pass *chunkPass) recordUndelivered() {
 func (service *Service) renderChunkFindings(
 	ctx context.Context,
 	head domain.HeadSHA,
+	chunkText string,
 	findings []domain.Finding,
 	pass *chunkPass,
 ) []postCandidate {
@@ -718,7 +720,13 @@ func (service *Service) renderChunkFindings(
 	defer pass.mu.Unlock()
 
 	pass.collector.collect(findings)
-	eligible := eligibleFindings(findings, pass.collector.fileIndex, pass.collector.minimumImportance)
+	eligible := eligibleFindings(
+		ctx,
+		findings,
+		pass.collector.fileIndex,
+		pass.collector.minimumImportance,
+		chunkText,
+	)
 	posts := make([]postCandidate, 0, len(eligible))
 	for _, finding := range eligible {
 		keys := keysFor(finding)

@@ -446,6 +446,7 @@ func TestATruncatedChunkSplitsAndRetriesInsideItsOwnCall(t *testing.T) {
 			EndLine:    2,
 			Title:      "Defect",
 			Body:       "The changed line breaks behavior.",
+			Evidence:   "added",
 			Importance: 9,
 		}},
 	}
@@ -614,6 +615,7 @@ func TestTheSameFindingFromTwoChunksIsPublishedOnce(t *testing.T) {
 		EndLine:    2,
 		Title:      "Duplicate",
 		Body:       "Same finding.",
+		Evidence:   "added",
 		Importance: 9,
 	}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
@@ -1025,6 +1027,7 @@ func TestEveryQualifyingFindingIsPublished(t *testing.T) {
 			EndLine:    index + 2,
 			Title:      fmt.Sprintf("Defect %d", index),
 			Body:       "A real defect on a changed line.",
+			Evidence:   fmt.Sprintf("added%d", index),
 			Importance: 9,
 		})
 	}
@@ -1049,7 +1052,9 @@ func TestEveryQualifyingFindingIsPublished(t *testing.T) {
 	}
 }
 
-// severeFinding is the one anchored defect most of these fixtures report.
+// severeFinding is the one anchored defect most of these fixtures report. Its
+// evidence quotes the line the stub collectors add, so it passes the grounding
+// gate the way an honest model answer does.
 func severeFinding() domain.Finding {
 	return domain.Finding{
 		Path:       "main.go",
@@ -1057,6 +1062,7 @@ func severeFinding() domain.Finding {
 		EndLine:    2,
 		Title:      "Severe defect",
 		Body:       "The changed line breaks core behavior.",
+		Evidence:   "added",
 		Importance: 9,
 	}
 }
@@ -1207,6 +1213,7 @@ func (model *chunkScriptedModel) Review(_ context.Context, prompt string) (revie
 				EndLine:    2,
 				Title:      "Defect in " + path,
 				Body:       "The changed line breaks core behavior.",
+				Evidence:   "added",
 				Importance: 9,
 			}},
 		},
@@ -1909,6 +1916,76 @@ func TestServiceReviewsNothingWhenTheStateAlreadyNamesTheHead(t *testing.T) {
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+// A finding that quotes a line the model was actually shown passes the
+// grounding gate and reaches the pull request.
+func TestAFindingWithEvidenceFromTheShownSourceIsPublished(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Severe defect",
+				Body:       "The changed line breaks core behavior.",
+				Evidence:   "added",
+				Importance: testMinimumImportance,
+			}},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the grounded finding published",
+			len(fixture.state.streamedComments))
+	}
+}
+
+// A finding whose evidence appears nowhere in the source the model was shown
+// asserts a fact the source cannot back, so it never reaches the pull request
+// and the drop is logged.
+func TestAFindingWhoseEvidenceIsNotInTheShownSourceIsDropped(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		evidence string
+	}{
+		{name: "fabricated evidence", evidence: "db.Exec(query)"},
+		{name: "missing evidence", evidence: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			logs := &syncBuffer{}
+			fixture := newServiceFixture(t, serviceFixtureOptions{
+				logWriter: logs,
+				model: &sequenceModel{results: []domain.ReviewResult{{
+					CoverageComplete: true,
+					Findings: []domain.Finding{{
+						Path:       "main.go",
+						StartLine:  2,
+						EndLine:    2,
+						Title:      "Severe defect",
+						Body:       "The changed line breaks core behavior.",
+						Evidence:   testCase.evidence,
+						Importance: testMinimumImportance,
+					}},
+				}}},
+			})
+
+			if err := fixture.run(context.Background(), fixture.job()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if len(fixture.state.streamedComments) != 0 {
+				t.Fatalf("streamed comments = %d, want the ungrounded finding dropped",
+					len(fixture.state.streamedComments))
+			}
+			if !strings.Contains(logs.String(), "finding discarded, evidence not in the source shown") {
+				t.Fatalf("service log = %q, want the distinct discard line", logs.String())
+			}
+		})
 	}
 }
 
@@ -3220,6 +3297,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 					EndLine:    4,
 					Title:      "Reworded historical defect",
 					Body:       "New wording must not republish this finding.",
+					Evidence:   "added",
 					Importance: 10,
 				},
 				{
@@ -3228,6 +3306,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 					EndLine:    2,
 					Title:      "Second defect",
 					Body:       "A different defect on a different line.",
+					Evidence:   "added",
 					Importance: 9,
 				},
 				{
@@ -3236,6 +3315,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 					EndLine:    3,
 					Title:      "Third defect",
 					Body:       "A third defect on a third line.",
+					Evidence:   "added",
 					Importance: 10,
 				},
 			},
@@ -3273,6 +3353,7 @@ func TestServiceKeepsPublishingWhileAnEarlierThreadIsOpen(t *testing.T) {
 				EndLine:    2,
 				Title:      "Current severe defect",
 				Body:       "The defect still requires a blocking decision.",
+				Evidence:   "added",
 				Importance: 9,
 			}},
 		}}},
@@ -3314,6 +3395,7 @@ func TestServiceApprovesWhenEveryFindingIsAlreadyResolved(t *testing.T) {
 		EndLine:    2,
 		Title:      "Severe defect",
 		Body:       "The changed line breaks core behavior.",
+		Evidence:   "added",
 		Importance: 9,
 	}
 	findingMarker, err := marker.Finding(domain.HeadSHA(testHeadSHA), resolvedFinding)
@@ -3371,6 +3453,7 @@ func TestARunThatPostsANewFindingDoesNotApprove(t *testing.T) {
 				EndLine:    2,
 				Title:      "Severe defect",
 				Body:       "The changed line breaks core behavior.",
+				Evidence:   "added",
 				Importance: 9,
 			}},
 		}}},
@@ -3446,6 +3529,7 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 		EndLine:    2,
 		Title:      "Severe defect",
 		Body:       "The changed line breaks core behavior.",
+		Evidence:   "added",
 		Importance: 9,
 	}
 	findingMarker, err := marker.Finding(domain.HeadSHA(testHeadSHA), openFinding)
@@ -3526,6 +3610,7 @@ func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 				EndLine:    2,
 				Title:      "Severe defect",
 				Body:       "The changed line breaks core behavior.",
+				Evidence:   "added",
 				Importance: 9,
 			}},
 		}}},
@@ -4295,6 +4380,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 					EndLine:    2,
 					Title:      "Severe defect",
 					Body:       "The changed line breaks core behavior.",
+					Evidence:   "added",
 					Importance: testMinimumImportance,
 				}},
 			}},

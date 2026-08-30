@@ -115,6 +115,7 @@ func chunkFinding(path string) domain.Finding {
 		EndLine:    2,
 		Title:      "Defect in " + path,
 		Body:       "The changed line breaks core behavior.",
+		Evidence:   "added",
 		Suggestion: "",
 		Importance: 9,
 	}
