@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -674,6 +675,76 @@ func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
 	}
 	if !strings.Contains(model.prompts[0], "other-user") {
 		t.Fatalf("prompt does not attribute the reply: %q", model.prompts[0])
+	}
+}
+
+// Nothing bounds how much a thread accumulates, and an oversized thread is sent
+// on its own rather than dropped, so one long argument becomes a request too
+// large for the model that fails every time it is retried and never reconciles.
+// The prompt keeps the most recent replies and says how many it left out.
+func TestReconcileBoundsALongThreadAndSaysWhatItOmitted(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	const replyCount = 60
+	thread := ownedThread("thread-long", body, finding, false)
+	for index := range replyCount {
+		thread.Replies = append(thread.Replies, domain.ReviewComment{
+			DatabaseID: int64(800 + index),
+			Author:     "other-user",
+			// Each reply is a substantial paragraph, as a real argument is.
+			Body:      fmt.Sprintf("reply %d: %s", index, strings.Repeat("word ", 60)),
+			Path:      finding.Path,
+			StartLine: finding.StartLine,
+			EndLine:   finding.EndLine,
+		})
+	}
+
+	github := &fakeGitHub{
+		head:    domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{thread},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\nissue line\nline3\n"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-long",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "the defect still applies",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	}
+	prompt := model.prompts[0]
+	if len(prompt) > config.MaximumPromptBytes {
+		t.Fatalf("prompt is %d bytes, over the %d byte budget, so it fails every time it is retried",
+			len(prompt), config.MaximumPromptBytes)
+	}
+	// The newest reply is the one that answers the current state of the code.
+	if !strings.Contains(prompt, fmt.Sprintf("reply %d:", replyCount-1)) {
+		t.Fatalf("prompt dropped the most recent reply:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "older replies are not shown") {
+		t.Fatalf("prompt does not say the discussion was cut, so the excerpt reads as all of it:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "reply 0:") {
+		t.Fatalf("prompt kept the oldest reply, so nothing was actually bounded:\n%s", prompt)
 	}
 }
 

@@ -28,6 +28,7 @@ package review
 // compare against. That is a change to the marker format, not to this file.
 
 import (
+	"fmt"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -104,23 +105,17 @@ func formatDisputeSection(
 		builder.WriteString("\nReplies: none yet.")
 		return builder.String()
 	}
-	builder.WriteString("\nReplies, oldest first. The name before each one is who wrote it:")
-	for _, reply := range replies {
+	lines, omitted := FormatReplies(replies, botLogin, MaximumReplyBytes)
+	builder.WriteString("\nReplies, oldest first. The name before each one is who wrote it")
+	if omitted > 0 {
+		fmt.Fprintf(&builder, ", and %d older replies are not shown", omitted)
+	}
+	builder.WriteString(":")
+	for _, line := range lines {
 		builder.WriteString("\n")
-		builder.WriteString(replySpeaker(reply, botLogin))
-		builder.WriteString(": ")
-		builder.WriteString(reply.Body)
+		builder.WriteString(line)
 	}
 	return builder.String()
-}
-
-// replySpeaker names who wrote one reply, marking this service's own replies so
-// its own words never read back to it as somebody else's answer.
-func replySpeaker(reply domain.ReviewComment, botLogin string) string {
-	if reply.Author == botLogin {
-		return reply.Author + " (this service, not a reply from a person)"
-	}
-	return reply.Author
 }
 
 // promptSection is the open thread context for one chunk prompt, or an empty

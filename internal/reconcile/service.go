@@ -123,7 +123,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		}
 		prepared = append(prepared, preparedThread{
 			thread: thread,
-			text:   formatThreadSection(thread, currentHead, contextText),
+			text:   formatThreadSection(thread, currentHead, contextText, service.botLogin),
 		})
 	}
 
@@ -524,6 +524,7 @@ func formatThreadSection(
 	thread domain.OwnedThread,
 	currentHead domain.HeadSHA,
 	contextText threadContext,
+	botLogin string,
 ) string {
 	var builder strings.Builder
 	builder.WriteString("Thread node id: ")
@@ -543,12 +544,19 @@ func formatThreadSection(
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
 	if len(thread.Replies) > 0 {
-		builder.WriteString("\n\nReplies on this thread (the pull request author's response):")
-		for _, reply := range thread.Replies {
+		// The replies are not labelled as the author's. Anyone who can comment on
+		// a pull request can reply on a thread, so calling them all the author's
+		// response would let a passer by, or this service quoting itself, stand as
+		// the answer that resolves a finding.
+		lines, omitted := review.FormatReplies(thread.Replies, botLogin, review.MaximumReplyBytes)
+		builder.WriteString("\n\nReplies on this thread, oldest first. The name before each one is who wrote it")
+		if omitted > 0 {
+			fmt.Fprintf(&builder, ", and %d older replies are not shown", omitted)
+		}
+		builder.WriteString(":")
+		for _, line := range lines {
 			builder.WriteString("\n")
-			builder.WriteString(reply.Author)
-			builder.WriteString(": ")
-			builder.WriteString(reply.Body)
+			builder.WriteString(line)
 		}
 	}
 	builder.WriteString("\n\nCurrent code around the anchor (line numbers may have shifted):\n")

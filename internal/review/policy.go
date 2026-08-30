@@ -4,6 +4,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -38,6 +39,67 @@ func ReconciliationPolicy() string {
 // WrapUntrusted wraps repository content in untrusted-input delimiters.
 func WrapUntrusted(body string) string {
 	return promptInputBegin + "\n" + body + "\n" + promptInputEnd
+}
+
+// MaximumReplyBytes bounds the reply section of one thread.
+//
+// Nothing else bounds it. A long argument on one finding can carry more text
+// than the code under review, and an oversized thread is sent on its own rather
+// than dropped, so it becomes one request too large for the model, fails every
+// time it is retried, and that thread is never reconciled at all.
+const MaximumReplyBytes = 8000
+
+// truncatedReplyNote marks a single reply too long to include whole.
+const truncatedReplyNote = " [reply truncated]"
+
+// FormatReplies renders the replies that fit inside budget and reports how many
+// were left out.
+//
+// The most recent are kept, because they answer the state the code is in now.
+// The count of the rest travels with them so neither the model nor a reader
+// mistakes an excerpt for the whole discussion.
+//
+// Every line names its speaker, and this service's own replies say so. Anyone
+// who can comment can reply on a thread, so presenting them all as the pull
+// request author's answer would let a passer by, or the service quoting itself,
+// stand as the authority that settles a finding.
+func FormatReplies(replies []domain.ReviewComment, botLogin string, budget int) ([]string, int) {
+	lines := make([]string, 0, len(replies))
+	used := 0
+	for _, reply := range slices.Backward(replies) {
+		line := ReplySpeaker(reply, botLogin) + ": " + reply.Body
+		if used+len(line) > budget {
+			// Even the newest reply can be over budget alone. A truncated answer
+			// still says more than no answer at all.
+			if len(lines) == 0 {
+				lines = append(lines, truncateReply(line, budget))
+			}
+			break
+		}
+		lines = append(lines, line)
+		used += len(line)
+	}
+	slices.Reverse(lines)
+	return lines, len(replies) - len(lines)
+}
+
+// ReplySpeaker names who wrote one reply, marking this service's own replies so
+// its own words never read back to it as somebody else's answer.
+func ReplySpeaker(reply domain.ReviewComment, botLogin string) string {
+	if reply.Author == botLogin {
+		return reply.Author + " (this service, not a reply from a person)"
+	}
+	return reply.Author
+}
+
+// truncateReply cuts one reply to the budget on a rune boundary and says it was
+// cut, so a half sentence is never read as the whole answer.
+func truncateReply(line string, budget int) string {
+	if budget <= len(truncatedReplyNote) || len(line) <= budget {
+		return line
+	}
+	cut := strings.ToValidUTF8(line[:budget-len(truncatedReplyNote)], "")
+	return cut + truncatedReplyNote
 }
 
 // Completion is one model answer and the model that produced it.
