@@ -29,29 +29,54 @@ Mint a scoped token from the account token kept at `~/Desktop/cftoken/token.txt`
 The three permission group identifiers below are Workers Observability Read,
 Workers Scripts Read, and Containers Read.
 
+A bearer token passed with `-H` is visible in the process arguments to every
+other user on the host, so pass it through a curl config file instead. Write
+the config with `umask 077` so only you can read it.
+
 ```bash
 cd ~/Desktop/cftoken
 umask 077
-curl -s -X POST \
-    -H "Authorization: Bearer $(<token.txt)" \
+printf 'header = "Authorization: Bearer %s"\n' "$(<token.txt)" > account.conf
+curl -sS --fail-with-body --config account.conf \
+    -X POST \
     -H "Content-Type: application/json" \
     -d '{"name":"pr-agent-observability-read","policies":[{"effect":"allow","permission_groups":[{"id":"66c1ed49f4ed46098b75696a6d4ee3c9"},{"id":"cfd39eebc07c4e3ea849e4b3d2644637"},{"id":"1a71c399035b4950a1bd1466bbe4f420"}],"resources":{"com.cloudflare.api.account.ee7d7ca7d611ef8c2a07885e8362de0c":"*"}}]}' \
     "https://api.cloudflare.com/client/v4/user/tokens" > created.json
-jq -r '.result.value' created.json > observability.txt
-jq -r '.result.id' created.json > observability.id
-rm created.json
-chmod 600 observability.txt observability.id
 ```
 
-The value now sits in `~/Desktop/cftoken/observability.txt`. Never print it.
+Check that it worked before writing anything. A failed call still returns JSON,
+and `jq -r` would write the string `null` into the token file, which then fails
+later with a confusing authentication error instead of an obvious one.
 
-Revoke it when you are done, using the identifier you saved:
+```bash
+jq -e '.success == true and (.result.value | type == "string") and (.result.id | type == "string")' created.json > /dev/null || {
+    echo "token creation failed:" >&2
+    jq '.errors' created.json >&2
+    exit 1
+}
+jq -r '.result.value' created.json > observability.txt
+jq -r '.result.id' created.json > observability.id
+printf 'header = "Authorization: Bearer %s"\n' "$(<observability.txt)" > observability.conf
+rm created.json
+chmod 600 observability.txt observability.id observability.conf account.conf
+```
+
+The value now sits in `~/Desktop/cftoken/observability.txt`, and every command
+below reads it through `observability.conf`. Never print either one.
+
+Revoke it when you are done, using the identifier you saved. Check the result:
+a silently failed revocation leaves a privileged non expiring token alive.
 
 ```bash
 cd ~/Desktop/cftoken
-curl -s -X DELETE \
-    -H "Authorization: Bearer $(<token.txt)" \
-    "https://api.cloudflare.com/client/v4/user/tokens/$(<observability.id)"
+curl -sS --fail-with-body --config account.conf \
+    -X DELETE \
+    "https://api.cloudflare.com/client/v4/user/tokens/$(<observability.id)" > revoked.json
+jq -e '.success == true' revoked.json > /dev/null && rm -f observability.txt observability.id observability.conf revoked.json || {
+    echo "revocation failed, the token is still live:" >&2
+    jq '.errors' revoked.json >&2
+}
+rm -f account.conf
 ```
 
 ## Dump one page
@@ -59,14 +84,22 @@ curl -s -X DELETE \
 One request. `timeframe.from` and `timeframe.to` are milliseconds since the
 epoch, and the wide window here asks for everything so retention decides.
 
+Compute the upper bound from the clock rather than hardcoding one. A fixed
+timestamp silently drops every log written after it, which is the failure you
+would least notice: the query still succeeds and just returns less.
+
 ```bash
-curl -s -X POST \
-    -H "Authorization: Bearer $(<~/Desktop/cftoken/observability.txt)" \
+NOW_MS=$(( $(date +%s) * 1000 ))
+jq -n --argjson to "$NOW_MS" '{queryId:"dump",timeframe:{from:0,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > req.json
+curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+    -X POST \
     -H "Content-Type: application/json" \
-    -d '{"queryId":"dump","timeframe":{"from":1700000000000,"to":1788300000000},"parameters":{"datasets":["cloudflare-workers"]},"limit":2000,"view":"events"}' \
+    --data @req.json \
     "https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query" \
     > page-1.json
 ```
+
+A `from` of 0 asks for everything, so retention decides the real start.
 
 That returns the newest events first and stops. It is one page, not the whole
 set.
@@ -77,13 +110,13 @@ There is no cursor. Page backwards through time: take the oldest timestamp a
 page returned and make it the next page's `to`. Stop when a page returns zero.
 
 ```bash
-TOKEN=$(<~/Desktop/cftoken/observability.txt)
 URL="https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query"
-TO=1788300000000
+TO=$(( $(date +%s) * 1000 ))
 
 for i in $(seq 1 40); do
-    jq -n --argjson to "$TO" '{queryId:"page",timeframe:{from:1700000000000,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > req.json
-    curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" --data @req.json "$URL" > "page-$i.json"
+    jq -n --argjson to "$TO" '{queryId:"page",timeframe:{from:0,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > req.json
+    curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+        -X POST -H "Content-Type: application/json" --data @req.json "$URL" > "page-$i.json"
     N=$(jq '.result.events.events | length' "page-$i.json")
     echo "page $i: $N events"
     if [[ "$N" -eq 0 ]]; then rm -f "page-$i.json"; break; fi
@@ -161,10 +194,11 @@ Add a filter when the full dump is more than you want. `operation` accepts
 `includes`, and `key` names any field on the record:
 
 ```bash
-curl -s -X POST \
-    -H "Authorization: Bearer $(<~/Desktop/cftoken/observability.txt)" \
-    -H "Content-Type: application/json" \
-    -d '{"queryId":"errors","timeframe":{"from":1787500000000,"to":1788200000000},"parameters":{"datasets":["cloudflare-workers"],"filters":[{"key":"$metadata.message","operation":"includes","value":"chunk request failed","type":"string"}]},"limit":200,"view":"events"}' \
+NOW_MS=$(( $(date +%s) * 1000 ))
+DAY_AGO_MS=$(( NOW_MS - 86400000 ))
+jq -n --argjson from "$DAY_AGO_MS" --argjson to "$NOW_MS" '{queryId:"errors",timeframe:{from:$from,to:$to},parameters:{datasets:["cloudflare-workers"],filters:[{key:"$metadata.message",operation:"includes",value:"chunk request failed",type:"string"}]},limit:200,view:"events"}' > req.json
+curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+    -X POST -H "Content-Type: application/json" --data @req.json \
     "https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query"
 ```
 
