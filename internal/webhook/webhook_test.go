@@ -147,3 +147,87 @@ func TestParsePullRequestRejectsMissingRequiredFields(t *testing.T) {
 		t.Fatal("missing fields: want error")
 	}
 }
+
+func reviewThreadPayloadBody(action string, draft bool) []byte {
+	payload := map[string]any{
+		"action": action,
+		"installation": map[string]any{
+			"id": float64(42),
+		},
+		"repository": map[string]any{
+			"name": "repo",
+			"owner": map[string]any{
+				"login": "owner",
+			},
+		},
+		"pull_request": map[string]any{
+			"number": float64(7),
+			"draft":  draft,
+			"head": map[string]any{
+				"sha": "a3c4f1cac7f595bc824704b9d2a1f1191630dc32",
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+func TestParseEventAcceptsResolvedAndUnresolvedThreadActions(t *testing.T) {
+	for _, action := range []string{"resolved", "unresolved"} {
+		event, supported, err := ParseEvent(
+			"pull_request_review_thread",
+			"delivery-thread",
+			reviewThreadPayloadBody(action, false),
+		)
+		if err != nil {
+			t.Fatalf("action %s: %v", action, err)
+		}
+		if !supported {
+			t.Fatalf("action %s: not supported", action)
+		}
+		if event.Head != "a3c4f1cac7f595bc824704b9d2a1f1191630dc32" {
+			t.Fatalf("head = %q, want the payload head sha", event.Head)
+		}
+		job := event.Job()
+		if job.Number != 7 || job.InstallationID != 42 || job.Repository.Owner != "owner" {
+			t.Fatalf("job = %+v, want the same job shape as a pull request event", job)
+		}
+	}
+}
+
+func TestParseEventIgnoresUnsupportedThreadActionsAndDrafts(t *testing.T) {
+	_, supported, err := ParseEvent(
+		"pull_request_review_thread",
+		"delivery-thread",
+		reviewThreadPayloadBody("labeled", false),
+	)
+	if err != nil {
+		t.Fatalf("unsupported action: %v", err)
+	}
+	if supported {
+		t.Fatal("unsupported action: want ignored")
+	}
+
+	_, supported, err = ParseEvent(
+		"pull_request_review_thread",
+		"delivery-thread",
+		reviewThreadPayloadBody("resolved", true),
+	)
+	if err != nil {
+		t.Fatalf("draft: %v", err)
+	}
+	if supported {
+		t.Fatal("draft: want ignored")
+	}
+}
+
+func TestParseReviewThreadRejectsMissingRequiredFields(t *testing.T) {
+	body := []byte(`{"action":"resolved"}`)
+	_, _, err := ParseReviewThread("pull_request_review_thread", "delivery-1", body)
+	if err == nil {
+		t.Fatal("missing fields: want error")
+	}
+}

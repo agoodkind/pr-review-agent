@@ -84,9 +84,25 @@ func (action pullRequestAction) supported() bool {
 	}
 }
 
-// ParsePullRequest parses a supported pull request webhook payload.
-func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
-	empty := PullRequestEvent{
+// reviewThreadAction is a pull_request_review_thread webhook action.
+type reviewThreadAction string
+
+const (
+	actionThreadResolved   reviewThreadAction = "resolved"
+	actionThreadUnresolved reviewThreadAction = "unresolved"
+)
+
+func (action reviewThreadAction) supported() bool {
+	switch action {
+	case actionThreadResolved, actionThreadUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+func emptyEvent() PullRequestEvent {
+	return PullRequestEvent{
 		Action:         "",
 		DeliveryID:     "",
 		InstallationID: 0,
@@ -95,43 +111,92 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 		Head:           "",
 		Draft:          false,
 	}
-	if eventType != "pull_request" {
-		return empty, false, nil
-	}
-	if strings.TrimSpace(deliveryID) == "" {
-		return empty, false, errors.New("missing delivery id")
-	}
+}
 
-	var payload pullRequestPayload
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return empty, false, errors.New("decode payload failed")
+// ParseEvent parses any supported webhook delivery into a pull request event.
+func ParseEvent(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
+	switch eventType {
+	case "pull_request":
+		return ParsePullRequest(eventType, deliveryID, body)
+	case "pull_request_review_thread":
+		return ParseReviewThread(eventType, deliveryID, body)
+	default:
+		return emptyEvent(), false, nil
+	}
+}
+
+// ParsePullRequest parses a supported pull request webhook payload.
+func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
+	if eventType != "pull_request" {
+		return emptyEvent(), false, nil
+	}
+	payload, ok, err := decodePayload(deliveryID, body)
+	if !ok {
+		return emptyEvent(), false, err
 	}
 
 	action := pullRequestAction(payload.Action)
 	if !action.supported() {
-		return empty, false, nil
+		return emptyEvent(), false, nil
 	}
 
 	if action != actionReadyForReview && payload.PullRequest.Draft {
-		return empty, false, nil
+		return emptyEvent(), false, nil
 	}
+	return eventFromPayload(deliveryID, payload)
+}
 
+// ParseReviewThread parses a resolved or unresolved review thread delivery.
+//
+// A thread flipping at an already reviewed head is the one signal that the
+// verdict may no longer match thread state, so it carries the same job shape
+// as a pull request event and rides the same admit-and-enqueue path.
+func ParseReviewThread(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
+	if eventType != "pull_request_review_thread" {
+		return emptyEvent(), false, nil
+	}
+	payload, ok, err := decodePayload(deliveryID, body)
+	if !ok {
+		return emptyEvent(), false, err
+	}
+	if !reviewThreadAction(payload.Action).supported() {
+		return emptyEvent(), false, nil
+	}
+	// A draft is never reviewed, so no verdict exists for a resolution to move.
+	if payload.PullRequest.Draft {
+		return emptyEvent(), false, nil
+	}
+	return eventFromPayload(deliveryID, payload)
+}
+
+func decodePayload(deliveryID string, body []byte) (pullRequestPayload, bool, error) {
+	var payload pullRequestPayload
+	if strings.TrimSpace(deliveryID) == "" {
+		return payload, false, errors.New("missing delivery id")
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return payload, false, errors.New("decode payload failed")
+	}
+	return payload, true, nil
+}
+
+func eventFromPayload(deliveryID string, payload pullRequestPayload) (PullRequestEvent, bool, error) {
 	if payload.Installation.ID == 0 {
-		return empty, false, errors.New("missing installation id")
+		return emptyEvent(), false, errors.New("missing installation id")
 	}
 	if payload.Repository.Owner.Login == "" || payload.Repository.Name == "" {
-		return empty, false, errors.New("missing repository")
+		return emptyEvent(), false, errors.New("missing repository")
 	}
 	if payload.PullRequest.Number == 0 {
-		return empty, false, errors.New("missing pull request number")
+		return emptyEvent(), false, errors.New("missing pull request number")
 	}
 	if payload.PullRequest.Head.SHA == "" {
-		return empty, false, errors.New("missing head sha")
+		return emptyEvent(), false, errors.New("missing head sha")
 	}
 
 	head, err := domain.ParseHeadSHA(payload.PullRequest.Head.SHA)
 	if err != nil {
-		return empty, false, errors.New("invalid head sha")
+		return emptyEvent(), false, errors.New("invalid head sha")
 	}
 
 	return PullRequestEvent{
