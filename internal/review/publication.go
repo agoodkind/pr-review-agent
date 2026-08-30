@@ -120,6 +120,9 @@ func threadCommentURL(thread githubapp.ReviewThread, ref domain.PullRequestRef) 
 const (
 	reviewStateApproved         = "APPROVED"
 	reviewStateChangesRequested = "CHANGES_REQUESTED"
+	// reviewStateDismissed is a verdict somebody withdrew. It is not a verdict
+	// and it does not restore the one before it.
+	reviewStateDismissed = "DISMISSED"
 )
 
 // latestBotVerdictReview returns the newest review of the service's own that
@@ -170,6 +173,14 @@ func latestBotVerdictState(reviews []githubapp.Review, botLogin string) string {
 	state := ""
 	for _, item := range reviews {
 		if item.Author != botLogin {
+			continue
+		}
+		// A dismissal withdraws the verdict rather than restoring the one before
+		// it. Passing over it would leave the older state standing, and a refresh
+		// that then found that state equal to the decision it recomputed would
+		// submit nothing, leaving the pull request carrying no verdict at all.
+		if item.State == reviewStateDismissed {
+			state = ""
 			continue
 		}
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {

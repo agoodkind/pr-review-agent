@@ -95,8 +95,17 @@ func ReplySpeaker(reply domain.ReviewComment, botLogin string) string {
 // truncateReply cuts one reply to the budget on a rune boundary and says it was
 // cut, so a half sentence is never read as the whole answer.
 func truncateReply(line string, budget int) string {
-	if budget <= len(truncatedReplyNote) || len(line) <= budget {
+	if len(line) <= budget {
 		return line
+	}
+	// A budget too small to hold the note still has to bound the text. Returning
+	// the line whole because the note would not fit put the entire reply back in
+	// the prompt, which is the failure this is here to prevent.
+	if budget <= 0 {
+		return ""
+	}
+	if budget <= len(truncatedReplyNote) {
+		return strings.ToValidUTF8(line[:budget], "")
 	}
 	cut := strings.ToValidUTF8(line[:budget-len(truncatedReplyNote)], "")
 	return cut + truncatedReplyNote

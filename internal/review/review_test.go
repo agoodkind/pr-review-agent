@@ -2495,6 +2495,66 @@ func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
 	}
 }
 
+// A dismissal withdraws the verdict; it does not restore the one before it. A
+// refresh that read the older state as still standing, found it equal to the
+// decision it recomputed, and submitted nothing would leave the pull request
+// carrying no verdict while a thread is open.
+func TestADismissedVerdictLeavesNoStandingStateToMatch(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{
+			{
+				"id":        float64(51),
+				"commit_id": string(head),
+				"state":     "CHANGES_REQUESTED",
+				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"user":      map[string]any{"login": testBotLogin},
+			},
+			// Somebody dismissed it, so nothing stands.
+			{
+				"id":        float64(52),
+				"commit_id": string(head),
+				"state":     "DISMISSED",
+				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"user":      map[string]any{"login": testBotLogin},
+			},
+		}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted, so a dismissed review left the head unguarded with a thread open")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES restated after the dismissal",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// A budget too small to hold the truncation note still has to bound the text.
+// Returning the line whole because the note would not fit puts the entire reply
+// back in the prompt, which is the failure the budget exists to prevent.
+func TestFormatRepliesBoundsEvenATinyBudget(t *testing.T) {
+	long := strings.Repeat("x", 5000)
+	replies := []domain.ReviewComment{{Author: "other-user", Body: long}}
+
+	for _, budget := range []int{0, 1, 5, len(" [reply truncated]"), 40} {
+		lines, _ := review.FormatReplies(replies, testBotLogin, budget)
+		total := 0
+		for _, line := range lines {
+			total += len(line)
+		}
+		if total > budget {
+			t.Fatalf("budget %d produced %d bytes, so nothing was bounded", budget, total)
+		}
+	}
+}
+
 // Resolving one of several blocking threads leaves the verdict where it was, so
 // the refresh submits no review. The summary still has to be rewritten, because
 // its blocking list names one entry per open thread and would otherwise keep
