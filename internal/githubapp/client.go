@@ -198,15 +198,10 @@ func (client *Client) doREST(
 func (client *Client) doRESTPaginated(
 	ctx context.Context,
 	installationID int64,
-	method string,
 	path string,
-	query url.Values,
 	decodePage func([]byte) (int, error),
 ) error {
 	nextURL := client.restURL(path)
-	if len(query) > 0 {
-		nextURL += "?" + query.Encode()
-	}
 
 	for nextURL != "" {
 		token, err := client.installationToken(ctx, installationID)
@@ -214,7 +209,7 @@ func (client *Client) doRESTPaginated(
 			return err
 		}
 
-		request, err := http.NewRequestWithContext(ctx, method, nextURL, http.NoBody)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, http.NoBody)
 		if err != nil {
 			client.logger.ErrorContext(ctx, "create github request", slog.String("err", err.Error()))
 			return errors.New("create github request")

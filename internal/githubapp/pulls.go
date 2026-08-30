@@ -89,7 +89,7 @@ func (client *Client) ListChangedFiles(
 ) ([]ChangedFile, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/files", number))
 	files := make([]ChangedFile, 0)
-	err := client.doRESTPaginated(ctx, installationID, "GET", path, nil, func(page []byte) (int, error) {
+	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
 		var pageFiles []changedFileResponse
 		if err := json.Unmarshal(page, &pageFiles); err != nil {
 			client.logger.ErrorContext(ctx, "decode changed files page", slog.String("err", err.Error()))
@@ -155,7 +155,7 @@ func (client *Client) Compare(
 ) ([]ChangedFile, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/compare/%s...%s", base, head))
 	files := make([]ChangedFile, 0)
-	err := client.doRESTPaginated(ctx, installationID, "GET", path, nil, func(page []byte) (int, error) {
+	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
 		var response compareResponse
 		if err := json.Unmarshal(page, &response); err != nil {
 			client.logger.ErrorContext(ctx, "decode compare page", slog.String("err", err.Error()))
