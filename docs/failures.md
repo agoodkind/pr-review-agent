@@ -100,7 +100,39 @@ The original operator requirements from 2026-08-14, one edited top level
 thread, quiet below the threshold, terse output, were never implemented as
 stated.
 
+## 8. A finding can be wrong about the code it read
+
+Two findings on 2026-08-30 asserted facts the source contradicts. On tack 160
+the review said `pgproto3.BackendKeyData.SecretKey` is a `uint32` and the
+package therefore could not compile; the pinned pgx v5.10.0 declares it
+`[]byte`, and the package builds and tests green. On configs 302 it said the
+audit consumer's ledger connection was unbounded and named `DATABASE_URL` as
+the override; that binary reads `AUDIT_CONSUMER_YUGABYTE_DSN`, which compose
+already sets to a bounded value.
+
+Both were answered with the source and resolved, and both cost an author a
+round trip to disprove. This is not the stale block failure and the durable
+review does not address it: those runs completed and published exactly what
+the model returned. The reviewer states a fact about code it could have read
+and does not check it, so a confident wrong finding costs the same as a right
+one until a human reads the source.
+
+## 9. A killed run leaves a check nobody can clear
+
+A deploy restarts the container and cancels every review in flight. The
+cancelled run leaves its check red, and shutdown cancels the GitHub writes
+that would explain it, so the comment never appears. Nothing retries and no
+event other than a pull request webhook starts a run, so the red check stands.
+
+Observed on tack 160 at 2026-08-30T15:53:27Z, where the killed run had begun
+13 seconds after the push it was reviewing. The escapes are a new head or a
+merge, and that pull request merged. A branch whose last commit is the one the
+author wants has neither escape, and the check exposes no run identifier an
+operator could use to re-trigger it.
+
 ## The common cause
+
+Failures 8 and 9 have their own causes, named above. The rest share one.
 
 Runs are stateless and all or nothing. Every run starts from zero against
 the whole diff, must finish inside one fixed deadline, keeps its progress
