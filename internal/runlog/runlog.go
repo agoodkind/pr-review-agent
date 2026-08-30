@@ -252,10 +252,19 @@ func formatFields(fields map[string]string) string {
 	return strings.Join(parts, " ")
 }
 
+// lineBreakEscaper keeps a published value on its own line.
+//
+// Allowlisting a field says its value is safe to read, not that its shape is.
+// A repository path comes from the pull request, so someone who can name a file
+// can put a newline in it, and a raw newline here would close the code block
+// this log renders into and let the rest of that value become markdown in a
+// body the service signed its name to.
+var lineBreakEscaper = strings.NewReplacer("\r", "\\r", "\n", "\\n")
+
 // publishedValue returns what one field may say on a public surface.
 func publishedValue(key string, value string) string {
 	if _, published := publishedFields[key]; published {
-		return value
+		return lineBreakEscaper.Replace(value)
 	}
 	return withheldValue
 }

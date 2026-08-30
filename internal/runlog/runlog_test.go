@@ -153,3 +153,23 @@ func TestTeeWritesToEverySink(t *testing.T) {
 		}
 	}
 }
+
+// A published field's value is trusted for what it says, not for its shape. A
+// repository path comes from the pull request, so a newline in one would close
+// the code block this log renders into and turn the rest into markdown on a
+// surface the service signed.
+func TestRenderKeepsAPublishedValueOnItsOwnLine(t *testing.T) {
+	recorder := runlog.NewRecorder()
+	logger := slog.New(recorder)
+	logger.Info("finding published", slog.String("path", "a.go\n```\n## injected heading"))
+
+	rendered := recorder.Render()
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.HasPrefix(line, "## injected") {
+			t.Fatalf("a field value reached the start of a line:\n%s", rendered)
+		}
+	}
+	if !strings.Contains(rendered, `path=a.go\n`) {
+		t.Fatalf("rendered log did not escape the line break:\n%s", rendered)
+	}
+}
