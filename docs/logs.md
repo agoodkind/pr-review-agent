@@ -38,10 +38,12 @@ the config with `umask 077` so only you can read it.
 cd ~/Desktop/cftoken
 umask 077
 printf 'header = "Authorization: Bearer %s"\n' "$(<token.txt)" > account.conf
+# date -v is BSD only and date -d is GNU only, so try each.
+EXPIRES=$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ)
 curl -sS --fail-with-body --config account.conf \
     -X POST \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"pr-agent-observability-read\",\"expires_on\":\"$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)\",\"policies\":[{\"effect\":\"allow\",\"permission_groups\":[{\"id\":\"66c1ed49f4ed46098b75696a6d4ee3c9\"}],\"resources\":{\"com.cloudflare.api.account.ee7d7ca7d611ef8c2a07885e8362de0c\":\"*\"}}]}" \
+    -d "{\"name\":\"pr-agent-observability-read\",\"expires_on\":\"$EXPIRES\",\"policies\":[{\"effect\":\"allow\",\"permission_groups\":[{\"id\":\"66c1ed49f4ed46098b75696a6d4ee3c9\"}],\"resources\":{\"com.cloudflare.api.account.ee7d7ca7d611ef8c2a07885e8362de0c\":\"*\"}}]}" \
     "https://api.cloudflare.com/client/v4/user/tokens" > created.json
 ```
 
@@ -115,10 +117,17 @@ call still writes a JSON error body, whose event count reads as zero, which the
 loop would otherwise treat as a clean finish and hand you a partial dump that
 looks complete.
 
-Two more ways a dump ends up quietly partial. A fixed page count stops on a full
-page and looks like a finish, so the loop below runs until a page is empty and
-fails loudly if it ever hits its safety cap. Leftover page files from an earlier
-run merge into a later shorter one, so each run writes into its own directory.
+Three more ways a dump ends up quietly partial. A fixed page count stops on a
+full page and looks like a finish, so the loop below runs until a page is empty
+and fails loudly if it ever hits its safety cap. Leftover page files from an
+earlier run merge into a later shorter one, so each run writes into its own
+directory. And the upper bound is inclusive, so a page whose records all share
+one timestamp would set the same bound again and repeat forever; the loop stops
+and says so rather than spinning to the cap.
+
+The inclusive bound also means consecutive pages overlap at the boundary
+timestamp, which is why the merge below deduplicates on the record identifier
+rather than concatenating.
 
 ```bash
 URL="https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query"
@@ -145,7 +154,12 @@ while true; do
     fi
     echo "page $i: $N events"
     if [[ "$N" -eq 0 ]]; then rm -f "$DUMP/page-$i.json"; break; fi
-    TO=$(jq '.result.events.events | min_by(.timestamp).timestamp' "$DUMP/page-$i.json")
+    NEXT=$(jq '.result.events.events | min_by(.timestamp).timestamp' "$DUMP/page-$i.json")
+    if [[ "$NEXT" -eq "$TO" ]]; then
+        echo "page $i did not move the boundary past $TO, so every later page would repeat it; the dump is incomplete" >&2
+        exit 1
+    fi
+    TO=$NEXT
 done
 echo "pages are in $DUMP"
 ```
