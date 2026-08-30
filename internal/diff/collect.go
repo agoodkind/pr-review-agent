@@ -28,6 +28,12 @@ type FileContext struct {
 type ReviewInput struct {
 	PullRequest githubapp.PullRequest
 	Files       []FileContext
+	// MergeBase is the commit the patches are measured from, which is not always
+	// the commit the range was asked for: GitHub compares from where two commits
+	// last agreed. It is empty when the whole pull request was listed rather than
+	// a range compared. Anything mapping coordinates from the requested base has
+	// to check this first, or it maps from a commit that was never in the patch.
+	MergeBase domain.HeadSHA
 }
 
 // Piece is one rendered diff hunk, the smallest unit a chunk can carry.
@@ -127,6 +133,9 @@ func (collector *Collector) Collect(
 	return ReviewInput{
 		PullRequest: pullRequest,
 		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles),
+		// Listing the whole pull request compares nothing, so there is no commit
+		// the patches were measured from to report.
+		MergeBase: "",
 	}, nil
 }
 
@@ -172,9 +181,21 @@ func (collector *Collector) CollectRange(
 		return ReviewInput{}, fmt.Errorf("compare %s to %s: %w", base, pullRequest.Head, err)
 	}
 
+	// A range measured from somewhere other than the commit that was asked for
+	// still covers everything since that commit and more, so it is safe to
+	// review, but nothing downstream can tell without being told.
+	if changedFiles.MergeBase != "" && changedFiles.MergeBase != base {
+		slog.WarnContext(
+			ctx,
+			"compare measured from the merge base rather than the requested commit",
+			slog.String("requested", string(base)),
+			slog.String("merge_base", string(changedFiles.MergeBase)),
+		)
+	}
 	return ReviewInput{
 		PullRequest: pullRequest,
 		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles.Files),
+		MergeBase:   changedFiles.MergeBase,
 	}, nil
 }
 

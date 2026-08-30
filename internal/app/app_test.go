@@ -2054,7 +2054,13 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		state.mu.Lock()
 		files := state.compareFiles
 		state.mu.Unlock()
-		writeJSON(writer, http.StatusOK, map[string]any{"files": files})
+		// GitHub always names the commit it measured the patches from. Here the
+		// requested base is an ancestor of the head, so it is that base, which is
+		// the case callers may map coordinates through.
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"merge_base_commit": map[string]any{"sha": compareBaseFromPath(request.URL.Path)},
+			"files":             files,
+		})
 		return
 	}
 
@@ -2383,6 +2389,20 @@ func (state *githubServerState) handleListChangedFiles(writer http.ResponseWrite
 	}
 
 	writeJSON(writer, http.StatusOK, files)
+}
+
+// compareBaseFromPath reads the base commit out of a compare request path,
+// which looks like /repos/owner/repo/compare/{base}...{head}.
+func compareBaseFromPath(path string) string {
+	_, after, found := strings.Cut(path, "/compare/")
+	if !found {
+		return ""
+	}
+	base, _, found := strings.Cut(after, "...")
+	if !found {
+		return ""
+	}
+	return base
 }
 
 func paginateMapPages(items []map[string]any, pageSize int) [][]map[string]any {

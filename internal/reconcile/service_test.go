@@ -496,11 +496,16 @@ func TestReconcileShowsFixedCodeAfterInsertionsAboveAnchor(t *testing.T) {
 // window and the remapped window disjoint enough to tell apart.
 const shiftedInsertionCount = 30
 
-// GitHub does not diff the finding head against the current head directly. Once
+// GitHub does not diff the finding commit against the current one directly. Once
 // the two diverge, through a force push or a rebase, it diffs from where they
-// last agreed, so the old side of every patch belongs to that merge base and the
-// finding's coordinates were never in it. Mapping them anyway lands on unrelated
-// code with full confidence, so a diverged comparison keeps the stale window.
+// last agreed, so the patches describe a range the finding's coordinates were
+// never in.
+//
+// There is then no honest window to show. The recorded line does not identify
+// the finding at the current commit either, so a window drawn on it can be
+// unrelated clean code that reads as the defect being gone, and the model
+// resolves a thread on evidence that is not about it. The thread is left
+// unreconciled instead, so it stays open for a person.
 func TestReconcileDoesNotRemapThroughADivergedComparison(t *testing.T) {
 	finding := sampleFinding()
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
@@ -539,27 +544,30 @@ func TestReconcileDoesNotRemapThroughADivergedComparison(t *testing.T) {
 			PatchPresent: true,
 		}},
 	}
+	// Scripted to resolve, so a thread that does reach the model resolves and the
+	// assertion below cannot pass by accident.
 	model := &fakeModel{
 		resolutions: []domain.ThreadResolution{{
 			ThreadNodeID: "thread-diverged",
-			Resolution:   domain.ResolutionOpen,
-			Reason:       "cannot prove the defect gone",
+			Resolution:   domain.ResolutionResolved,
+			Reason:       "fixed",
 		}},
 	}
 
 	service := reconcile.NewService(github, model, testBotLogin, nil)
-	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+	threads, err := service.Reconcile(context.Background(), testJob())
+	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if len(model.prompts) != 1 {
-		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	if len(model.prompts) != 0 {
+		t.Fatalf("the thread was sent to the model on a window that is not about it:\n%s", model.prompts[0])
 	}
-	// The window stays where the recorded coordinates put it. Remapping through
-	// a patch whose old side is some third commit would move it somewhere the
-	// finding never pointed, and claim the move was exact.
-	promptCodeSection := currentCodeSection(t, model.prompts[0])
-	if !strings.Contains(promptCodeSection, "new line 0") {
-		t.Fatalf("current code section was remapped through a diverged comparison: %q", promptCodeSection)
+	if len(github.resolveCalls) != 0 {
+		t.Fatalf("resolve calls = %v, want none: nothing here shows whether the defect is gone",
+			github.resolveCalls)
+	}
+	if threads[0].Resolved {
+		t.Fatal("the thread was resolved on a comparison that never contained the finding")
 	}
 }
 

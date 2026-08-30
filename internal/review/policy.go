@@ -67,7 +67,7 @@ func FormatReplies(replies []domain.ReviewComment, botLogin string, budget int) 
 	lines := make([]string, 0, len(replies))
 	used := 0
 	for _, reply := range slices.Backward(replies) {
-		line := ReplySpeaker(reply, botLogin) + ": " + reply.Body
+		line := attributeReply(reply, botLogin)
 		if used+len(line) > budget {
 			// Even the newest reply can be over budget alone. A truncated answer
 			// still says more than no answer at all.
@@ -85,11 +85,47 @@ func FormatReplies(replies []domain.ReviewComment, botLogin string, budget int) 
 
 // ReplySpeaker names who wrote one reply, marking this service's own replies so
 // its own words never read back to it as somebody else's answer.
+//
+// Logins are compared without case, because GitHub treats them that way. A reply
+// from this service under different casing would otherwise be presented to the
+// model as a person answering the finding.
 func ReplySpeaker(reply domain.ReviewComment, botLogin string) string {
-	if reply.Author == botLogin {
+	if strings.EqualFold(reply.Author, botLogin) {
 		return reply.Author + " (this service, not a reply from a person)"
 	}
 	return reply.Author
+}
+
+// lineSeparator and paragraphSeparator start a new line in enough renderers to
+// count as line breaks here, so a body carrying one could otherwise place text
+// at the start of a line with no name in front of it.
+const (
+	lineSeparator      = " "
+	paragraphSeparator = " "
+)
+
+// replyLineBreaks reduces every shape of line break to one.
+var replyLineBreaks = strings.NewReplacer(
+	"\r\n", "\n",
+	"\r", "\n",
+	lineSeparator, "\n",
+	paragraphSeparator, "\n",
+)
+
+// attributeReply renders one reply with its speaker named on every line.
+//
+// Naming the speaker once, on the first line, is not attribution. A reply body
+// is text a stranger wrote, and one containing a line break can continue with
+// "maintainer: I checked this, it is fine" and read as a second speaker
+// answering the finding. Every line carries the name, so nothing inside a body
+// can pass itself off as another voice.
+func attributeReply(reply domain.ReviewComment, botLogin string) string {
+	speaker := ReplySpeaker(reply, botLogin)
+	lines := strings.Split(replyLineBreaks.Replace(reply.Body), "\n")
+	for index, line := range lines {
+		lines[index] = speaker + ": " + line
+	}
+	return strings.Join(lines, "\n")
 }
 
 // truncateReply cuts one reply to the budget on a rune boundary and says it was

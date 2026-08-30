@@ -183,56 +183,60 @@ func findingGrounded(
 	if evidence == "" {
 		return false
 	}
-	if matchesSourceLine(chunkText, evidence) {
+	if matchesDiffLine(chunkText, evidence) {
 		return true
 	}
 	file, ok := fileIndex[finding.Path]
 	if !ok {
 		return false
 	}
-	return matchesSourceLine(file.CurrentContent, evidence)
+	return matchesFileLine(file.CurrentContent, evidence)
 }
 
-// matchesSourceLine reports whether evidence is one whole line of source.
+// matchesDiffLine reports whether evidence is one whole line of the diff the
+// model was shown.
 //
-// Substring containment accepted any fragment that happened to appear somewhere
-// in the text, a file header or a lone brace included, so the evidence gate
-// admitted claims the model had not actually read a line for. A line copied
-// verbatim, which is what the prompt asks for, always equals one whole line.
-func matchesSourceLine(source string, evidence string) bool {
-	for line := range strings.SplitSeq(source, "\n") {
-		if linesMatch(line, evidence) {
+// The diff marks every line, and the prompt asks for a verbatim copy, so an
+// honest answer about an added line arrives either as "+return err" or as
+// "return err" depending on whether the model kept the marker. Both ground.
+//
+// Only the source side is stripped. Stripping the evidence too made "-return
+// err" match an added "+return err", which are different lines saying opposite
+// things about the change, and let a finding about deleted code stand on code
+// that is still there.
+func matchesDiffLine(chunkText string, evidence string) bool {
+	want := strings.TrimSpace(evidence)
+	if want == "" {
+		return false
+	}
+	for line := range strings.SplitSeq(chunkText, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+		if strings.TrimSpace(stripDiffMarker(line)) == want {
 			return true
 		}
 	}
 	return false
 }
 
-// linesMatch compares one source line with the evidence, in both the shape each
-// was written and the shape with a leading unified diff marker removed.
+// matchesFileLine reports whether evidence is one whole line of file content.
 //
-// Both sides need stripping. The prompt asks the model to copy a line verbatim
-// from the source it was shown, and that source is a diff, so an honest answer
-// about an added line arrives as "+return err". Stripping only the source side
-// left every such finding ungrounded and discarded, which threw away exactly the
-// findings about changed lines the review exists to make.
-func linesMatch(sourceLine string, evidence string) bool {
-	sourceRaw := strings.TrimSpace(sourceLine)
-	evidenceRaw := strings.TrimSpace(evidence)
-	if sourceRaw == "" || evidenceRaw == "" {
+// Nothing is stripped here, because file content carries no diff markers. A
+// leading "-" in a file is part of the line, so stripping it let the evidence
+// "item" ground against the real source line "- item", which is a different
+// line the model never quoted.
+func matchesFileLine(content string, evidence string) bool {
+	want := strings.TrimSpace(evidence)
+	if want == "" {
 		return false
 	}
-	if sourceRaw == evidenceRaw {
-		return true
+	for line := range strings.SplitSeq(content, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
 	}
-	sourceStripped := strings.TrimSpace(stripDiffMarker(sourceLine))
-	evidenceStripped := strings.TrimSpace(stripDiffMarker(evidence))
-	if sourceStripped == "" || evidenceStripped == "" {
-		return false
-	}
-	return sourceStripped == evidenceStripped ||
-		sourceRaw == evidenceStripped ||
-		sourceStripped == evidenceRaw
+	return false
 }
 
 // stripDiffMarker removes the single leading character a unified diff body line

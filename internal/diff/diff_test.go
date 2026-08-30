@@ -558,6 +558,9 @@ type fakeSource struct {
 	compareCalls    int
 	lastCompareBase domain.HeadSHA
 	lastCompareHead domain.HeadSHA
+	// mergeBase overrides the commit the patches are reported as measured from,
+	// for the diverged case where it is not the base that was asked for.
+	mergeBase domain.HeadSHA
 }
 
 func (source *fakeSource) ListChangedFiles(
@@ -583,7 +586,11 @@ func (source *fakeSource) Compare(
 	if source.compareErr != nil {
 		return githubapp.Comparison{}, source.compareErr
 	}
-	return githubapp.Comparison{MergeBase: base, Files: source.files}, nil
+	mergeBase := base
+	if source.mergeBase != "" {
+		mergeBase = source.mergeBase
+	}
+	return githubapp.Comparison{MergeBase: mergeBase, Files: source.files}, nil
 }
 
 func (source *fakeSource) GetFile(
@@ -761,6 +768,37 @@ func TestCollectorRangeReviewsEverythingWhenTheBaseIsGone(t *testing.T) {
 	}
 	if len(input.Files) != 1 {
 		t.Fatalf("file count = %d, want 1", len(input.Files))
+	}
+}
+
+// GitHub compares from where two commits last agreed, so the patches are not
+// always measured from the commit the range asked for. Nothing downstream can
+// tell that from the files alone, and anything mapping coordinates from the
+// requested base would be mapping from a commit that was never in the patch, so
+// the collected input carries the commit the comparison actually used.
+func TestCollectRangeCarriesTheCommitTheComparisonMeasuredFrom(t *testing.T) {
+	const divergedMergeBase = "f8a9c5fdfaf828ef157a37e2f5d4f4424963af65"
+	source := &fakeSource{
+		files: []githubapp.ChangedFile{{
+			Path:         "pkg/a.go",
+			Status:       "modified",
+			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+			PatchPresent: true,
+		}},
+		contents:  map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
+		mergeBase: domain.HeadSHA(divergedMergeBase),
+	}
+
+	input, err := diff.NewCollector(source).CollectRange(
+		context.Background(), testRef(), testPullRequest(), domain.HeadSHA(testStaleHeadSHA),
+	)
+	if err != nil {
+		t.Fatalf("CollectRange: %v", err)
+	}
+	if input.MergeBase != domain.HeadSHA(divergedMergeBase) {
+		t.Fatalf("merge base = %q, want %q: without it nothing downstream can tell the patches "+
+			"were measured from somewhere other than the commit asked for",
+			input.MergeBase, divergedMergeBase)
 	}
 }
 

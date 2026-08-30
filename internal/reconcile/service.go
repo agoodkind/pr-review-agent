@@ -408,6 +408,23 @@ func (service *Service) loadThreadContext(
 	}
 	changedFiles := comparison.Files
 
+	// GitHub compares from where two commits last agreed, so once the finding
+	// commit and the current one diverge the patches describe a range the
+	// finding's coordinates were never in. There is then no way to say where the
+	// anchor went: the recorded line does not identify it here either, and a
+	// window drawn on it can show unrelated clean code that reads as the defect
+	// being gone. The thread is left unreconciled instead, which keeps it open
+	// for a person rather than resolving it on evidence that is not about it.
+	if comparison.MergeBase == "" || comparison.MergeBase != thread.FindingHead {
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"thread context unavailable, the comparison is not measured from the finding commit",
+			slog.String("thread", thread.NodeID),
+			slog.String("merge_base", string(comparison.MergeBase)),
+		)
+		return emptyThreadContext(), threadContextUnavailable
+	}
+
 	currentPath := normalizedPath
 	for _, file := range changedFiles {
 		if file.Path == normalizedPath && file.Status == "removed" {
@@ -429,7 +446,7 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	startLine, endLine := remapAnchor(comparison, normalizedPath, thread.Finding, thread.FindingHead)
+	startLine, endLine := remapAnchor(comparison, normalizedPath, thread.Finding)
 	return threadContext{
 		currentContent: extractAnchorWindow(fileBytes, startLine, endLine),
 		compareText:    formatCompareForPath(changedFiles, normalizedPath),
@@ -446,23 +463,16 @@ func (service *Service) loadThreadContext(
 // compare patch is already loaded here and records every shift exactly, so the
 // remapping needs no extra call.
 //
-// It only holds while the patch is measured from the finding head. GitHub
-// compares from where two commits last agreed, so once the finding head and the
-// current head have diverged, through a force push or a rebase, the old side of
-// every patch belongs to the merge base and the finding's coordinates were never
-// in it. Mapping them anyway lands on unrelated code with full confidence, which
-// is worse than the stale window it replaces, so a diverged comparison keeps the
-// coordinates it had. So does a file the patch does not cover, or a patch this
-// cannot read.
+// The caller has already established that the patch is measured from the commit
+// the finding was written against; a comparison that is not gets no context at
+// all rather than a remapped or a stale window. What is left here is the case
+// where the patch simply says nothing about this file, or cannot be read, and
+// the recorded coordinates are then still the best available.
 func remapAnchor(
 	comparison githubapp.Comparison,
 	normalizedPath string,
 	finding domain.Finding,
-	findingHead domain.HeadSHA,
 ) (int, int) {
-	if comparison.MergeBase == "" || comparison.MergeBase != findingHead {
-		return finding.StartLine, finding.EndLine
-	}
 	patch, ok := patchForPath(comparison.Files, normalizedPath)
 	if !ok {
 		return finding.StartLine, finding.EndLine
