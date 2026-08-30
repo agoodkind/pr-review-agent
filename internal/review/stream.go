@@ -96,6 +96,19 @@ func (sink *streamingSink) Publish(ctx context.Context, findings []domain.Findin
 	ctx, cancel := detachFromReviewDeadline(ctx, sink.postTimeout)
 	defer cancel()
 
+	// A push during analysis supersedes the commit these findings describe.
+	// Posting them anyway would leave comments on a commit nobody is looking at,
+	// and the reader would see objections to code they have already replaced.
+	if !sink.headIsCurrent(ctx) {
+		logger.InfoContext(
+			ctx,
+			"streamed findings dropped",
+			slog.String("reason", "head moved during analysis"),
+			slog.Int("findings", len(admitted)),
+		)
+		return
+	}
+
 	posted := 0
 	rejected := 0
 	for _, comment := range comments {
@@ -128,6 +141,28 @@ func (sink *streamingSink) Publish(ctx context.Context, findings []domain.Findin
 		slog.Int("posted", posted),
 		slog.Int("rejected", rejected),
 	)
+}
+
+// headIsCurrent reports whether the pull request still points at the commit
+// these findings describe. A read that fails is treated as current, because
+// dropping real findings over one failed lookup costs the reader more than a
+// comment on a commit that just moved.
+func (sink *streamingSink) headIsCurrent(ctx context.Context) bool {
+	pullRequest, err := sink.github.GetPullRequest(
+		ctx,
+		sink.job.InstallationID,
+		sink.job.Repository,
+		sink.job.Number,
+	)
+	if err != nil {
+		gklog.L(ctx).ErrorContext(
+			ctx,
+			"read head before streaming findings",
+			slog.String("err", err.Error()),
+		)
+		return true
+	}
+	return pullRequest.Head == sink.head
 }
 
 // admit reserves capacity for the findings this chunk may publish, so two
