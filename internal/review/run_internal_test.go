@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -191,5 +193,81 @@ func TestConfirmHeadReportsAMovedHead(t *testing.T) {
 	)
 	if !errors.Is(err, errHeadMoved) {
 		t.Fatalf("err = %v, want the moved head reported", err)
+	}
+}
+
+// postPlanGitHub answers each comment post from a scripted plan, so a test can
+// put a refusal and a transient failure in one batch.
+type postPlanGitHub struct {
+	headStubGitHub
+	plan []error
+	call int
+}
+
+func (github *postPlanGitHub) CreateReviewComment(
+	context.Context, int64, domain.Repository, int, domain.HeadSHA, githubapp.InlineComment,
+) error {
+	answer := github.plan[github.call%len(github.plan)]
+	github.call++
+	return answer
+}
+
+func postFindingsWithPlan(t *testing.T, plan []error) error {
+	t.Helper()
+	postHead := domain.HeadSHA(internalTestHeadSHA)
+	work := deltaWork{
+		Files: []diff.FileContext{{
+			Path:              "main.go",
+			Status:            "modified",
+			Patch:             "@@ -1,2 +1,4 @@\n context\n+two\n+three\n context2\n",
+			CurrentContent:    "context\ntwo\nthree\ncontext2\n",
+			ChangedRightLines: map[int]struct{}{2: {}, 3: {}},
+			ChangedRightHunks: map[int]int{2: 1, 3: 1},
+			CoverageComplete:  true,
+		}},
+		Chunks: nil,
+	}
+	selection := collectPublicationState(nil, nil, summaryCommentTestBotLogin)
+	pass := newChunkPass(work, 1, &selection)
+	service := &Service{
+		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
+		publicationTimeout: time.Second,
+		now:                time.Now,
+	}
+	findings := []domain.Finding{
+		{Path: "main.go", StartLine: 2, EndLine: 2, Title: "First defect", Body: "body one", Importance: 8},
+		{Path: "main.go", StartLine: 3, EndLine: 3, Title: "Second defect", Body: "body two", Importance: 8},
+	}
+	return service.postChunkFindings(context.Background(), summaryCommentTestJob(), postHead, findings, pass)
+}
+
+// Each failed post is classified by its own error, never by the batch it
+// shares. A batch mixing a refusal with a dropped connection must report the
+// transient as the cause the chunk stays pending for: the refusal is final for
+// its one comment and no later attempt can change it, so blaming the batch on
+// the refusal misattributed a retryable failure to an unretryable one.
+func TestAMixedPostBatchPendsOnTheTransientNotTheRefusal(t *testing.T) {
+	refusal := githubapp.APIError{StatusCode: 422, Message: "Unprocessable"}
+	transient := errors.New("connection reset by peer")
+
+	err := postFindingsWithPlan(t, []error{refusal, transient})
+	if err == nil {
+		t.Fatal("no error, want the chunk left pending for the transient failure")
+	}
+	if errors.Is(err, errCommentRefused) {
+		t.Fatalf("err = %v, want the pending path: a transient failure was in the batch", err)
+	}
+	if !strings.Contains(err.Error(), "connection reset by peer") {
+		t.Fatalf("err = %v, want the transient failure as the recorded cause", err)
+	}
+}
+
+// A batch whose every failure is GitHub answering no is finished, not owed.
+func TestAPureRefusalBatchTakesTheRefusedPath(t *testing.T) {
+	refusal := githubapp.APIError{StatusCode: 422, Message: "Unprocessable"}
+
+	err := postFindingsWithPlan(t, []error{refusal, refusal})
+	if !errors.Is(err, errCommentRefused) {
+		t.Fatalf("err = %v, want errCommentRefused when no failure is retryable", err)
 	}
 }

@@ -604,9 +604,16 @@ func (service *Service) postChunkFindings(
 		return err
 	}
 
+	// Each failed post is classified by its own error, never by the batch it
+	// shares. A refusal is GitHub answering no, which no later attempt can
+	// change, so it is final for that one comment. A transient failure is the
+	// only thing that leaves the chunk pending: batching them together let one
+	// dropped connection turn a refusal into an endless retry, because the
+	// mixed batch never took the refused path.
 	delivered := 0
 	refused := 0
-	var firstErr error
+	var refusedErr error
+	var transientErr error
 	for _, post := range posts {
 		err := service.github.CreateReviewComment(
 			ctx,
@@ -628,9 +635,11 @@ func (service *Service) postChunkFindings(
 			var apiErr githubapp.APIError
 			if errors.As(err, &apiErr) {
 				refused++
-			}
-			if firstErr == nil {
-				firstErr = err
+				if refusedErr == nil {
+					refusedErr = err
+				}
+			} else if transientErr == nil {
+				transientErr = err
 			}
 			continue
 		}
@@ -645,13 +654,13 @@ func (service *Service) postChunkFindings(
 		slog.Int("refused", refused),
 		slog.Int("failed", len(posts)-delivered),
 	)
-	if firstErr == nil {
-		return nil
+	if transientErr != nil {
+		return fmt.Errorf("post chunk findings: %w", transientErr)
 	}
-	if refused == len(posts)-delivered {
-		return fmt.Errorf("%w: %w", errCommentRefused, firstErr)
+	if refusedErr != nil {
+		return fmt.Errorf("%w: %w", errCommentRefused, refusedErr)
 	}
-	return fmt.Errorf("post chunk findings: %w", firstErr)
+	return nil
 }
 
 // recordDelivered records one finding whose comment reached the page.
