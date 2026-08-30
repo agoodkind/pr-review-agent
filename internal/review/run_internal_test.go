@@ -274,17 +274,42 @@ func TestAPureRefusalBatchTakesTheRefusedPath(t *testing.T) {
 
 // A rate limit or a server error is GitHub failing to answer, not answering
 // no. Classifying either as a refusal checkpointed the chunk and silently
-// dropped its findings, when the next run would have posted them fine.
-func TestARateLimitedOrServerFailedBatchStaysPending(t *testing.T) {
-	rateLimited := githubapp.APIError{StatusCode: 429, Message: "rate limited"}
-	serverError := githubapp.APIError{StatusCode: 502, Message: "bad gateway"}
-
-	err := postFindingsWithPlan(t, []error{rateLimited, serverError})
-
-	if err == nil {
-		t.Fatal("no error, want the chunk left pending for GitHub failing to answer")
+// dropped its findings, when the next run would have posted them fine. Each
+// status gets its own batch, because a batch mixing two transients would let
+// either one mask the other being misclassified.
+func TestAFailureToAnswerLeavesTheChunkPending(t *testing.T) {
+	cases := []struct {
+		name string
+		err  githubapp.APIError
+	}{
+		{name: "primary rate limit", err: githubapp.APIError{StatusCode: 429, Message: "rate limited"}},
+		{name: "server error", err: githubapp.APIError{StatusCode: 502, Message: "bad gateway"}},
+		{name: "secondary rate limit as 403", err: githubapp.APIError{
+			StatusCode: 403,
+			Message:    "You have exceeded a secondary rate limit",
+		}},
 	}
-	if errors.Is(err, errCommentRefused) {
-		t.Fatalf("err = %v, want the pending path: no failure in the batch was an answer", err)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := postFindingsWithPlan(t, []error{testCase.err, testCase.err})
+			if err == nil {
+				t.Fatal("no error, want the chunk left pending for GitHub failing to answer")
+			}
+			if errors.Is(err, errCommentRefused) {
+				t.Fatalf("err = %v, want the pending path: the failure was not an answer", err)
+			}
+		})
+	}
+}
+
+// A 403 that is not a rate limit is GitHub answering no, such as a permissions
+// refusal, and no later attempt changes that answer.
+func TestAPermissionForbiddenBatchTakesTheRefusedPath(t *testing.T) {
+	forbidden := githubapp.APIError{StatusCode: 403, Message: "Resource not accessible by integration"}
+
+	err := postFindingsWithPlan(t, []error{forbidden, forbidden})
+
+	if !errors.Is(err, errCommentRefused) {
+		t.Fatalf("err = %v, want errCommentRefused for an answered permissions refusal", err)
 	}
 }

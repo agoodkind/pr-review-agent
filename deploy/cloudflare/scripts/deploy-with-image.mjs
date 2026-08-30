@@ -35,21 +35,25 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const deployDirectory = path.join(scriptDirectory, "..");
 const configPath = path.join(deployDirectory, "wrangler.jsonc");
 
-// The configuration is restored whether the deploy succeeds or fails. Leaving
-// the real digest written would let a later raw `wrangler deploy` reuse it
-// once it goes stale, which is the exact outage this script exists to prevent.
-const committedConfig = fs.readFileSync(configPath, "utf8");
+// The committed configuration is never mutated. The digest is written into a
+// temporary copy beside it, because relative paths inside the configuration
+// resolve from its directory, and the deploy reads that copy. A kill at any
+// moment leaves the committed placeholder in place, so a later raw
+// `wrangler deploy` still fails at build instead of reusing a stale digest,
+// which is the exact outage this script exists to prevent.
+const deployConfigPath = path.join(deployDirectory, "wrangler.deploy.jsonc");
+fs.copyFileSync(configPath, deployConfigPath);
 try {
-  execFileSync("node", [path.join(scriptDirectory, "configure-image.mjs")], {
+  execFileSync("node", [path.join(scriptDirectory, "configure-image.mjs"), deployConfigPath], {
     cwd: deployDirectory,
     env: process.env,
     stdio: "inherit",
   });
-  execFileSync("npm", ["exec", "wrangler", "deploy"], {
+  execFileSync("npm", ["exec", "wrangler", "deploy", "--", "--config", deployConfigPath], {
     cwd: deployDirectory,
     env: process.env,
     stdio: "inherit",
   });
 } finally {
-  fs.writeFileSync(configPath, committedConfig);
+  fs.rmSync(deployConfigPath, { force: true });
 }

@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 
 	"goodkind.io/gklog"
@@ -668,12 +669,18 @@ func (service *Service) postChunkFindings(
 // error is GitHub failing to answer, not answering no: treating those as
 // refusals checkpointed the chunk and silently dropped its findings, when the
 // next run would have posted them fine.
+//
+// GitHub reports its primary and secondary rate limits as 403 as often as 429,
+// so a 403 whose message says rate limit is a failure to answer too.
 func commentRefusal(err error) bool {
 	var apiErr githubapp.APIError
 	if !errors.As(err, &apiErr) {
 		return false
 	}
 	if apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode == http.StatusRequestTimeout {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(apiErr.Message), "rate limit") {
 		return false
 	}
 	return apiErr.StatusCode >= http.StatusBadRequest && apiErr.StatusCode < http.StatusInternalServerError
