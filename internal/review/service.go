@@ -333,8 +333,12 @@ func (service *Service) reviewOwedWork(
 		return err
 	}
 
+	// Both are built from the threads reconciliation already loaded, so raising
+	// an answered claim again costs the run no extra read and no extra model
+	// call.
 	selection := collectPublicationState(reviews, threads, service.botLogin)
-	pass := newChunkPass(work, service.minimumImportance, &selection)
+	disputes := collectDisputes(threads, service.botLogin)
+	pass := newChunkPass(work, service.minimumImportance, &selection, disputes)
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {

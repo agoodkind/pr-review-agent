@@ -83,6 +83,11 @@ func removeChunkID(pending []string, id string) []string {
 type chunkPass struct {
 	work      deltaWork
 	selection *publicationState
+	// disputes and disputePrompt are what the pull request has already been
+	// told. Both are built once and never written again, so the chunks read
+	// them concurrently without the lock.
+	disputes      disputeContext
+	disputePrompt string
 
 	mu        sync.Mutex
 	collector *findingCollector
@@ -118,20 +123,27 @@ func isChunkPanic(err error) bool {
 	return errors.As(err, &target)
 }
 
-func newChunkPass(work deltaWork, minimumImportance int, selection *publicationState) *chunkPass {
+func newChunkPass(
+	work deltaWork,
+	minimumImportance int,
+	selection *publicationState,
+	disputes disputeContext,
+) *chunkPass {
 	return &chunkPass{
-		work:      work,
-		selection: selection,
-		mu:        sync.Mutex{},
-		collector: newFindingCollector(work.Files, minimumImportance),
-		models:    modelSet{names: nil, seen: nil},
-		published: make([]domain.Finding, 0),
-		failures:  make([]chunkFailure, 0),
-		coverage:  inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
-		requests:  0,
-		posted:    0,
-		failed:    0,
-		panicked:  nil,
+		work:          work,
+		selection:     selection,
+		disputes:      disputes,
+		disputePrompt: disputes.promptSection(),
+		mu:            sync.Mutex{},
+		collector:     newFindingCollector(work.Files, minimumImportance),
+		models:        modelSet{names: nil, seen: nil},
+		published:     make([]domain.Finding, 0),
+		failures:      make([]chunkFailure, 0),
+		coverage:      inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
+		requests:      0,
+		posted:        0,
+		failed:        0,
+		panicked:      nil,
 	}
 }
 
@@ -551,6 +563,7 @@ func (service *Service) reviewOneChunk(
 		service.model,
 		chunk,
 		service.minimumImportance,
+		pass.disputePrompt,
 		&models,
 		&requests,
 		service.now,
@@ -704,7 +717,8 @@ func (pass *chunkPass) recordUndelivered() {
 }
 
 // renderChunkFindings turns one chunk's findings into the comments to post,
-// dropping the ones an earlier review or an earlier chunk already carried.
+// dropping the ones an earlier review or an earlier chunk already carried and
+// the ones this pull request has already answered.
 //
 // It runs under the pass lock, because the suppression state it reads and
 // writes is what makes two chunks reporting one defect post it once.
@@ -720,15 +734,12 @@ func (service *Service) renderChunkFindings(
 	defer pass.mu.Unlock()
 
 	pass.collector.collect(findings)
-	eligible := eligibleFindings(
-		ctx,
-		findings,
-		pass.collector.fileIndex,
-		pass.collector.minimumImportance,
-		chunkText,
-	)
-	posts := make([]postCandidate, 0, len(eligible))
-	for _, finding := range eligible {
+	grounded := groundedFindings(ctx, findings, pass.collector.fileIndex, chunkText)
+	eligible := eligibleFindings(grounded, pass.collector.fileIndex, pass.collector.minimumImportance)
+	unanswered, withheld := pass.disputes.partition(eligible)
+	logWithheldFindings(ctx, withheld)
+	posts := make([]postCandidate, 0, len(unanswered))
+	for _, finding := range unanswered {
 		keys := keysFor(finding)
 		if pass.selection.suppressed(keys) {
 			continue

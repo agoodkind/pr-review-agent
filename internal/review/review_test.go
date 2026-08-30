@@ -446,7 +446,7 @@ func TestATruncatedChunkSplitsAndRetriesInsideItsOwnCall(t *testing.T) {
 			EndLine:    2,
 			Title:      "Defect",
 			Body:       "The changed line breaks behavior.",
-			Evidence:   "added",
+			Evidence:   "added1",
 			Importance: 9,
 		}},
 	}
@@ -615,7 +615,7 @@ func TestTheSameFindingFromTwoChunksIsPublishedOnce(t *testing.T) {
 		EndLine:    2,
 		Title:      "Duplicate",
 		Body:       "Same finding.",
-		Evidence:   "added",
+		Evidence:   "added1",
 		Importance: 9,
 	}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
@@ -1213,7 +1213,7 @@ func (model *chunkScriptedModel) Review(_ context.Context, prompt string) (revie
 				EndLine:    2,
 				Title:      "Defect in " + path,
 				Body:       "The changed line breaks core behavior.",
-				Evidence:   "added",
+				Evidence:   addedLineFor(path),
 				Importance: 9,
 			}},
 		},
@@ -1301,6 +1301,13 @@ func (collector *growingCollector) CollectRange(
 	}
 	collector.mu.Unlock()
 	return paddedFiles(pullRequest, fileCount)
+}
+
+// addedLineFor is the whole line paddedFiles adds to one of its files. The
+// grounding gate wants a complete line, so a fixture answer quotes this rather
+// than a fragment of it, which is what an honest model answer carries.
+func addedLineFor(path string) string {
+	return "added" + strings.TrimSuffix(strings.TrimPrefix(path, "file"), ".go")
 }
 
 // paddedFiles builds one file per chunk, each padded past the prompt size so
@@ -1986,6 +1993,201 @@ func TestAFindingWhoseEvidenceIsNotInTheShownSourceIsDropped(t *testing.T) {
 				t.Fatalf("service log = %q, want the distinct discard line", logs.String())
 			}
 		})
+	}
+}
+
+// disputeEvidenceLine is the one changed line disputeCollector adds. It is a
+// realistic source line rather than a token, because the whole point of the
+// dispute tests is a model quoting the same line twice under two titles.
+const disputeEvidenceLine = "if err := publish(ctx); err != nil {"
+
+// disputeCollector returns one file whose single changed line is
+// disputeEvidenceLine, anchored at line 2.
+type disputeCollector struct{}
+
+func (disputeCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	patch := strings.Join([]string{
+		"@@ -1,1 +1,2 @@",
+		" package main",
+		"+" + disputeEvidenceLine,
+	}, "\n")
+	changed, hunks, err := diff.ChangedRightLines(patch)
+	if err != nil {
+		return diff.ReviewInput{}, err
+	}
+	return diff.ReviewInput{
+		PullRequest: pullRequest,
+		Files: []diff.FileContext{{
+			Path:              "main.go",
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    "package main\n" + disputeEvidenceLine + "\n",
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		}},
+	}, nil
+}
+
+// answeredThreadFinding is the claim already standing on the pull request. It
+// anchors at line 1, away from the line the new finding anchors to, so neither
+// the finding identity nor the anchor key can suppress the repeat and only the
+// dispute guard is under test.
+func answeredThreadFinding() domain.Finding {
+	return domain.Finding{
+		Path:       "main.go",
+		StartLine:  1,
+		EndLine:    1,
+		Title:      "Check the publish error",
+		Body:       "The call `" + disputeEvidenceLine + "` ignores its failure.",
+		Evidence:   "",
+		Suggestion: "",
+		Importance: 9,
+	}
+}
+
+// rewordedRepeat is the same claim coming back under a new title, which is the
+// shape the live republishes took: a different title, so a different identity,
+// quoting the same line.
+func rewordedRepeat() domain.Finding {
+	return domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Publish failure is not handled",
+		Body:       "This call can fail and nothing reacts to it.",
+		Evidence:   disputeEvidenceLine,
+		Suggestion: "",
+		Importance: 9,
+	}
+}
+
+// answeredThread is one bot thread carrying answeredThreadFinding, with the
+// author's reply under it, as ListReviewThreads reports one.
+func answeredThread(t *testing.T, resolved bool, reply string) githubapp.ReviewThread {
+	t.Helper()
+	finding := answeredThreadFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testStaleHeadSHA), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+	thread := githubapp.ReviewThread{
+		NodeID:   "thread-answered",
+		Resolved: resolved,
+		RootComment: domain.ReviewComment{
+			DatabaseID: 900,
+			Author:     testBotLogin,
+			Body:       body,
+			Path:       finding.Path,
+			StartLine:  finding.StartLine,
+			EndLine:    finding.EndLine,
+		},
+	}
+	if reply != "" {
+		thread.Replies = []domain.ReviewComment{{
+			DatabaseID: 901,
+			Author:     "other-user",
+			Body:       reply,
+			Path:       finding.Path,
+			StartLine:  finding.StartLine,
+			EndLine:    finding.EndLine,
+		}}
+	}
+	return thread
+}
+
+// disputeFixture wires a run whose one chunk answers with the reworded repeat,
+// against one standing thread carrying the original claim.
+func disputeFixture(t *testing.T, thread githubapp.ReviewThread) *serviceFixture {
+	t.Helper()
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         disputeCollector{},
+		minimumImportance: 9,
+		reconcileThreads:  []githubapp.ReviewThread{thread},
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         []domain.Finding{rewordedRepeat()},
+		}}},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{thread})
+	return fixture
+}
+
+// A claim the author has already answered must not come back under a new title.
+//
+// One live pull request received the same ask five times across five pushes,
+// each time after the author disproved it on the thread, and each time as a new
+// thread. Every title differed, so identity suppression caught none of them.
+func TestAClaimAnsweredOnAnOpenThreadIsNotRaisedAgain(t *testing.T) {
+	fixture := disputeFixture(t, answeredThread(t, false, "Declined: publish already logs and retries."))
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 0 {
+		t.Fatalf("streamed comments = %v, want none: the claim is already open and answered",
+			bodiesOf(fixture.state.streamedComments))
+	}
+	// Withholding the repeat must not quietly drop the question. The standing
+	// thread is still open, so it still holds the pull request and the verdict
+	// still names it.
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES while the answered thread is open",
+			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.lastSubmitReview["body"].(string)
+	if !ok || !strings.Contains(body, "main.go:1") {
+		t.Fatalf("verdict body = %v, want the surviving open thread named",
+			fixture.state.lastSubmitReview["body"])
+	}
+}
+
+// A resolved thread is a settled question, so it suppresses nothing. A defect
+// reintroduced after a fix has to be raised again or nobody hears about it.
+func TestAClaimOnAResolvedThreadIsRaisedAgain(t *testing.T) {
+	fixture := disputeFixture(t, answeredThread(t, true, ""))
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the finding published: a resolved thread suppresses nothing",
+			len(fixture.state.streamedComments))
+	}
+}
+
+// The model cannot avoid repeating a claim it was never shown, so the open
+// threads and the author's answers go into the chunk prompt.
+func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
+	const replyText = "Declined: publish already logs and retries."
+	fixture := disputeFixture(t, answeredThread(t, false, replyText))
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	model, ok := fixture.model.(*sequenceModel)
+	if !ok {
+		t.Fatalf("model = %T, want the sequence model", fixture.model)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("prompt count = %d, want 1", len(model.prompts))
+	}
+	finding := answeredThreadFinding()
+	for _, want := range []string{
+		finding.Title,
+		finding.Body,
+		replyText,
+		"other-user",
+		"must not be raised again in any wording",
+	} {
+		if !strings.Contains(model.prompts[0], want) {
+			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])
+		}
 	}
 }
 

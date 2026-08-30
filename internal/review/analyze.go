@@ -110,20 +110,50 @@ func normalizeFinding(finding domain.Finding) domain.Finding {
 	return sanitized
 }
 
-// eligibleFindings returns the findings from one chunk that anchor to changed
-// lines, meet the importance floor, and ground their evidence in the source
-// the model was shown.
+// groundedFindings returns the findings whose evidence appears in the source
+// the model was shown, normalized and ready for the collector.
 //
-// This is the whole publication test. Everything it returns is posted, because
-// the review stands behind every defect it reports and rationing them is how a
-// reader ends up acting on the wrong one. Duplicates stay in, because the
-// caller suppresses them against what the pull request already carries.
-func eligibleFindings(
+// It runs before the collector rather than only before publication. A finding
+// aimed at another chunk used to reach the collector, count toward the run's own
+// analysis, and carry weight in what the review concluded, while the publication
+// test refused it and no reader ever saw it. A claim nobody can be shown must
+// not decide anything, so it is refused once, at the door.
+func groundedFindings(
 	ctx context.Context,
 	findings []domain.Finding,
 	fileIndex map[string]diff.FileContext,
-	minimumImportance int,
 	chunkText string,
+) []domain.Finding {
+	logger := gklog.L(ctx)
+	grounded := make([]domain.Finding, 0, len(findings))
+	for _, finding := range findings {
+		sanitized := normalizeFinding(finding)
+		if !findingGrounded(sanitized, chunkText, fileIndex) {
+			logger.WarnContext(
+				ctx,
+				"finding discarded, evidence not in the source shown",
+				slog.String("path", sanitized.Path),
+				slog.String("title", sanitized.Title),
+				slog.String("evidence", sanitized.Evidence),
+			)
+			continue
+		}
+		grounded = append(grounded, sanitized)
+	}
+	return grounded
+}
+
+// eligibleFindings returns the grounded findings that anchor to changed lines
+// and meet the importance floor.
+//
+// Everything it returns is posted, because the review stands behind every defect
+// it reports and rationing them is how a reader ends up acting on the wrong one.
+// Duplicates stay in, because the caller suppresses them against what the pull
+// request already carries.
+func eligibleFindings(
+	findings []domain.Finding,
+	fileIndex map[string]diff.FileContext,
+	minimumImportance int,
 ) []domain.Finding {
 	eligible := make([]domain.Finding, 0, len(findings))
 	for _, finding := range findings {
@@ -134,26 +164,16 @@ func eligibleFindings(
 		if sanitized.Importance < minimumImportance {
 			continue
 		}
-		if !findingGrounded(sanitized, chunkText, fileIndex) {
-			gklog.L(ctx).WarnContext(
-				ctx,
-				"finding discarded, evidence not in the source shown",
-				slog.String("path", sanitized.Path),
-				slog.String("title", sanitized.Title),
-				slog.String("evidence", sanitized.Evidence),
-			)
-			continue
-		}
 		eligible = append(eligible, sanitized)
 	}
 	return eligible
 }
 
-// findingGrounded reports whether the finding's evidence appears verbatim in
-// the source the model was shown: the chunk text it reviewed, or the current
-// content of the file the finding anchors to. A finding without evidence is
-// ungrounded, which is also how an answer from an older schema reads, so a
-// claim quoting code the model never saw cannot pass.
+// findingGrounded reports whether the finding's evidence is a whole line of the
+// source the model was shown: the chunk text it reviewed, or the current content
+// of the file the finding anchors to. A finding without evidence is ungrounded,
+// which is also how an answer from an older schema reads, so a claim quoting
+// code the model never saw cannot pass.
 func findingGrounded(
 	finding domain.Finding,
 	chunkText string,
@@ -163,14 +183,56 @@ func findingGrounded(
 	if evidence == "" {
 		return false
 	}
-	if strings.Contains(chunkText, evidence) {
+	if matchesDiffLine(chunkText, evidence) {
 		return true
 	}
 	file, ok := fileIndex[finding.Path]
 	if !ok {
 		return false
 	}
-	return strings.Contains(file.CurrentContent, evidence)
+	return matchesFileLine(file.CurrentContent, evidence)
+}
+
+// matchesDiffLine reports whether evidence is one whole line of the diff the
+// model was shown, ignoring the marker a unified diff puts at the start of every
+// line.
+//
+// Substring containment accepted any fragment that happened to appear somewhere
+// in the text, a file header or a lone brace included, so the evidence gate
+// admitted claims the model had not actually read a line for. A line copied
+// verbatim, which is what the prompt asks for, always equals one whole line.
+func matchesDiffLine(chunkText string, evidence string) bool {
+	for line := range strings.SplitSeq(chunkText, "\n") {
+		if strings.TrimSpace(stripDiffMarker(line)) == evidence {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesFileLine reports whether evidence is one whole line of file content.
+func matchesFileLine(content string, evidence string) bool {
+	for line := range strings.SplitSeq(content, "\n") {
+		if strings.TrimSpace(line) == evidence {
+			return true
+		}
+	}
+	return false
+}
+
+// stripDiffMarker removes the single leading character a unified diff body line
+// carries. Exactly one is removed, so a diff header such as "+++ b/main.go"
+// cannot be mistaken for the source line "+ b/main.go".
+func stripDiffMarker(line string) string {
+	if line == "" {
+		return line
+	}
+	switch line[0] {
+	case '+', '-', ' ':
+		return line[1:]
+	default:
+		return line
+	}
 }
 
 // truncatedError is any model failure that stopped mid answer at the completion
@@ -205,6 +267,7 @@ func reviewChunk(
 	model Model,
 	chunk diff.Chunk,
 	minimumImportance int,
+	disputes string,
 	models *modelSet,
 	requests *int,
 	now func() time.Time,
@@ -212,7 +275,7 @@ func reviewChunk(
 	logger := gklog.L(ctx)
 	*requests++
 	startedAt := now()
-	completion, err := model.Review(ctx, buildPrompt(chunk, minimumImportance))
+	completion, err := model.Review(ctx, buildPrompt(chunk, minimumImportance, disputes))
 	elapsed := now().Sub(startedAt)
 	if err == nil {
 		if validateErr := completion.Result.Validate(); validateErr != nil {
@@ -273,7 +336,7 @@ func reviewChunk(
 	)
 	results := make([]domain.ReviewResult, 0, 2)
 	for _, half := range []diff.Chunk{first, second} {
-		halfResults, halfErr := reviewChunk(ctx, model, half, minimumImportance, models, requests, now)
+		halfResults, halfErr := reviewChunk(ctx, model, half, minimumImportance, disputes, models, requests, now)
 		if halfErr != nil {
 			return nil, halfErr
 		}
@@ -314,8 +377,15 @@ func (set *modelSet) add(name string) {
 	set.names = append(set.names, name)
 }
 
-func buildPrompt(chunk diff.Chunk, minimumImportance int) string {
+// buildPrompt assembles one chunk's model prompt.
+//
+// disputes is the open thread context, empty when the pull request carries no
+// open finding of the service's own. It comes first, because what has already
+// been raised and answered has to be in view before the model reads the code
+// and decides what to say about it.
+func buildPrompt(chunk diff.Chunk, minimumImportance int, disputes string) string {
 	var builder strings.Builder
+	builder.WriteString(disputes)
 	builder.WriteString("Review changed lines. Return every concrete defect and assign importance from 1 through 10. ")
 	builder.WriteString("Reserve 9 and 10 for defects that plausibly enable a security compromise, irreversible data loss or corruption, or a broad production outage. ")
 	builder.WriteString("Rate bounded crashes, incorrect responses, maintainability problems, performance costs, and localized failures 8 or lower unless the diff proves severe impact. ")
