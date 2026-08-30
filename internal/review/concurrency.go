@@ -48,6 +48,7 @@ func reviewChunksConcurrently(
 	chunks []diff.Chunk,
 	minimumImportance int,
 	now func() time.Time,
+	stream chunkStream,
 ) []chunkOutcome {
 	outcomes := make([]chunkOutcome, len(chunks))
 	limit := min(config.MaximumChunkConcurrency, len(chunks))
@@ -81,6 +82,7 @@ func reviewChunksConcurrently(
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			outcomes[index] = reviewOneChunk(ctx, model, chunk, minimumImportance, now)
+			stream.publish(ctx, outcomes[index])
 		})
 	}
 	waitGroup.Wait()
@@ -93,6 +95,31 @@ func reviewChunksConcurrently(
 		}
 	}
 	return outcomes
+}
+
+// chunkStream sends one chunk's findings to the pull request as soon as that
+// chunk answers, so the reader sees them without waiting for the rest.
+type chunkStream struct {
+	sink              FindingSink
+	fileIndex         map[string]diff.FileContext
+	minimumImportance int
+}
+
+// publish posts the eligible findings from one chunk. A chunk that failed has
+// none, so nothing is posted for it.
+func (stream chunkStream) publish(ctx context.Context, outcome chunkOutcome) {
+	if stream.sink == nil || outcome.err != nil {
+		return
+	}
+	findings := make([]domain.Finding, 0)
+	for _, result := range outcome.results {
+		findings = append(findings, result.Findings...)
+	}
+	eligible := eligibleFindings(findings, stream.fileIndex, stream.minimumImportance)
+	if len(eligible) == 0 {
+		return
+	}
+	stream.sink.Publish(ctx, eligible)
 }
 
 // chunkPanicError marks a chunk that panicked, so the caller can report the

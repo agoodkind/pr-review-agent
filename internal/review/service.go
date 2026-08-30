@@ -54,6 +54,14 @@ type GitHub interface {
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
 	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
 	DismissReview(context.Context, int64, domain.Repository, int, int64, string) error
+	CreateReviewComment(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+		domain.HeadSHA,
+		githubapp.InlineComment,
+	) error
 }
 
 // Collector gathers pull request diff input for one review pass.
@@ -248,19 +256,11 @@ func (service *Service) runLocked(
 	}
 	progress.reached("the pull request")
 
-	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
+	reviews, reviewed, err := service.loadReviewHistory(ctx, job, head, progress)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err)
 	}
-	progress.priorReviews = traceReviews(reviews, service.botLogin)
-	progress.reached("the review history")
-	logger.InfoContext(
-		ctx,
-		"review history loaded",
-		slog.Any("bot_reviews", progress.priorReviews),
-	)
-	if hasBotReviewMarker(reviews, service.botLogin, head) {
-		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
+	if reviewed {
 		return service.succeed(
 			ctx,
 			job,
@@ -282,29 +282,103 @@ func (service *Service) runLocked(
 		slog.Any("bot_threads", progress.threads),
 	)
 
+	sink := service.newFindingSink(job, head, reviews, threads)
+	analysis, stage, err := service.readAndAnalyze(ctx, job, pullRequest, sink, progress)
+	if err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), stage, err)
+	}
+
+	return service.publish(
+		ctx,
+		job,
+		head,
+		checkRun,
+		reviews,
+		threads,
+		analysis,
+		sink,
+		startedAt,
+		progress,
+	)
+}
+
+// readAndAnalyze collects the diff and reviews it, returning the stage name to
+// report if either step fails.
+func (service *Service) readAndAnalyze(
+	ctx context.Context,
+	job domain.ReviewJob,
+	pullRequest githubapp.PullRequest,
+	sink FindingSink,
+	progress *reviewProgress,
+) (Analysis, string, error) {
+	logger := gklog.L(ctx)
 	input, err := service.collector.Collect(ctx, job.PullRequestRef, pullRequest)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureDiff, err)
+		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
+		return Analysis{}, checkFailureDiff, fmt.Errorf("collect pull request diff: %w", err)
 	}
 	progress.reached("the diff")
 
-	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now)
+	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now, sink)
 	progress.applyAnalysis(analysis)
 	if err != nil {
 		// A chunk that panicked is an internal fault, not a model failure, and
 		// the reported cause has to say so.
-		title := checkFailureAnalysis
 		if isChunkPanic(err) {
-			title = checkFailurePanic
+			return analysis, checkFailurePanic, err
 		}
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), title, err)
+		return analysis, checkFailureAnalysis, err
 	}
 	progress.reached("model analysis")
 	if err := logAnalysis(ctx, analysis); err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		return analysis, checkFailureAnalysis, err
 	}
+	return analysis, "", nil
+}
 
-	return service.publish(ctx, job, head, checkRun, reviews, threads, analysis, startedAt, progress)
+// loadReviewHistory reads every prior review and reports whether this head was
+// already reviewed, which is how a redelivered webhook avoids a second review.
+func (service *Service) loadReviewHistory(
+	ctx context.Context,
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	progress *reviewProgress,
+) ([]githubapp.Review, bool, error) {
+	logger := gklog.L(ctx)
+	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		logger.ErrorContext(ctx, "list reviews", slog.String("err", err.Error()))
+		return nil, false, fmt.Errorf("list reviews: %w", err)
+	}
+	progress.priorReviews = traceReviews(reviews, service.botLogin)
+	progress.reached("the review history")
+	logger.InfoContext(
+		ctx,
+		"review history loaded",
+		slog.Any("bot_reviews", progress.priorReviews),
+	)
+	if hasBotReviewMarker(reviews, service.botLogin, head) {
+		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
+		return reviews, true, nil
+	}
+	return reviews, false, nil
+}
+
+// newFindingSink builds the destination that posts findings as each chunk
+// answers, so whatever the review has found reaches the pull request even when
+// the rest of the run never finishes.
+func (service *Service) newFindingSink(
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	reviews []githubapp.Review,
+	threads []githubapp.ReviewThread,
+) *streamingSink {
+	return newStreamingSink(service.github, job, head, newSelectionState(collectPublicationState(
+		reviews,
+		threads,
+		service.botLogin,
+		service.maximumUnresolvedComments,
+	)))
 }
 
 func (service *Service) newProgress(head domain.HeadSHA, startedAt time.Time) *reviewProgress {
@@ -360,6 +434,7 @@ func (service *Service) publish(
 	reviews []githubapp.Review,
 	threads []githubapp.ReviewThread,
 	analysis Analysis,
+	sink *streamingSink,
 	startedAt time.Time,
 	progress *reviewProgress,
 ) error {
@@ -383,22 +458,11 @@ func (service *Service) publish(
 	}
 	progress.reached("the head refresh")
 
-	publishedFindings, err := selectFindingsForPublication(
-		ctx,
-		analysis.Anchored,
-		reviews,
-		threads,
-		service.botLogin,
-		service.maximumUnresolvedComments,
-	)
-	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRender, err)
-	}
-
-	comments, err := RenderInline(head, publishedFindings)
-	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRender, err)
-	}
+	// The findings already reached the pull request as their chunks answered, so
+	// the review submitted here carries the verdict and the summary alone.
+	publishedFindings := sink.Objections()
+	posted, failed := sink.Delivery()
+	logPublishedFindings(ctx, analysis.Anchored, publishedFindings, posted, failed)
 	progress.reached("finding selection")
 
 	decision := standingDecision(ctx, analysis, publishedFindings, threads, service.botLogin)
@@ -435,7 +499,7 @@ func (service *Service) publish(
 			CommitID: head,
 			Body:     body,
 			Event:    decision,
-			Comments: comments,
+			Comments: nil,
 		},
 	)
 	if err != nil {
@@ -446,7 +510,7 @@ func (service *Service) publish(
 		"review published",
 		slog.Int64("review_id", publishedReview.ID),
 		slog.String("event", string(decision)),
-		slog.Int("inline_comments", len(comments)),
+		slog.Int("streamed_comments", len(publishedFindings)),
 		slog.Bool("visible_body", true),
 	)
 
