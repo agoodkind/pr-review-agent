@@ -2,8 +2,10 @@ package diff
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -151,6 +153,21 @@ func (collector *Collector) CollectRange(
 		pullRequest.Head,
 	)
 	if err != nil {
+		// A force push or a history rewrite can leave the recorded base
+		// unreachable, and GitHub then refuses the comparison outright. Failing
+		// here would strand the pull request: every later run reads the same
+		// dead base from the marker and aborts the same way, so the review
+		// never recovers on its own. Reviewing the whole pull request instead
+		// costs one larger run and leaves nothing unread.
+		if baseUnreachable(err) {
+			slog.WarnContext(
+				ctx,
+				"recorded base is no longer comparable, reviewing the whole pull request",
+				slog.String("base", string(base)),
+				slog.String("err", err.Error()),
+			)
+			return collector.Collect(ctx, ref, pullRequest)
+		}
 		slog.ErrorContext(ctx, "compare commit range", slog.String("err", err.Error()))
 		return ReviewInput{}, fmt.Errorf("compare %s to %s: %w", base, pullRequest.Head, err)
 	}
@@ -159,6 +176,21 @@ func (collector *Collector) CollectRange(
 		PullRequest: pullRequest,
 		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles),
 	}, nil
+}
+
+// baseUnreachable reports whether GitHub refused a comparison because the base
+// commit is gone rather than because the call went wrong. A missing commit
+// answers 404, and a range GitHub cannot compute answers 422. Every other
+// failure, including rate limits and outages, is transient and must keep
+// failing so a later run retries it rather than silently reviewing more than
+// it was asked to.
+func baseUnreachable(err error) bool {
+	var apiErr githubapp.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.StatusCode == http.StatusNotFound ||
+		apiErr.StatusCode == http.StatusUnprocessableEntity
 }
 
 // collectFiles orders changed files deterministically and collects each one's
