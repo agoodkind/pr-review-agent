@@ -2004,6 +2004,80 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 	}
 }
 
+// The check title is the one line a reader sees before opening anything. A
+// stage name tells them where the run was, not what went wrong, so it leaves
+// them no idea whether to retry, wait, or fix something.
+//
+// The causes below are the ones production actually produced. The websocket
+// text is copied from the failure on pull request 66.
+func TestCheckTitleNamesTheCauseRatherThanTheStage(t *testing.T) {
+	cases := []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{
+			name:  "connection dropped",
+			cause: &stubProviderFailure{reason: "the connection carrying the answer closed early"},
+			want:  "Review stopped: the connection carrying the answer closed early",
+		},
+		{
+			name:  "provider refused the request",
+			cause: &stubProviderFailure{reason: "scan codex SSE events: upstream_malformed_request"},
+			want:  "Review stopped: scan codex SSE events: upstream_malformed_request",
+		},
+		{
+			name:  "no remaining usage",
+			cause: &stubProviderFailure{reason: "The usage limit has been reached", usage: true},
+			want:  "Review stopped: the model provider reported no remaining usage.",
+		},
+		{
+			name:  "ran out of time",
+			cause: fmt.Errorf("review chunk 3/4: %w", context.DeadlineExceeded),
+			want:  "Review stopped: it ran out of time before every chunk answered.",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newServiceFixture(t, serviceFixtureOptions{
+				model: &failingModel{err: testCase.cause},
+			})
+
+			if err := fixture.run(context.Background(), fixture.job()); err == nil {
+				t.Fatal("Run: want the model failure")
+			}
+
+			output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+			if !ok {
+				t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+			}
+			if output["title"] != testCase.want {
+				t.Fatalf("title = %v, want %q", output["title"], testCase.want)
+			}
+		})
+	}
+}
+
+// stubProviderFailure states a cause the same way the model provider package
+// does, without the review package importing it.
+type stubProviderFailure struct {
+	reason string
+	usage  bool
+}
+
+func (failure *stubProviderFailure) Error() string {
+	return "model provider: " + failure.reason
+}
+
+func (failure *stubProviderFailure) ProviderReason() string {
+	return failure.reason
+}
+
+func (failure *stubProviderFailure) UsageExceeded() bool {
+	return failure.usage
+}
+
 // dismissedStates reports the review states this run withdrew, in call order.
 func dismissedStates(dismissals []map[string]any) []string {
 	states := make([]string, 0, len(dismissals))
