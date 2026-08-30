@@ -13,7 +13,13 @@ package review_test
 //  2. The last reviewed commit advances only after its chunks' findings are on
 //     the page. Proven by TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost in
 //     review_test.go.
-//  3. Killing the process loses at most one chunk of work. Proven here.
+//  3. Killing the process loses only the chunks in flight. Proven here in the
+//     narrowest case: the test holds exactly one chunk at the model and kills
+//     the run there, which is what lets it prove the strong half of the
+//     invariant exactly rather than as a range, that no checkpointed chunk is
+//     lost and the held chunk is re-analyzed once and only once. Chunks run
+//     several at a time, so a real kill can lose as many as are in flight, and
+//     each of those is the held chunk's case repeated.
 //  4. An admitted delta completes in one invocation and no clock spans more
 //     than one model call. Proven here. The clock half is also held from the
 //     other side by TestNoModelCallInheritsAnEarlierChunksClock.
@@ -226,7 +232,13 @@ func postedPaths(fixture *serviceFixture) []string {
 	return paths
 }
 
-// Invariant 3. Killing the process loses at most one chunk of work.
+// Invariant 3. Killing the process loses only the chunks in flight.
+//
+// Exactly one chunk is in flight here, by construction: the model holds
+// file3.go while every other chunk checkpoints, and the kill lands there. That
+// is deliberately narrower than the invariant, and it is what makes the
+// surviving work an exact number rather than a range. A kill with more chunks
+// in flight is this same case repeated once per chunk held.
 //
 // The kill is a cancelled run context, which is the closest a test gets to the
 // real thing: it stops the model calls in flight, and publication is bound to
@@ -237,7 +249,7 @@ func postedPaths(fixture *serviceFixture) []string {
 // The run after the kill must therefore ask the model about the lost chunk and
 // nothing else, and the pull request must end up carrying every chunk's finding
 // exactly once, none duplicated and none missing.
-func TestKillingTheProcessLosesAtMostOneChunk(t *testing.T) {
+func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 	requireMultipleWaves(t)
 	const heldPath = "file3.go"
 
