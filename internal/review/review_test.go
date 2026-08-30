@@ -1676,10 +1676,22 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if !strings.HasPrefix(body, "## Review\n\nNo severe findings.\n\n") {
 		t.Fatalf("body = %q, want the verdict first", body)
 	}
-	if !strings.Contains(body, "| Model | `"+testReviewModel+"` |") {
-		t.Fatalf("body = %q, want the model that answered", body)
+	// The verdict review is short by design: the detail table lives on the one
+	// top level comment, and a review repeating it rendered as a second near
+	// identical Review box. It must still say its decision and carry the review
+	// marker a later run reads.
+	if strings.Contains(body, "| Model |") {
+		t.Fatalf("body = %q, want no detail table on the verdict review", body)
 	}
-	assertCheckAndCommentShareDetails(t, fixture, body)
+	if _, found := marker.FindReview(body); !found {
+		t.Fatalf("body = %q, want the review marker for the analyzed head", body)
+	}
+	commentBody, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || !strings.Contains(commentBody, "| Model | `"+testReviewModel+"` |") {
+		t.Fatalf("comment = %v, want the detail table with the model that answered",
+			fixture.state.issueComments[0]["body"])
+	}
+	assertCheckAndCommentShareDetails(t, fixture, commentBody)
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
@@ -2764,13 +2776,6 @@ func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 // and still changes no review object: the review that failed to submit or
 // update stays exactly as the reader last saw it.
 func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T) {
-	summaryReview := map[string]any{
-		"id":        float64(42),
-		"commit_id": testStaleHeadSHA,
-		"body":      "## Review\n\nNo severe findings.\n\n" + marker.Summary(),
-		"state":     "COMMENTED",
-		"user":      map[string]any{"login": testBotLogin},
-	}
 	cases := []struct {
 		name    string
 		title   string
@@ -2780,14 +2785,6 @@ func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T)
 			name:    "review reads fail",
 			title:   "Review failed while reading existing reviews.",
 			options: serviceFixtureOptions{reviewListStatus: http.StatusInternalServerError},
-		},
-		{
-			name:  "summary update fails",
-			title: "Review failed while updating the visible summary.",
-			options: serviceFixtureOptions{
-				updateReviewStatus: http.StatusInternalServerError,
-				reviewPages:        [][]map[string]any{{summaryReview}},
-			},
 		},
 		{
 			name:    "review submission fails",

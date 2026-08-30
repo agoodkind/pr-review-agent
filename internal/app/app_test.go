@@ -636,16 +636,12 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 		t.Fatalf("full file list page fetches = %d, want 0: the second run must not list the whole pull request again",
 			fixture.githubState.listedFilePages())
 	}
-	secondReview := fixture.githubState.lastSubmitReview()
-	if secondReview["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
-		t.Fatalf("second review body = %q, want marker only", secondReview["body"])
-	}
-	if fixture.githubState.summaryReviewCount() != 1 {
-		t.Fatalf("summary review count = %d, want 1", fixture.githubState.summaryReviewCount())
-	}
+	// Every verdict review states its decision. The old behavior submitted a
+	// marker-only body once a summary review existed, and that body blocked a
+	// live pull request while naming nothing to fix.
 	assertReviewBody(
 		t,
-		fixture.githubState.summaryReviewBody(),
+		fixture.githubState.lastSubmitReview()["body"],
 		"Severe findings are listed inline.",
 		testCorrectedHead,
 	)
@@ -811,15 +807,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if approval["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("second event = %v, want APPROVE", approval["event"])
 	}
-	if approval["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
-		t.Fatalf("approval body = %v, want hidden marker", approval["body"])
-	}
-	assertReviewBody(
-		t,
-		fixture.githubState.summaryReviewBody(),
-		"No severe findings.",
-		testCorrectedHead,
-	)
+	assertReviewBody(t, approval["body"], "No severe findings.", testCorrectedHead)
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
 		t.Fatalf("resolve count = %d, want 1", fixture.githubState.resolveCallCount())
@@ -2244,8 +2232,10 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(writer).Encode(payload)
 }
 
-// assertReviewBody checks the published comment leads with the verdict, carries
-// the review details, and keeps the markers the service reads back.
+// assertReviewBody checks the verdict review states its decision, never
+// repeats the detail table the comment carries, is never empty, and keeps the
+// review marker the service reads back. One live blocking review carried only
+// an HTML marker, so it named nothing to fix and no edit could satisfy it.
 func assertReviewBody(t *testing.T, value any, verdict string, head string) {
 	t.Helper()
 	body, ok := value.(string)
@@ -2255,14 +2245,8 @@ func assertReviewBody(t *testing.T, value any, verdict string, head string) {
 	if !strings.HasPrefix(body, "## Review\n\n"+verdict+"\n\n") {
 		t.Fatalf("body = %q, want the verdict %q first", body, verdict)
 	}
-	if !strings.Contains(body, "<summary>Review details</summary>") {
-		t.Fatalf("body = %q, want the review details", body)
-	}
-	if !strings.Contains(body, "| Model | `"+testReviewModel+"` |") {
-		t.Fatalf("body = %q, want the model that answered", body)
-	}
-	if !marker.HasSummary(body) {
-		t.Fatalf("body = %q, want the summary marker", body)
+	if strings.Contains(body, "<summary>Review details</summary>") {
+		t.Fatalf("body = %q, want no detail table: it lives on the one top level comment", body)
 	}
 	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
 		t.Fatalf("body = %q, want the review marker for %s", body, head)

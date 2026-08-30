@@ -575,6 +575,12 @@ func TestCreateAndUpdateIssueComment(t *testing.T) {
 	if lastMethod != http.MethodPost || lastPath != "/repos/owner/repo/issues/7/comments" {
 		t.Fatalf("request = %s %s, want POST the issue comments path", lastMethod, lastPath)
 	}
+	// The create half asserted method and path but never the body, so a create
+	// that posted the wrong text, or none, passed. Both halves share one
+	// writer, and the update half is the only place that caught it.
+	if !strings.Contains(lastBody, "hello") {
+		t.Fatalf("create body = %q, want the text the caller asked to post", lastBody)
+	}
 
 	if _, err := client.UpdateIssueComment(context.Background(), 99, repo, 4242, "second"); err != nil {
 		t.Fatalf("UpdateIssueComment: %v", err)
@@ -979,4 +985,54 @@ func base64RawURLDecode(value string) ([]byte, error) {
 	pad := strings.Repeat("=", (4-len(value)%4)%4)
 	standard := strings.NewReplacer("-", "+", "_", "/").Replace(value + pad)
 	return base64.StdEncoding.DecodeString(standard)
+}
+
+// The summary comment is found by listing the pull request's comments, and a
+// busy pull request pages them. A lookup that read only the first page would
+// miss the marker and create a second top level comment, which is the one
+// comment guarantee broken by pagination rather than by logic.
+func TestListIssueCommentsReadsEveryPage(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	pages := [][]map[string]any{
+		{{"id": float64(1), "body": "first page", "user": map[string]any{"login": "someone"}}},
+		{{"id": float64(2), "body": "marker lives here", "user": map[string]any{"login": "bot"}}},
+	}
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
+			writeJSON(writer, http.StatusCreated, map[string]any{
+				"token":      "ghs_installation",
+				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+			})
+			return
+		}
+		// GitHub paginates through the Link header, and the client follows
+		// exactly that, so the fixture speaks it too.
+		pageIndex := 0
+		if request.URL.Query().Get("page") == "2" {
+			pageIndex = 1
+		} else {
+			writer.Header().Set(
+				"Link",
+				fmt.Sprintf("<http://%s%s?page=2>; rel=\"next\"", request.Host, request.URL.Path),
+			)
+		}
+		writeJSON(writer, http.StatusOK, pages[pageIndex])
+	})
+
+	comments, err := client.ListIssueComments(context.Background(), 99, testRepo(), 7)
+	if err != nil {
+		t.Fatalf("ListIssueComments: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("comments = %d, want both pages read", len(comments))
+	}
+	if comments[1].Body != "marker lives here" {
+		t.Fatalf("second comment = %q, want the one only page two carries", comments[1].Body)
+	}
+	if comments[1].Author != "bot" {
+		t.Fatalf("author = %q, want the login decoded from the page", comments[1].Author)
+	}
 }

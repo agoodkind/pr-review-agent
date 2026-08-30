@@ -610,7 +610,7 @@ func (service *Service) publish(
 	if len(state.Pending) > 0 {
 		return service.concludeIncomplete(ctx, job, checkRun, state, pass, summary, progress)
 	}
-	return service.publishVerdict(ctx, job, checkRun, reviews, summary, state, progress)
+	return service.publishVerdict(ctx, job, checkRun, summary, state, progress)
 }
 
 // openThreads reads the service's own threads as they stand now, which is one
@@ -643,17 +643,11 @@ func (service *Service) publishVerdict(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRun githubapp.CheckRun,
-	reviews []githubapp.Review,
 	summary Summary,
 	state marker.State,
 	progress *reviewProgress,
 ) error {
 	logger := gklog.L(ctx)
-	body, err := service.prepareReviewBody(ctx, job, reviews, summary)
-	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
-	}
-
 	publishedReview, err := service.github.SubmitReview(
 		ctx,
 		job.InstallationID,
@@ -661,7 +655,7 @@ func (service *Service) publishVerdict(
 		job.Number,
 		githubapp.SubmitReviewRequest{
 			CommitID: summary.Head,
-			Body:     body,
+			Body:     RenderVerdictBody(summary),
 			Event:    summary.Decision,
 			Comments: nil,
 		},
@@ -762,74 +756,6 @@ func (service *Service) succeed(
 		return fmt.Errorf("complete check run: %w", err)
 	}
 	return nil
-}
-
-func (service *Service) prepareReviewBody(
-	ctx context.Context,
-	job domain.ReviewJob,
-	reviews []githubapp.Review,
-	summary Summary,
-) (string, error) {
-	body := RenderBody(summary)
-	updated, err := service.updateSummaryReview(ctx, job, reviews, body)
-	if err != nil {
-		return "", err
-	}
-	if updated {
-		return marker.Review(summary.Head), nil
-	}
-	return body, nil
-}
-
-// updateSummaryReview replaces the single visible summary body in place and
-// reports whether one existed to replace.
-func (service *Service) updateSummaryReview(
-	ctx context.Context,
-	job domain.ReviewJob,
-	reviews []githubapp.Review,
-	body string,
-) (bool, error) {
-	logger := gklog.L(ctx)
-	summaryReview, found := findSummaryReview(reviews, service.botLogin)
-	if !found {
-		return false, nil
-	}
-	if _, err := service.github.UpdateReview(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-		summaryReview.ID,
-		body,
-	); err != nil {
-		logger.ErrorContext(ctx, "update review summary", slog.String("err", err.Error()))
-		return false, fmt.Errorf("update review summary: %w", err)
-	}
-	logger.InfoContext(
-		ctx,
-		"review summary updated",
-		slog.Int64("review_id", summaryReview.ID),
-		slog.Bool("visible", true),
-	)
-	return true, nil
-}
-
-func findSummaryReview(reviews []githubapp.Review, botLogin string) (githubapp.Review, bool) {
-	for _, item := range reviews {
-		if item.Author != botLogin {
-			continue
-		}
-		if marker.HasSummary(item.Body) {
-			return item, true
-		}
-	}
-	return githubapp.Review{
-		ID:       0,
-		CommitID: "",
-		Author:   "",
-		Body:     "",
-		State:    "",
-	}, false
 }
 
 func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {

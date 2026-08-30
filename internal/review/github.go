@@ -12,13 +12,13 @@ import (
 // This is split into three narrower interfaces, embedded here, so the
 // combined declaration stays under the repository's interface size lint.
 type GitHub interface {
-	CheckRunGitHub
-	PublicationGitHub
-	IssueCommentGitHub
+	checkRunGitHub
+	publicationGitHub
+	issueCommentGitHub
 }
 
-// CheckRunGitHub loads the pull request and runs the visible check lifecycle.
-type CheckRunGitHub interface {
+// checkRunGitHub loads the pull request and runs the visible check lifecycle.
+type checkRunGitHub interface {
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
 	FindCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, bool, error)
 	CreateCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, error)
@@ -26,9 +26,9 @@ type CheckRunGitHub interface {
 	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string, string) error
 }
 
-// PublicationGitHub publishes the pull request review and its inline
+// publicationGitHub publishes the pull request review and its inline
 // findings, and reads back the threads those findings become.
-type PublicationGitHub interface {
+type publicationGitHub interface {
 	ListReviews(context.Context, int64, domain.Repository, int) ([]githubapp.Review, error)
 	ListReviewThreads(context.Context, int64, domain.Repository, int) ([]githubapp.ReviewThread, error)
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
@@ -43,8 +43,8 @@ type PublicationGitHub interface {
 	) error
 }
 
-// IssueCommentGitHub keeps the service's one top level comment.
-type IssueCommentGitHub interface {
+// issueCommentGitHub keeps the service's one top level comment.
+type issueCommentGitHub interface {
 	ListIssueComments(context.Context, int64, domain.Repository, int) ([]githubapp.IssueComment, error)
 	CreateIssueComment(context.Context, int64, domain.Repository, int, string) (githubapp.IssueComment, error)
 	UpdateIssueComment(context.Context, int64, domain.Repository, int64, string) (githubapp.IssueComment, error)

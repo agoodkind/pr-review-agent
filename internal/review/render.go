@@ -109,6 +109,24 @@ func RenderBody(summary Summary) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// RenderVerdictBody renders the review that carries the verdict.
+//
+// It is short on purpose. The full summary, the detail table, and the durable
+// state live on the one top level comment; a verdict review repeating them
+// rendered as a second near identical Review box saying the same thing. What a
+// verdict must never be is empty: one live blocking review carried only an
+// HTML marker, so it named nothing to fix and no edit could satisfy it. This
+// body always states the decision, names what a block is waiting on, and
+// carries the review marker a later run reads to know the head was reviewed.
+func RenderVerdictBody(summary Summary) string {
+	parts := []string{"## Review", summary.Verdict()}
+	if blocking := renderBlocking(summary.Blocking); blocking != "" {
+		parts = append(parts, blocking)
+	}
+	parts = append(parts, marker.Review(summary.Head))
+	return strings.Join(parts, "\n\n")
+}
+
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can
 // go straight to the thing holding the pull request.
 func renderBlocking(reasons []string) string {
