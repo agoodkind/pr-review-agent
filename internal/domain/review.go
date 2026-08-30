@@ -191,8 +191,12 @@ type OwnedThread struct {
 	ViewerCanResolve   bool
 	ViewerCanUnresolve bool
 	RootComment        ReviewComment
-	Finding            Finding
-	FindingHead        HeadSHA
+	// Replies are the comments under the finding, in thread order. They carry
+	// the pull request author's response, which reconciliation shows the model
+	// as untrusted context.
+	Replies     []ReviewComment
+	Finding     Finding
+	FindingHead HeadSHA
 }
 
 // ThreadResolution is the model decision for one owned thread.

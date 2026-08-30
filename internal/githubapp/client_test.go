@@ -459,6 +459,67 @@ func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
 	}
 }
 
+func TestListReviewThreadsDecodesRepliesAfterTheRootComment(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	state.threadPages = []map[string]any{{
+		"repository": map[string]any{
+			"pullRequest": map[string]any{
+				"reviewThreads": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   "",
+					},
+					"nodes": []map[string]any{{
+						"id":         "thread-replied",
+						"isResolved": false,
+						"comments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"databaseId": float64(1),
+									"body":       "the finding",
+									"path":       "main.go",
+									"line":       float64(3),
+									"startLine":  float64(3),
+									"author": map[string]any{
+										"__typename": "Bot",
+										"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
+									},
+								},
+								{
+									"databaseId": float64(2),
+									"body":       "declined: the configured stack has no authorizer",
+									"path":       "main.go",
+									"line":       float64(3),
+									"startLine":  float64(3),
+									"author":     map[string]any{"login": "author-user"},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
+	}}
+
+	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 6)
+	if err != nil {
+		t.Fatalf("ListReviewThreads: %v", err)
+	}
+	if threads[0].RootComment.Body != "the finding" {
+		t.Fatalf("root body = %q, want the first comment", threads[0].RootComment.Body)
+	}
+	if len(threads[0].Replies) != 1 {
+		t.Fatalf("replies = %d, want the one reply after the root", len(threads[0].Replies))
+	}
+	reply := threads[0].Replies[0]
+	if reply.Author != "author-user" || reply.Body != "declined: the configured stack has no authorizer" {
+		t.Fatalf("reply = %+v, want the author's reply decoded", reply)
+	}
+}
+
 func TestListReviewThreadsUsesOriginalLinesForOutdatedComments(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))

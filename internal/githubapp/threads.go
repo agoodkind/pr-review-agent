@@ -26,7 +26,7 @@ query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
           isOutdated
           viewerCanResolve
           viewerCanUnresolve
-          comments(first: 1) {
+          comments(first: 50) {
             nodes {
               databaseId
               body
@@ -213,24 +213,9 @@ func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
 	if len(node.Comments.Nodes) == 0 {
 		return ReviewThread{}, errors.New("review thread missing root comment")
 	}
-	root := node.Comments.Nodes[0]
-	author := root.Author.Login
-	if root.Author.TypeName == "Bot" && !strings.HasSuffix(author, "[bot]") {
-		author += "[bot]"
-	}
-	endLine := root.Line
-	if endLine < 1 {
-		endLine = root.OriginalLine
-	}
-	startLine := root.StartLine
-	if startLine < 1 {
-		startLine = root.OriginalStartLine
-	}
-	if startLine < 1 {
-		startLine = endLine
-	}
-	if endLine < 1 {
-		endLine = startLine
+	replies := make([]domain.ReviewComment, 0, len(node.Comments.Nodes)-1)
+	for _, reply := range node.Comments.Nodes[1:] {
+		replies = append(replies, decodeThreadComment(reply))
 	}
 
 	return ReviewThread{
@@ -239,13 +224,38 @@ func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
 		Outdated:           node.IsOutdated,
 		ViewerCanResolve:   node.ViewerCanResolve,
 		ViewerCanUnresolve: node.ViewerCanUnresolve,
-		RootComment: domain.ReviewComment{
-			DatabaseID: root.DatabaseID,
-			Author:     author,
-			Body:       root.Body,
-			Path:       root.Path,
-			StartLine:  startLine,
-			EndLine:    endLine,
-		},
+		RootComment:        decodeThreadComment(node.Comments.Nodes[0]),
+		Replies:            replies,
 	}, nil
+}
+
+// decodeThreadComment maps one GraphQL comment node, falling back to the
+// original coordinates GitHub reports for outdated threads.
+func decodeThreadComment(comment reviewCommentNode) domain.ReviewComment {
+	author := comment.Author.Login
+	if comment.Author.TypeName == "Bot" && !strings.HasSuffix(author, "[bot]") {
+		author += "[bot]"
+	}
+	endLine := comment.Line
+	if endLine < 1 {
+		endLine = comment.OriginalLine
+	}
+	startLine := comment.StartLine
+	if startLine < 1 {
+		startLine = comment.OriginalStartLine
+	}
+	if startLine < 1 {
+		startLine = endLine
+	}
+	if endLine < 1 {
+		endLine = startLine
+	}
+	return domain.ReviewComment{
+		DatabaseID: comment.DatabaseID,
+		Author:     author,
+		Body:       comment.Body,
+		Path:       comment.Path,
+		StartLine:  startLine,
+		EndLine:    endLine,
+	}
 }

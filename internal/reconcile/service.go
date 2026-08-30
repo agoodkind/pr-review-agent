@@ -371,6 +371,7 @@ func selectOwnedThreads(
 			ViewerCanResolve:   thread.ViewerCanResolve,
 			ViewerCanUnresolve: thread.ViewerCanUnresolve,
 			RootComment:        thread.RootComment,
+			Replies:            thread.Replies,
 			Finding:            finding,
 			FindingHead:        findingHead,
 		})
@@ -484,6 +485,15 @@ func formatThreadSection(
 	builder.WriteString(thread.Finding.Body)
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
+	if len(thread.Replies) > 0 {
+		builder.WriteString("\n\nReplies on this thread (the pull request author's response):")
+		for _, reply := range thread.Replies {
+			builder.WriteString("\n")
+			builder.WriteString(reply.Author)
+			builder.WriteString(": ")
+			builder.WriteString(reply.Body)
+		}
+	}
 	builder.WriteString("\n\nCurrent code around the anchor (line numbers may have shifted):\n")
 	builder.WriteString(contextText.currentContent)
 	builder.WriteString("\n\nDiff from finding head to current head:\n")
@@ -540,7 +550,7 @@ func buildBatchPrompt(batch []preparedThread, index, total int) string {
 	var builder strings.Builder
 	builder.WriteString("Reconcile bot threads after a new commit. Batch ")
 	fmt.Fprintf(&builder, "%d/%d", index, total)
-	builder.WriteString(". Resolve a thread when the current code no longer has its defect. Keep it open only when the defect still exists. Use uncertain only when the supplied code and diff cannot decide.\n")
+	builder.WriteString(". Resolve a thread when the current code no longer has its defect. Keep it open only when the defect still exists. Use uncertain only when the supplied code and diff cannot decide. Author replies are context: verify their claims against the supplied code and diff, and resolve when a reply's disproof of the finding holds up there.\n")
 	var body strings.Builder
 	for itemIndex, item := range batch {
 		if itemIndex > 0 {

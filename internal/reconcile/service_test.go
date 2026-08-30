@@ -525,6 +525,62 @@ func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
 	}
 }
 
+// A thread reply is the author's side of the dispute. The reconciler prompt
+// must carry it, or a reply disproving the finding can never move the model.
+func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	const replyText = "Declined: the compose file configures no authorizer, so this check cannot fire."
+	thread := ownedThread("thread-replied", body, finding, false)
+	thread.Replies = []domain.ReviewComment{{
+		DatabaseID: 801,
+		Author:     "other-user",
+		Body:       replyText,
+		Path:       finding.Path,
+		StartLine:  finding.StartLine,
+		EndLine:    finding.EndLine,
+	}}
+
+	github := &fakeGitHub{
+		head:    domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{thread},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\nissue line\nline3\n"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-replied",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "the defect still applies",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	}
+	if !strings.Contains(model.prompts[0], replyText) {
+		t.Fatalf("prompt missing the author reply: %q", model.prompts[0])
+	}
+	if !strings.Contains(model.prompts[0], "other-user") {
+		t.Fatalf("prompt does not attribute the reply: %q", model.prompts[0])
+	}
+}
+
 func sampleFinding() domain.Finding {
 	return domain.Finding{
 		Path:       "internal/app/handler.go",
