@@ -19,6 +19,7 @@ type reviewProgress struct {
 	chunks            int
 	observed          []domain.Finding
 	eligible          []domain.Finding
+	published         []domain.Finding
 	priorReviews      []reviewTrace
 	threads           []threadTrace
 }
@@ -34,9 +35,16 @@ func newReviewProgress(head domain.HeadSHA, startedAt time.Time, minimumImportan
 		chunks:            0,
 		observed:          nil,
 		eligible:          nil,
+		published:         nil,
 		priorReviews:      nil,
 		threads:           nil,
 	}
+}
+
+// applyPublished records the findings that already reached the pull request, so
+// a failed run reports the comments a reader can see rather than none.
+func (progress *reviewProgress) applyPublished(published []domain.Finding) {
+	progress.published = published
 }
 
 // reached names the last stage the review finished.
@@ -67,10 +75,13 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		MinimumImportance: progress.minimumImportance,
 		Observed:          progress.observed,
 		Eligible:          progress.eligible,
-		Published:         nil,
-		PriorReviews:      progress.priorReviews,
-		Threads:           progress.threads,
-		Reached:           progress.stage,
-		Failed:            true,
+		// Findings post while the review runs, so a failed run can still leave
+		// comments on the page. Reporting none here would contradict what the
+		// reader sees on the same pull request.
+		Published:    progress.published,
+		PriorReviews: progress.priorReviews,
+		Threads:      progress.threads,
+		Reached:      progress.stage,
+		Failed:       true,
 	}
 }

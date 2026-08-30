@@ -99,28 +99,33 @@ func logPublishedFindings(
 	)
 }
 
-type publicationState struct {
-	historyIDs        map[string]struct{}
-	historyIDList     []string
-	historyAnchors    map[string]struct{}
-	historyAnchorList []string
-	unresolvedCount   int
-	capacity          int
-}
-
-// selectionState applies the publication rules to findings that arrive a chunk
-// at a time rather than all at once.
+// publicationState decides which findings a run may publish.
 //
-// It holds the same history and capacity a single pass holds, and it grows that
-// history as findings are posted, so a finding published from one chunk
-// suppresses the same finding reported by a later chunk. The caller serializes
-// access, because chunks run concurrently.
-type selectionState struct {
-	state publicationState
+// It starts from what earlier reviews and threads already carried, and it grows
+// as findings post, so a finding published from one chunk suppresses the same
+// finding reported by a later chunk. The caller serializes access, because
+// chunks run concurrently.
+type publicationState struct {
+	historyIDs     map[string]struct{}
+	historyAnchors map[string]struct{}
+	capacity       int
 }
 
-func newSelectionState(state publicationState) *selectionState {
-	return &selectionState{state: state}
+// findingKeys are the two identities a finding is suppressed by. Both cost a
+// hash and a path normalization, so they are computed once per finding.
+type findingKeys struct {
+	id          string
+	anchor      string
+	anchorValid bool
+}
+
+func keysFor(finding domain.Finding) findingKeys {
+	keys := findingKeys{id: "", anchor: "", anchorValid: false}
+	if findingID, err := marker.FindingID(finding); err == nil {
+		keys.id = findingID
+	}
+	keys.anchor, keys.anchorValid = findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine)
+	return keys
 }
 
 // admit returns the findings this batch may publish and spends their capacity.
@@ -128,63 +133,69 @@ func newSelectionState(state publicationState) *selectionState {
 // The highest importance findings go first, which matters once capacity is
 // scarce: the reader should see the worst defects, not whichever chunk happened
 // to answer first.
-func (selection *selectionState) admit(findings []domain.Finding) []domain.Finding {
-	candidates := make([]domain.Finding, 0, len(findings))
+func (state *publicationState) admit(findings []domain.Finding) []domain.Finding {
+	candidates := make([]candidate, 0, len(findings))
 	for _, finding := range findings {
-		if selection.suppressed(finding) {
+		keys := keysFor(finding)
+		if state.suppressed(keys) {
 			continue
 		}
-		candidates = append(candidates, finding)
+		candidates = append(candidates, candidate{finding: finding, keys: keys})
 	}
 	sortByImportanceThenPosition(candidates)
 
 	admitted := make([]domain.Finding, 0, len(candidates))
-	for _, finding := range candidates {
-		if selection.state.capacity <= 0 {
+	for _, item := range candidates {
+		if state.capacity <= 0 {
 			break
 		}
-		selection.state.capacity--
-		selection.remember(finding)
-		admitted = append(admitted, finding)
+		state.capacity--
+		state.remember(item.keys)
+		admitted = append(admitted, item.finding)
 	}
 	return admitted
 }
 
+// candidate is one finding with the identities used to suppress it, carried
+// together so ordering cannot separate them.
+type candidate struct {
+	finding domain.Finding
+	keys    findingKeys
+}
+
 // suppressed reports whether an earlier review or an earlier chunk already
 // carried this finding.
-func (selection *selectionState) suppressed(finding domain.Finding) bool {
-	findingID, err := marker.FindingID(finding)
-	if err == nil {
-		if _, seen := selection.state.historyIDs[findingID]; seen {
+func (state *publicationState) suppressed(keys findingKeys) bool {
+	if keys.id != "" {
+		if _, seen := state.historyIDs[keys.id]; seen {
 			return true
 		}
 	}
-	anchor, valid := findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine)
-	if !valid {
+	if !keys.anchorValid {
 		return false
 	}
-	_, seen := selection.state.historyAnchors[anchor]
+	_, seen := state.historyAnchors[keys.anchor]
 	return seen
 }
 
 // remember records a finding so no later chunk repeats it.
-func (selection *selectionState) remember(finding domain.Finding) {
-	if findingID, err := marker.FindingID(finding); err == nil {
-		selection.state.historyIDs[findingID] = struct{}{}
+func (state *publicationState) remember(keys findingKeys) {
+	if keys.id != "" {
+		state.historyIDs[keys.id] = struct{}{}
 	}
-	if anchor, valid := findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine); valid {
-		selection.state.historyAnchors[anchor] = struct{}{}
+	if keys.anchorValid {
+		state.historyAnchors[keys.anchor] = struct{}{}
 	}
 }
 
-// sortByImportanceThenPosition orders findings worst first, breaking ties the
-// same way a single publication pass breaks them.
-func sortByImportanceThenPosition(findings []domain.Finding) {
-	sort.SliceStable(findings, func(left, right int) bool {
-		if findings[left].Importance != findings[right].Importance {
-			return findings[left].Importance > findings[right].Importance
+// sortByImportanceThenPosition orders candidates worst first, so a scarce
+// capacity shows the worst defects rather than the fastest chunk's.
+func sortByImportanceThenPosition(candidates []candidate) {
+	sort.SliceStable(candidates, func(left, right int) bool {
+		if candidates[left].finding.Importance != candidates[right].finding.Importance {
+			return candidates[left].finding.Importance > candidates[right].finding.Importance
 		}
-		return compareFindings(findings[left], findings[right]) < 0
+		return compareFindings(candidates[left].finding, candidates[right].finding) < 0
 	})
 }
 
@@ -225,24 +236,10 @@ func collectPublicationState(
 			}
 		}
 	}
-	historyIDList := make([]string, 0, len(historyIDs))
-	for findingID := range historyIDs {
-		historyIDList = append(historyIDList, findingID)
-	}
-	sort.Strings(historyIDList)
-	historyAnchorList := make([]string, 0, len(historyAnchors))
-	for anchor := range historyAnchors {
-		historyAnchorList = append(historyAnchorList, anchor)
-	}
-	sort.Strings(historyAnchorList)
-	capacity := max(maximumUnresolvedComments-unresolvedCount, 0)
 	return publicationState{
-		historyIDs:        historyIDs,
-		historyIDList:     historyIDList,
-		historyAnchors:    historyAnchors,
-		historyAnchorList: historyAnchorList,
-		unresolvedCount:   unresolvedCount,
-		capacity:          capacity,
+		historyIDs:     historyIDs,
+		historyAnchors: historyAnchors,
+		capacity:       max(maximumUnresolvedComments-unresolvedCount, 0),
 	}
 }
 

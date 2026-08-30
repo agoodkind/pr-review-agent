@@ -29,12 +29,11 @@ const (
 	checkFailureDiff         = "Review failed while collecting the pull request diff."
 	checkFailureAnalysis     = "Review failed during model analysis."
 	checkFailureRefresh      = "Review failed while refreshing the pull request head."
-	checkFailureRender       = "Review failed while rendering inline findings."
 	checkFailureSummary      = "Review failed while updating the visible summary."
 	checkFailurePublish      = "Review failed while publishing the final decision."
 	checkFailurePanic        = "Review failed after an internal panic."
 	checkFailureUsage        = "Review stopped: the model provider reported no remaining usage."
-	checkFailureDeadline     = "Review stopped: it ran out of time before every chunk answered."
+	checkFailureDeadline     = "Review stopped: it ran out of time."
 	maxCheckFailureRunes     = 1000
 	maximumCompletionTimeout = 30 * time.Second
 	// maximumPublicationTimeout caps the slice of the review budget reserved for
@@ -152,6 +151,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	)
 	ctx = gklog.WithLogger(ctx, logger)
 	ctx = withRecorder(ctx, recorder)
+	ctx = withShutdown(ctx, parent)
 	logger.InfoContext(
 		ctx,
 		"review job started",
@@ -284,6 +284,7 @@ func (service *Service) runLocked(
 
 	sink := service.newFindingSink(job, head, reviews, threads)
 	analysis, stage, err := service.readAndAnalyze(ctx, job, pullRequest, sink, progress)
+	progress.applyPublished(sink.Objections())
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), stage, err)
 	}
@@ -300,6 +301,86 @@ func (service *Service) runLocked(
 		startedAt,
 		progress,
 	)
+}
+
+// publicationContext gives publication its own reserved budget, freed from the
+// analysis deadline but still bound to the service lifetime.
+//
+// Analysis is the part that runs long, and the findings it produced are worth
+// nothing to the reader until they reach the pull request, so the analysis
+// deadline must not cancel the publish that follows it. Shutdown is different:
+// when the service is stopping, publication stops with it rather than holding
+// the process open writing to GitHub.
+func (service *Service) publicationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return detachFromReviewDeadline(ctx, service.publicationTimeout)
+}
+
+// detachFromReviewDeadline gives one closing stage its own budget, freed from
+// the review deadline but still bound to the service lifetime.
+//
+// Every stage that runs after the review is over needs this: publishing the
+// verdict, writing the failure notice, and completing the check. The review
+// deadline has usually passed by then, and that is exactly when the reader most
+// needs the outcome, so it must not cancel the work that reports it. Shutdown
+// still does, because a stopping service must not hold the process open writing
+// to GitHub.
+func detachFromReviewDeadline(
+	ctx context.Context,
+	budget time.Duration,
+) (context.Context, context.CancelFunc) {
+	shutdown := shutdownFrom(ctx)
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
+	if shutdown == nil {
+		return detached, cancel
+	}
+	// A service already stopping never starts. Checking here rather than only in
+	// the watch below removes the race where the first GitHub call would get
+	// away before the watch observed the shutdown.
+	if shutdown.Err() != nil {
+		cancel()
+		return detached, cancel
+	}
+
+	stopWatch := make(chan struct{})
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				gklog.L(detached).ErrorContext(
+					detached,
+					"shutdown watch panicked",
+					slog.Any("panic", recovered),
+					slog.String("err", "shutdown watch panicked"),
+				)
+			}
+		}()
+		select {
+		case <-shutdown.Done():
+			cancel()
+		case <-stopWatch:
+		}
+	}()
+	return detached, func() {
+		close(stopWatch)
+		cancel()
+	}
+}
+
+// shutdownKey names the service lifetime context carried alongside the review.
+type shutdownKey struct{}
+
+// withShutdown carries the service lifetime context, so a later stage can free
+// itself from the review deadline without also freeing itself from shutdown.
+func withShutdown(ctx context.Context, shutdown context.Context) context.Context {
+	return context.WithValue(ctx, shutdownKey{}, shutdown)
+}
+
+// shutdownFrom returns the service lifetime context, or nil when none was set.
+func shutdownFrom(ctx context.Context) context.Context {
+	shutdown, ok := ctx.Value(shutdownKey{}).(context.Context)
+	if !ok {
+		return nil
+	}
+	return shutdown
 }
 
 // readAndAnalyze collects the diff and reviews it, returning the stage name to
@@ -322,11 +403,8 @@ func (service *Service) readAndAnalyze(
 	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now, sink)
 	progress.applyAnalysis(analysis)
 	if err != nil {
-		// A chunk that panicked is an internal fault, not a model failure, and
-		// the reported cause has to say so.
-		if isChunkPanic(err) {
-			return analysis, checkFailurePanic, err
-		}
+		// The stage is the fallback wording. failureTitle picks the cause,
+		// including an internal panic, so this names no cause of its own.
 		return analysis, checkFailureAnalysis, err
 	}
 	progress.reached("model analysis")
@@ -373,12 +451,13 @@ func (service *Service) newFindingSink(
 	reviews []githubapp.Review,
 	threads []githubapp.ReviewThread,
 ) *streamingSink {
-	return newStreamingSink(service.github, job, head, newSelectionState(collectPublicationState(
+	state := collectPublicationState(
 		reviews,
 		threads,
 		service.botLogin,
 		service.maximumUnresolvedComments,
-	)))
+	)
+	return newStreamingSink(service.github, job, head, &state, service.checkCompletionTimeout)
 }
 
 func (service *Service) newProgress(head domain.HeadSHA, startedAt time.Time) *reviewProgress {
@@ -438,14 +517,7 @@ func (service *Service) publish(
 	startedAt time.Time,
 	progress *reviewProgress,
 ) error {
-	// Publication runs on its own reserved budget, detached from the analysis
-	// deadline. Analysis is what runs long, and the findings it produced are
-	// worth nothing to the reader until they reach the pull request, so its
-	// deadline must not be able to cancel the publish that follows it.
-	ctx, cancelPublication := context.WithTimeout(
-		context.WithoutCancel(ctx),
-		service.publicationTimeout,
-	)
+	ctx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
 
 	logger := gklog.L(ctx)
@@ -684,6 +756,12 @@ func (service *Service) clearFailedReviewState(
 	title string,
 	detail string,
 ) {
+	// All three steps share one budget on one detached context. Giving each its
+	// own would let a failing pull request hold the service for three times the
+	// configured window.
+	ctx, cancel := detachFromReviewDeadline(ctx, service.checkCompletionTimeout)
+	defer cancel()
+
 	logger := gklog.L(ctx)
 	reviews, err := service.listReviewsForFailure(ctx, job)
 	if err != nil {
