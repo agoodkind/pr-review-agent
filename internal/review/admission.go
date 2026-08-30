@@ -21,6 +21,11 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
+// compareFileCap is the most files GitHub's compare endpoint will name in one
+// range. Past it the response is silently short, so a delta that reaches the
+// cap cannot be seen whole and must not be reviewed as though it had been.
+const compareFileCap = 300
+
 // admissionVerdict says whether to review the delta, and when not, why.
 type admissionVerdict struct {
 	Skip   bool
@@ -28,7 +33,15 @@ type admissionVerdict struct {
 }
 
 // admitDelta measures the delta against the configured budgets.
+//
+// The file budget can never exceed what one compare can name. Past that cap the
+// range comes back short with nothing saying so, and reviewing it would report
+// complete coverage over files nobody listed, which is the one thing this
+// service must never do.
 func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admissionVerdict {
+	if maxFiles > compareFileCap {
+		maxFiles = compareFileCap
+	}
 	if fileCount > maxFiles {
 		return admissionVerdict{
 			Skip:   true,

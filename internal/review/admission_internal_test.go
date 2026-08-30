@@ -19,3 +19,17 @@ func TestAdmissionSkipsAnOverBudgetDelta(t *testing.T) {
 		t.Fatalf("verdict = %+v, want admission at the boundary", within)
 	}
 }
+
+// GitHub's compare endpoint names at most 300 files and says nothing when a
+// range holds more, so a budget above that cap would admit a delta the service
+// only partly saw and then report complete coverage over it.
+func TestAdmissionNeverTrustsMoreFilesThanOneCompareCanName(t *testing.T) {
+	overCap := admitDelta(compareFileCap+1, 1, 1000, 60)
+	if !overCap.Skip {
+		t.Fatalf("verdict = %+v, want a skip: a budget above the compare cap cannot be honoured", overCap)
+	}
+	atCap := admitDelta(compareFileCap, 1, 1000, 60)
+	if atCap.Skip {
+		t.Fatalf("verdict = %+v, want admission at exactly the cap", atCap)
+	}
+}
