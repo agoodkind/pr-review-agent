@@ -5,19 +5,28 @@ the real service, which is the only evidence that counts before trusting it on
 your own pull requests. Run it once after each deploy of a review behavior
 change.
 
-Nothing here is automatic. Merging publishes a container image and stops there,
-so a deploy is a deliberate act and so is this.
+Merging to the trunk deploys: the release workflow builds the container image,
+rewrites the deploy configuration to that exact digest, and deploys the Worker.
+The proofs below are the deliberate part.
 
-## Deploy first
+## Never deploy by hand with wrangler alone
+
+The committed configuration carries an unbuildable image placeholder on
+purpose, so a raw `wrangler deploy` fails before it can touch production. It
+once shipped a fourteen day old digest, because only the release workflow
+rewrites the digest at deploy time, and the stale image crash looped on its
+next cold start while 33 webhook deliveries died. When a manual deploy is
+genuinely needed, name the digest explicitly:
 
 ```bash
 cd deploy/cloudflare
-npx wrangler deploy
+PR_REVIEW_AGENT_IMAGE=ghcr.io/agoodkind/pr-review-agent@sha256:<digest> npm run deploy
 ```
 
-The container image the Worker runs is published by the release workflow on
-every push to the trunk. Check that the image you expect is the one live before
-reading anything below, or you will be testing the previous build.
+A deploy restarts the Worker and kills every review in flight, so check the
+log for a running review before deploying. Confirm the image you expect is the
+one live before reading anything below, or you will be testing the previous
+build.
 
 ## Watch what happens
 

@@ -25,7 +25,7 @@
       "class_name": "PrAgentContainer",
       "image": "./Dockerfile",
       "image_vars": {
-        "PR_REVIEW_AGENT_IMAGE": "ghcr.io/agoodkind/pr-review-agent@sha256:a46b46853eb7f9dc8e19117c1c017f6040c53cb5602737fdf476c95002d376b5"
+        "PR_REVIEW_AGENT_IMAGE": "IMAGE_DIGEST_IS_WRITTEN_BY_configure-image.mjs_NEVER_DEPLOY_THIS_FILE_RAW"
       },
       "instance_type": "basic",
       "max_instances": 1
