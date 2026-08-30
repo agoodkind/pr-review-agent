@@ -300,6 +300,7 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
 	}
 	fixture.waitForClydeCalls(t, 1)
+	fixture.waitForCheckCompletions(t, 1)
 	fixture.waitForCheckConclusion(t, "action_required")
 
 	resolved := fixture.postWebhook(t, webhookRequestOptions{
@@ -310,8 +311,15 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 	if resolved.StatusCode != http.StatusAccepted {
 		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
 	}
+	// The second run has to be finished before anything is asserted about it.
+	// Its model call starting says only that it began, and the conclusion it
+	// leaves is the one the first run already left, so neither tells the two
+	// runs apart. The completion count does.
 	fixture.waitForClydeCalls(t, 2)
-	fixture.waitForCheckConclusion(t, "action_required")
+	fixture.waitForCheckCompletions(t, 2)
+	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "action_required" {
+		t.Fatalf("conclusion = %q, want action_required after the second run", conclusion)
+	}
 	if count := fixture.githubState.submitReviewCount(); count != 0 {
 		t.Fatalf("submit review count = %d, want 0 with chunks pending", count)
 	}
@@ -1176,6 +1184,23 @@ func (fixture *appFixture) waitForClydeCalls(t *testing.T, count int32) {
 	t.Fatalf("clyde requests = %d, want >= %d", fixture.clydeState.requestCount(), count)
 }
 
+// waitForCheckCompletions waits until count runs have concluded their check.
+// It counts completions rather than reading a conclusion value, so a test can
+// wait for a specific run to finish even when it concludes the way the run
+// before it did.
+func (fixture *appFixture) waitForCheckCompletions(t *testing.T, count int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&fixture.githubState.checkCompletions) >= count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("check completions = %d, want >= %d",
+		atomic.LoadInt32(&fixture.githubState.checkCompletions), count)
+}
+
 func (fixture *appFixture) waitForCheckConclusion(t *testing.T, conclusion string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -1518,6 +1543,12 @@ type githubServerState struct {
 	requests             int32
 	issueComments        []map[string]any
 	issueCommentUpdates  int32
+	// checkCompletions counts every check run update that carried a conclusion.
+	// A conclusion value alone cannot tell one run from the next, because the
+	// second run of a pull request usually concludes the same way the first did,
+	// so a test that waits on the value can read the earlier run's result and
+	// assert against a run that has not finished.
+	checkCompletions int32
 }
 
 func newGitHubServerState(head string) *githubServerState {
@@ -2000,6 +2031,9 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 		}
 		if conclusion, ok := body["conclusion"].(string); ok {
 			item["conclusion"] = conclusion
+			if conclusion != "" {
+				atomic.AddInt32(&state.checkCompletions, 1)
+			}
 		}
 		state.checkRuns[index] = item
 	}

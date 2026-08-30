@@ -86,6 +86,127 @@ func TestAppJWTContainsExpectedClaimsAndValidSignature(t *testing.T) {
 	}
 }
 
+// threadCommentNode is one comment as the GraphQL API reports it.
+func threadCommentNode(databaseID int, body string, author string) map[string]any {
+	return map[string]any{
+		"databaseId": float64(databaseID),
+		"body":       body,
+		"path":       "main.go",
+		"line":       float64(2),
+		"startLine":  float64(2),
+		"author":     map[string]any{"login": author},
+	}
+}
+
+// A long argument on one finding runs past the first page of that thread's
+// comments. Those later replies are the author's answer, which reconciliation
+// weighs and the dispute guard reads, so dropping them in silence decides from
+// partial context. Every page has to be followed.
+func TestListReviewThreadsFollowsEveryPageOfAThreadsComments(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	commentPageRequests := 0
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
+			writeJSON(writer, http.StatusCreated, map[string]any{
+				"token":      "ghs_installation",
+				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+			})
+			return
+		}
+
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// The follow-up query addresses one thread by node id; the listing walks
+		// the pull request's threads.
+		if strings.Contains(payload.Query, "PullRequestReviewThread") {
+			commentPageRequests++
+			writeJSON(writer, http.StatusOK, map[string]any{
+				"data": map[string]any{
+					"node": map[string]any{
+						"comments": map[string]any{
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							"nodes": []map[string]any{
+								threadCommentNode(3, "third comment", "other-user"),
+								threadCommentNode(4, "fourth comment", "other-user"),
+							},
+						},
+					},
+				},
+			})
+			return
+		}
+
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"data": map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"reviewThreads": map[string]any{
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							"nodes": []map[string]any{{
+								"id":         "thread-long",
+								"isResolved": false,
+								"isOutdated": false,
+								"comments": map[string]any{
+									"pageInfo": map[string]any{
+										"hasNextPage": true,
+										"endCursor":   "comment-cursor-1",
+									},
+									"nodes": []map[string]any{
+										threadCommentNode(1, "the finding", testBotLogin),
+										threadCommentNode(2, "second comment", "other-user"),
+									},
+								},
+							}},
+						},
+					},
+				},
+			},
+		})
+	})
+
+	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 1)
+	if err != nil {
+		t.Fatalf("ListReviewThreads: %v", err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("threads = %d, want 1", len(threads))
+	}
+	if commentPageRequests != 1 {
+		t.Fatalf("comment page requests = %d, want the second page fetched once", commentPageRequests)
+	}
+	if threads[0].RootComment.Body != "the finding" {
+		t.Fatalf("root comment = %q, want the finding", threads[0].RootComment.Body)
+	}
+
+	bodies := make([]string, 0, len(threads[0].Replies))
+	for _, reply := range threads[0].Replies {
+		bodies = append(bodies, reply.Body)
+	}
+	want := []string{"second comment", "third comment", "fourth comment"}
+	if len(bodies) != len(want) {
+		t.Fatalf("replies = %v, want every reply across both pages %v", bodies, want)
+	}
+	for index, body := range want {
+		if bodies[index] != body {
+			t.Fatalf("replies = %v, want %v in thread order", bodies, want)
+		}
+	}
+}
+
 func TestInstallationTokenIsCachedAndRefreshedBeforeExpiry(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	now := time.Unix(1_700_000_000, 0)
