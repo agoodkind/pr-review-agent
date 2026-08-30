@@ -60,12 +60,9 @@ func (service *Service) listReviewsForFailure(
 	job domain.ReviewJob,
 ) ([]githubapp.Review, error) {
 	logger := gklog.L(ctx)
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
-	defer cancel()
-
-	reviews, err := service.github.ListReviews(readCtx, job.InstallationID, job.Repository, job.Number)
+	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		logger.ErrorContext(readCtx, "load reviews for failure", slog.String("err", err.Error()))
+		logger.ErrorContext(ctx, "load reviews for failure", slog.String("err", err.Error()))
 		return nil, fmt.Errorf("load reviews for failure: %w", err)
 	}
 	return reviews, nil
@@ -84,17 +81,20 @@ func (service *Service) dismissStaleVerdicts(
 	reviews []githubapp.Review,
 ) error {
 	logger := gklog.L(ctx)
-	dismissCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
-	defer cancel()
-
 	survivors := make([]error, 0)
 	dismissed := make([]string, 0)
 	for _, item := range reviews {
 		if item.Author != service.botLogin || !standingVerdict(item.State) {
 			continue
 		}
+		// A verdict on this same head came from a review that finished. This run
+		// failing says nothing about that one, so withdrawing it would discard a
+		// judgment the service still stands behind.
+		if item.CommitID == job.Head {
+			continue
+		}
 		if dismissErr := service.github.DismissReview(
-			dismissCtx,
+			ctx,
 			job.InstallationID,
 			job.Repository,
 			job.Number,
@@ -102,7 +102,7 @@ func (service *Service) dismissStaleVerdicts(
 			dismissalMessageFor(item.State),
 		); dismissErr != nil {
 			logger.ErrorContext(
-				dismissCtx,
+				ctx,
 				"dismiss stale verdict",
 				slog.Int64("review_id", item.ID),
 				slog.String("state", item.State),
@@ -116,7 +116,7 @@ func (service *Service) dismissStaleVerdicts(
 	// The state travels with each id, so a reader can tell a withdrawn approval
 	// from a withdrawn block without opening the pull request.
 	logger.InfoContext(
-		dismissCtx,
+		ctx,
 		"stale verdicts dismissed",
 		slog.Int("count", len(dismissed)),
 		slog.Any("reviews", dismissed),

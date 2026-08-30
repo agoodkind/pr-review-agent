@@ -132,6 +132,42 @@ func (client *Client) UpdateReview(
 	return decodeReview(body, "updated", ctx, client)
 }
 
+// createReviewCommentBody is one standalone review comment. It is the inline
+// comment a review would carry plus the commit it anchors to, so a field added
+// to the inline comment reaches both ways of posting it.
+type createReviewCommentBody struct {
+	InlineComment
+	CommitID string `json:"commit_id"`
+}
+
+// CreateReviewComment posts one finding on its own, as soon as it is found.
+//
+// A review submitted with its comments attached publishes nothing until every
+// chunk has answered, so a run that stops early leaves the reader with none of
+// what it did find. Posting each finding on arrival means the work already done
+// survives whatever happens to the rest of the run.
+func (client *Client) CreateReviewComment(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	number int,
+	head domain.HeadSHA,
+	comment InlineComment,
+) error {
+	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/comments", number))
+	encoded, err := json.Marshal(createReviewCommentBody{
+		InlineComment: comment,
+		CommitID:      string(head),
+	})
+	if err != nil {
+		client.logger.ErrorContext(ctx, "marshal review comment body", slog.String("err", err.Error()))
+		return errors.New("marshal review comment body")
+	}
+
+	_, err = client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	return err
+}
+
 // DismissReview withdraws one submitted review verdict.
 //
 // Editing a review body cannot change its state, so a verdict the service can

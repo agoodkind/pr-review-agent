@@ -21,21 +21,27 @@ import (
 )
 
 const (
-	checkSummaryFailure      = "Review failed."
-	checkSummaryCancelled    = "Review cancelled."
-	checkFailureReviews      = "Review failed while reading existing reviews."
-	checkFailurePullRequest  = "Review failed while loading the pull request."
-	checkFailureReconcile    = "Review failed while reconciling existing findings."
-	checkFailureDiff         = "Review failed while collecting the pull request diff."
-	checkFailureAnalysis     = "Review failed during model analysis."
-	checkFailureRefresh      = "Review failed while refreshing the pull request head."
-	checkFailureRender       = "Review failed while rendering inline findings."
-	checkFailureSummary      = "Review failed while updating the visible summary."
-	checkFailurePublish      = "Review failed while publishing the final decision."
-	checkFailurePanic        = "Review failed after an internal panic."
-	checkFailureUsage        = "Review stopped: the model provider reported no remaining usage."
-	maxCheckFailureRunes     = 1000
+	checkSummaryFailure     = "Review failed."
+	checkSummaryCancelled   = "Review cancelled."
+	checkFailureReviews     = "Review failed while reading existing reviews."
+	checkFailurePullRequest = "Review failed while loading the pull request."
+	checkFailureReconcile   = "Review failed while reconciling existing findings."
+	checkFailureDiff        = "Review failed while collecting the pull request diff."
+	checkFailureAnalysis    = "Review failed during model analysis."
+	checkFailureRefresh     = "Review failed while refreshing the pull request head."
+	checkFailureSummary     = "Review failed while updating the visible summary."
+	checkFailurePublish     = "Review failed while publishing the final decision."
+	checkFailurePanic       = "Review failed after an internal panic."
+	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
+	checkFailureDeadline    = "Review stopped: it ran out of time."
+	maxCheckFailureRunes    = 1000
+	// maxCheckTitleRunes is the longest title GitHub accepts for check output.
+	maxCheckTitleRunes       = 255
 	maximumCompletionTimeout = 30 * time.Second
+	// maximumPublicationTimeout caps the slice of the review budget reserved for
+	// publishing. Publication is a handful of GitHub calls, so this is generous
+	// for the work while staying small against a ten minute review.
+	maximumPublicationTimeout = 60 * time.Second
 )
 
 // GitHub loads pull request state and publishes review lifecycle updates.
@@ -49,6 +55,14 @@ type GitHub interface {
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
 	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
 	DismissReview(context.Context, int64, domain.Repository, int, int64, string) error
+	CreateReviewComment(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+		domain.HeadSHA,
+		githubapp.InlineComment,
+	) error
 }
 
 // Collector gathers pull request diff input for one review pass.
@@ -74,6 +88,7 @@ type Service struct {
 	maximumUnresolvedComments int
 	reviewTimeout             time.Duration
 	checkCompletionTimeout    time.Duration
+	publicationTimeout        time.Duration
 	now                       func() time.Time
 	logger                    *slog.Logger
 }
@@ -98,7 +113,12 @@ func NewService(
 	if now == nil {
 		now = time.Now
 	}
+	// Publishing the review and completing the check each get a reserved slice
+	// of the budget, and analysis gets what remains. Reaching the analysis
+	// deadline then still leaves time to publish what the review already found,
+	// so a slow diff produces a partial review rather than nothing at all.
 	completionTimeout := min(reviewTimeout/4, maximumCompletionTimeout)
+	publicationTimeout := min(reviewTimeout/4, maximumPublicationTimeout)
 	return &Service{
 		github:                    github,
 		collector:                 collector,
@@ -109,8 +129,9 @@ func NewService(
 		checkName:                 config.ReviewCheckName,
 		minimumImportance:         minimumImportance,
 		maximumUnresolvedComments: maximumUnresolvedComments,
-		reviewTimeout:             reviewTimeout - completionTimeout,
+		reviewTimeout:             reviewTimeout - completionTimeout - publicationTimeout,
 		checkCompletionTimeout:    completionTimeout,
+		publicationTimeout:        publicationTimeout,
 		now:                       now,
 		logger:                    logger,
 	}
@@ -132,6 +153,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	)
 	ctx = gklog.WithLogger(ctx, logger)
 	ctx = withRecorder(ctx, recorder)
+	ctx = withShutdown(ctx, parent)
 	logger.InfoContext(
 		ctx,
 		"review job started",
@@ -236,19 +258,11 @@ func (service *Service) runLocked(
 	}
 	progress.reached("the pull request")
 
-	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
+	reviews, reviewed, err := service.loadReviewHistory(ctx, job, head, progress)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err)
 	}
-	progress.priorReviews = traceReviews(reviews, service.botLogin)
-	progress.reached("the review history")
-	logger.InfoContext(
-		ctx,
-		"review history loaded",
-		slog.Any("bot_reviews", progress.priorReviews),
-	)
-	if hasBotReviewMarker(reviews, service.botLogin, head) {
-		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
+	if reviewed {
 		return service.succeed(
 			ctx,
 			job,
@@ -270,29 +284,186 @@ func (service *Service) runLocked(
 		slog.Any("bot_threads", progress.threads),
 	)
 
+	sink := service.newFindingSink(job, head, reviews, threads)
+	analysis, stage, err := service.readAndAnalyze(ctx, job, pullRequest, sink, progress)
+	// Every chunk has answered by the time readAndAnalyze returns, so whichever
+	// finding is holding the run's one contested tail slot can now be posted:
+	// no later arrival can still outrank it.
+	sink.Finalize(ctx)
+	progress.applyPublished(sink.Objections())
+	if err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), stage, err)
+	}
+
+	return service.publish(
+		ctx,
+		job,
+		head,
+		checkRun,
+		reviews,
+		threads,
+		analysis,
+		sink,
+		startedAt,
+		progress,
+	)
+}
+
+// publicationContext gives publication its own reserved budget, freed from the
+// analysis deadline but still bound to the service lifetime.
+//
+// Analysis is the part that runs long, and the findings it produced are worth
+// nothing to the reader until they reach the pull request, so the analysis
+// deadline must not cancel the publish that follows it. Shutdown is different:
+// when the service is stopping, publication stops with it rather than holding
+// the process open writing to GitHub.
+func (service *Service) publicationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return detachFromReviewDeadline(ctx, service.publicationTimeout)
+}
+
+// detachFromReviewDeadline gives one closing stage its own budget, freed from
+// the review deadline but still bound to the service lifetime.
+//
+// Every stage that runs after the review is over needs this: publishing the
+// verdict, writing the failure notice, and completing the check. The review
+// deadline has usually passed by then, and that is exactly when the reader most
+// needs the outcome, so it must not cancel the work that reports it. Shutdown
+// still does, because a stopping service must not hold the process open writing
+// to GitHub.
+func detachFromReviewDeadline(
+	ctx context.Context,
+	budget time.Duration,
+) (context.Context, context.CancelFunc) {
+	shutdown := shutdownFrom(ctx)
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
+	if shutdown == nil {
+		return detached, cancel
+	}
+	// A service already stopping never starts. Checking here rather than only in
+	// the watch below removes the race where the first GitHub call would get
+	// away before the watch observed the shutdown.
+	if shutdown.Err() != nil {
+		cancel()
+		return detached, cancel
+	}
+
+	stopWatch := make(chan struct{})
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				gklog.L(detached).ErrorContext(
+					detached,
+					"shutdown watch panicked",
+					slog.Any("panic", recovered),
+					slog.String("err", "shutdown watch panicked"),
+				)
+			}
+		}()
+		select {
+		case <-shutdown.Done():
+			cancel()
+		case <-stopWatch:
+		}
+	}()
+	return detached, func() {
+		close(stopWatch)
+		cancel()
+	}
+}
+
+// shutdownKey names the service lifetime context carried alongside the review.
+type shutdownKey struct{}
+
+// withShutdown carries the service lifetime context, so a later stage can free
+// itself from the review deadline without also freeing itself from shutdown.
+func withShutdown(ctx context.Context, shutdown context.Context) context.Context {
+	return context.WithValue(ctx, shutdownKey{}, shutdown)
+}
+
+// shutdownFrom returns the service lifetime context, or nil when none was set.
+func shutdownFrom(ctx context.Context) context.Context {
+	shutdown, ok := ctx.Value(shutdownKey{}).(context.Context)
+	if !ok {
+		return nil
+	}
+	return shutdown
+}
+
+// readAndAnalyze collects the diff and reviews it, returning the stage name to
+// report if either step fails.
+func (service *Service) readAndAnalyze(
+	ctx context.Context,
+	job domain.ReviewJob,
+	pullRequest githubapp.PullRequest,
+	sink FindingSink,
+	progress *reviewProgress,
+) (Analysis, string, error) {
+	logger := gklog.L(ctx)
 	input, err := service.collector.Collect(ctx, job.PullRequestRef, pullRequest)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureDiff, err)
+		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
+		return Analysis{}, checkFailureDiff, fmt.Errorf("collect pull request diff: %w", err)
 	}
 	progress.reached("the diff")
 
-	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now)
+	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now, sink)
 	progress.applyAnalysis(analysis)
 	if err != nil {
-		// A chunk that panicked is an internal fault, not a model failure, and
-		// the reported cause has to say so.
-		title := checkFailureAnalysis
-		if isChunkPanic(err) {
-			title = checkFailurePanic
-		}
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), title, err)
+		// The stage is the fallback wording. failureTitle picks the cause,
+		// including an internal panic, so this names no cause of its own.
+		return analysis, checkFailureAnalysis, err
 	}
 	progress.reached("model analysis")
 	if err := logAnalysis(ctx, analysis); err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		return analysis, checkFailureAnalysis, err
 	}
+	return analysis, "", nil
+}
 
-	return service.publish(ctx, job, head, checkRun, reviews, threads, analysis, startedAt, progress)
+// loadReviewHistory reads every prior review and reports whether this head was
+// already reviewed, which is how a redelivered webhook avoids a second review.
+func (service *Service) loadReviewHistory(
+	ctx context.Context,
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	progress *reviewProgress,
+) ([]githubapp.Review, bool, error) {
+	logger := gklog.L(ctx)
+	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		logger.ErrorContext(ctx, "list reviews", slog.String("err", err.Error()))
+		return nil, false, fmt.Errorf("list reviews: %w", err)
+	}
+	progress.priorReviews = traceReviews(reviews, service.botLogin)
+	progress.reached("the review history")
+	logger.InfoContext(
+		ctx,
+		"review history loaded",
+		slog.Any("bot_reviews", progress.priorReviews),
+	)
+	if hasBotReviewMarker(reviews, service.botLogin, head) {
+		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
+		return reviews, true, nil
+	}
+	return reviews, false, nil
+}
+
+// newFindingSink builds the destination that posts findings as each chunk
+// answers, so whatever the review has found reaches the pull request even when
+// the rest of the run never finishes.
+func (service *Service) newFindingSink(
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	reviews []githubapp.Review,
+	threads []githubapp.ReviewThread,
+) *streamingSink {
+	state := collectPublicationState(
+		reviews,
+		threads,
+		service.botLogin,
+		service.maximumUnresolvedComments,
+	)
+	return newStreamingSink(service.github, job, head, &state, service.checkCompletionTimeout)
 }
 
 func (service *Service) newProgress(head domain.HeadSHA, startedAt time.Time) *reviewProgress {
@@ -348,9 +519,13 @@ func (service *Service) publish(
 	reviews []githubapp.Review,
 	threads []githubapp.ReviewThread,
 	analysis Analysis,
+	sink *streamingSink,
 	startedAt time.Time,
 	progress *reviewProgress,
 ) error {
+	ctx, cancelPublication := service.publicationContext(ctx)
+	defer cancelPublication()
+
 	logger := gklog.L(ctx)
 	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
@@ -361,22 +536,11 @@ func (service *Service) publish(
 	}
 	progress.reached("the head refresh")
 
-	publishedFindings, err := selectFindingsForPublication(
-		ctx,
-		analysis.Anchored,
-		reviews,
-		threads,
-		service.botLogin,
-		service.maximumUnresolvedComments,
-	)
-	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRender, err)
-	}
-
-	comments, err := RenderInline(head, publishedFindings)
-	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRender, err)
-	}
+	// The findings already reached the pull request as their chunks answered, so
+	// the review submitted here carries the verdict and the summary alone.
+	publishedFindings := sink.Objections()
+	posted, failed := sink.Delivery()
+	logPublishedFindings(ctx, analysis.Anchored, publishedFindings, posted, failed)
 	progress.reached("finding selection")
 
 	decision := standingDecision(ctx, analysis, publishedFindings, threads, service.botLogin)
@@ -413,7 +577,7 @@ func (service *Service) publish(
 			CommitID: head,
 			Body:     body,
 			Event:    decision,
-			Comments: comments,
+			Comments: nil,
 		},
 	)
 	if err != nil {
@@ -424,7 +588,7 @@ func (service *Service) publish(
 		"review published",
 		slog.Int64("review_id", publishedReview.ID),
 		slog.String("event", string(decision)),
-		slog.Int("inline_comments", len(comments)),
+		slog.Int("streamed_comments", len(publishedFindings)),
 		slog.Bool("visible_body", true),
 	)
 
@@ -504,49 +668,6 @@ func (service *Service) succeed(
 	return nil
 }
 
-func formatFindingImportances(findings []domain.Finding) string {
-	if len(findings) == 0 {
-		return "none"
-	}
-	values := make([]string, 0, len(findings))
-	for _, finding := range findings {
-		values = append(values, fmt.Sprintf("`%d`", finding.Importance))
-	}
-	return strings.Join(values, ", ")
-}
-
-func formatReviewTraceIDs(reviews []reviewTrace) string {
-	if len(reviews) == 0 {
-		return "none"
-	}
-	ids := make([]string, 0, len(reviews))
-	for _, item := range reviews {
-		ids = append(ids, fmt.Sprintf("`%d`", item.ID))
-	}
-	return strings.Join(ids, ", ")
-}
-
-func formatThreadTraceIDs(threads []threadTrace) string {
-	if len(threads) == 0 {
-		return "none"
-	}
-	ids := make([]string, 0, len(threads))
-	for _, item := range threads {
-		ids = append(ids, "`"+item.NodeID+"`")
-	}
-	return strings.Join(ids, ", ")
-}
-
-func countResolvedThreadTraces(threads []threadTrace) int {
-	count := 0
-	for _, item := range threads {
-		if item.Resolved {
-			count++
-		}
-	}
-	return count
-}
-
 func (service *Service) failCheck(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -556,12 +677,7 @@ func (service *Service) failCheck(
 	cause error,
 ) error {
 	logger := gklog.L(ctx)
-	if title == "" {
-		title = checkSummaryFailure
-	}
-	if usageExceeded(cause) {
-		title = checkFailureUsage
-	}
+	title = failureTitle(title, cause)
 	progress.Failed = true
 	detail := checkFailureDetail(cause)
 	// The check run reports the same cause and the same progress the comment
@@ -603,6 +719,12 @@ func (service *Service) clearFailedReviewState(
 	title string,
 	detail string,
 ) {
+	// All three steps share one budget on one detached context. Giving each its
+	// own would let a failing pull request hold the service for three times the
+	// configured window.
+	ctx, cancel := detachFromReviewDeadline(ctx, service.checkCompletionTimeout)
+	defer cancel()
+
 	logger := gklog.L(ctx)
 	reviews, err := service.listReviewsForFailure(ctx, job)
 	if err != nil {
@@ -614,9 +736,65 @@ func (service *Service) clearFailedReviewState(
 	service.publishFailureNotice(ctx, job, reviews, progress, title, detail)
 }
 
+// failureTitle names why a review stopped, in the one line a reader sees in the
+// checks list before opening anything.
+//
+// A stage name alone tells the reader where the run was, not what went wrong,
+// so it leaves them no idea whether to retry, wait, or fix something. The cause
+// answers that, and the stage is the fallback for a failure that carries no
+// cause of its own.
+func failureTitle(stage string, cause error) string {
+	switch {
+	case usageExceeded(cause):
+		return checkFailureUsage
+	case errors.Is(cause, context.DeadlineExceeded):
+		return checkFailureDeadline
+	case isChunkPanic(cause):
+		return checkFailurePanic
+	}
+	if reason := providerReason(cause); reason != "" {
+		return boundTitle("Review stopped: " + reason)
+	}
+	if stage == "" {
+		return checkSummaryFailure
+	}
+	return stage
+}
+
+// boundTitle keeps a title inside the length GitHub accepts for check output.
+//
+// A provider can state a reason of any length, and a check update carrying an
+// over-long title is rejected outright. That would leave the check unfinished
+// and hide the failure it was reporting, which is worse than a shortened
+// sentence.
+func boundTitle(title string) string {
+	runes := []rune(title)
+	if len(runes) <= maxCheckTitleRunes {
+		return title
+	}
+	return string(runes[:maxCheckTitleRunes-3]) + "..."
+}
+
 // usageExceededError is any provider error that reports exhausted usage.
 type usageExceededError interface {
 	UsageExceeded() bool
+}
+
+// reasonedError is any failure that can state its own cause in a sentence. The
+// model provider package implements it, and stating the interface here keeps
+// that dependency pointing one way.
+type reasonedError interface {
+	ProviderReason() string
+}
+
+// providerReason returns the cause's own sentence, or an empty string when the
+// failure states none.
+func providerReason(cause error) string {
+	var target reasonedError
+	if !errors.As(cause, &target) {
+		return ""
+	}
+	return target.ProviderReason()
 }
 
 func usageExceeded(cause error) bool {

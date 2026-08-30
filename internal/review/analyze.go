@@ -25,6 +25,7 @@ func Analyze(
 	input diff.ReviewInput,
 	minimumImportance int,
 	now func() time.Time,
+	sink FindingSink,
 ) (Analysis, error) {
 	logger := gklog.L(ctx)
 	// partial reports how far the analysis got. Every error path returns it, so
@@ -58,33 +59,27 @@ func Analyze(
 	analysisStartedAt := now()
 	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
 
-	outcomes := reviewChunksConcurrently(ctx, model, chunks, minimumImportance, now)
+	stream := newChunkStream(sink, collector.fileIndex, minimumImportance)
+	outcomes := reviewChunksConcurrently(ctx, model, chunks, minimumImportance, now, stream)
 
 	// Outcomes fold back in chunk order even though the calls ran together, so
 	// deduplication and finding order stay identical to a serial review.
+	//
+	// A chunk that failed does not end the analysis. Its slice of the diff goes
+	// unread, which makes coverage incomplete, while every finding the other
+	// chunks produced stays valid and reaches the pull request.
 	var models modelSet
 	requests := 0
+	failures := make([]chunkFailure, 0)
 	for _, outcome := range outcomes {
 		requests += outcome.requests
 		for _, name := range outcome.models {
 			models.add(name)
 		}
 		if outcome.err != nil {
-			// The elapsed total says whether the budget ran out or one call
-			// failed early, which the failing chunk number alone cannot.
-			logger.ErrorContext(
-				ctx,
-				"review model analysis failed",
-				slog.Int("chunk", outcome.chunk),
-				slog.Int("chunks", len(chunks)),
-				slog.Int("model_requests", requests),
-				slog.Duration("elapsed", now().Sub(analysisStartedAt)),
-				slog.String("err", outcome.err.Error()),
-			)
-			partial.Models = models.names
-			partial.Observed = collector.observed
-			partial.Anchored = collector.anchored
-			return partial, outcome.err
+			coverageComplete = false
+			failures = append(failures, chunkFailure{chunk: outcome.chunk, err: outcome.err})
+			continue
 		}
 		for _, result := range outcome.results {
 			if !result.CoverageComplete {
@@ -93,13 +88,26 @@ func Analyze(
 			collector.collect(result.Findings)
 		}
 	}
+
+	elapsed := now().Sub(analysisStartedAt)
+	logChunkFailures(ctx, failures, len(chunks), requests, elapsed)
+	// Every chunk failing means nothing was read, so there is no partial answer
+	// to publish and the first cause becomes the analysis failure.
+	if len(chunks) > 0 && len(failures) == len(chunks) {
+		partial.Models = models.names
+		partial.Observed = collector.observed
+		partial.Anchored = collector.anchored
+		return partial, failures[0].err
+	}
 	logger.InfoContext(
 		ctx,
 		"review model analysis completed",
 		slog.Int("chunks", len(chunks)),
+		slog.Int("chunks_failed", len(failures)),
 		slog.Int("model_requests", requests),
 		slog.Int("reported_findings", collector.reported),
-		slog.Duration("elapsed", now().Sub(analysisStartedAt)),
+		slog.Bool("coverage_complete", coverageComplete),
+		slog.Duration("elapsed", elapsed),
 	)
 
 	sortFindings(collector.observed)
@@ -114,6 +122,39 @@ func Analyze(
 		Chunks:           len(chunks),
 		Models:           models.names,
 	}, nil
+}
+
+// chunkFailure records one chunk the analysis could not read.
+type chunkFailure struct {
+	chunk int
+	err   error
+}
+
+// logChunkFailures reports every chunk that failed in one line, so a reader can
+// tell how much of the diff went unread and why without opening each chunk.
+func logChunkFailures(
+	ctx context.Context,
+	failures []chunkFailure,
+	chunks int,
+	requests int,
+	elapsed time.Duration,
+) {
+	if len(failures) == 0 {
+		return
+	}
+	reasons := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		reasons = append(reasons, fmt.Sprintf("%d: %s", failure.chunk, failure.err.Error()))
+	}
+	gklog.L(ctx).ErrorContext(
+		ctx,
+		"review chunks unread",
+		slog.Int("chunks", chunks),
+		slog.Int("chunks_failed", len(failures)),
+		slog.Int("model_requests", requests),
+		slog.Duration("elapsed", elapsed),
+		slog.Any("causes", reasons),
+	)
 }
 
 // findingCollector deduplicates model findings and keeps the anchored ones.
@@ -140,11 +181,7 @@ func newFindingCollector(files []diff.FileContext, minimumImportance int) *findi
 func (collector *findingCollector) collect(findings []domain.Finding) {
 	collector.reported += len(findings)
 	for _, finding := range findings {
-		sanitized := sanitizeFinding(finding)
-		normalizedPath, pathErr := marker.NormalizePath(sanitized.Path)
-		if pathErr == nil {
-			sanitized.Path = normalizedPath
-		}
+		sanitized := normalizeFinding(finding)
 
 		key := normalizedFindingKey(sanitized)
 		if _, exists := collector.seen[key]; exists {
@@ -160,6 +197,42 @@ func (collector *findingCollector) collect(findings []domain.Finding) {
 			collector.anchored = append(collector.anchored, sanitized)
 		}
 	}
+}
+
+// normalizeFinding puts one model finding into the shape the rest of the review
+// works with: sanitized text and a path that matches the diff.
+func normalizeFinding(finding domain.Finding) domain.Finding {
+	sanitized := sanitizeFinding(finding)
+	if normalizedPath, err := marker.NormalizePath(sanitized.Path); err == nil {
+		sanitized.Path = normalizedPath
+	}
+	return sanitized
+}
+
+// eligibleFindings returns the findings from one chunk that anchor to changed
+// lines and meet the importance floor.
+//
+// Streaming and the final summary apply the same test, so a finding posted
+// while the review runs is exactly one the review would have published at the
+// end. Duplicates are not removed here, because the two callers track what they
+// have already seen in different ways.
+func eligibleFindings(
+	findings []domain.Finding,
+	fileIndex map[string]diff.FileContext,
+	minimumImportance int,
+) []domain.Finding {
+	eligible := make([]domain.Finding, 0, len(findings))
+	for _, finding := range findings {
+		sanitized := normalizeFinding(finding)
+		if !isAnchored(sanitized, fileIndex) {
+			continue
+		}
+		if sanitized.Importance < minimumImportance {
+			continue
+		}
+		eligible = append(eligible, sanitized)
+	}
+	return eligible
 }
 
 // truncatedError is any model failure that stopped mid answer at the completion
