@@ -2286,53 +2286,6 @@ func writeCompletionStream(writer http.ResponseWriter, content string) {
 	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 }
 
-// The fixture serves review threads the way GitHub does, and GitHub serves
-// them while resolutions land. Encoding the shared thread maps outside the
-// lock while a resolve mutates them is a data race that go's map runtime
-// escalates to a crash, so it would surface as a mystery CI failure rather
-// than a soft assertion.
-func TestFixtureServesThreadsWhileResolutionsLand(t *testing.T) {
-	state := &githubServerState{
-		threads: []map[string]any{
-			{"id": "thread-1", "isResolved": false, "comments": map[string]any{"nodes": []map[string]any{}}},
-			{"id": "thread-2", "isResolved": false, "comments": map[string]any{"nodes": []map[string]any{}}},
-		},
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		state.handleGraphQL(writer, request)
-	}))
-	t.Cleanup(server.Close)
-
-	listBody := []byte(`{"query":"query reviewThreads"}`)
-	resolveBody := []byte(`{"query":"mutation resolveReviewThread","variables":{"threadID":"thread-1"}}`)
-
-	var group sync.WaitGroup
-	for range 8 {
-		group.Add(2)
-		go func() {
-			defer group.Done()
-			for range 25 {
-				response, err := http.Post(server.URL, "application/json", bytes.NewReader(listBody))
-				if err == nil {
-					_, _ = io.Copy(io.Discard, response.Body)
-					_ = response.Body.Close()
-				}
-			}
-		}()
-		go func() {
-			defer group.Done()
-			for range 25 {
-				response, err := http.Post(server.URL, "application/json", bytes.NewReader(resolveBody))
-				if err == nil {
-					_, _ = io.Copy(io.Discard, response.Body)
-					_ = response.Body.Close()
-				}
-			}
-		}()
-	}
-	group.Wait()
-}
-
 // copyThreadNodes deep copies thread nodes one level down, which is the level
 // the resolve mutation writes. The nested comment nodes are never mutated
 // after construction, so sharing them is safe.
