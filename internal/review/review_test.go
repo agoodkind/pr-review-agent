@@ -1947,6 +1947,35 @@ func TestAFindingWithEvidenceFromTheShownSourceIsPublished(t *testing.T) {
 	}
 }
 
+// The source the model is shown is a diff, so an honest answer about an added
+// line arrives carrying the marker the diff put on it. That is the verbatim copy
+// the prompt asked for and it has to ground, or the gate discards exactly the
+// findings about changed lines the review exists to make.
+func TestEvidenceCarryingItsDiffMarkerIsStillGrounded(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Severe defect",
+				Body:       "The changed line breaks core behavior.",
+				Evidence:   "+added",
+				Importance: testMinimumImportance,
+			}},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the finding published: the evidence is the added line "+
+			"exactly as the diff showed it", len(fixture.state.streamedComments))
+	}
+}
+
 // A finding whose evidence is not a whole line of the source the model was
 // shown asserts a fact the source cannot back, so it never reaches the pull
 // request and the drop is logged.
