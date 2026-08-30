@@ -41,7 +41,7 @@ const configPath = path.join(deployDirectory, "wrangler.jsonc");
 // moment leaves the committed placeholder in place, so a later raw
 // `wrangler deploy` still fails at build instead of reusing a stale digest,
 // which is the exact outage this script exists to prevent.
-const deployConfigPath = path.join(deployDirectory, "wrangler.deploy.jsonc");
+const deployConfigPath = path.join(deployDirectory, `wrangler.deploy.${process.pid}.jsonc`);
 fs.copyFileSync(configPath, deployConfigPath);
 try {
   execFileSync("node", [path.join(scriptDirectory, "configure-image.mjs"), deployConfigPath], {
