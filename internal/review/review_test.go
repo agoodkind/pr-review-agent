@@ -1912,6 +1912,150 @@ func TestServiceReviewsNothingWhenTheStateAlreadyNamesTheHead(t *testing.T) {
 	}
 }
 
+// blockingVerdictReviewPage is one standing bot verdict at the given head:
+// CHANGES_REQUESTED, carrying the review marker a later delivery reads to know
+// the head was reviewed.
+func blockingVerdictReviewPage(head domain.HeadSHA, withMarker bool) [][]map[string]any {
+	body := "## Review\n\nSevere findings are listed inline."
+	if withMarker {
+		body += "\n\n" + marker.Review(head)
+	}
+	return [][]map[string]any{{
+		{
+			"id":        float64(31),
+			"commit_id": string(head),
+			"state":     "CHANGES_REQUESTED",
+			"body":      body,
+			"user":      map[string]any{"login": testBotLogin},
+		},
+	}}
+}
+
+func resolvedBotThread(nodeID string) githubapp.ReviewThread {
+	return githubapp.ReviewThread{
+		NodeID:   nodeID,
+		Resolved: true,
+		RootComment: domain.ReviewComment{
+			DatabaseID: 700,
+			Author:     testBotLogin,
+			Body:       "an earlier finding",
+			Path:       "main.go",
+			StartLine:  2,
+			EndLine:    2,
+		},
+	}
+}
+
+// A thread resolved after the review must move the verdict without a push. A
+// delivery at the reviewed head finds the bot's standing CHANGES_REQUESTED
+// review disagreeing with all-resolved thread state and submits an APPROVE.
+func TestResolvedThreadsRefreshTheVerdictAtAReviewedHead(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages:      blockingVerdictReviewPage(head, true),
+		reconcileThreads: []githubapp.ReviewThread{resolvedBotThread("thread-resolved")},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-resolved")})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("SubmitReview was not called: the verdict was not refreshed")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
+	}
+	if fixture.reconciler.callCount != 0 {
+		t.Fatalf("reconcile calls = %d, want none: no new head to reconcile", fixture.reconciler.callCount)
+	}
+	// The visible comment must not keep claiming severe findings after the
+	// verdict flipped.
+	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
+	if !ok || !strings.Contains(body, "No severe findings.") {
+		t.Fatalf("summary comment = %v, want the refreshed verdict prose", body)
+	}
+}
+
+// The same refresh runs when the head is known reviewed only through the
+// durable state, which is the shape a run leaves when the verdict submit
+// succeeded but its marker never reached the review list.
+func TestResolvedThreadsRefreshTheVerdictFromDurableState(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages:      blockingVerdictReviewPage(head, false),
+		reconcileThreads: []githubapp.ReviewThread{resolvedBotThread("thread-resolved")},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-resolved")})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: head,
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("SubmitReview was not called: the verdict was not refreshed")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// An open bot thread means the standing block is still right, so a delivery at
+// the reviewed head submits nothing.
+func TestOpenThreadsKeepTheVerdictAtAReviewedHead(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages:      blockingVerdictReviewPage(head, true),
+		reconcileThreads: []githubapp.ReviewThread{openThread},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none while a bot thread is open", fixture.state.lastSubmitReview)
+	}
+	if fixture.state.lastUpdateReview != nil {
+		t.Fatalf("updated review = %v, want none", fixture.state.lastUpdateReview)
+	}
+}
+
+// A standing block that names an unreviewed head is not one a thread
+// resolution can lift: nothing about the code became reviewed.
+func TestThreadResolutionCannotApproveAPartiallyReviewedHead(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	pages := blockingVerdictReviewPage(head, true)
+	pages[0][0]["body"] = "## Review\n\nSevere findings are listed inline.\n\nWaiting on:\n- " +
+		"This head was not fully reviewed, so nothing here can approve it yet. " +
+		"The next push reviews what this run could not." +
+		"\n\n" + marker.Review(head)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages:      pages,
+		reconcileThreads: []githubapp.ReviewThread{resolvedBotThread("thread-resolved")},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-resolved")})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none: the head was never fully reviewed",
+			fixture.state.lastSubmitReview)
+	}
+}
+
 func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{

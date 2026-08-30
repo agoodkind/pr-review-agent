@@ -223,6 +223,100 @@ func TestUnsupportedEventReturns202(t *testing.T) {
 	}
 }
 
+// A resolved review thread must move the verdict with no push: the
+// pull_request_review_thread delivery at the already reviewed head finds the
+// standing CHANGES_REQUESTED disagreeing with all-resolved thread state and
+// submits an APPROVE.
+func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
+	withIntegrationLock(t)
+	defectiveFinding := domain.Finding{
+		Path:       testFindingPath,
+		StartLine:  3,
+		EndLine:    3,
+		Title:      "Missing validation",
+		Body:       "Validate the webhook payload before enqueue.",
+		Importance: testMinimumImportance,
+	}
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(defectiveFinding)},
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-opened",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckConclusion(t, "success")
+	blocking := fixture.githubState.lastSubmitReview()
+	if blocking["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("first event = %v, want REQUEST_CHANGES", blocking["event"])
+	}
+
+	// A person resolves the finding's thread on GitHub; no commit is pushed.
+	fixture.githubState.markAllThreadsResolved()
+
+	resolved := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request_review_thread",
+		deliveryID: "delivery-thread-resolved",
+		body:       reviewThreadPayload("resolved", testDefectiveHead),
+	})
+	if resolved.StatusCode != http.StatusAccepted {
+		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
+	}
+
+	fixture.waitForSubmitReviews(t, 2)
+	approval := fixture.githubState.lastSubmitReview()
+	if approval["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("refreshed event = %v, want APPROVE", approval["event"])
+	}
+	if commit := approval["commit_id"]; commit != testDefectiveHead {
+		t.Fatalf("refreshed commit = %v, want the reviewed head", commit)
+	}
+	if fixture.githubState.lastCheckConclusion() != "success" {
+		t.Fatalf("conclusion = %q, want success kept", fixture.githubState.lastCheckConclusion())
+	}
+}
+
+// A resolution delivery at a head with chunks still pending re-runs the owed
+// work; it must not approve a head nobody finished reading.
+func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeStatus: http.StatusInternalServerError,
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-opened-pending",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	fixture.waitForClydeCalls(t, 1)
+	fixture.waitForCheckConclusion(t, "action_required")
+
+	resolved := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request_review_thread",
+		deliveryID: "delivery-thread-pending",
+		body:       reviewThreadPayload("resolved", testDefectiveHead),
+	})
+	if resolved.StatusCode != http.StatusAccepted {
+		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
+	}
+	fixture.waitForClydeCalls(t, 2)
+	fixture.waitForCheckConclusion(t, "action_required")
+	if count := fixture.githubState.submitReviewCount(); count != 0 {
+		t.Fatalf("submit review count = %d, want 0 with chunks pending", count)
+	}
+}
+
 func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -1204,6 +1298,33 @@ func openedPayload(head string) []byte {
 	return body
 }
 
+func reviewThreadPayload(action string, head string) []byte {
+	payload := map[string]any{
+		"action": action,
+		"installation": map[string]any{
+			"id": float64(testInstallation),
+		},
+		"repository": map[string]any{
+			"name": testRepoName,
+			"owner": map[string]any{
+				"login": testRepoOwner,
+			},
+		},
+		"pull_request": map[string]any{
+			"number": float64(testPRNumber),
+			"draft":  false,
+			"head": map[string]any{
+				"sha": head,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
 func synchronizePayload(head string) []byte {
 	payload := map[string]any{
 		"action": "synchronize",
@@ -1680,6 +1801,16 @@ func (state *githubServerState) setCompareFiles(files []map[string]any) {
 	state.compareFiles = files
 }
 
+// markAllThreadsResolved is a person resolving every open thread in the GitHub
+// UI: the threads stay listed, and later reads report them resolved.
+func (state *githubServerState) markAllThreadsResolved() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for _, node := range state.threads {
+		node["isResolved"] = true
+	}
+}
+
 func (state *githubServerState) setThreads(threads []map[string]any) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1873,6 +2004,20 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 	})
 }
 
+// githubReviewStateForEvent maps a submitted review event to the state GitHub
+// reports for it afterwards: REQUEST_CHANGES is submitted and CHANGES_REQUESTED
+// is read back, APPROVE comes back as APPROVED.
+func githubReviewStateForEvent(event any) string {
+	switch fmt.Sprint(event) {
+	case string(domain.ReviewDecisionRequestChanges):
+		return "CHANGES_REQUESTED"
+	case string(domain.ReviewDecisionApprove):
+		return "APPROVED"
+	default:
+		return "COMMENTED"
+	}
+}
+
 func (state *githubServerState) handleListReviews(writer http.ResponseWriter) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1910,7 +2055,7 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		"id":        float64(100 + len(state.submitReviews)),
 		"commit_id": commitID,
 		"body":      reviewBody,
-		"state":     body["event"],
+		"state":     githubReviewStateForEvent(body["event"]),
 		"user":      map[string]any{"login": testBotLogin},
 	}
 	if len(state.listReviewPages) == 0 {
@@ -2159,25 +2304,30 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	if isReconcile && state.reconcileStatus != 0 {
 		status = state.reconcileStatus
 	}
+	failed := status != 0 && status != http.StatusOK
 	var content string
-	if isReconcile {
-		if len(state.reconcileResponses) == 0 {
-			content = reconcileResolvedContent("thread-owned")
-		} else {
-			content = state.reconcileResponses[state.reconcileIndex]
-			if state.reconcileIndex < len(state.reconcileResponses)-1 {
-				state.reconcileIndex++
+	// A failing endpoint serves no content, and a fixture configured with only
+	// a status has no responses to index.
+	if !failed {
+		if isReconcile {
+			if len(state.reconcileResponses) == 0 {
+				content = reconcileResolvedContent("thread-owned")
+			} else {
+				content = state.reconcileResponses[state.reconcileIndex]
+				if state.reconcileIndex < len(state.reconcileResponses)-1 {
+					state.reconcileIndex++
+				}
 			}
-		}
-	} else {
-		content = state.responses[state.index]
-		if state.index < len(state.responses)-1 {
-			state.index++
+		} else {
+			content = state.responses[state.index]
+			if state.index < len(state.responses)-1 {
+				state.index++
+			}
 		}
 	}
 	state.mu.Unlock()
 
-	if status != 0 && status != http.StatusOK {
+	if failed {
 		http.Error(writer, "clyde request failed", status)
 		return
 	}

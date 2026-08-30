@@ -113,12 +113,20 @@ func emptyEvent() PullRequestEvent {
 	}
 }
 
+// githubEventType names a GitHub webhook event this service understands.
+type githubEventType string
+
+const (
+	eventPullRequest  githubEventType = "pull_request"
+	eventReviewThread githubEventType = "pull_request_review_thread"
+)
+
 // ParseEvent parses any supported webhook delivery into a pull request event.
 func ParseEvent(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
-	switch eventType {
-	case "pull_request":
+	switch githubEventType(eventType) {
+	case eventPullRequest:
 		return ParsePullRequest(eventType, deliveryID, body)
-	case "pull_request_review_thread":
+	case eventReviewThread:
 		return ParseReviewThread(eventType, deliveryID, body)
 	default:
 		return emptyEvent(), false, nil
@@ -127,7 +135,7 @@ func ParseEvent(eventType string, deliveryID string, body []byte) (PullRequestEv
 
 // ParsePullRequest parses a supported pull request webhook payload.
 func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
-	if eventType != "pull_request" {
+	if githubEventType(eventType) != eventPullRequest {
 		return emptyEvent(), false, nil
 	}
 	payload, ok, err := decodePayload(deliveryID, body)
@@ -152,7 +160,7 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 // verdict may no longer match thread state, so it carries the same job shape
 // as a pull request event and rides the same admit-and-enqueue path.
 func ParseReviewThread(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
-	if eventType != "pull_request_review_thread" {
+	if githubEventType(eventType) != eventReviewThread {
 		return emptyEvent(), false, nil
 	}
 	payload, ok, err := decodePayload(deliveryID, body)

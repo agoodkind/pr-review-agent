@@ -127,6 +127,22 @@ func RenderVerdictBody(summary Summary) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// renderVerdictRefreshProse is the summary comment prose for a verdict
+// refreshed from thread state alone. It reports no run statistics because no
+// model ran; the verdict and what it still waits on are the whole story.
+func renderVerdictRefreshProse(summary Summary) string {
+	parts := []string{"## Review", summary.Verdict()}
+	if blocking := renderBlocking(summary.Blocking); blocking != "" {
+		parts = append(parts, blocking)
+	}
+	parts = append(
+		parts,
+		"Verdict refreshed from review thread state on `"+shortHead(summary.Head)+"` with no new push.",
+		marker.Summary()+"\n"+marker.Review(summary.Head),
+	)
+	return strings.Join(parts, "\n\n")
+}
+
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can
 // go straight to the thing holding the pull request.
 func renderBlocking(reasons []string) string {

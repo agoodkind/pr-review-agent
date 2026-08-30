@@ -115,6 +115,45 @@ func threadCommentURL(thread githubapp.ReviewThread, ref domain.PullRequestRef) 
 	)
 }
 
+// GitHub reports review states, not the events that produced them: the event
+// REQUEST_CHANGES reads back as CHANGES_REQUESTED and APPROVE as APPROVED.
+const (
+	reviewStateApproved         = "APPROVED"
+	reviewStateChangesRequested = "CHANGES_REQUESTED"
+)
+
+// latestBotVerdictReview returns the newest review of the service's own that
+// still carries a verdict; COMMENTED and DISMISSED reviews decide nothing.
+func latestBotVerdictReview(reviews []githubapp.Review, botLogin string) (githubapp.Review, bool) {
+	latest := githubapp.Review{ID: 0, CommitID: "", Author: "", Body: "", State: ""}
+	found := false
+	for _, item := range reviews {
+		if item.Author != botLogin {
+			continue
+		}
+		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
+			continue
+		}
+		latest = item
+		found = true
+	}
+	return latest, found
+}
+
+// reviewStateFor is the state GitHub reports once a decision is submitted.
+func reviewStateFor(decision domain.ReviewDecision) string {
+	switch decision {
+	case domain.ReviewDecisionApprove:
+		return reviewStateApproved
+	case domain.ReviewDecisionRequestChanges:
+		return reviewStateChangesRequested
+	case domain.ReviewDecisionComment:
+		return "COMMENTED"
+	default:
+		return ""
+	}
+}
+
 // logPublishedFindings records what the review found against what reached the
 // pull request, so a reader can tell a suppressed finding from a lost one.
 func logPublishedFindings(
