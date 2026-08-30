@@ -55,6 +55,23 @@ no prompt outgrows the model's context.
 | Verdict review | `APPROVE` or `REQUEST_CHANGES`, nothing else | Replaced by every run's recomputation |
 | Check run | Not started, running, finished, or failed, plus the run identifier | One per head |
 
+Every write above is a read then write on shared state, so two runs on the same
+pull request must never overlap. Without that, both can publish the same chunks,
+and the slower run can overwrite a newer last reviewed commit, pending list,
+summary, and verdict with stale values.
+
+Serialization already exists and this design depends on it. Runs are keyed by
+pull request: the dispatcher never starts a second job for a key it is already
+running, and the service takes a per key lock for the whole run. All webhook
+traffic reaches one container instance, so those two layers make the read then
+write sequences atomic per pull request.
+
+That guarantee has one boundary worth naming. It holds within a single
+container. Running two container instances would break it, because neither the
+lock nor the dispatcher spans processes. Should the deployment ever scale out,
+this design needs a compare and swap on the marker instead: reject a write whose
+observed state no longer matches what the run read.
+
 ## Admission: too large is not attempted
 
 CodeRabbit's measured behavior, docs and live: when a pull request exceeds
