@@ -5,7 +5,7 @@ package review
 // It is neither a success nor a failure. The run reached the end and knows what
 // it read, so it publishes a verdict and a summary like any other; it just
 // cannot claim the head. The three outputs say so consistently: a blocking
-// review, a comment naming what is still owed, and a neutral check.
+// review, a comment naming what is still owed, and a check that does not pass.
 
 import (
 	"context"
@@ -24,8 +24,14 @@ import (
 // It submits a blocking verdict. The run does not know what the chunks it never
 // read contain, and withholding the verdict to avoid a wrong approval is what
 // leaves the previous run's approval standing over a head nobody finished
-// reading. The check concludes neutral, because the run itself did not fail,
-// and the comment names what is left and that the next push reviews it.
+// reading. The comment names what is left and that the next push reviews it.
+//
+// The check does not reach a passing conclusion. GitHub counts a required check
+// concluded neutral as satisfying the gate, exactly as it counts one concluded
+// skipped, so concluding either way would let a head with unread chunks merge
+// on the strength of a run that admitted it had not finished. The title still
+// separates "could not be reviewed" from "the review broke", so the reader
+// learns which happened without the gate opening.
 func (service *Service) concludeIncomplete(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -57,7 +63,7 @@ func (service *Service) concludeIncomplete(
 		job.InstallationID,
 		job.Repository,
 		checkRun.ID,
-		"neutral",
+		checkConclusionDeclined,
 		incompleteCheckTitle(pending),
 		incompleteCheckDetail(unread, summary, job),
 	); err != nil {

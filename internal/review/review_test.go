@@ -535,8 +535,8 @@ func TestAModelRefusalIsNotRetriedAndLeavesItsChunkPending(t *testing.T) {
 	if len(model.prompts) != 1 {
 		t.Fatalf("model calls = %d, want 1 because splitting cannot fix a refusal", len(model.prompts))
 	}
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "neutral" {
-		t.Fatalf("conclusion = %v, want neutral", fixture.state.lastUpdateCheckRun["conclusion"])
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want the declined conclusion", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 	if state := decodedSummaryState(t, fixture); len(state.Pending) != 1 {
 		t.Fatalf("pending = %v, want the refused chunk", state.Pending)
@@ -803,9 +803,10 @@ func TestEveryChunkFailingLeavesEveryChunkPendingAndBlocksTheHead(t *testing.T) 
 		t.Fatalf("last reviewed = %q, want no checkpoint at all", state.LastReviewed)
 	}
 	assertBlockingVerdictOverAnUnreadHead(t, fixture)
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "neutral" {
-		t.Fatalf("conclusion = %v, want neutral", fixture.state.lastUpdateCheckRun["conclusion"])
-	}
+	// A head with unread chunks must not merge either. GitHub counts a check
+	// concluded neutral as satisfying the gate exactly as it counts one
+	// concluded skipped, so this asserts the class rather than one string.
+	assertDeclinedCheckDoesNotPass(t, fixture)
 }
 
 // A chunk that answers still publishes what it found, even while another chunk
@@ -843,8 +844,8 @@ func TestARunThatLeavesChunksPendingPublishesItsOwnLogInTheCheckRun(t *testing.T
 		t.Fatalf("Run: %v", err)
 	}
 
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "neutral" {
-		t.Fatalf("conclusion = %v, want neutral", fixture.state.lastUpdateCheckRun["conclusion"])
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want the declined conclusion", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok {
@@ -1093,8 +1094,8 @@ func TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost(t *testing.T) {
 	if state.LastReviewed != "" {
 		t.Fatalf("last reviewed = %q, want no checkpoint over an unseen finding", state.LastReviewed)
 	}
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "neutral" {
-		t.Fatalf("conclusion = %v, want neutral rather than a failure",
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want the declined conclusion rather than a failure",
 			fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 	// The defect is real whether or not its comment reached the page, so the
@@ -1241,9 +1242,10 @@ func TestAFailedChunkStaysPendingAndTheNextRunFinishesIt(t *testing.T) {
 		t.Fatalf("status = %q, want %q", first.Status, marker.StateReviewing)
 	}
 	assertBlockingVerdictOverAnUnreadHead(t, fixture)
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "neutral" {
-		t.Fatalf("conclusion = %v, want neutral", fixture.state.lastUpdateCheckRun["conclusion"])
-	}
+	// A head with unread chunks must not merge either. GitHub counts a check
+	// concluded neutral as satisfying the gate exactly as it counts one
+	// concluded skipped, so this asserts the class rather than one string.
+	assertDeclinedCheckDoesNotPass(t, fixture)
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok || !strings.Contains(fmt.Sprint(output["title"]), "1 chunk could not be reviewed") {
 		t.Fatalf("check title = %v, want the count of unread chunks", fixture.state.lastUpdateCheckRun["output"])
