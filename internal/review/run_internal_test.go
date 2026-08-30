@@ -271,3 +271,20 @@ func TestAPureRefusalBatchTakesTheRefusedPath(t *testing.T) {
 		t.Fatalf("err = %v, want errCommentRefused when no failure is retryable", err)
 	}
 }
+
+// A rate limit or a server error is GitHub failing to answer, not answering
+// no. Classifying either as a refusal checkpointed the chunk and silently
+// dropped its findings, when the next run would have posted them fine.
+func TestARateLimitedOrServerFailedBatchStaysPending(t *testing.T) {
+	rateLimited := githubapp.APIError{StatusCode: 429, Message: "rate limited"}
+	serverError := githubapp.APIError{StatusCode: 502, Message: "bad gateway"}
+
+	err := postFindingsWithPlan(t, []error{rateLimited, serverError})
+
+	if err == nil {
+		t.Fatal("no error, want the chunk left pending for GitHub failing to answer")
+	}
+	if errors.Is(err, errCommentRefused) {
+		t.Fatalf("err = %v, want the pending path: no failure in the batch was an answer", err)
+	}
+}

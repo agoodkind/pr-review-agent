@@ -1,5 +1,5 @@
 import { entryFromDelivery, forwardFailed } from "./replaylogic.js";
-import { SERVICE_LOG_PATH, handleServiceLogs } from "./servicelogs.js";
+import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
 
 export async function routeRequest(request, env) {
   const url = new URL(request.url);
@@ -34,7 +34,18 @@ export async function routeRequest(request, env) {
   // pull requests with a required check that simply never appeared. The
   // delivery is queued and replayed instead, and GitHub is answered 202
   // because this worker now owns it.
+  //
+  // Only a delivery GitHub signed is queued. The signature is normally checked
+  // by the Go service, which is exactly the part that is unavailable here, so
+  // an unverified queue would let anyone fill the replay store with forged
+  // bodies during an outage. The verifier is the service log one because both
+  // use GitHub's own scheme and key.
   if (forwardFailed(response) && request.method === "POST" && metadata.deliveryId !== "") {
+    const signature = request.headers.get("x-hub-signature-256") ?? "";
+    if (!(await verifyServiceLogSignature(env.GITHUB_WEBHOOK_SECRET, body, signature))) {
+      console.error(JSON.stringify({ message: "webhook replay refused, invalid signature", ...metadata }));
+      return new Response("invalid signature", { status: 401 });
+    }
     const queuedId = await enqueueForReplay(env, url.pathname, request, body, metadata);
     console.log(JSON.stringify({ message: "webhook queued for replay", ...metadata, queuedId }));
     return Response.json({ status: "queued for replay", deliveryId: queuedId }, { status: 202 });

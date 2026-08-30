@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"sync"
 
@@ -632,8 +633,7 @@ func (service *Service) postChunkFindings(
 				slog.String("err", err.Error()),
 			)
 			pass.recordUndelivered()
-			var apiErr githubapp.APIError
-			if errors.As(err, &apiErr) {
+			if commentRefusal(err) {
 				refused++
 				if refusedErr == nil {
 					refusedErr = err
@@ -661,6 +661,22 @@ func (service *Service) postChunkFindings(
 		return fmt.Errorf("%w: %w", errCommentRefused, refusedErr)
 	}
 	return nil
+}
+
+// commentRefusal reports whether GitHub read this comment and rejected it for
+// what it is, which no later attempt can change. A rate limit or a server
+// error is GitHub failing to answer, not answering no: treating those as
+// refusals checkpointed the chunk and silently dropped its findings, when the
+// next run would have posted them fine.
+func commentRefusal(err error) bool {
+	var apiErr githubapp.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode == http.StatusRequestTimeout {
+		return false
+	}
+	return apiErr.StatusCode >= http.StatusBadRequest && apiErr.StatusCode < http.StatusInternalServerError
 }
 
 // recordDelivered records one finding whose comment reached the page.

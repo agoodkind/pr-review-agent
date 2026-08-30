@@ -9,6 +9,7 @@
 // only then deploys.
 
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -32,14 +33,23 @@ if (image === "") {
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const deployDirectory = path.join(scriptDirectory, "..");
+const configPath = path.join(deployDirectory, "wrangler.jsonc");
 
-execFileSync("node", [path.join(scriptDirectory, "configure-image.mjs")], {
-  cwd: deployDirectory,
-  env: process.env,
-  stdio: "inherit",
-});
-execFileSync("npm", ["exec", "wrangler", "deploy"], {
-  cwd: deployDirectory,
-  env: process.env,
-  stdio: "inherit",
-});
+// The configuration is restored whether the deploy succeeds or fails. Leaving
+// the real digest written would let a later raw `wrangler deploy` reuse it
+// once it goes stale, which is the exact outage this script exists to prevent.
+const committedConfig = fs.readFileSync(configPath, "utf8");
+try {
+  execFileSync("node", [path.join(scriptDirectory, "configure-image.mjs")], {
+    cwd: deployDirectory,
+    env: process.env,
+    stdio: "inherit",
+  });
+  execFileSync("npm", ["exec", "wrangler", "deploy"], {
+    cwd: deployDirectory,
+    env: process.env,
+    stdio: "inherit",
+  });
+} finally {
+  fs.writeFileSync(configPath, committedConfig);
+}

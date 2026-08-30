@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
@@ -71,8 +72,15 @@ test("webhooks reach the Go review container", async function () {
 // blocked with nothing a person could point at. A delivery the container
 // cannot take is queued and GitHub is answered 202, because the worker now
 // owns it.
+const testWebhookSecret = "test-webhook-secret"; // gitleaks:allow
+
+function signBody(body) {
+  return "sha256=" + createHmac("sha256", testWebhookSecret).update(body).digest("hex"); // gitleaks:allow
+}
+
 function createFailingEnvironment(mode, queued) {
   return {
+    GITHUB_WEBHOOK_SECRET: testWebhookSecret, // gitleaks:allow
     PR_AGENT: {
       getByName() {
         return {
@@ -99,15 +107,16 @@ function createFailingEnvironment(mode, queued) {
   };
 }
 
-function signedWebhookRequest() {
+function signedWebhookRequest(signature) {
+  const body = JSON.stringify({ action: "opened", pull_request: { head: { sha: "e6949cd" } } });
   return new Request("https://reviewer.example/api/v1/github_webhooks", {
-    body: JSON.stringify({ action: "opened", pull_request: { head: { sha: "e6949cd" } } }),
+    body,
     method: "POST",
     headers: {
       "content-type": "application/json",
       "x-github-event": "pull_request",
       "x-github-delivery": "delivery-lost-1",
-      "x-hub-signature-256": "sha256=signature",
+      "x-hub-signature-256": signature ?? signBody(body),
     },
   });
 }
@@ -120,8 +129,22 @@ test("a delivery the container fetch throws on is queued and GitHub answered 202
   assert.equal(queued.length, 1);
   assert.equal(queued[0].id, "delivery-lost-1");
   assert.equal(queued[0].path, "/api/v1/github_webhooks");
-  assert.equal(queued[0].headers["x-hub-signature-256"], "sha256=signature");
+  assert.match(queued[0].headers["x-hub-signature-256"], /^sha256=/);
   assert.match(queued[0].body, /opened/);
+});
+
+// The signature is normally checked by the Go service, which is exactly the
+// part that is unavailable when the queue is in play. An unverified queue
+// would let anyone fill the replay store with forged bodies during an outage.
+test("a forged delivery is refused during an outage and queues nothing", async function () {
+  const queued = [];
+  const response = await routeRequest(
+    signedWebhookRequest("sha256=" + "0".repeat(64)),
+    createFailingEnvironment("throw", queued),
+  );
+
+  assert.equal(response.status, 401);
+  assert.equal(queued.length, 0);
 });
 
 test("a delivery answered 500 is queued, because the Go service never returns 500", async function () {
