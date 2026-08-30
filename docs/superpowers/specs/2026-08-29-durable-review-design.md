@@ -45,6 +45,15 @@ no prompt outgrows the model's context.
    to the run that push triggers. The verdict itself names the analyzed commit,
    so a push landing between the check and the write cannot leave an approval
    attached to a commit nobody reviewed.
+
+   Naming the commit is not enough on its own to stop a merge. GitHub keeps
+   counting an approval after a push unless the repository dismisses stale
+   approvals, so an approval written moments before a push could still satisfy
+   branch protection. The check run is the enforcement point, because it is
+   created per head and a new head has no passing check until a run produces
+   one. A repository relying on this service should require that check, or
+   enable stale approval dismissal, or both. The verdict expresses the
+   reviewer's opinion; the check is what actually holds the gate.
 6. **A block always says what is holding it.** When the verdict requests
    changes, the top level comment names the open threads it is waiting on. A
    run that finds nothing new still blocks while an earlier thread is
