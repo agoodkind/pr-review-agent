@@ -1953,16 +1953,24 @@ func TestAFindingWithEvidenceFromTheShownSourceIsPublished(t *testing.T) {
 	}
 }
 
-// A finding whose evidence appears nowhere in the source the model was shown
-// asserts a fact the source cannot back, so it never reaches the pull request
-// and the drop is logged.
-func TestAFindingWhoseEvidenceIsNotInTheShownSourceIsDropped(t *testing.T) {
+// A finding whose evidence is not a whole line of the source the model was
+// shown asserts a fact the source cannot back, so it never reaches the pull
+// request and the drop is logged.
+//
+// The fragment cases are the reason this is a line comparison rather than a
+// substring search. The prompt asks for one line copied verbatim, and anything
+// short of that matches code the model never actually read a line for: a
+// containment test accepted any fragment that happened to appear somewhere in
+// the diff.
+func TestAFindingWhoseEvidenceIsNotAWholeShownLineIsDropped(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
 		evidence string
 	}{
 		{name: "fabricated evidence", evidence: "db.Exec(query)"},
 		{name: "missing evidence", evidence: ""},
+		{name: "fragment of a shown line", evidence: "adde"},
+		{name: "fragment carrying the diff marker", evidence: "+add"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			logs := &syncBuffer{}
