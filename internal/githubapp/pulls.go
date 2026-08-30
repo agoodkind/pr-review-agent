@@ -34,7 +34,25 @@ type changedFileResponse struct {
 }
 
 type compareResponse struct {
+	MergeBaseCommit struct {
+		SHA string `json:"sha"`
+	} `json:"merge_base_commit"`
 	Files []changedFileResponse `json:"files"`
+}
+
+// Comparison is what comparing two commits returned: the files that changed, and
+// the commit their patches are measured from.
+//
+// The merge base is part of the answer because GitHub does not diff the base
+// against the head directly. When the two have diverged it diffs from where they
+// last agreed, so the old side of every patch belongs to the merge base rather
+// than to the base that was asked for. A caller mapping coordinates through those
+// patches would be mapping from a commit it never named, and landing on
+// unrelated code. MergeBase is empty when the response did not carry a usable
+// one, which callers must read as "do not assume".
+type Comparison struct {
+	MergeBase domain.HeadSHA
+	Files     []ChangedFile
 }
 
 type fileContentResponse struct {
@@ -145,31 +163,40 @@ func (client *Client) GetFile(
 	return decoded, nil
 }
 
-// Compare returns files changed between two head SHAs.
+// Compare returns the files changed between two commits and the commit their
+// patches are measured from.
 func (client *Client) Compare(
 	ctx context.Context,
 	installationID int64,
 	repo domain.Repository,
 	base domain.HeadSHA,
 	head domain.HeadSHA,
-) ([]ChangedFile, error) {
+) (Comparison, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/compare/%s...%s", base, head))
-	files := make([]ChangedFile, 0)
+	comparison := Comparison{MergeBase: "", Files: make([]ChangedFile, 0)}
 	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
 		var response compareResponse
 		if err := json.Unmarshal(page, &response); err != nil {
 			client.logger.ErrorContext(ctx, "decode compare page", slog.String("err", err.Error()))
 			return 0, errors.New("decode compare page")
 		}
+		// Every page repeats the merge base; the first usable one settles it. A
+		// SHA that does not parse leaves it empty, which reads as unknown rather
+		// than as a commit nobody verified.
+		if comparison.MergeBase == "" {
+			if mergeBase, err := parseHeadSHA(response.MergeBaseCommit.SHA); err == nil {
+				comparison.MergeBase = mergeBase
+			}
+		}
 		for _, item := range response.Files {
-			files = append(files, decodeChangedFile(item))
+			comparison.Files = append(comparison.Files, decodeChangedFile(item))
 		}
 		return len(response.Files), nil
 	})
 	if err != nil {
-		return nil, err
+		return Comparison{MergeBase: "", Files: nil}, err
 	}
-	return files, nil
+	return comparison, nil
 }
 
 func decodeChangedFile(item changedFileResponse) ChangedFile {

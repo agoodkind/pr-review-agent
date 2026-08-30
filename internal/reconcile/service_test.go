@@ -495,6 +495,73 @@ func TestReconcileShowsFixedCodeAfterInsertionsAboveAnchor(t *testing.T) {
 // window and the remapped window disjoint enough to tell apart.
 const shiftedInsertionCount = 30
 
+// GitHub does not diff the finding head against the current head directly. Once
+// the two diverge, through a force push or a rebase, it diffs from where they
+// last agreed, so the old side of every patch belongs to that merge base and the
+// finding's coordinates were never in it. Mapping them anyway lands on unrelated
+// code with full confidence, so a diverged comparison keeps the stale window.
+func TestReconcileDoesNotRemapThroughADivergedComparison(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	// The same shape as the shifted-anchor fixture, so the only difference is
+	// which commit the patch is measured from.
+	insertedLines := make([]string, 0, shiftedInsertionCount)
+	patchLines := []string{
+		fmt.Sprintf("@@ -1,3 +1,%d @@", shiftedInsertionCount+3),
+		" line1",
+	}
+	for index := range shiftedInsertionCount {
+		inserted := fmt.Sprintf("new line %d", index)
+		insertedLines = append(insertedLines, inserted)
+		patchLines = append(patchLines, "+"+inserted)
+	}
+	patchLines = append(patchLines, "-issue line", "+fixed line", " line3")
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		// The branches diverged, so the patch is measured from neither head.
+		mergeBase: domain.HeadSHA("e7f8b4fdfaf828ef157a37e2f5d4f4424963af65"),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-diverged", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\n" + strings.Join(insertedLines, "\n") + "\nfixed line\nline3"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        strings.Join(patchLines, "\n") + "\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-diverged",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "cannot prove the defect gone",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	}
+	// The window stays where the recorded coordinates put it. Remapping through
+	// a patch whose old side is some third commit would move it somewhere the
+	// finding never pointed, and claim the move was exact.
+	promptCodeSection := currentCodeSection(t, model.prompts[0])
+	if !strings.Contains(promptCodeSection, "new line 0") {
+		t.Fatalf("current code section was remapped through a diverged comparison: %q", promptCodeSection)
+	}
+}
+
 // currentCodeSection isolates the current-code excerpt so assertions cannot be
 // satisfied by the diff section of the prompt.
 func currentCodeSection(t *testing.T, prompt string) string {
@@ -674,10 +741,13 @@ type fakeGitHub struct {
 	getFileErrors  map[string]error
 	compareFiles   []githubapp.ChangedFile
 	compareError   error
-	resolveErrors  map[string]error
-	resolveCalls   []string
-	replyCalls     int
-	getPullCount   int
+	// mergeBase overrides the commit the compare patches are measured from, for
+	// the diverged case where it is neither the finding head nor the current one.
+	mergeBase     domain.HeadSHA
+	resolveErrors map[string]error
+	resolveCalls  []string
+	replyCalls    int
+	getPullCount  int
 }
 
 func (fake *fakeGitHub) ListReviewThreads(
@@ -706,16 +776,24 @@ func (fake *fakeGitHub) GetFile(
 	return content, nil
 }
 
+// Compare answers the way GitHub does: the patches are measured from where the
+// two commits last agreed. mergeBase names that commit, defaulting to the
+// finding head, which is the case where the head is an ancestor of the current
+// head and the patches really are measured from it.
 func (fake *fakeGitHub) Compare(
 	_ context.Context,
 	_ int64,
 	_ domain.Repository,
-	_, _ domain.HeadSHA,
-) ([]githubapp.ChangedFile, error) {
+	base, _ domain.HeadSHA,
+) (githubapp.Comparison, error) {
 	if fake.compareError != nil {
-		return nil, fake.compareError
+		return githubapp.Comparison{}, fake.compareError
 	}
-	return fake.compareFiles, nil
+	mergeBase := base
+	if fake.mergeBase != "" {
+		mergeBase = fake.mergeBase
+	}
+	return githubapp.Comparison{MergeBase: mergeBase, Files: fake.compareFiles}, nil
 }
 
 func (fake *fakeGitHub) GetPullRequest(

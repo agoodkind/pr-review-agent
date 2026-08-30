@@ -576,14 +576,14 @@ func (source *fakeSource) Compare(
 	_ domain.Repository,
 	base domain.HeadSHA,
 	head domain.HeadSHA,
-) ([]githubapp.ChangedFile, error) {
+) (githubapp.Comparison, error) {
 	source.compareCalls++
 	source.lastCompareBase = base
 	source.lastCompareHead = head
 	if source.compareErr != nil {
-		return nil, source.compareErr
+		return githubapp.Comparison{}, source.compareErr
 	}
-	return source.files, nil
+	return githubapp.Comparison{MergeBase: base, Files: source.files}, nil
 }
 
 func (source *fakeSource) GetFile(

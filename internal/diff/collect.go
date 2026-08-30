@@ -94,7 +94,7 @@ func chunkFromPieces(pieces []Piece, index int, total int) Chunk {
 type Source interface {
 	ListChangedFiles(context.Context, int64, domain.Repository, int) ([]githubapp.ChangedFile, error)
 	GetFile(context.Context, int64, domain.Repository, string, domain.HeadSHA) ([]byte, error)
-	Compare(context.Context, int64, domain.Repository, domain.HeadSHA, domain.HeadSHA) ([]githubapp.ChangedFile, error)
+	Compare(context.Context, int64, domain.Repository, domain.HeadSHA, domain.HeadSHA) (githubapp.Comparison, error)
 }
 
 // Collector gathers pull request patches and file content for review.
@@ -174,7 +174,7 @@ func (collector *Collector) CollectRange(
 
 	return ReviewInput{
 		PullRequest: pullRequest,
-		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles),
+		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles.Files),
 	}, nil
 }
 

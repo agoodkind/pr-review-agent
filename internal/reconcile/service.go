@@ -28,7 +28,7 @@ type GitHub interface {
 		domain.Repository,
 		domain.HeadSHA,
 		domain.HeadSHA,
-	) ([]githubapp.ChangedFile, error)
+	) (githubapp.Comparison, error)
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
 	ResolveReviewThread(context.Context, int64, string) error
 }
@@ -395,7 +395,7 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	changedFiles, err := service.github.Compare(
+	comparison, err := service.github.Compare(
 		ctx,
 		job.InstallationID,
 		job.Repository,
@@ -406,6 +406,7 @@ func (service *Service) loadThreadContext(
 		gklog.L(ctx).ErrorContext(ctx, "compare finding head", slog.String("err", err.Error()))
 		return emptyThreadContext(), threadContextUnavailable
 	}
+	changedFiles := comparison.Files
 
 	currentPath := normalizedPath
 	for _, file := range changedFiles {
@@ -428,7 +429,7 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	startLine, endLine := remapAnchor(changedFiles, normalizedPath, thread.Finding)
+	startLine, endLine := remapAnchor(comparison, normalizedPath, thread.Finding, thread.FindingHead)
 	return threadContext{
 		currentContent: extractAnchorWindow(fileBytes, startLine, endLine),
 		compareText:    formatCompareForPath(changedFiles, normalizedPath),
@@ -443,14 +444,26 @@ func (service *Service) loadThreadContext(
 // lines above the anchor moves the code the reconciler needs to see out of view,
 // and the model then reads unrelated code and keeps a fixed finding open. The
 // compare patch is already loaded here and records every shift exactly, so the
-// remapping needs no extra call. A file the patch does not cover, or a patch
-// this cannot read, keeps the coordinates it had.
+// remapping needs no extra call.
+//
+// It only holds while the patch is measured from the finding head. GitHub
+// compares from where two commits last agreed, so once the finding head and the
+// current head have diverged, through a force push or a rebase, the old side of
+// every patch belongs to the merge base and the finding's coordinates were never
+// in it. Mapping them anyway lands on unrelated code with full confidence, which
+// is worse than the stale window it replaces, so a diverged comparison keeps the
+// coordinates it had. So does a file the patch does not cover, or a patch this
+// cannot read.
 func remapAnchor(
-	changedFiles []githubapp.ChangedFile,
+	comparison githubapp.Comparison,
 	normalizedPath string,
 	finding domain.Finding,
+	findingHead domain.HeadSHA,
 ) (int, int) {
-	patch, ok := patchForPath(changedFiles, normalizedPath)
+	if comparison.MergeBase == "" || comparison.MergeBase != findingHead {
+		return finding.StartLine, finding.EndLine
+	}
+	patch, ok := patchForPath(comparison.Files, normalizedPath)
 	if !ok {
 		return finding.StartLine, finding.EndLine
 	}
