@@ -65,8 +65,11 @@ func (progress *reviewProgress) applyAnalysis(analysis Analysis) {
 // summary renders the progress as the value both failure outputs report from.
 func (progress *reviewProgress) summary(now time.Time) Summary {
 	return Summary{
-		Head:              progress.head,
-		Decision:          "",
+		Head:     progress.head,
+		Decision: "",
+		// A failed run carries no verdict, so there is nothing for it to be
+		// waiting on and nothing to name.
+		Blocking:          nil,
 		Models:            progress.models,
 		Duration:          now.Sub(progress.startedAt),
 		FilesReviewed:     progress.filesReviewed,

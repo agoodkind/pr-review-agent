@@ -898,10 +898,6 @@ func emptyThreadPage(hasNext bool) map[string]any {
 }
 
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
-	if strings.Contains(request.URL.Path, "/issues/comments") {
-		http.Error(writer, "issue comments forbidden", http.StatusForbidden)
-		return true
-	}
 	if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
 		http.Error(writer, "replies forbidden", http.StatusForbidden)
 		return true

@@ -121,7 +121,97 @@ func (recorder *Recorder) Entries() []Entry {
 	return copied
 }
 
-// Render returns the run's log as a markdown block for a check run body. It
+// publishedFields are the field names whose values may reach a public surface.
+// Every one of them holds a measurement this run counted, an identifier a
+// reader can look up, or a phrase this service itself wrote.
+//
+// This is an allowlist, and the direction is the whole point. A check run is as
+// public and as permanent as a pull request comment, and a model provider error
+// can carry the request it failed on, an internal endpoint, or a credential.
+// Naming what is safe means a field someone adds later and forgets to list here
+// is withheld rather than published: forgetting costs a reader one lookup in
+// this service's log, where publishing a credential costs something nobody can
+// take back.
+//
+// A withheld field keeps its key, its line's message, and every other field on
+// that line, so a reader still sees which line carried it. Entries keeps the
+// value itself, so the service log the run identifier points at still holds it.
+var publishedFields = map[string]struct{}{
+	// Which run this was, and what it ran against.
+	"delivery_id":  {},
+	"run_id":       {},
+	"repository":   {},
+	"pull_request": {},
+	"head":         {},
+	"check_run_id": {},
+	"comment_id":   {},
+	"review_id":    {},
+
+	// How the run was configured, and what it concluded.
+	"minimum_importance": {},
+	"chunk_timeout":      {},
+	"status":             {},
+	"conclusion":         {},
+	"decision":           {},
+	"event":              {},
+	"visible":            {},
+	// reason and blocking carry sentences this service composed: why a run was
+	// suppressed or declined, and what an open thread is holding.
+	"reason":   {},
+	"blocking": {},
+
+	// How much of the delta there was, and how much of it was read.
+	"files":             {},
+	"chunk":             {},
+	"chunks":            {},
+	"delta_chunks":      {},
+	"already_read":      {},
+	"owed":              {},
+	"pending":           {},
+	"concurrency":       {},
+	"chunks_failed":     {},
+	"coverage_complete": {},
+	"hunks":             {},
+	"path":              {},
+	"paths":             {},
+	"line":              {},
+
+	// What the model was asked, and how the request went. The model name is the
+	// service's own configuration, and the check run already reports it.
+	"model":          {},
+	"model_requests": {},
+	"elapsed":        {},
+	"findings":       {},
+	"prompt_bytes":   {},
+	"truncated":      {},
+	"attempt":        {},
+	"attempts":       {},
+	"recovered":      {},
+
+	// What reached the pull request. The finding and thread traces carry an
+	// identifier, a path, a line range, and an importance, and no model prose.
+	"eligible":             {},
+	"published":            {},
+	"offered":              {},
+	"posted":               {},
+	"refused":              {},
+	"failed":               {},
+	"comments_posted":      {},
+	"comments_rejected":    {},
+	"comments_undelivered": {},
+	"streamed_comments":    {},
+	"observed_findings":    {},
+	"eligible_findings":    {},
+	"published_findings":   {},
+	"bot_reviews":          {},
+	"bot_threads":          {},
+}
+
+// withheldValue stands in for a dropped value and says where the real one is.
+const withheldValue = "[redacted: see this service's log for this run]"
+
+// Render returns the run's log as a markdown block for a check run body, with
+// the value of every field this service has not vouched for withheld. It
 // returns the empty string when the run logged nothing, so a caller can omit
 // the section rather than publish an empty heading.
 func (recorder *Recorder) Render() string {
@@ -157,9 +247,26 @@ func formatFields(fields map[string]string) string {
 
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
-		parts = append(parts, key+"="+fields[key])
+		parts = append(parts, key+"="+publishedValue(key, fields[key]))
 	}
 	return strings.Join(parts, " ")
+}
+
+// lineBreakEscaper keeps a published value on its own line.
+//
+// Allowlisting a field says its value is safe to read, not that its shape is.
+// A repository path comes from the pull request, so someone who can name a file
+// can put a newline in it, and a raw newline here would close the code block
+// this log renders into and let the rest of that value become markdown in a
+// body the service signed its name to.
+var lineBreakEscaper = strings.NewReplacer("\r", "\\r", "\n", "\\n")
+
+// publishedValue returns what one field may say on a public surface.
+func publishedValue(key string, value string) string {
+	if _, published := publishedFields[key]; published {
+		return lineBreakEscaper.Replace(value)
+	}
+	return withheldValue
 }
 
 // Tee returns a handler that writes to every handler given. It lets one review

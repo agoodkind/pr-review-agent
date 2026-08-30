@@ -46,8 +46,6 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		"CF_ACCESS_CLIENT_ID",
 		"CF_ACCESS_CLIENT_SECRET",
 		"REVIEW_MIN_IMPORTANCE",
-		"REVIEW_MAX_UNRESOLVED_COMMENTS",
-		"REVIEW_TIMEOUT",
 		"REVIEW_WORKERS",
 		"REVIEW_MODEL",
 	} {
@@ -270,23 +268,96 @@ func TestLoadUsesConfiguredMinimumImportance(t *testing.T) {
 	}
 }
 
-func TestLoadUsesConfiguredMaximumUnresolvedComments(t *testing.T) {
-	cfg, err := loadWithOverrides(map[string]string{"REVIEW_MAX_UNRESOLVED_COMMENTS": "12"})
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.MaximumUnresolvedComments != 12 {
-		t.Fatalf("MaximumUnresolvedComments = %d, want 12", cfg.MaximumUnresolvedComments)
-	}
-}
-
-func TestLoadUsesConfiguredReviewTimeout(t *testing.T) {
+// A review is bounded by admission and by one clock per model call, so no
+// run wide deadline may creep back into the configuration.
+func TestLoadIgnoresARunWideReviewTimeout(t *testing.T) {
 	cfg, err := loadWithOverrides(map[string]string{"REVIEW_TIMEOUT": "12m30s"})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.ReviewTimeout != 12*time.Minute+30*time.Second {
-		t.Fatalf("ReviewTimeout = %s, want 12m30s", cfg.ReviewTimeout)
+	if cfg.ReviewChunkTimeout != 5*time.Minute {
+		t.Fatalf("ReviewChunkTimeout = %s, want the per call default 5m", cfg.ReviewChunkTimeout)
+	}
+}
+
+func TestLoadUsesReviewMaxFilesDefault(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewMaxFiles != 100 {
+		t.Fatalf("ReviewMaxFiles = %d, want 100", cfg.ReviewMaxFiles)
+	}
+}
+
+func TestLoadUsesConfiguredReviewMaxFiles(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{"REVIEW_MAX_FILES": "40"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewMaxFiles != 40 {
+		t.Fatalf("ReviewMaxFiles = %d, want 40", cfg.ReviewMaxFiles)
+	}
+}
+
+func TestLoadRejectsANonPositiveReviewMaxFiles(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{"REVIEW_MAX_FILES": "0"})
+	if err == nil || !strings.Contains(err.Error(), "REVIEW_MAX_FILES") {
+		t.Fatalf("Load with REVIEW_MAX_FILES=0: err = %v, want REVIEW_MAX_FILES", err)
+	}
+}
+
+func TestLoadUsesReviewMaxChunksDefault(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewMaxChunks != 60 {
+		t.Fatalf("ReviewMaxChunks = %d, want 60", cfg.ReviewMaxChunks)
+	}
+}
+
+func TestLoadUsesConfiguredReviewMaxChunks(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{"REVIEW_MAX_CHUNKS": "20"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewMaxChunks != 20 {
+		t.Fatalf("ReviewMaxChunks = %d, want 20", cfg.ReviewMaxChunks)
+	}
+}
+
+func TestLoadRejectsANonPositiveReviewMaxChunks(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{"REVIEW_MAX_CHUNKS": "-1"})
+	if err == nil || !strings.Contains(err.Error(), "REVIEW_MAX_CHUNKS") {
+		t.Fatalf("Load with REVIEW_MAX_CHUNKS=-1: err = %v, want REVIEW_MAX_CHUNKS", err)
+	}
+}
+
+func TestLoadUsesReviewChunkTimeoutDefault(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewChunkTimeout != 5*time.Minute {
+		t.Fatalf("ReviewChunkTimeout = %s, want 5m", cfg.ReviewChunkTimeout)
+	}
+}
+
+func TestLoadUsesConfiguredReviewChunkTimeout(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{"REVIEW_CHUNK_TIMEOUT": "90s"})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReviewChunkTimeout != 90*time.Second {
+		t.Fatalf("ReviewChunkTimeout = %s, want 90s", cfg.ReviewChunkTimeout)
+	}
+}
+
+func TestLoadRejectsANonPositiveReviewChunkTimeout(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{"REVIEW_CHUNK_TIMEOUT": "0s"})
+	if err == nil || !strings.Contains(err.Error(), "REVIEW_CHUNK_TIMEOUT") {
+		t.Fatalf("Load with REVIEW_CHUNK_TIMEOUT=0s: err = %v, want REVIEW_CHUNK_TIMEOUT", err)
 	}
 }
 
@@ -350,19 +421,17 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 	}))
 
 	values := map[string]string{
-		"GITHUB_APP_ID":                  "12345",
-		"GITHUB_PRIVATE_KEY":             defaultKey,
-		"GITHUB_WEBHOOK_SECRET":          "fixture-webhook-" + strings.Repeat("a", 8),
-		"GITHUB_BOT_LOGIN":               testBotLogin,
-		"CLYDE_BASE_URL":                 "https://clyde.example",
-		"CLYDE_API_KEY":                  "fixture-clyde-" + strings.Repeat("b", 8),
-		"CF_ACCESS_CLIENT_ID":            "fixture-cf-id",
-		"CF_ACCESS_CLIENT_SECRET":        "fixture-cf-" + strings.Repeat("c", 8),
-		"REVIEW_MIN_IMPORTANCE":          "7",
-		"REVIEW_MAX_UNRESOLVED_COMMENTS": "10",
-		"REVIEW_TIMEOUT":                 "10m",
-		"REVIEW_WORKERS":                 "4",
-		"REVIEW_MODEL":                   "fixture-primary-model",
+		"GITHUB_APP_ID":           "12345",
+		"GITHUB_PRIVATE_KEY":      defaultKey,
+		"GITHUB_WEBHOOK_SECRET":   "fixture-webhook-" + strings.Repeat("a", 8),
+		"GITHUB_BOT_LOGIN":        testBotLogin,
+		"CLYDE_BASE_URL":          "https://clyde.example",
+		"CLYDE_API_KEY":           "fixture-clyde-" + strings.Repeat("b", 8),
+		"CF_ACCESS_CLIENT_ID":     "fixture-cf-id",
+		"CF_ACCESS_CLIENT_SECRET": "fixture-cf-" + strings.Repeat("c", 8),
+		"REVIEW_MIN_IMPORTANCE":   "7",
+		"REVIEW_WORKERS":          "4",
+		"REVIEW_MODEL":            "fixture-primary-model",
 	}
 	for key, value := range overrides {
 		values[key] = value

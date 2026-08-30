@@ -3,16 +3,15 @@ package review
 // This file decides which findings a review posts and which decision that
 // review can stand behind.
 //
-// Analysis reports every defect the model found on this head. Publication is
-// narrower: a finding an earlier review already carried stays suppressed once
-// its thread exists, and the number of open findings is capped. The two answers
-// differ, so the review publishes the narrower one.
+// A run reports every defect it found on this head, with one exception: a
+// finding an earlier review already carried stays suppressed once its thread
+// exists, so the same defect is raised once and not once per push.
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -20,41 +19,31 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// standingDecision reports the decision this review can actually stand behind.
+// reviewerDecision is the whole verdict policy. A reviewer blocks while
+// something they raised is open, and approves when nothing is. Anything more
+// clever than this is how stale blocks happened: a decision derived from what
+// one run happened to find outlives the run, while the threads a reader can
+// actually act on say something else entirely.
 //
-// The analysis decision covers every finding the model reported on this head.
-// Publication is narrower: a finding an earlier review already carried is
-// suppressed, and it stays suppressed after its thread is resolved. A review
-// that publishes nothing and leaves no unresolved thread therefore has no
-// objection a reader can act on, and requesting changes there blocks the pull
-// request with nothing to fix and nothing to dismiss but the review itself.
-func standingDecision(
-	ctx context.Context,
-	analysis Analysis,
-	published []domain.Finding,
+// Both inputs are read after this run's findings are published, so the threads
+// include the ones this run just opened, and a head that was not fully
+// reviewed is never approved on the strength of a partial read.
+func reviewerDecision(
 	threads []githubapp.ReviewThread,
 	botLogin string,
+	headFullyReviewed bool,
 ) domain.ReviewDecision {
-	if analysis.Decision != domain.ReviewDecisionRequestChanges {
-		return analysis.Decision
-	}
-	if len(published) > 0 || hasUnresolvedBotThread(threads, botLogin) {
+	if hasUnresolvedBotThread(threads, botLogin) {
 		return domain.ReviewDecisionRequestChanges
 	}
-	gklog.L(ctx).InfoContext(
-		ctx,
-		"review decision relaxed to approval",
-		slog.String("analysis_decision", string(analysis.Decision)),
-		slog.Int("eligible_findings", len(analysis.Anchored)),
-		slog.Int("published_findings", 0),
-		slog.String("reason", "every eligible finding was already carried by an earlier review and no bot thread is open"),
-	)
+	if !headFullyReviewed {
+		return domain.ReviewDecisionRequestChanges
+	}
 	return domain.ReviewDecisionApprove
 }
 
-// hasUnresolvedBotThread reports whether any earlier bot finding is still open.
-// The threads argument is the state after reconciliation, so a thread the
-// reconciler just resolved is already marked resolved here.
+// hasUnresolvedBotThread reports whether any finding of the service's own is
+// still open.
 func hasUnresolvedBotThread(threads []githubapp.ReviewThread, botLogin string) bool {
 	for _, thread := range threads {
 		if thread.RootComment.Author != botLogin {
@@ -65,6 +54,65 @@ func hasUnresolvedBotThread(threads []githubapp.ReviewThread, botLogin string) b
 		}
 	}
 	return false
+}
+
+// blockingReasons states everything holding a requesting-changes verdict: one
+// line per open thread of the service's own, and one line when the head was
+// not fully reviewed.
+//
+// A run that finds nothing new still blocks while an earlier thread is
+// unresolved, and with nothing said about it the review reads as a silent
+// repeat. One live pull request carried three blocking reviews, two of them
+// empty, and no reader could tell that a single unresolved thread was the
+// whole cause.
+func blockingReasons(
+	threads []githubapp.ReviewThread,
+	botLogin string,
+	ref domain.PullRequestRef,
+	headFullyReviewed bool,
+) []string {
+	reasons := make([]string, 0)
+	for _, thread := range threads {
+		if thread.RootComment.Author != botLogin || thread.Resolved {
+			continue
+		}
+		reasons = append(reasons, describeOpenThread(thread, ref))
+	}
+	if !headFullyReviewed {
+		reasons = append(reasons, unreviewedHeadReason)
+	}
+	return reasons
+}
+
+// unreviewedHeadReason explains a block that no open thread accounts for: the
+// run could not read the whole head, or could not post what it found there.
+const unreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet. " +
+	"The next push reviews what this run could not."
+
+// describeOpenThread names one open thread the way a reader can act on it: the
+// place in the code it objects to, linked to the comment itself.
+func describeOpenThread(thread githubapp.ReviewThread, ref domain.PullRequestRef) string {
+	label := strings.TrimSpace(thread.RootComment.Path)
+	if label == "" {
+		label = thread.NodeID
+	} else if thread.RootComment.EndLine > 0 {
+		label = fmt.Sprintf("%s:%d", label, thread.RootComment.EndLine)
+	}
+	if thread.RootComment.DatabaseID == 0 {
+		return label
+	}
+	return fmt.Sprintf("[%s](%s)", label, threadCommentURL(thread, ref))
+}
+
+// threadCommentURL builds the permalink GitHub gives one review comment.
+func threadCommentURL(thread githubapp.ReviewThread, ref domain.PullRequestRef) string {
+	return fmt.Sprintf(
+		"https://github.com/%s/%s/pull/%d#discussion_r%d",
+		ref.Repository.Owner,
+		ref.Repository.Name,
+		ref.Number,
+		thread.RootComment.DatabaseID,
+	)
 }
 
 // logPublishedFindings records what the review found against what reached the
@@ -102,20 +150,11 @@ func logPublishedFindings(
 // publicationState decides which findings a run may publish.
 //
 // It starts from what earlier reviews and threads already carried, and it grows
-// as findings are confirmed delivered, so a finding published from one chunk
-// suppresses the same finding reported by a later chunk. The caller serializes
-// access, because chunks run concurrently.
-//
-// One slot out of the configured cap is never spent immediately; it is held
-// back for the run's single tail slot, arbitrated in stream.go once every
-// chunk has answered. Without that, whichever chunk happened to answer first
-// could spend the last slot on a low importance finding and leave no room for
-// a more severe one a later chunk reports.
+// as this run carries findings of its own, so a defect two chunks both report
+// is posted once. Chunks are reviewed one at a time, so no locking is needed.
 type publicationState struct {
 	historyIDs     map[string]struct{}
 	historyAnchors map[string]struct{}
-	capacity       int
-	hasTailSlot    bool
 }
 
 // findingKeys are the two identities a finding is suppressed by. Both cost a
@@ -135,13 +174,6 @@ func keysFor(finding domain.Finding) findingKeys {
 	return keys
 }
 
-// candidate is one finding with the identities used to suppress it, carried
-// together so ordering cannot separate them.
-type candidate struct {
-	finding domain.Finding
-	keys    findingKeys
-}
-
 // suppressed reports whether an earlier review or an earlier chunk already
 // carried this finding.
 func (state *publicationState) suppressed(keys findingKeys) bool {
@@ -157,9 +189,10 @@ func (state *publicationState) suppressed(keys findingKeys) bool {
 	return seen
 }
 
-// remember records a finding as delivered, so no later chunk repeats it and no
-// future run reports it again. Called only once a comment has actually posted;
-// a reservation that never delivers must never reach here.
+// remember records a finding as carried by this run, so no later chunk repeats
+// it. It is called before the comment is attempted, because two chunks
+// reporting the same defect must produce one comment whether or not the first
+// attempt succeeded.
 func (state *publicationState) remember(keys findingKeys) {
 	if keys.id != "" {
 		state.historyIDs[keys.id] = struct{}{}
@@ -169,28 +202,12 @@ func (state *publicationState) remember(keys findingKeys) {
 	}
 }
 
-// outranks reports whether one candidate should be shown ahead of another when
-// capacity forces a choice between them.
-func outranks(left candidate, right candidate) bool {
-	if left.finding.Importance != right.finding.Importance {
-		return left.finding.Importance > right.finding.Importance
-	}
-	return compareFindings(left.finding, right.finding) < 0
-}
-
-// sortByImportanceThenPosition orders candidates worst first, so a scarce
-// capacity shows the worst defects rather than the fastest chunk's.
-func sortByImportanceThenPosition(candidates []candidate) {
-	sort.SliceStable(candidates, func(left, right int) bool {
-		return outranks(candidates[left], candidates[right])
-	})
-}
-
+// collectPublicationState reads what the pull request already carries, which is
+// the only reason a run withholds a finding it stands behind.
 func collectPublicationState(
 	reviews []githubapp.Review,
 	threads []githubapp.ReviewThread,
 	botLogin string,
-	maximumUnresolvedComments int,
 ) publicationState {
 	historyIDs := make(map[string]struct{})
 	historyAnchors := make(map[string]struct{})
@@ -203,32 +220,26 @@ func collectPublicationState(
 			historyIDs[findingMarker.ID] = struct{}{}
 		}
 	}
-	unresolvedCount := 0
 	for _, thread := range threads {
 		if thread.RootComment.Author != botLogin {
 			continue
 		}
-		if !thread.Resolved {
-			unresolvedCount++
-		}
 		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
-		if ok {
-			historyIDs[findingMarker.ID] = struct{}{}
-			if anchor, valid := findingAnchorKey(
-				thread.RootComment.Path,
-				thread.RootComment.StartLine,
-				thread.RootComment.EndLine,
-			); valid {
-				historyAnchors[anchor] = struct{}{}
-			}
+		if !ok {
+			continue
+		}
+		historyIDs[findingMarker.ID] = struct{}{}
+		if anchor, valid := findingAnchorKey(
+			thread.RootComment.Path,
+			thread.RootComment.StartLine,
+			thread.RootComment.EndLine,
+		); valid {
+			historyAnchors[anchor] = struct{}{}
 		}
 	}
-	totalCapacity := max(maximumUnresolvedComments-unresolvedCount, 0)
 	return publicationState{
 		historyIDs:     historyIDs,
 		historyAnchors: historyAnchors,
-		capacity:       max(totalCapacity-1, 0),
-		hasTailSlot:    totalCapacity >= 1,
 	}
 }
 

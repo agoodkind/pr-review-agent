@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
@@ -13,7 +14,10 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
 
-const testHeadSHA = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+const (
+	testHeadSHA      = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+	testStaleHeadSHA = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
+)
 
 func TestChangedRightLinesMultipleHunks(t *testing.T) {
 	patch := strings.Join([]string{
@@ -309,6 +313,75 @@ func TestCollectorDeterministicPathOrder(t *testing.T) {
 	}
 }
 
+// The delta is the unit of work: a range since a previously reviewed commit
+// must compare against that commit rather than list the whole pull request
+// again, so a run never reviews the same commit range twice.
+func TestCollectorRangeComparesSinceTheGivenBase(t *testing.T) {
+	source := &fakeSource{
+		files: []githubapp.ChangedFile{{
+			Path:         "pkg/a.go",
+			Status:       "modified",
+			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+			PatchPresent: true,
+		}},
+		contents: map[string][]byte{
+			"pkg/a.go": []byte("line\nadded\n"),
+		},
+	}
+	collector := diff.NewCollector(source)
+	base := domain.HeadSHA(testStaleHeadSHA)
+	pullRequest := testPullRequest()
+
+	input, err := collector.CollectRange(context.Background(), testRef(), pullRequest, base)
+	if err != nil {
+		t.Fatalf("CollectRange: %v", err)
+	}
+	if source.compareCalls != 1 {
+		t.Fatalf("compare calls = %d, want 1", source.compareCalls)
+	}
+	if source.listCalls != 0 {
+		t.Fatalf("list changed files calls = %d, want 0: the range must not fetch the full file list", source.listCalls)
+	}
+	if source.lastCompareBase != base || source.lastCompareHead != pullRequest.Head {
+		t.Fatalf("compare range = %s...%s, want %s...%s",
+			source.lastCompareBase, source.lastCompareHead, base, pullRequest.Head)
+	}
+	if len(input.Files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(input.Files))
+	}
+}
+
+// An empty base means no prior review exists, so the range collector falls
+// back to the full file list rather than comparing against nothing.
+func TestCollectorRangeFallsBackToTheFullListWhenBaseIsEmpty(t *testing.T) {
+	source := &fakeSource{
+		files: []githubapp.ChangedFile{{
+			Path:         "pkg/a.go",
+			Status:       "modified",
+			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+			PatchPresent: true,
+		}},
+		contents: map[string][]byte{
+			"pkg/a.go": []byte("line\nadded\n"),
+		},
+	}
+	collector := diff.NewCollector(source)
+
+	input, err := collector.CollectRange(context.Background(), testRef(), testPullRequest(), "")
+	if err != nil {
+		t.Fatalf("CollectRange: %v", err)
+	}
+	if source.compareCalls != 0 {
+		t.Fatalf("compare calls = %d, want 0: an empty base means no prior review", source.compareCalls)
+	}
+	if source.listCalls != 1 {
+		t.Fatalf("list changed files calls = %d, want 1", source.listCalls)
+	}
+	if len(input.Files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(input.Files))
+	}
+}
+
 func TestChunkInputEachHunkAppearsOnce(t *testing.T) {
 	patchOne := "@@ -1,1 +1,2 @@\n a\n+one\n"
 	patchTwo := "@@ -4,1 +5,2 @@\n d\n+two\n"
@@ -416,10 +489,15 @@ func TestChunkInputOversizedHunkIncomplete(t *testing.T) {
 }
 
 type fakeSource struct {
-	files    []githubapp.ChangedFile
-	contents map[string][]byte
-	getErr   error
-	getCalls int
+	files           []githubapp.ChangedFile
+	contents        map[string][]byte
+	getErr          error
+	compareErr      error
+	getCalls        int
+	listCalls       int
+	compareCalls    int
+	lastCompareBase domain.HeadSHA
+	lastCompareHead domain.HeadSHA
 }
 
 func (source *fakeSource) ListChangedFiles(
@@ -428,6 +506,23 @@ func (source *fakeSource) ListChangedFiles(
 	_ domain.Repository,
 	_ int,
 ) ([]githubapp.ChangedFile, error) {
+	source.listCalls++
+	return source.files, nil
+}
+
+func (source *fakeSource) Compare(
+	_ context.Context,
+	_ int64,
+	_ domain.Repository,
+	base domain.HeadSHA,
+	head domain.HeadSHA,
+) ([]githubapp.ChangedFile, error) {
+	source.compareCalls++
+	source.lastCompareBase = base
+	source.lastCompareHead = head
+	if source.compareErr != nil {
+		return nil, source.compareErr
+	}
 	return source.files, nil
 }
 
@@ -576,4 +671,53 @@ func testPullRequest() githubapp.PullRequest {
 func containsLine(changed map[int]struct{}, line int) bool {
 	_, ok := changed[line]
 	return ok
+}
+
+// A force push can leave the recorded base unreachable, and GitHub then refuses
+// the comparison outright. Failing there would strand the pull request: every
+// later run reads the same dead base from the marker and aborts the same way,
+// so the review never recovers on its own.
+func TestCollectorRangeReviewsEverythingWhenTheBaseIsGone(t *testing.T) {
+	source := &fakeSource{
+		files: []githubapp.ChangedFile{{
+			Path:         "pkg/a.go",
+			Status:       "modified",
+			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+			PatchPresent: true,
+		}},
+		contents:   map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
+		compareErr: githubapp.APIError{StatusCode: http.StatusNotFound, Message: "No common ancestor"},
+	}
+	collector := diff.NewCollector(source)
+
+	input, err := collector.CollectRange(
+		context.Background(), testRef(), testPullRequest(), domain.HeadSHA(testStaleHeadSHA),
+	)
+	if err != nil {
+		t.Fatalf("CollectRange: %v, want the whole pull request reviewed instead of a failure", err)
+	}
+	if source.listCalls != 1 {
+		t.Fatalf("list changed files calls = %d, want 1: the run must fall back to the full list", source.listCalls)
+	}
+	if len(input.Files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(input.Files))
+	}
+}
+
+// A transient failure must keep failing, so a later run retries the range
+// rather than silently reviewing more than it was asked to.
+func TestCollectorRangeFailsWhenCompareIsMerelyBroken(t *testing.T) {
+	source := &fakeSource{
+		compareErr: githubapp.APIError{StatusCode: http.StatusInternalServerError, Message: "server error"},
+	}
+	collector := diff.NewCollector(source)
+
+	if _, err := collector.CollectRange(
+		context.Background(), testRef(), testPullRequest(), domain.HeadSHA(testStaleHeadSHA),
+	); err == nil {
+		t.Fatal("CollectRange returned no error, want the transient failure surfaced")
+	}
+	if source.listCalls != 0 {
+		t.Fatalf("list changed files calls = %d, want 0", source.listCalls)
+	}
 }

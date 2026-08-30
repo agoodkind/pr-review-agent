@@ -39,10 +39,15 @@ const (
 )
 
 // testClock advances a fixed amount on every read, so a rendered duration is
-// deterministic without any sleeping.
+// deterministic without any sleeping. Chunks are timed from several goroutines
+// at once, so the cursor is guarded; production reads time.Now, which is safe
+// on its own.
 func testClock(step time.Duration) func() time.Time {
+	var mu sync.Mutex
 	current := time.Unix(1_700_000_000, 0).UTC()
 	return func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
 		now := current
 		current = current.Add(step)
 		return now
@@ -204,27 +209,20 @@ func TestRenderBodyCarriesTheRequiredMarkersAndNoFindingMarker(t *testing.T) {
 	}
 }
 
-func TestRenderFailureBodyFencesTheCauseAndOmitsTheReviewMarker(t *testing.T) {
-	t.Run("plain cause", func(t *testing.T) {
+func TestRenderFailureBodyStatesTheFailureAndOmitsTheReviewMarker(t *testing.T) {
+	t.Run("stated failure", func(t *testing.T) {
 		summary := testSummary()
-		body := review.RenderFailureBody(summary, "Review failed.", "provider refused")
+		detail := "The cause is recorded in this service's log."
+		body := review.RenderFailureBody(summary, "Review failed.", detail)
 		summary.Failed = true
-		want := "## Review\n\nReview failed.\n\n```\nprovider refused\n```\n\n" +
+		want := "## Review\n\nReview failed.\n\n" + detail + "\n\n" +
 			review.RenderDetails(summary) + "\n\n" + marker.Summary()
 		if body != want {
 			t.Fatalf("body = %q, want %q", body, want)
 		}
 	})
 
-	t.Run("cause containing a fence", func(t *testing.T) {
-		detail := "provider said ``` and then ````"
-		body := review.RenderFailureBody(testSummary(), "Review failed.", detail)
-		if !strings.Contains(body, "`````\n"+detail+"\n`````") {
-			t.Fatalf("body = %q, want a fence longer than the cause backtick run", body)
-		}
-	})
-
-	t.Run("no cause", func(t *testing.T) {
+	t.Run("no detail", func(t *testing.T) {
 		summary := testSummary()
 		body := review.RenderFailureBody(summary, "Review failed.", "   ")
 		summary.Failed = true
@@ -394,10 +392,16 @@ func (model *truncatedModel) Review(_ context.Context, prompt string) (review.Co
 	}, nil
 }
 
-// multiHunkInput builds one file whose patch has four hunks, so its chunk can
-// split twice before reaching the one hunk floor.
-func multiHunkInput(t *testing.T) diff.ReviewInput {
-	t.Helper()
+// multiHunkCollector returns one file whose patch has four hunks, so its single
+// chunk can split twice before reaching the one hunk floor.
+type multiHunkCollector struct{}
+
+func (multiHunkCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
 	patch := strings.Join([]string{
 		"@@ -1,2 +1,3 @@",
 		" package main",
@@ -414,10 +418,10 @@ func multiHunkInput(t *testing.T) diff.ReviewInput {
 	}, "\n")
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
-		t.Fatalf("ChangedRightLines: %v", err)
+		return diff.ReviewInput{}, err
 	}
 	return diff.ReviewInput{
-		PullRequest: githubapp.PullRequest{Head: domain.HeadSHA(testHeadSHA)},
+		PullRequest: pullRequest,
 		Files: []diff.FileContext{{
 			Path:              "main.go",
 			Status:            "modified",
@@ -427,11 +431,13 @@ func multiHunkInput(t *testing.T) diff.ReviewInput {
 			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
 		}},
-	}
+	}, nil
 }
 
-func TestAnalyzeSplitsAndRetriesATruncatedChunk(t *testing.T) {
-	input := multiHunkInput(t)
+// A model that reaches its completion token budget stops mid answer. The chunk
+// splits in half and each half is reviewed instead, inside the same per chunk
+// call, so the finding the answer carried still reaches the pull request.
+func TestATruncatedChunkSplitsAndRetriesInsideItsOwnCall(t *testing.T) {
 	model := &truncatedModel{
 		truncateCalls: 1,
 		findings: []domain.Finding{{
@@ -443,74 +449,142 @@ func TestAnalyzeSplitsAndRetriesATruncatedChunk(t *testing.T) {
 			Importance: 9,
 		}},
 	}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         multiHunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 	if model.calls != 3 {
 		t.Fatalf("model calls = %d, want 3: one truncated, then both halves", model.calls)
 	}
-	if len(analysis.Anchored) != 1 {
-		t.Fatalf("anchored = %d, want the finding recovered from the halves", len(analysis.Anchored))
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the finding recovered from the halves",
+			len(fixture.state.streamedComments))
 	}
-	if !analysis.CoverageComplete {
-		t.Fatal("CoverageComplete = false, want true because every hunk was reviewed")
+	if state := decodedSummaryState(t, fixture); len(state.Pending) != 0 {
+		t.Fatalf("pending = %v, want none: every hunk was reviewed", state.Pending)
 	}
 }
 
-func TestAnalyzeKeepsSplittingWhileTheAnswerTruncates(t *testing.T) {
-	input := multiHunkInput(t)
+func TestTheSplitRecursesWhileTheAnswerKeepsTruncating(t *testing.T) {
 	model := &truncatedModel{truncateCalls: 2}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         multiHunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 	// Four hunks: the whole chunk truncates, its first half truncates again,
 	// then both single hunks answer, then the second half answers.
 	if model.calls != 5 {
 		t.Fatalf("model calls = %d, want 5 as the split recurses twice", model.calls)
 	}
-	if !analysis.CoverageComplete {
-		t.Fatal("CoverageComplete = false, want true because every hunk was eventually reviewed")
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE because every hunk was eventually reviewed",
+			fixture.state.lastSubmitReview["event"])
 	}
 }
 
-func TestAnalyzeSkipsAHunkThatCannotSplitAndReportsIncompleteCoverage(t *testing.T) {
-	input := multiHunkInput(t)
-	model := &truncatedModel{truncateCalls: 1000}
+// A hunk that cannot split is skipped rather than failing the chunk, so the
+// head is not fully reviewed and nothing here may approve it.
+func TestAHunkThatCannotSplitLeavesTheHeadUnapproved(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         multiHunkCollector{},
+		minimumImportance: 9,
+		model:             &truncatedModel{truncateCalls: 1000},
+	})
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if analysis.CoverageComplete {
-		t.Fatal("CoverageComplete = true, want false after skipping unsplittable hunks")
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES over a head that was not fully read",
+			fixture.state.lastSubmitReview["event"])
 	}
-	if len(analysis.Observed) != 0 {
-		t.Fatalf("observed = %d, want none", len(analysis.Observed))
+	body := failureSummaryComment(t, fixture)
+	if !strings.Contains(body, "This head was not fully reviewed") {
+		t.Fatalf("summary comment does not say the head went partly unread:\n%s", body)
+	}
+	if !strings.Contains(body, "| Coverage complete | no |") {
+		t.Fatalf("summary comment claims coverage it never established:\n%s", body)
+	}
+	if len(fixture.state.streamedComments) != 0 {
+		t.Fatalf("streamed comments = %d, want none", len(fixture.state.streamedComments))
 	}
 }
 
-func TestAnalyzeFailsOnAnErrorThatSplittingCannotFix(t *testing.T) {
-	input := multiHunkInput(t)
+// A refusal is not truncation, so nothing splits and nothing retries. The chunk
+// stays pending for the next push and the run does not fail.
+func TestAModelRefusalIsNotRetriedAndLeavesItsChunkPending(t *testing.T) {
 	model := &sequenceModel{err: errors.New("provider refused the prompt")}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector: multiHunkCollector{},
+		model:     model,
+	})
 
-	_, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err == nil {
-		t.Fatal("Analyze: want the provider error")
-	}
-	if !strings.Contains(err.Error(), "provider refused the prompt") {
-		t.Fatalf("err = %q, want the provider cause", err)
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 	if len(model.prompts) != 1 {
 		t.Fatalf("model calls = %d, want 1 because splitting cannot fix a refusal", len(model.prompts))
 	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want the declined conclusion", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	if state := decodedSummaryState(t, fixture); len(state.Pending) != 1 {
+		t.Fatalf("pending = %v, want the refused chunk", state.Pending)
+	}
+	assertBlockingVerdictOverAnUnreadHead(t, fixture)
 }
 
-func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testing.T) {
-	largeContent := strings.Repeat("x\n", 20000)
+// assertBlockingVerdictOverAnUnreadHead proves a run that could not read the
+// whole head blocks it and says why, and that the verdict it submits carries no
+// review marker.
+//
+// Withholding the verdict is what leaves the previous run's approval standing
+// over a head nobody finished reading, and a review marker here would tell the
+// next run this head was already reviewed and suppress the run that finishes it.
+func assertBlockingVerdictOverAnUnreadHead(t *testing.T, fixture *serviceFixture) {
+	t.Helper()
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted, want a blocking one over a head that was not fully read")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.lastSubmitReview["body"].(string)
+	if !ok {
+		t.Fatalf("verdict body = %v, want a string", fixture.state.lastSubmitReview["body"])
+	}
+	if !strings.Contains(body, "could not be reviewed") {
+		t.Fatalf("verdict body does not say what is holding it:\n%s", body)
+	}
+	if _, found := marker.FindReview(body); found {
+		t.Fatalf("verdict body carries a review marker, which suppresses the run that finishes the head:\n%s", body)
+	}
+	if marker.HasSummary(body) {
+		t.Fatalf("verdict body carries the summary marker, which makes it a second visible summary:\n%s", body)
+	}
+}
+
+// twoChunkSameFileCollector returns one file whose two hunks are each large
+// enough to need their own chunk, so both chunks describe the same file and a
+// finding reported by both is the same defect.
+type twoChunkSameFileCollector struct{}
+
+func (twoChunkSameFileCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
 	patch := strings.Join([]string{
 		"@@ -1,2 +1,3 @@",
 		" package main",
@@ -521,177 +595,103 @@ func TestAnalyzeAggregatesChunksDedupesFindingsAndClassifiesBadAnchors(t *testin
 	}, "\n")
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
-		t.Fatalf("ChangedRightLines: %v", err)
+		return diff.ReviewInput{}, err
 	}
-
-	input := diff.ReviewInput{
-		PullRequest: githubapp.PullRequest{Head: domain.HeadSHA(testHeadSHA)},
-		Files: []diff.FileContext{
-			{
-				Path:              "main.go",
-				Status:            "modified",
-				Patch:             patch,
-				CurrentContent:    largeContent,
-				ChangedRightLines: changed,
-				ChangedRightHunks: hunks,
-				CoverageComplete:  true,
-			},
-			{
-				Path:             "binary.bin",
-				Status:           "binary",
-				Patch:            "Binary files differ",
-				CoverageComplete: false,
-			},
-		},
-	}
-
-	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
-	if err != nil {
-		t.Fatalf("ChunkInput: %v", err)
-	}
-	if len(chunks) < 2 {
-		t.Fatalf("chunk count = %d, want at least 2", len(chunks))
-	}
-
-	model := &sequenceModel{
-		results: []domain.ReviewResult{
-			{
-				CoverageComplete: true,
-				Findings: []domain.Finding{{
-					Path:       "main.go",
-					StartLine:  2,
-					EndLine:    2,
-					Title:      "Duplicate",
-					Body:       "Same finding.",
-					Importance: 9,
-				}},
-			},
-			{
-				CoverageComplete: true,
-				Findings: []domain.Finding{
-					{
-						Path:       "main.go",
-						StartLine:  2,
-						EndLine:    2,
-						Title:      "Duplicate",
-						Body:       "Same finding.",
-						Importance: 9,
-					},
-					{
-						Path:       "main.go",
-						StartLine:  99,
-						EndLine:    99,
-						Title:      "Bad anchor",
-						Body:       "Line is outside the diff.",
-						Importance: 3,
-					},
-					{
-						Path:       "../escape.go",
-						StartLine:  1,
-						EndLine:    1,
-						Title:      "Bad path",
-						Body:       "Path normalizes to traversal.",
-						Importance: 2,
-					},
-				},
-			},
-		},
-	}
-
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
-	}
-	if model.callCount != len(chunks) {
-		t.Fatalf("model call count = %d, want %d", model.callCount, len(chunks))
-	}
-	if analysis.CoverageComplete {
-		t.Fatal("coverage complete = true, want false from binary file")
-	}
-	if len(analysis.Anchored) != 1 {
-		t.Fatalf("anchored count = %d, want 1", len(analysis.Anchored))
-	}
-	if analysis.Decision != domain.ReviewDecisionRequestChanges {
-		t.Fatalf("decision = %q, want %q", analysis.Decision, domain.ReviewDecisionRequestChanges)
-	}
-}
-
-func TestAnalyzePromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
-	patch := strings.Join([]string{
-		"@@ -1,1 +1,2 @@",
-		" package main",
-		"+added",
-	}, "\n")
-	changed, hunks, err := diff.ChangedRightLines(patch)
-	if err != nil {
-		t.Fatalf("ChangedRightLines: %v", err)
-	}
-
-	input := diff.ReviewInput{
+	return diff.ReviewInput{
+		PullRequest: pullRequest,
 		Files: []diff.FileContext{{
 			Path:              "main.go",
 			Status:            "modified",
 			Patch:             patch,
-			CurrentContent:    "package main\nadded\n",
+			CurrentContent:    strings.Repeat("x\n", 20000),
 			ChangedRightLines: changed,
 			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
 		}},
-	}
+	}, nil
+}
 
-	model := &sequenceModel{
-		results: []domain.ReviewResult{{
-			CoverageComplete: true,
+// One defect reported by two chunks is one comment, and a finding that does not
+// anchor to a changed line is never published at all.
+func TestTheSameFindingFromTwoChunksIsPublishedOnce(t *testing.T) {
+	duplicate := domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Duplicate",
+		Body:       "Same finding.",
+		Importance: 9,
+	}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkSameFileCollector{},
+		minimumImportance: 9,
+		model: &sequenceModel{results: []domain.ReviewResult{
+			{CoverageComplete: true, Findings: []domain.Finding{duplicate}},
+			{CoverageComplete: true, Findings: []domain.Finding{
+				duplicate,
+				{
+					Path:       "main.go",
+					StartLine:  99,
+					EndLine:    99,
+					Title:      "Bad anchor",
+					Body:       "Line is outside the diff.",
+					Importance: 10,
+				},
+				{
+					Path:       "../escape.go",
+					StartLine:  1,
+					EndLine:    1,
+					Title:      "Bad path",
+					Body:       "Path normalizes to traversal.",
+					Importance: 10,
+				},
+			}},
 		}},
-	}
+	})
 
-	_, err = review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.model.(*sequenceModel).callCount != 2 {
+		t.Fatalf("model call count = %d, want one call per chunk", fixture.model.(*sequenceModel).callCount)
+	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the one anchored defect", len(fixture.state.streamedComments))
+	}
+	body, ok := fixture.state.streamedComments[0]["body"].(string)
+	if !ok || !strings.Contains(body, "Duplicate") {
+		t.Fatalf("comment body = %v, want the anchored duplicate", fixture.state.streamedComments[0]["body"])
+	}
+}
+
+func TestTheChunkPromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{{CoverageComplete: true}}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{minimumImportance: 9, model: model})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 	if len(model.prompts) != 1 {
 		t.Fatalf("prompt count = %d, want 1", len(model.prompts))
 	}
 	prompt := model.prompts[0]
-	if !strings.Contains(prompt, "importance 9 or higher") {
-		t.Fatalf("prompt missing configured importance: %q", prompt)
-	}
-	if !strings.Contains(prompt, "backticks") {
-		t.Fatalf("prompt missing code formatting rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "exact replacement") {
-		t.Fatalf("prompt missing suggestion rule: %q", prompt)
-	}
-	if !strings.Contains(prompt, "<<<UNTRUSTED_INPUT>>>") {
-		t.Fatalf("prompt missing untrusted input delimiter: %q", prompt)
+	for _, want := range []string{
+		"importance 9 or higher",
+		"backticks",
+		"exact replacement",
+		"<<<UNTRUSTED_INPUT>>>",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %q", want, prompt)
+		}
 	}
 }
 
-func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
-	patch := strings.Join([]string{
-		"@@ -1,1 +1,2 @@",
-		" package main",
-		"+added",
-	}, "\n")
-	changed, hunks, err := diff.ChangedRightLines(patch)
-	if err != nil {
-		t.Fatalf("ChangedRightLines: %v", err)
-	}
-
-	input := diff.ReviewInput{
-		Files: []diff.FileContext{{
-			Path:              "main.go",
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    "package main\nadded\n",
-			ChangedRightLines: changed,
-			ChangedRightHunks: hunks,
-			CoverageComplete:  true,
-		}},
-	}
-
-	model := &sequenceModel{
-		results: []domain.ReviewResult{{
+// A model answer the schema rejects is a failed chunk like any other: it stays
+// pending, and the run blocks the head rather than approving what it never read.
+func TestAnInvalidModelResultLeavesItsChunkPending(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{results: []domain.ReviewResult{{
 			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
@@ -701,17 +701,20 @@ func TestAnalyzeFailsOnInvalidModelResult(t *testing.T) {
 				Body:       "Invalid title.",
 				Importance: 5,
 			}},
-		}},
-	}
+		}}},
+	})
 
-	_, err = review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err == nil {
-		t.Fatal("Analyze invalid model result: want error")
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
+	if state := decodedSummaryState(t, fixture); len(state.Pending) != 1 {
+		t.Fatalf("pending = %v, want the chunk whose answer was rejected", state.Pending)
+	}
+	assertBlockingVerdictOverAnUnreadHead(t, fixture)
 }
 
-// sequenceModel answers a fixed sequence of results. Chunks are reviewed
-// concurrently, so its call bookkeeping is guarded.
+// sequenceModel answers a fixed sequence of results, one per chunk, in the
+// order the chunk loop asks for them.
 type sequenceModel struct {
 	mu        sync.Mutex
 	results   []domain.ReviewResult
@@ -780,208 +783,69 @@ func containsTypographicDash(value string) bool {
 	return false
 }
 
-// A review holds one time budget for the whole diff. Reviewing chunks one at a
-// time spends that budget serially, which is how a thirteen chunk review ran
-// out of time on chunk twelve. This proves several chunks are in flight at once.
-func TestChunksAreReviewedConcurrently(t *testing.T) {
-	input := manyChunkInput(t)
-	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
-	if err != nil {
-		t.Fatalf("ChunkInput: %v", err)
-	}
-	if len(chunks) < config.MaximumChunkConcurrency {
-		t.Fatalf("chunk count = %d, want at least %d", len(chunks), config.MaximumChunkConcurrency)
-	}
-
-	model := newConcurrencyProbeModel()
-
-	if _, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil); err != nil {
-		t.Fatalf("Analyze: %v", err)
-	}
-
-	if model.peak() < 2 {
-		t.Fatalf("peak concurrent model calls = %d, want more than one chunk in flight", model.peak())
-	}
-	if model.peak() > config.MaximumChunkConcurrency {
-		t.Fatalf("peak concurrent model calls = %d, want at most %d", model.peak(), config.MaximumChunkConcurrency)
-	}
-}
-
-// Every chunk failing means nothing was read, so there is no partial answer to
-// publish and the cause must survive the concurrent path unchanged.
-func TestEveryChunkFailingFailsTheConcurrentReview(t *testing.T) {
-	input := manyChunkInput(t)
-	model := &sequenceModel{err: errors.New("provider refused the prompt")}
-
-	_, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err == nil {
-		t.Fatal("Analyze: want the provider error")
-	}
-	if !strings.Contains(err.Error(), "provider refused the prompt") {
-		t.Fatalf("err = %q, want the provider cause", err)
-	}
-}
-
-// One chunk failing must not discard what the others found.
-//
-// A chunk covers its own slice of the diff, so the findings in the rest stay
-// valid. Failing the whole review there threw away work that was already
-// correct and left the reader with nothing, which is the worse outcome.
-func TestOneFailingChunkStillReportsWhatTheOthersFound(t *testing.T) {
-	input := manyChunkInput(t)
-	// file1.go line 2 is a changed line in the fixture, so this finding anchors.
-	model := newFlakyChunkModel(domain.Finding{
-		Path:       "file1.go",
-		StartLine:  2,
-		EndLine:    2,
-		Title:      "Severe defect",
-		Body:       "The changed line breaks core behavior.",
-		Importance: 9,
+// Every chunk failing is still not a failed run. Nothing was read, so nothing
+// is claimed: every chunk stays pending, the head is blocked rather than
+// approved, and the next push reviews the whole delta again.
+func TestEveryChunkFailingLeavesEveryChunkPendingAndBlocksTheHead(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector: twoChunkCollector{},
+		model:     &sequenceModel{err: errors.New("provider refused the prompt")},
 	})
 
-	analysis, err := review.Analyze(context.Background(), model, input, 9, time.Now, nil)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	if len(analysis.Anchored) == 0 {
-		t.Fatal("anchored findings = 0, want the findings the answering chunks produced")
+	state := decodedSummaryState(t, fixture)
+	if len(state.Pending) != 2 {
+		t.Fatalf("pending = %v, want both chunks", state.Pending)
 	}
-	if analysis.CoverageComplete {
-		t.Fatal("coverage complete, want incomplete because a chunk went unread")
+	if state.LastReviewed != "" {
+		t.Fatalf("last reviewed = %q, want no checkpoint at all", state.LastReviewed)
 	}
+	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+	// A head with unread chunks must not merge either. GitHub counts a check
+	// concluded neutral as satisfying the gate exactly as it counts one
+	// concluded skipped, so this asserts the class rather than one string.
+	assertDeclinedCheckDoesNotPass(t, fixture)
 }
 
-// flakyChunkModel fails its first request and answers every later one, which is
-// how a provider drops one chunk of a diff while serving the rest.
-type flakyChunkModel struct {
-	mu      sync.Mutex
-	calls   int
-	finding domain.Finding
-}
+// A chunk that answers still publishes what it found, even while another chunk
+// of the same delta goes unread. The unread one stays pending; the finding does
+// not wait for it.
+func TestAnAnsweringChunkPublishesWhileAnotherStaysPending(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             newChunkScriptedModel("file1.go"),
+	})
 
-func newFlakyChunkModel(finding domain.Finding) *flakyChunkModel {
-	return &flakyChunkModel{finding: finding}
-}
-
-func (model *flakyChunkModel) Review(context.Context, string) (review.Completion, error) {
-	model.mu.Lock()
-	model.calls++
-	first := model.calls == 1
-	model.mu.Unlock()
-	if first {
-		return review.Completion{}, errors.New("provider refused the prompt")
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	return review.Completion{
-		Result: domain.ReviewResult{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{model.finding},
-		},
-		Model: testReviewModel,
-	}, nil
-}
-
-// concurrencyProbeModel records how many calls overlap, so a test can prove
-// chunks run together instead of one after another.
-type concurrencyProbeModel struct {
-	mu       sync.Mutex
-	inFlight int
-	highest  int
-	release  chan struct{}
-}
-
-func newConcurrencyProbeModel() *concurrencyProbeModel {
-	return &concurrencyProbeModel{
-		mu:       sync.Mutex{},
-		inFlight: 0,
-		highest:  0,
-		release:  make(chan struct{}),
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the answering chunk's finding",
+			len(fixture.state.streamedComments))
+	}
+	if state := decodedSummaryState(t, fixture); len(state.Pending) != 1 {
+		t.Fatalf("pending = %v, want only the chunk that went unread", state.Pending)
 	}
 }
 
-func (model *concurrencyProbeModel) Review(context.Context, string) (review.Completion, error) {
-	model.mu.Lock()
-	model.inFlight++
-	if model.inFlight > model.highest {
-		model.highest = model.inFlight
-	}
-	reached := model.inFlight >= config.MaximumChunkConcurrency
-	model.mu.Unlock()
-
-	// The first full wave releases everyone, so the test proves overlap without
-	// depending on wall clock timing.
-	if reached {
-		model.releaseOnce()
-	}
-	<-model.release
-
-	model.mu.Lock()
-	model.inFlight--
-	model.mu.Unlock()
-	return review.Completion{
-		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
-		Model:  testReviewModel,
-	}, nil
-}
-
-func (model *concurrencyProbeModel) releaseOnce() {
-	select {
-	case <-model.release:
-	default:
-		close(model.release)
-	}
-}
-
-func (model *concurrencyProbeModel) peak() int {
-	model.mu.Lock()
-	defer model.mu.Unlock()
-	return model.highest
-}
-
-// manyChunkInput builds files large enough that each one lands in its own
-// chunk, producing more chunks than the concurrency limit so a full wave and
-// the bound on it are both observable.
-func manyChunkInput(t *testing.T) diff.ReviewInput {
-	t.Helper()
-	const fileCount = 12
-	padding := strings.Repeat("x\n", 30000)
-	files := make([]diff.FileContext, 0, fileCount)
-	for index := range fileCount {
-		patch := fmt.Sprintf("@@ -1,1 +1,2 @@\n line%d\n+added%d\n", index, index)
-		changed, hunks, err := diff.ChangedRightLines(patch)
-		if err != nil {
-			t.Fatalf("ChangedRightLines: %v", err)
-		}
-		files = append(files, diff.FileContext{
-			Path:              fmt.Sprintf("file%d.go", index),
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    padding,
-			ChangedRightLines: changed,
-			ChangedRightHunks: hunks,
-			CoverageComplete:  true,
-		})
-	}
-	return diff.ReviewInput{
-		PullRequest: githubapp.PullRequest{Head: domain.HeadSHA(testHeadSHA)},
-		Files:       files,
-	}
-}
-
-// A reader who opens a failed check run must see what the review did, not only
-// the stage that failed. Before this, "Review failed during model analysis."
-// was the whole explanation and the per-chunk detail existed nowhere readable.
-func TestFailedReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
+// A reader who opens a check run must see what the review did, not only the
+// stage it stopped at. Before this, "Review failed during model analysis." was
+// the whole explanation and the per-chunk detail existed nowhere readable.
+func TestARunThatLeavesChunksPendingPublishesItsOwnLogInTheCheckRun(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model:             &sequenceModel{err: errors.New("model provider request timed out")},
 	})
 
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want the model failure to surface")
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
-		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want the declined conclusion", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok {
@@ -996,10 +860,21 @@ func TestFailedReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
 		"review job started",
 		"review model analysis started",
 		"delivery_id=delivery-1",
+		// The line that carried the cause is still there, and still says it
+		// carried one, so a reader can see where the run went wrong.
+		"chunk review failed, leaving it pending",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("run log missing %q:\n%s", want, text)
 		}
+	}
+	// The published log is on a check run, which is as public and as permanent
+	// as a comment, so the provider's own sentence is not in it.
+	if strings.Contains(text, "model provider request timed out") {
+		t.Fatalf("published run log carries the raw provider cause:\n%s", text)
+	}
+	if !strings.Contains(text, "err=[redacted: see this service's log for this run]") {
+		t.Fatalf("published run log does not say a cause was withheld:\n%s", text)
 	}
 }
 
@@ -1098,6 +973,686 @@ func TestSuccessfulReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
 	}
 }
 
+// decodedSummaryState reads the durable state back from the one top level
+// comment, which is where a later invocation reads it from too.
+func decodedSummaryState(t *testing.T, fixture *serviceFixture) marker.State {
+	t.Helper()
+	state, ok := marker.DecodeState(failureSummaryComment(t, fixture))
+	if !ok {
+		t.Fatalf("summary comment carries no decodable state marker:\n%s", failureSummaryComment(t, fixture))
+	}
+	return state
+}
+
+// wideCollector returns one file with twelve changed lines, so one chunk can
+// carry twelve separately anchored findings.
+type wideCollector struct{}
+
+func (wideCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	patchLines := []string{"@@ -1,1 +1,13 @@", " package main"}
+	contentLines := []string{"package main"}
+	for index := range 12 {
+		patchLines = append(patchLines, fmt.Sprintf("+added%d", index))
+		contentLines = append(contentLines, fmt.Sprintf("added%d", index))
+	}
+	patch := strings.Join(patchLines, "\n")
+	changed, hunks, err := diff.ChangedRightLines(patch)
+	if err != nil {
+		return diff.ReviewInput{}, err
+	}
+	return diff.ReviewInput{
+		PullRequest: pullRequest,
+		Files: []diff.FileContext{{
+			Path:              "main.go",
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    strings.Join(contentLines, "\n") + "\n",
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		}},
+	}, nil
+}
+
+// A reviewer does not ration comments. Every finding that anchors to a changed
+// line and meets the importance floor is published, however many there are.
+// The old cap of three silently hid the rest.
+func TestEveryQualifyingFindingIsPublished(t *testing.T) {
+	findings := make([]domain.Finding, 0, 12)
+	for index := range 12 {
+		findings = append(findings, domain.Finding{
+			Path:       "main.go",
+			StartLine:  index + 2,
+			EndLine:    index + 2,
+			Title:      fmt.Sprintf("Defect %d", index),
+			Body:       "A real defect on a changed line.",
+			Importance: 9,
+		})
+	}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         wideCollector{},
+		minimumImportance: 9,
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{CoverageComplete: true, Findings: findings}},
+		},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 12 {
+		t.Fatalf("streamed comments = %d, want all 12: a reviewer does not ration comments",
+			len(fixture.state.streamedComments))
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES over the threads this run opened",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// severeFinding is the one anchored defect most of these fixtures report.
+func severeFinding() domain.Finding {
+	return domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Severe defect",
+		Body:       "The changed line breaks core behavior.",
+		Importance: 9,
+	}
+}
+
+// The checkpoint is what a later invocation resumes from, so it may only
+// advance over findings the reader can actually see. A post whose answer never
+// arrived leaves its whole chunk pending, and the run neither fails nor
+// approves.
+func TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:   9,
+		createCommentHangup: true,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         []domain.Finding{severeFinding()},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	state := decodedSummaryState(t, fixture)
+	if len(state.Pending) != 1 {
+		t.Fatalf("pending = %v, want the chunk whose comment never reached the page", state.Pending)
+	}
+	if !chunkIDShaped(state.Pending[0]) {
+		t.Fatalf("pending id = %q, want twelve lowercase hex characters", state.Pending[0])
+	}
+	if state.LastReviewed != "" {
+		t.Fatalf("last reviewed = %q, want no checkpoint over an unseen finding", state.LastReviewed)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want the declined conclusion rather than a failure",
+			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	// The defect is real whether or not its comment reached the page, so the
+	// run must never approve over it.
+	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+}
+
+// A comment GitHub answered and refused is not a transient failure. Retrying it
+// on every later run would pin the pull request forever on an attempt already
+// known to fail, so the chunk finishes and the checkpoint advances. The run
+// still refuses to approve, because a finding nobody can see is still a finding.
+func TestACommentGitHubRefusesFinishesItsChunkAndStillBlocks(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance:   9,
+		createCommentStatus: http.StatusUnprocessableEntity,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         []domain.Finding{severeFinding()},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	state := decodedSummaryState(t, fixture)
+	if len(state.Pending) != 0 {
+		t.Fatalf("pending = %v, want none: no later attempt can post a comment GitHub refused", state.Pending)
+	}
+	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head: the chunk was read", state.LastReviewed)
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES despite the refused comment",
+			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || !strings.Contains(body, "This head was not fully reviewed") {
+		t.Fatalf("summary comment does not say the head went partly unseen:\n%v",
+			fixture.state.issueComments[0]["body"])
+	}
+}
+
+// chunkIDShaped reports whether an id matches what the durable marker accepts.
+func chunkIDShaped(id string) bool {
+	if len(id) != 12 {
+		return false
+	}
+	for _, character := range id {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// chunkScriptedModel refuses the chunk covering one path until it is healed,
+// and answers every other chunk with a finding on that chunk's own file. It
+// records which paths it was asked about, so a test can prove a chunk reached
+// the model rather than only that a run finished.
+type chunkScriptedModel struct {
+	mu       sync.Mutex
+	failPath string
+	healthy  bool
+	seen     []string
+}
+
+func newChunkScriptedModel(failPath string) *chunkScriptedModel {
+	return &chunkScriptedModel{failPath: failPath}
+}
+
+func (model *chunkScriptedModel) heal() {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	model.healthy = true
+}
+
+func (model *chunkScriptedModel) reviewedPaths() []string {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return append([]string{}, model.seen...)
+}
+
+func (model *chunkScriptedModel) reviewed(path string) bool {
+	for _, seen := range model.reviewedPaths() {
+		if seen == path {
+			return true
+		}
+	}
+	return false
+}
+
+func (model *chunkScriptedModel) Review(_ context.Context, prompt string) (review.Completion, error) {
+	path := "file0.go"
+	for _, candidate := range []string{"file1.go", "file2.go"} {
+		if strings.Contains(prompt, "File: "+candidate) {
+			path = candidate
+		}
+	}
+
+	model.mu.Lock()
+	healthy := model.healthy
+	failPath := model.failPath
+	model.seen = append(model.seen, path)
+	model.mu.Unlock()
+
+	if !healthy && path == failPath {
+		return review.Completion{}, errors.New("provider refused the prompt")
+	}
+	return review.Completion{
+		Result: domain.ReviewResult{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       path,
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Defect in " + path,
+				Body:       "The changed line breaks core behavior.",
+				Importance: 9,
+			}},
+		},
+		Model: testReviewModel,
+	}, nil
+}
+
+// A chunk whose model call fails stays pending and visible, and the next run
+// reviews it and nothing else. The chunk that already answered is not asked
+// again, so its finding is not posted twice.
+func TestAFailedChunkStaysPendingAndTheNextRunFinishesIt(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first := decodedSummaryState(t, fixture)
+	if len(first.Pending) != 1 {
+		t.Fatalf("pending after the first run = %v, want the refused chunk", first.Pending)
+	}
+	if first.Status != marker.StateReviewing {
+		t.Fatalf("status = %q, want %q", first.Status, marker.StateReviewing)
+	}
+	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+	// A head with unread chunks must not merge either. GitHub counts a check
+	// concluded neutral as satisfying the gate exactly as it counts one
+	// concluded skipped, so this asserts the class rather than one string.
+	assertDeclinedCheckDoesNotPass(t, fixture)
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok || !strings.Contains(fmt.Sprint(output["title"]), "1 chunk could not be reviewed") {
+		t.Fatalf("check title = %v, want the count of unread chunks", fixture.state.lastUpdateCheckRun["output"])
+	}
+
+	model.heal()
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	second := decodedSummaryState(t, fixture)
+	if len(second.Pending) != 0 {
+		t.Fatalf("pending after the second run = %v, want none", second.Pending)
+	}
+	if second.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head now that every chunk answered", second.LastReviewed)
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want a verdict from the run that finished the head",
+			fixture.state.lastSubmitReview["event"])
+	}
+	// The second run re-reads the chunk that already answered, because a delta
+	// may have grown since. The finding it reports again is suppressed by the
+	// thread the first run opened, so it is not posted twice.
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("streamed comments = %d, want one per chunk and no repeat",
+			len(fixture.state.streamedComments))
+	}
+	bodies := bodiesOf(fixture.state.streamedComments)
+	if bodies[0] == bodies[1] {
+		t.Fatal("the same comment was posted twice")
+	}
+}
+
+// growingCollector returns one more chunk on its second call, which is what a
+// push adds to a delta whose baseline has not moved.
+type growingCollector struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (collector *growingCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	collector.mu.Lock()
+	collector.calls++
+	fileCount := 2
+	if collector.calls > 1 {
+		fileCount = 3
+	}
+	collector.mu.Unlock()
+	return paddedFiles(pullRequest, fileCount)
+}
+
+// paddedFiles builds one file per chunk, each padded past the prompt size so
+// the chunker cannot merge two of them.
+func paddedFiles(pullRequest githubapp.PullRequest, count int) (diff.ReviewInput, error) {
+	padding := strings.Repeat("x\n", 30000)
+	files := make([]diff.FileContext, 0, count)
+	for index := range count {
+		patch := fmt.Sprintf("@@ -1,1 +1,2 @@\n line%d\n+added%d\n", index, index)
+		changed, hunks, err := diff.ChangedRightLines(patch)
+		if err != nil {
+			return diff.ReviewInput{}, err
+		}
+		files = append(files, diff.FileContext{
+			Path:              fmt.Sprintf("file%d.go", index),
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    padding,
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		})
+	}
+	return diff.ReviewInput{PullRequest: pullRequest, Files: files}, nil
+}
+
+// A run that left a chunk pending did not advance the baseline, so the next
+// delta covers the old range plus everything pushed since. Reviewing only the
+// pending ids would skip those new commits and then mark the whole range
+// reviewed, which is unreviewed code merging while the service says it read it.
+func TestTheNextRunReviewsNewChunksAndNotOnlyThePendingOnes(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         &growingCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if state := decodedSummaryState(t, fixture); len(state.Pending) != 1 {
+		t.Fatalf("pending after the first run = %v, want the refused chunk", state.Pending)
+	}
+
+	// The second run's delta carries a third chunk the first run never saw.
+	model.heal()
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if !model.reviewed("file2.go") {
+		t.Fatalf("the new chunk was never sent to the model; paths reviewed = %v", model.reviewedPaths())
+	}
+	state := decodedSummaryState(t, fixture)
+	if len(state.Pending) != 0 {
+		t.Fatalf("pending = %v, want none", state.Pending)
+	}
+	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head only once every chunk of the delta was read",
+			state.LastReviewed)
+	}
+	// Closing the gap must not cost a re-analysis of what the first run read.
+	if timesReviewed(model, "file0.go") != 1 {
+		t.Fatalf("file0.go was analyzed %d times, want once: it answered on the first run",
+			timesReviewed(model, "file0.go"))
+	}
+}
+
+func timesReviewed(model *chunkScriptedModel, path string) int {
+	count := 0
+	for _, seen := range model.reviewedPaths() {
+		if seen == path {
+			count++
+		}
+	}
+	return count
+}
+
+// A chunk that answered is recorded as done, so the next run subtracts it from
+// the delta instead of paying for it again. Without that record, one failed
+// chunk in a sixty chunk delta costs sixty model calls on the next run to
+// deliver one.
+func TestAnAlreadyReadChunkIsNotAnalyzedTwice(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first := decodedSummaryState(t, fixture)
+	if len(first.Completed) != 1 {
+		t.Fatalf("completed after the first run = %v, want the chunk that answered", first.Completed)
+	}
+	if !chunkIDShaped(first.Completed[0]) {
+		t.Fatalf("completed id = %q, want twelve lowercase hex characters", first.Completed[0])
+	}
+
+	model.heal()
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if timesReviewed(model, "file0.go") != 1 {
+		t.Fatalf("file0.go was analyzed %d times, want once", timesReviewed(model, "file0.go"))
+	}
+	if timesReviewed(model, "file1.go") != 2 {
+		t.Fatalf("file1.go was analyzed %d times, want twice: it failed and was retried by the next run",
+			timesReviewed(model, "file1.go"))
+	}
+	// The record is meaningless once the baseline moves, so it is dropped
+	// rather than left to grow across the life of the pull request.
+	second := decodedSummaryState(t, fixture)
+	if len(second.Completed) != 0 {
+		t.Fatalf("completed after the baseline advanced = %v, want none", second.Completed)
+	}
+	if second.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head", second.LastReviewed)
+	}
+}
+
+// Two incomplete runs must leave one blocking review, not one each. A reader
+// facing a stack of short verdicts cannot tell which still describes the pull
+// request.
+func TestTwoIncompleteRunsLeaveOneBlockingReview(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             newChunkScriptedModel("file1.go"),
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews after the first run = %d, want 1", len(fixture.state.submittedReviews))
+	}
+	if fixture.state.lastUpdateReview != nil {
+		t.Fatalf("updated review = %v, want none on the first run", fixture.state.lastUpdateReview)
+	}
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want the first one rewritten rather than a second left beside it",
+			len(fixture.state.submittedReviews))
+	}
+	if fixture.state.lastUpdateReview == nil {
+		t.Fatal("the second run submitted a new review instead of rewriting its own standing verdict")
+	}
+	body, ok := fixture.state.lastUpdateReview["body"].(string)
+	if !ok || !marker.HasPartial(body) {
+		t.Fatalf("rewritten body = %v, want the partial verdict marker", fixture.state.lastUpdateReview["body"])
+	}
+	// An update changes a body and not a state, so the standing request for
+	// changes is still standing.
+	if !strings.Contains(body, "could not be reviewed") {
+		t.Fatalf("rewritten body does not say what is holding it:\n%s", body)
+	}
+}
+
+func bodiesOf(comments []map[string]any) []string {
+	bodies := make([]string, 0, len(comments))
+	for _, comment := range comments {
+		body, _ := comment["body"].(string)
+		bodies = append(bodies, body)
+	}
+	return bodies
+}
+
+// manyChunkCollector returns one more file than the concurrency limit, so the
+// last chunk can only start after an earlier one has finished.
+type manyChunkCollector struct{}
+
+func (manyChunkCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	return paddedFiles(pullRequest, config.MaximumChunkConcurrency+1)
+}
+
+// deadlineProbeModel measures each call's budget from that call's own start,
+// and burns real time in the first wave so a later wave starts visibly later.
+type deadlineProbeModel struct {
+	mu        sync.Mutex
+	firstWait time.Duration
+	waves     int
+	budgets   []time.Duration
+	undated   int
+}
+
+func newDeadlineProbeModel(firstWait time.Duration) *deadlineProbeModel {
+	return &deadlineProbeModel{firstWait: firstWait}
+}
+
+func (model *deadlineProbeModel) Review(ctx context.Context, _ string) (review.Completion, error) {
+	started := time.Now()
+	deadline, dated := ctx.Deadline()
+
+	model.mu.Lock()
+	if !dated {
+		model.undated++
+	}
+	model.budgets = append(model.budgets, deadline.Sub(started))
+	model.waves++
+	inFirstWave := model.waves <= config.MaximumChunkConcurrency
+	model.mu.Unlock()
+
+	if inFirstWave {
+		time.Sleep(model.firstWait)
+	}
+	return review.Completion{
+		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
+		Model:  testReviewModel,
+	}, nil
+}
+
+// shortestBudget is the least time any one call was given, which is where a
+// clock shared across calls shows up.
+func (model *deadlineProbeModel) shortestBudget() (time.Duration, int, int) {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	shortest := time.Duration(0)
+	for index, budget := range model.budgets {
+		if index == 0 || budget < shortest {
+			shortest = budget
+		}
+	}
+	return shortest, len(model.budgets), model.undated
+}
+
+// No clock spans two model calls. Every chunk builds its own timeout when its
+// call starts, so a chunk that answers slowly takes nothing from the chunks
+// after it. One shared deadline is what made a thirteen chunk review die on
+// chunk twelve with the first eleven chunks' work thrown away.
+//
+// Concurrency is why this measures each call's own budget rather than comparing
+// two deadlines: calls in one wave start together and would share a deadline
+// either way. The wave after the first is the one that tells them apart.
+func TestNoModelCallInheritsAnEarlierChunksClock(t *testing.T) {
+	const (
+		firstWaveWork = 600 * time.Millisecond
+		chunkTimeout  = 5 * time.Second
+	)
+	model := newDeadlineProbeModel(firstWaveWork)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:    manyChunkCollector{},
+		model:        model,
+		chunkTimeout: chunkTimeout,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	shortest, calls, undated := model.shortestBudget()
+	if undated != 0 {
+		t.Fatalf("%d model calls carried no deadline, want every call bounded", undated)
+	}
+	if calls != config.MaximumChunkConcurrency+1 {
+		t.Fatalf("model calls = %d, want one per chunk", calls)
+	}
+	// One clock over the whole pass would leave the last wave short by the time
+	// the first wave spent. A clock per call leaves every call the full budget.
+	if shortest < chunkTimeout-firstWaveWork/2 {
+		t.Fatalf("shortest call budget = %s, want close to %s: a later call inherited an earlier clock",
+			shortest, chunkTimeout)
+	}
+}
+
+// concurrencyProbeModel records how many calls overlap, so a test can prove
+// chunks run together rather than one after another.
+type concurrencyProbeModel struct {
+	mu       sync.Mutex
+	inFlight int
+	highest  int
+	release  chan struct{}
+}
+
+func newConcurrencyProbeModel() *concurrencyProbeModel {
+	return &concurrencyProbeModel{release: make(chan struct{})}
+}
+
+func (model *concurrencyProbeModel) Review(context.Context, string) (review.Completion, error) {
+	model.mu.Lock()
+	model.inFlight++
+	if model.inFlight > model.highest {
+		model.highest = model.inFlight
+	}
+	reached := model.inFlight >= config.MaximumChunkConcurrency
+	model.mu.Unlock()
+
+	// The first full wave releases everyone, so the test proves overlap without
+	// depending on wall clock timing.
+	if reached {
+		model.releaseOnce()
+	}
+	<-model.release
+
+	model.mu.Lock()
+	model.inFlight--
+	model.mu.Unlock()
+	return review.Completion{
+		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
+		Model:  testReviewModel,
+	}, nil
+}
+
+func (model *concurrencyProbeModel) releaseOnce() {
+	select {
+	case <-model.release:
+	default:
+		close(model.release)
+	}
+}
+
+func (model *concurrencyProbeModel) peak() int {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return model.highest
+}
+
+// Chunks are reviewed several at a time, under a bound. Strictly one at a time
+// would take hours on a sixty chunk delta at the measured call durations, and
+// unbounded would put that whole delta on the provider at once.
+func TestChunksAreReviewedConcurrentlyUnderABound(t *testing.T) {
+	model := newConcurrencyProbeModel()
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector: manyChunkCollector{},
+		model:     model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if model.peak() < 2 {
+		t.Fatalf("peak concurrent model calls = %d, want more than one chunk in flight", model.peak())
+	}
+	if model.peak() > config.MaximumChunkConcurrency {
+		t.Fatalf("peak concurrent model calls = %d, want at most %d",
+			model.peak(), config.MaximumChunkConcurrency)
+	}
+}
+
 func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
@@ -1182,18 +1737,25 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The finding posts as its chunk answers, before the head refresh and the
-	// review submission that carries the verdict.
+	// The finding posts as its chunk answers, the checkpoint follows it, and
+	// only then come the head refresh, the thread read the verdict is computed
+	// from, and the review that carries it.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
@@ -1201,9 +1763,76 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 	if fixture.state.lastSubmitReview == nil {
 		t.Fatal("SubmitReview was not called")
 	}
+	// The verdict names the commit this run analyzed. Reloading the head and
+	// comparing it closes most of the race, but a push can still land between
+	// that check and this write, and a verdict pinned to the analyzed commit
+	// cannot be read as judging the commit that replaced it.
+	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA {
+		t.Fatalf("commit_id = %v, want the analyzed commit %q",
+			fixture.state.lastSubmitReview["commit_id"], testHeadSHA)
+	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
+}
+
+// Every write to the top level comment carries the state marker, because the
+// marker is the only way the next run finds the comment. A body written
+// without one makes that run open a second comment, and the write most likely
+// to forget it is a failure notice, when the pull request is already in
+// trouble.
+func TestEveryTopLevelCommentWriteCarriesTheStateMarker(t *testing.T) {
+	t.Run("an incomplete run then a completing run leave one comment", func(t *testing.T) {
+		fixture := newServiceFixture(t, serviceFixtureOptions{
+			model: &failThenSucceedModel{err: errors.New("provider refused the prompt")},
+		})
+
+		if err := fixture.run(context.Background(), fixture.job()); err != nil {
+			t.Fatalf("first Run: %v", err)
+		}
+		pending, ok := marker.DecodeState(failureSummaryComment(t, fixture))
+		if !ok || pending.Status != marker.StateReviewing || len(pending.Pending) != 1 {
+			t.Fatalf("state after the unread chunk = %+v ok=%v, want a decodable reviewing marker", pending, ok)
+		}
+
+		if err := fixture.run(context.Background(), fixture.job()); err != nil {
+			t.Fatalf("second Run: %v", err)
+		}
+		if len(fixture.state.issueComments) != 1 {
+			t.Fatalf("issue comments = %d, want the failure comment reused, not a second one",
+				len(fixture.state.issueComments))
+		}
+		body, ok := fixture.state.issueComments[0]["body"].(string)
+		if !ok {
+			t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+		}
+		done, ok := marker.DecodeState(body)
+		if !ok || done.Status != marker.StateDone {
+			t.Fatalf("state after the success = %+v ok=%v, want a decodable done marker", done, ok)
+		}
+	})
+
+	t.Run("a declined delta", func(t *testing.T) {
+		fixture := newServiceFixture(t, serviceFixtureOptions{
+			collector:       twoChunkCollector{},
+			reviewMaxChunks: 1,
+		})
+
+		if err := fixture.run(context.Background(), fixture.job()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if len(fixture.state.issueComments) != 1 {
+			t.Fatalf("issue comments = %d, want 1", len(fixture.state.issueComments))
+		}
+		body, ok := fixture.state.issueComments[0]["body"].(string)
+		if !ok {
+			t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+		}
+		skipped, ok := marker.DecodeState(body)
+		if !ok || skipped.Status != marker.StateSkipped {
+			t.Fatalf("state = %+v ok=%v, want a decodable skipped marker", skipped, ok)
+		}
+	})
 }
 
 func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
@@ -1228,6 +1857,9 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 0", fixture.reconciler.callCount)
 	}
 
+	// The durable state is never read here. A head an existing review marker
+	// already covers owes no delta, so the run pays for no issue comment read
+	// on its way out.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
@@ -1239,6 +1871,41 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatal("SubmitReview was called for existing marker")
+	}
+}
+
+// A head the durable state already records as reviewed, with no chunk pending,
+// owes nothing. The run says so from the state alone rather than asking GitHub
+// to compare a commit against itself.
+func TestServiceReviewsNothingWhenTheStateAlreadyNamesTheHead(t *testing.T) {
+	collector := &recordingDeltaCollector{}
+	model := &sequenceModel{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{collector: collector, model: model})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(collector.bases()) != 0 {
+		t.Fatalf("CollectRange calls = %v, want none: the state already names this head", collector.bases())
+	}
+	if model.callCount != 0 {
+		t.Fatalf("model calls = %d, want none", model.callCount)
+	}
+	if fixture.reconciler.callCount != 0 {
+		t.Fatalf("reconcile calls = %d, want none", fixture.reconciler.callCount)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 }
 
@@ -1267,10 +1934,16 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
@@ -1279,6 +1952,9 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 	}
 }
 
+// Reading a commit proves it was reviewed, not that it is still the head. A run
+// whose head moved mid flight posts nothing more about that commit, submits no
+// verdict, and never reads the threads it would have judged.
 func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		headAfterAnalysis: testStaleHeadSHA,
@@ -1292,13 +1968,15 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
+	// The head check that guards the first chunk's comments catches the move,
+	// so the run ends there rather than posting to a commit nobody is reading.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
-		"GET /repos/owner/repo/pulls/7",
+		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
@@ -1306,8 +1984,11 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatal("SubmitReview was called after stale head")
 	}
-	// The head moved during analysis, so the findings describe a commit nobody
-	// is looking at any more and none of them post.
+	if fixture.state.lastUpdateReview != nil {
+		t.Fatal("a review was edited after the head moved, want no verdict at all")
+	}
+	// The head moved during the review, so the findings describe a commit
+	// nobody is looking at any more and none of them post.
 	if len(fixture.state.streamedComments) != 0 {
 		t.Fatalf("streamed comments = %d, want none after the head moved",
 			len(fixture.state.streamedComments))
@@ -1333,13 +2014,17 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"POST /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
@@ -1383,6 +2068,358 @@ func TestServiceCompletesCheckAfterModelPanic(t *testing.T) {
 	}
 }
 
+// The admission gate measures the delta before any model call and declines
+// it outright when it is over budget. A declined review carries no verdict at
+// all: no review submitted, none dismissed, only a notice saying why the
+// review did not try.
+//
+// The check still must not pass. GitHub counts a required check concluded
+// skipped as passing, so concluding that way would let an entirely unreviewed
+// oversized delta merge with any earlier approval still standing.
+func TestServiceDeclinesAnOverBudgetDeltaBeforeAnyModelCall(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:       twoChunkCollector{},
+		reviewMaxChunks: 1,
+	})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
+	}
+	assertDeclinedCheckDoesNotPass(t, fixture)
+
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("issue comments = %d, want 1", len(fixture.state.issueComments))
+	}
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok {
+		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+	}
+	if !strings.Contains(body, "2 diff chunks") {
+		t.Fatalf("summary comment body = %q, want the measured chunk count", body)
+	}
+	if !strings.Contains(body, "1 chunk review budget") {
+		t.Fatalf("summary comment body = %q, want the configured budget", body)
+	}
+
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none: a declined delta carries no verdict",
+			fixture.state.lastSubmitReview)
+	}
+	if len(fixture.state.dismissals) != 0 {
+		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
+	}
+}
+
+// passingCheckConclusions are the conclusions GitHub counts as satisfying a
+// required check. A declined delta must reach none of them, or unreviewed code
+// merges on the strength of having been refused a review.
+var passingCheckConclusions = []string{"success", "skipped", "neutral"}
+
+// assertDeclinedCheckDoesNotPass proves the admission gate leaves the merge gate
+// shut, and says so as a class rather than pinning one string, so a later change
+// to another passing conclusion fails here too.
+func assertDeclinedCheckDoesNotPass(t *testing.T, fixture *serviceFixture) {
+	t.Helper()
+	conclusion, ok := fixture.state.lastUpdateCheckRun["conclusion"].(string)
+	if !ok {
+		t.Fatalf("conclusion = %v, want a string", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	for _, passing := range passingCheckConclusions {
+		if conclusion == passing {
+			t.Fatalf("conclusion = %q, which GitHub counts as passing: an unreviewed delta could merge",
+				conclusion)
+		}
+	}
+	if conclusion != "action_required" {
+		t.Fatalf("conclusion = %q, want action_required", conclusion)
+	}
+}
+
+// The gate exists so an over budget delta costs nothing. Reconciliation makes
+// its own model call and resolves threads, so running it before admission
+// spent both on the exact delta the run was about to refuse, and mutated
+// review state on the way.
+func TestAnOverBudgetDeltaReconcilesNothingAndCallsNoModel(t *testing.T) {
+	model := &sequenceModel{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:       twoChunkCollector{},
+		reviewMaxChunks: 1,
+		model:           model,
+		reconcileThreads: []githubapp.ReviewThread{{
+			NodeID:   "open-thread",
+			Resolved: false,
+			RootComment: domain.ReviewComment{
+				Author: testBotLogin,
+				Body:   "an earlier finding the reconciler would look at",
+				Path:   "main.go",
+			},
+		}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Thread resolution happens inside the reconciler, so a reconciler that was
+	// never called resolved nothing.
+	if fixture.reconciler.callCount != 0 {
+		t.Fatalf("reconcile call count = %d, want 0 on a declined delta", fixture.reconciler.callCount)
+	}
+	if model.callCount != 0 {
+		t.Fatalf("model call count = %d, want 0 on a declined delta", model.callCount)
+	}
+	assertDeclinedCheckDoesNotPass(t, fixture)
+}
+
+// budgetBypassCollector answers a compare the way GitHub would. Measured from
+// the real baseline the range still carries the whole oversized delta; measured
+// from the head that was declined it carries only the one commit pushed since.
+//
+// That difference is the bug this collector exists to catch. A skip that moved
+// the baseline to the head it refused would be handed the small range on the
+// next push, review it, approve, and let the oversized code merge unread.
+type budgetBypassCollector struct {
+	mu           sync.Mutex
+	declinedHead domain.HeadSHA
+	rangeBases   []domain.HeadSHA
+}
+
+func (collector *budgetBypassCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	base domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	collector.mu.Lock()
+	collector.rangeBases = append(collector.rangeBases, base)
+	declined := collector.declinedHead
+	collector.mu.Unlock()
+
+	if base == declined {
+		return paddedFiles(pullRequest, 1)
+	}
+	return paddedFiles(pullRequest, 2)
+}
+
+func (collector *budgetBypassCollector) bases() []domain.HeadSHA {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	return append([]domain.HeadSHA{}, collector.rangeBases...)
+}
+
+// A declined delta must not move the baseline to the head it refused.
+//
+// Advancing it there reopens the gate one push later by a different door than
+// the conclusion does: the next run measures only the commits since a head
+// nobody read, finds them small and clean, approves, and the oversized range
+// merges with the marker claiming the whole range was reviewed. The check
+// conclusion holds the gate only until that push.
+//
+// The spec says so and calls repeated skips the intended behaviour: an over
+// budget delta stays over budget, and the way out is a person splitting the
+// pull request, raising its budget, or asking for the review.
+func TestADeclinedDeltaKeepsItsBaselineSoALaterPushCannotBypassTheBudget(t *testing.T) {
+	const pushedHeadSHA = "d6f7a4fdfaf828ef157a37e2f5d4f4424963af65"
+
+	collector := &budgetBypassCollector{declinedHead: domain.HeadSHA(testHeadSHA)}
+	model := &sequenceModel{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:       collector,
+		reviewMaxChunks: 1,
+		model:           model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	assertDeclinedCheckDoesNotPass(t, fixture)
+	declined := decodedSummaryState(t, fixture)
+	if declined.LastReviewed != "" {
+		t.Fatalf("last reviewed after the skip = %q, want it left where it was: nothing was read",
+			declined.LastReviewed)
+	}
+	if declined.Status != marker.StateSkipped {
+		t.Fatalf("status = %q, want %q", declined.Status, marker.StateSkipped)
+	}
+
+	// One small commit lands on top of the delta that was refused.
+	fixture.state.mu.Lock()
+	fixture.state.headSHA = pushedHeadSHA
+	fixture.state.mu.Unlock()
+
+	pushed := fixture.job()
+	pushed.DeliveryID = "delivery-2"
+	pushed.Head = domain.HeadSHA(pushedHeadSHA)
+	if err := fixture.run(context.Background(), pushed); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	bases := collector.bases()
+	if len(bases) != 2 {
+		t.Fatalf("CollectRange calls = %v, want one per run", bases)
+	}
+	if bases[1] != "" {
+		t.Fatalf("second compare base = %q, want the baseline unmoved: measuring from the declined head "+
+			"hides the oversized range and merges it unreviewed", bases[1])
+	}
+	assertDeclinedCheckDoesNotPass(t, fixture)
+	if model.callCount != 0 {
+		t.Fatalf("model call count = %d, want 0: the oversized range is still over budget", model.callCount)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none: nothing was reviewed", fixture.state.lastSubmitReview)
+	}
+	if after := decodedSummaryState(t, fixture); after.LastReviewed != "" {
+		t.Fatalf("last reviewed after the push = %q, want it still unmoved", after.LastReviewed)
+	}
+}
+
+// A redelivery of a declined head must be declined again.
+//
+// This door needs no push at all. A baseline advanced to the head that was
+// refused makes the next run find the state already naming this head with
+// nothing pending, which returns "already reviewed" and concludes the check
+// successfully, so a plain webhook retry opens the gate over code nobody read.
+func TestARedeliveryOfADeclinedHeadIsDeclinedAgain(t *testing.T) {
+	model := &sequenceModel{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:       twoChunkCollector{},
+		reviewMaxChunks: 1,
+		model:           model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	assertDeclinedCheckDoesNotPass(t, fixture)
+
+	// The same delivery arrives again, which is what GitHub does on a retry.
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("redelivered Run: %v", err)
+	}
+
+	assertDeclinedCheckDoesNotPass(t, fixture)
+	if title := fmt.Sprint(checkOutput(t, fixture)["title"]); title == checkTitleAlreadyReviewedText {
+		t.Fatalf("check title = %q, want the skip: nothing was ever reviewed on this head", title)
+	}
+	if model.callCount != 0 {
+		t.Fatalf("model call count = %d, want 0: the delta is still over budget", model.callCount)
+	}
+	if fixture.reconciler.callCount != 0 {
+		t.Fatalf("reconcile call count = %d, want 0 on a redelivered decline", fixture.reconciler.callCount)
+	}
+	if state := decodedSummaryState(t, fixture); state.Status != marker.StateSkipped {
+		t.Fatalf("status = %q, want %q", state.Status, marker.StateSkipped)
+	}
+}
+
+// checkTitleAlreadyReviewedText is the title the service completes a check with
+// when it finds nothing owed. A declined delta must never reach it.
+const checkTitleAlreadyReviewedText = "Already reviewed"
+
+// A declined delta must keep the work an earlier run already recorded. It read
+// no chunk, so it has nothing to add and no business taking any away: erasing
+// the finished chunk list would send the next run that is allowed to review
+// over work this pull request already paid for.
+func TestADeclinedDeltaKeepsTheWorkAnEarlierRunRecorded(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:       twoChunkCollector{},
+		reviewMaxChunks: 1,
+		model:           &sequenceModel{},
+	})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": "## Review\n\nan earlier run\n\n" + marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testStaleHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateReviewing,
+			Pending:      []string{"aaaaaaaaaaaa"},
+			Completed:    []string{"bbbbbbbbbbbb", "cccccccccccc"},
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	assertDeclinedCheckDoesNotPass(t, fixture)
+	state := decodedSummaryState(t, fixture)
+	if state.LastReviewed != domain.HeadSHA(testStaleHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the earlier run's commit %q", state.LastReviewed, testStaleHeadSHA)
+	}
+	if len(state.Completed) != 2 {
+		t.Fatalf("completed = %v, want the two chunks an earlier run finished", state.Completed)
+	}
+	if len(state.Pending) != 1 {
+		t.Fatalf("pending = %v, want the chunk an earlier run still owed", state.Pending)
+	}
+	if state.Status != marker.StateSkipped {
+		t.Fatalf("status = %q, want %q", state.Status, marker.StateSkipped)
+	}
+	if state.RunID != "delivery-1" {
+		t.Fatalf("run id = %q, want the run that declined the delta", state.RunID)
+	}
+}
+
+// A skip that cannot be written is still a run that has to end. Before this
+// the error travelled back to the dispatcher, which only logs, so a GitHub
+// outage during a skip left the check in progress forever with nothing on the
+// pull request saying why.
+func TestAFailedSkipWriteStillCompletesTheCheck(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:          twoChunkCollector{},
+		reviewMaxChunks:    1,
+		issueCommentStatus: http.StatusInternalServerError,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the failed skip write surfaced")
+	}
+
+	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	}
+	if output["title"] != "Review failed while recording the skipped review." {
+		t.Fatalf("title = %v, want the skip write stage", output["title"])
+	}
+}
+
+// A zero budget refuses every real delta while admitting an empty one, which
+// is the opposite of what a budget is for. It means the caller left the value
+// unset, so the configured default applies.
+func TestUnsetReviewBudgetsAdmitANormalDelta(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		unsetReviewBudgets: true,
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+		},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want success: a one file delta is inside the default budget",
+			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no review was submitted, want the delta reviewed rather than declined")
+	}
+}
+
 func TestServiceCreatesAndCompletesCheckBeforePullRequestLoadFails(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		pullRequestStatus: http.StatusInternalServerError,
@@ -1418,174 +2455,219 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
-	notice := fixture.state.lastSubmitReview
-	if notice == nil {
-		t.Fatal("failure notice was not published")
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none on a failure", fixture.state.lastSubmitReview)
 	}
-	if notice["event"] != string(domain.ReviewDecisionComment) {
-		t.Fatalf("event = %v, want COMMENT", notice["event"])
+	assertSanitizedFailureComment(
+		t,
+		fixture,
+		"Review failed while reconciling existing findings.",
+		"reconcile failed",
+	)
+}
+
+// failureSummaryComment returns the body of the one top level comment a failed
+// run leaves behind, which is where the failure is now reported.
+func failureSummaryComment(t *testing.T, fixture *serviceFixture) string {
+	t.Helper()
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("issue comments = %d, want the one summary comment", len(fixture.state.issueComments))
 	}
-	comments, ok := notice["comments"].([]any)
-	if !ok || len(comments) != 0 {
-		t.Fatalf("comments = %v, want none on a failure notice", notice["comments"])
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok {
+		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+	}
+	return body
+}
+
+// assertSanitizedFailureComment proves the comment says the review stopped and
+// where the cause is, and that the provider's own words are not in it.
+//
+// A model provider error can carry the request it failed on, an internal
+// endpoint, or a credential. A pull request comment is public and permanent,
+// so the cause goes to the service log and the comment carries the run
+// identifier that finds it.
+func assertSanitizedFailureComment(t *testing.T, fixture *serviceFixture, statedFailure string, rawCause string) {
+	t.Helper()
+	body := failureSummaryComment(t, fixture)
+	if !strings.Contains(body, statedFailure) {
+		t.Fatalf("summary comment = %q, want the stated failure %q", body, statedFailure)
+	}
+	if !strings.Contains(body, "under run identifier `delivery-1`") {
+		t.Fatalf("summary comment = %q, want the run identifier that finds the cause", body)
+	}
+	if strings.Contains(body, rawCause) {
+		t.Fatalf("summary comment published the raw provider cause %q:\n%s", rawCause, body)
 	}
 }
 
-func TestServiceReportsModelFailureCause(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		model: &sequenceModel{err: errors.New("provider rejected response schema")},
-	})
-
-	err := fixture.run(context.Background(), fixture.job())
-	if err == nil {
-		t.Fatal("Run: want error")
-	}
+// checkOutput returns the output object of the last check run update.
+func checkOutput(t *testing.T, fixture *serviceFixture) map[string]any {
+	t.Helper()
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok {
-		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+		t.Fatalf("check output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
 	}
-	if output["title"] != "Review failed during model analysis." {
-		t.Fatalf("title = %v, want model analysis stage", output["title"])
+	return output
+}
+
+// A check run is as public and as permanent as a pull request comment, so it
+// names which chunks went unread and where the cause is, and never quotes the
+// provider. The cause itself stays in the service log the run identifier finds.
+func TestTheNeutralCheckNamesTheUnreadChunksWithoutQuotingTheProvider(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector: twoChunkCollector{},
+		model:     &sequenceModel{err: errors.New("provider rejected response schema")},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	output := checkOutput(t, fixture)
+	if !strings.Contains(fmt.Sprint(output["title"]), "could not be reviewed") {
+		t.Fatalf("title = %v, want the count of unread chunks", output["title"])
 	}
 	summary, ok := output["summary"].(string)
-	if !ok || !strings.Contains(summary, "provider rejected response schema") {
-		t.Fatalf("summary = %v, want provider failure", output["summary"])
+	if !ok {
+		t.Fatalf("summary = %v, want string", output["summary"])
+	}
+	if strings.Contains(summary, "provider rejected response schema") {
+		t.Fatalf("check summary published the raw provider cause:\n%s", summary)
+	}
+	for _, want := range []string{
+		"Chunks left unread: 1, 2.",
+		"under run identifier `delivery-1`",
+		"<summary>Review details</summary>",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("check summary missing %q:\n%s", want, summary)
+		}
 	}
 }
 
+// Exhausted usage is the largest single failure cause in production, so both
+// public surfaces say so in this service's own words. The provider's message
+// behind it reaches neither of them.
 func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &sequenceModel{err: quotaExhaustedError{}},
 	})
 
-	err := fixture.run(context.Background(), fixture.job())
-	if err == nil {
-		t.Fatal("Run: want error")
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
-	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
-	if !ok {
-		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+	wantReason := "Review stopped: the model provider reported no remaining usage."
+	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
+	if !ok || !strings.Contains(checkSummary, wantReason) {
+		t.Fatalf("check summary = %v, want the classified reason", checkOutput(t, fixture)["summary"])
 	}
-	wantTitle := "Review stopped: the model provider reported no remaining usage."
-	if output["title"] != wantTitle {
-		t.Fatalf("title = %v, want %q", output["title"], wantTitle)
+	if strings.Contains(checkSummary, "usage credits are exhausted") {
+		t.Fatalf("check summary published the raw provider cause:\n%s", checkSummary)
 	}
-
-	notice := fixture.state.lastSubmitReview
-	if notice == nil {
-		t.Fatal("failure notice was not published")
-	}
-	body, ok := notice["body"].(string)
-	if !ok || !strings.Contains(body, wantTitle) {
-		t.Fatalf("notice body = %v, want the usage wording", notice["body"])
-	}
-	if !strings.Contains(body, "usage credits are exhausted") {
-		t.Fatalf("notice body = %q, want the provider detail", body)
-	}
+	assertSanitizedFailureComment(t, fixture, wantReason, "usage credits are exhausted")
 }
 
-func TestServiceFailureNoticeOmitsReviewMarkerSoTheHeadIsReviewedAgain(t *testing.T) {
+// A run that could not read every chunk leaves no review marker, so the same
+// head is reviewed again rather than being suppressed as already done.
+func TestAnIncompleteRunOmitsTheReviewMarkerSoTheHeadIsReviewedAgain(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &sequenceModel{err: errors.New("provider rejected response schema")},
 	})
 
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want error")
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
-	notice := fixture.state.lastSubmitReview
-	if notice == nil {
-		t.Fatal("failure notice was not published")
-	}
-	body, ok := notice["body"].(string)
-	if !ok {
-		t.Fatalf("notice body = %v, want string", notice["body"])
-	}
-	if !marker.HasSummary(body) {
-		t.Fatalf("notice body = %q, want the summary marker so a later run edits it", body)
-	}
+	body := failureSummaryComment(t, fixture)
 	if _, found := marker.FindReview(body); found {
-		t.Fatalf("notice body = %q, want no review marker", body)
+		t.Fatalf("summary comment = %q, want no review marker", body)
 	}
 }
 
-func TestServiceFailureNoticeEditsTheExistingSummary(t *testing.T) {
-	summaryReview := map[string]any{
-		"id":        float64(42),
-		"commit_id": testStaleHeadSHA,
-		"body":      "## Review\n\nNo severe findings.\n\n" + marker.Summary(),
-		"state":     "COMMENTED",
-		"user":      map[string]any{"login": testBotLogin},
-	}
+// The failure notice edits the one comment the service already owns rather
+// than leaving a second one behind, so a pull request that fails repeatedly
+// still shows one summary.
+func TestServiceFailureNoticeEditsTheExistingSummaryComment(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		model:       &sequenceModel{err: errors.New("provider rejected response schema")},
-		reviewPages: [][]map[string]any{{summaryReview}},
+		reconcileErr: errors.New("reconcile failed"),
+	})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": "## Review\n\nNo severe findings.\n\n" + marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testStaleHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
 	})
 
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run: want error")
 	}
-	if fixture.state.lastSubmitReview != nil {
-		t.Fatal("SubmitReview was called although a summary review already exists")
+	if fixture.state.issueCommentUpdates != 1 {
+		t.Fatalf("issue comment updates = %d, want the existing comment edited once", fixture.state.issueCommentUpdates)
 	}
-	updated := fixture.state.lastUpdateReview
-	if updated == nil {
-		t.Fatal("the existing summary review was not updated")
-	}
-	body, ok := updated["body"].(string)
-	if !ok || !strings.Contains(body, "Review failed during model analysis.") {
-		t.Fatalf("updated body = %v, want the failure wording", updated["body"])
+	body := failureSummaryComment(t, fixture)
+	if !strings.Contains(body, "Review failed while reconciling existing findings.") {
+		t.Fatalf("summary comment = %q, want the failure wording", body)
 	}
 }
 
-// A failed review must report the same detail table a successful one does, so a
-// reader can tell which model answered and how far it got.
-func TestServiceFailureReportsProgressInTheCommentAndTheCheck(t *testing.T) {
+// A run that stops early must report the same detail table a finished one does,
+// so a reader can tell which model answered and how far it got.
+func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &sequenceModel{err: errors.New("provider refused the prompt")},
 	})
 
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want error")
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 
-	notice := fixture.state.lastSubmitReview
-	if notice == nil {
-		t.Fatal("failure notice was not published")
-	}
-	body, ok := notice["body"].(string)
-	if !ok {
-		t.Fatalf("notice body = %v, want string", notice["body"])
-	}
+	body := failureSummaryComment(t, fixture)
 	for _, want := range []string{
 		"<summary>Review details</summary>",
-		// No model answered, because the first chunk failed. The table says so
+		// No model answered, because the only chunk failed. The table says so
 		// rather than naming the configured model that never replied.
 		"| Model | unknown |",
 		"| Head | `a3c4f1c` |",
 		"| Files reviewed | `1` |",
 		"| Diff chunks | `1` |",
-		"| Reached | the diff |",
-		"provider refused the prompt",
+		// A chunk nobody read is a slice of the head nobody covered, so the
+		// table says so rather than claiming coverage it never established.
+		"| Coverage complete | no |",
+		"1 chunk could not be reviewed",
+		// The block names what is holding it, the unread chunk included.
+		"This head was not fully reviewed",
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("failure notice missing %q:\n%s", want, body)
+			t.Fatalf("incomplete notice missing %q:\n%s", want, body)
 		}
 	}
+	// The progress table is this service's own measurements, so the comment
+	// carries all of it. The provider's message is not part of it.
+	if strings.Contains(body, "provider refused the prompt") {
+		t.Fatalf("summary comment published the raw provider cause:\n%s", body)
+	}
+	if !strings.Contains(body, "under run identifier `delivery-1`") {
+		t.Fatalf("summary comment = %q, want the run identifier that finds the cause", body)
+	}
 
-	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
+	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
 	if !ok {
-		t.Fatalf("check output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+		t.Fatalf("check summary = %v, want string", checkOutput(t, fixture)["summary"])
 	}
-	checkSummary, ok := output["summary"].(string)
-	if !ok {
-		t.Fatalf("check summary = %v, want string", output["summary"])
+	if strings.Contains(checkSummary, "provider refused the prompt") {
+		t.Fatalf("check summary published the raw provider cause:\n%s", checkSummary)
 	}
-	if !strings.Contains(checkSummary, "provider refused the prompt") {
-		t.Fatalf("check summary lost the cause:\n%s", checkSummary)
+	if !strings.Contains(checkSummary, "under run identifier `delivery-1`") {
+		t.Fatalf("check summary lost the pointer to the cause:\n%s", checkSummary)
 	}
-	if !strings.Contains(checkSummary, "| Reached | the diff |") {
-		t.Fatalf("check summary lost the progress:\n%s", checkSummary)
+	for _, want := range []string{"Chunks left unread: 1.", "| Coverage complete | no |"} {
+		if !strings.Contains(checkSummary, want) {
+			t.Fatalf("check summary missing %q:\n%s", want, checkSummary)
+		}
 	}
 }
 
@@ -1631,11 +2713,6 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 			options: serviceFixtureOptions{collector: failingCollector{}},
 		},
 		{
-			name:    "model analysis",
-			title:   "Review failed during model analysis.",
-			options: serviceFixtureOptions{model: &sequenceModel{err: errors.New("provider refused")}},
-		},
-		{
 			name:    "head refresh",
 			title:   "Review failed while refreshing the pull request head.",
 			options: serviceFixtureOptions{pullRequestStatusAfterFirstRead: http.StatusInternalServerError},
@@ -1661,23 +2738,17 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 			if output["title"] != stage.title {
 				t.Fatalf("title = %v, want %q", output["title"], stage.title)
 			}
-
-			notice := fixture.state.lastSubmitReview
-			if notice == nil {
-				t.Fatal("failure notice was not published")
+			if fixture.state.lastSubmitReview != nil {
+				t.Fatalf("submitted review = %v, want none on a failure", fixture.state.lastSubmitReview)
 			}
-			if notice["event"] != string(domain.ReviewDecisionComment) {
-				t.Fatalf("event = %v, want COMMENT", notice["event"])
-			}
-			body, ok := notice["body"].(string)
-			if !ok || !strings.Contains(body, stage.title) {
-				t.Fatalf("notice body = %v, want %q", notice["body"], stage.title)
+			if body := failureSummaryComment(t, fixture); !strings.Contains(body, stage.title) {
+				t.Fatalf("summary comment = %q, want %q", body, stage.title)
 			}
 		})
 	}
 }
 
-func TestServiceRejectPublishesAFailureNotice(t *testing.T) {
+func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 
 	admitted, err := fixture.service.Admit(context.Background(), fixture.job())
@@ -1692,19 +2763,16 @@ func TestServiceRejectPublishesAFailureNotice(t *testing.T) {
 		t.Fatal("Reject: want the rejection cause")
 	}
 
-	notice := fixture.state.lastSubmitReview
-	if notice == nil {
-		t.Fatal("failure notice was not published")
-	}
-	body, ok := notice["body"].(string)
-	if !ok || !strings.Contains(body, "review queue is full") {
-		t.Fatalf("notice body = %v, want the rejection cause", notice["body"])
+	assertSanitizedFailureComment(t, fixture, "Review failed.", "review queue is full")
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none on a rejection", fixture.state.lastSubmitReview)
 	}
 }
 
-// The notice needs the same GitHub reads that failed in these stages, so it
-// cannot be written. The check run still reports the failure.
-func TestServiceSkipsTheNoticeWhenItsOwnGitHubCallIsTheFailure(t *testing.T) {
+// A failure inside publication is reported by the check run and the comment,
+// and still changes no review object: the review that failed to submit or
+// update stays exactly as the reader last saw it.
+func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T) {
 	summaryReview := map[string]any{
 		"id":        float64(42),
 		"commit_id": testStaleHeadSHA,
@@ -1735,6 +2803,11 @@ func TestServiceSkipsTheNoticeWhenItsOwnGitHubCallIsTheFailure(t *testing.T) {
 			title:   "Review failed while publishing the final decision.",
 			options: serviceFixtureOptions{submitReviewStatus: http.StatusInternalServerError},
 		},
+		{
+			name:    "thread read fails",
+			title:   "Review failed while reading the open review threads.",
+			options: serviceFixtureOptions{listThreadsStatus: http.StatusInternalServerError},
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -1750,8 +2823,11 @@ func TestServiceSkipsTheNoticeWhenItsOwnGitHubCallIsTheFailure(t *testing.T) {
 			if output["title"] != testCase.title {
 				t.Fatalf("title = %v, want %q", output["title"], testCase.title)
 			}
-			if fixture.state.lastSubmitReview != nil {
-				t.Fatalf("a second visible comment was created: %v", fixture.state.lastSubmitReview)
+			if len(fixture.state.dismissals) != 0 {
+				t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
+			}
+			if body := failureSummaryComment(t, fixture); !strings.Contains(body, testCase.title) {
+				t.Fatalf("summary comment = %q, want %q", body, testCase.title)
 			}
 		})
 	}
@@ -1759,77 +2835,187 @@ func TestServiceSkipsTheNoticeWhenItsOwnGitHubCallIsTheFailure(t *testing.T) {
 
 func TestServiceReturnsTheReviewCauseWhenTheNoticeCannotBeWritten(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		model:              &sequenceModel{err: errors.New("provider refused the prompt")},
-		submitReviewStatus: http.StatusInternalServerError,
+		reconcileErr:       errors.New("reconcile failed"),
+		issueCommentStatus: http.StatusInternalServerError,
 	})
 
 	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: want error")
 	}
-	if !strings.Contains(err.Error(), "provider refused the prompt") {
+	if !strings.Contains(err.Error(), "reconcile failed") {
 		t.Fatalf("err = %q, want the review cause", err)
 	}
-	if strings.Contains(err.Error(), "submit review failed") {
+	if strings.Contains(err.Error(), "issue comment") {
 		t.Fatalf("err = %q, want the notice failure kept out of the returned cause", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure even when the notice cannot be written",
+			fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 }
 
-func TestServiceReviewsTheSameHeadAgainAfterAFailureNotice(t *testing.T) {
+// A run that leaves a chunk pending leaves no review marker for its head, so
+// the same head is reviewed again on the next attempt and the one comment is
+// rewritten in place.
+func TestServiceReviewsTheSameHeadAgainAfterAnIncompleteRun(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &failThenSucceedModel{err: errors.New("provider refused the prompt")},
 	})
 
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("first Run: want error")
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
 	}
-	notice := fixture.state.lastSubmitReview
-	if notice == nil {
-		t.Fatal("failure notice was not published")
-	}
-	noticeBody, ok := notice["body"].(string)
-	if !ok {
-		t.Fatalf("notice body = %v, want string", notice["body"])
+	if !strings.Contains(failureSummaryComment(t, fixture), "could not be reviewed") {
+		t.Fatalf("summary comment = %q, want the unread chunk wording", failureSummaryComment(t, fixture))
 	}
 
-	// The published notice is the pull request state the retry reads back.
-	fixture.state.reviewPages = [][]map[string]any{{{
-		"id":        float64(42),
-		"commit_id": testHeadSHA,
-		"body":      noticeBody,
-		"state":     "COMMENTED",
-		"user":      map[string]any{"login": testBotLogin},
-	}}}
-	fixture.state.reviewPageIndex = 0
-	fixture.state.lastSubmitReview = nil
-
+	// The retry runs against the neutral check the first attempt left behind,
+	// exactly as a redelivery does. Only a completed successful check
+	// suppresses a rerun, so this one does not.
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v, want success on the retry", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
-	if fixture.state.lastUpdateReview == nil {
-		t.Fatal("the retry did not rewrite the existing comment")
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("issue comments = %d, want the one comment rewritten in place", len(fixture.state.issueComments))
 	}
-	rewritten, ok := fixture.state.lastUpdateReview["body"].(string)
-	if !ok || strings.Contains(rewritten, "Review failed") {
-		t.Fatalf("rewritten body = %v, want the normal review summary", fixture.state.lastUpdateReview["body"])
+	rewritten, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || strings.Contains(rewritten, "could not be reviewed") {
+		t.Fatalf("rewritten comment = %v, want the normal review summary", fixture.state.issueComments[0]["body"])
 	}
 	if fixture.state.lastSubmitReview == nil {
 		t.Fatal("the retry did not publish its review")
 	}
-	if fixture.state.lastSubmitReview["event"] == string(domain.ReviewDecisionComment) {
-		t.Fatal("the retry published a second visible comment instead of its review")
+}
+
+// A normal review run leaves exactly one summary comment behind, carrying the
+// durable state marker a later invocation resumes from. The create-then-
+// update-in-place contract of upsertSummaryComment itself is proven directly
+// in TestUpsertSummaryCommentCreatesOnceThenUpdatesInPlace, because a second
+// call to fixture.run on the same head here hits the pre-existing completed
+// check dedup path (checkAlreadySucceeded) rather than a repeat publish.
+func TestServiceCreatesTheSummaryCommentCarryingTheStateMarker(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("issue comments = %d, want 1", len(fixture.state.issueComments))
+	}
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok {
+		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+	}
+	state, ok := marker.DecodeState(body)
+	if !ok {
+		t.Fatalf("summary comment body = %q, want a decodable state marker", body)
+	}
+	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want %q", state.LastReviewed, testHeadSHA)
+	}
+	if state.Status != marker.StateDone {
+		t.Fatalf("status = %q, want %q", state.Status, marker.StateDone)
+	}
+}
+
+// A pull request whose state marker names an earlier commit must cause the
+// run to request the compare range from that commit to the head, not the
+// full changed file list, so a run never reviews the same commit range
+// twice.
+func TestServiceRequestsTheDeltaSinceTheLastReviewedCommitWhenAMarkerExists(t *testing.T) {
+	collector := &recordingDeltaCollector{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{collector: collector})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testStaleHeadSHA),
+			RunID:        "r1",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	bases := collector.bases()
+	if len(bases) != 1 {
+		t.Fatalf("CollectRange calls = %d, want 1", len(bases))
+	}
+	if bases[0] != domain.HeadSHA(testStaleHeadSHA) {
+		t.Fatalf("compare base = %q, want the last reviewed commit %q", bases[0], testStaleHeadSHA)
+	}
+}
+
+// Anyone who can comment on a pull request can write a state marker, so the
+// marker alone is not a credential. A forged one naming the head would make
+// the run compare the head against itself and review nothing, which is a
+// review bypass. Authorship is the gate; the marker only locates the comment
+// behind it.
+func TestServiceIgnoresAStateMarkerFromAnotherAuthor(t *testing.T) {
+	collector := &recordingDeltaCollector{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{collector: collector})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testHeadSHA),
+			RunID:        "forged",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": "someone-else"},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	bases := collector.bases()
+	if len(bases) != 1 || bases[0] != domain.HeadSHA("") {
+		t.Fatalf("compare bases = %v, want one full collection: a foreign marker is not this service's state", bases)
+	}
+	if len(fixture.state.issueComments) != 2 {
+		t.Fatalf("issue comments = %d, want the foreign one plus the service's own", len(fixture.state.issueComments))
+	}
+	foreign, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || !strings.Contains(foreign, "run=forged") {
+		t.Fatalf("foreign comment = %v, want it left exactly as it was",
+			fixture.state.issueComments[0]["body"])
+	}
+}
+
+// No state marker means this head has never been reviewed, so the run must
+// request the full file list rather than comparing against nothing.
+func TestServiceRequestsTheFullFileListWhenNoStateMarkerExists(t *testing.T) {
+	collector := &recordingDeltaCollector{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{collector: collector})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	bases := collector.bases()
+	if len(bases) != 1 {
+		t.Fatalf("CollectRange calls = %d, want 1", len(bases))
+	}
+	if bases[0] != domain.HeadSHA("") {
+		t.Fatalf("compare base = %q, want empty on first contact", bases[0])
 	}
 }
 
 type failingCollector struct{}
 
-func (failingCollector) Collect(
+func (failingCollector) CollectRange(
 	context.Context,
 	domain.PullRequestRef,
 	githubapp.PullRequest,
+	domain.HeadSHA,
 ) (diff.ReviewInput, error) {
 	return diff.ReviewInput{}, errors.New("collect diff failed")
 }
@@ -1863,7 +3049,10 @@ func (quotaExhaustedError) UsageExceeded() bool {
 	return true
 }
 
-func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinCap(t *testing.T) {
+// A finding an earlier review already carried stays suppressed even when this
+// run rewords it, because its thread is already on the page. Every other
+// finding is published: nothing else withholds one.
+func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 	historical := domain.Finding{
 		Path:       "main.go",
 		StartLine:  4,
@@ -1878,8 +3067,7 @@ func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinC
 	}
 
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance:         9,
-		maximumUnresolvedComments: 1,
+		minimumImportance: 9,
 		reconcileThreads: []githubapp.ReviewThread{{
 			NodeID:   "historical-thread",
 			Resolved: true,
@@ -1906,16 +3094,16 @@ func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinC
 					Path:       "main.go",
 					StartLine:  2,
 					EndLine:    2,
-					Title:      "Lower importance defect",
-					Body:       "This finding waits because capacity is limited.",
+					Title:      "Second defect",
+					Body:       "A different defect on a different line.",
 					Importance: 9,
 				},
 				{
 					Path:       "main.go",
 					StartLine:  3,
 					EndLine:    3,
-					Title:      "Highest importance defect",
-					Body:       "This finding uses the available capacity.",
+					Title:      "Third defect",
+					Body:       "A third defect on a third line.",
 					Importance: 10,
 				},
 			},
@@ -1928,19 +3116,23 @@ func TestServiceSuppressesHistoricalFindingsAndPublishesHighestImportanceWithinC
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
 	}
-	if len(fixture.state.streamedComments) != 1 {
-		t.Fatalf("streamed comments = %d, want one", len(fixture.state.streamedComments))
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("streamed comments = %d, want both new defects and not the reworded historical one",
+			len(fixture.state.streamedComments))
 	}
-	body, ok := fixture.state.streamedComments[0]["body"].(string)
-	if !ok || !strings.Contains(body, "Highest importance defect") {
-		t.Fatalf("comment body = %v, want highest importance finding", fixture.state.streamedComments[0]["body"])
+	for _, body := range bodiesOf(fixture.state.streamedComments) {
+		if strings.Contains(body, "Reworded historical defect") {
+			t.Fatalf("the historical finding was republished:\n%s", body)
+		}
 	}
 }
 
-func TestServiceRequestsChangesWithoutPublishingWhenThreadCapIsFull(t *testing.T) {
+// An unresolved thread of the service's own keeps the verdict blocking, and it
+// no longer stops this run publishing what it just found: nothing rations
+// comments against a thread count any more.
+func TestServiceKeepsPublishingWhileAnEarlierThreadIsOpen(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance:         9,
-		maximumUnresolvedComments: 1,
+		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
 			CoverageComplete: true,
 			Findings: []domain.Finding{{
@@ -1968,47 +3160,14 @@ func TestServiceRequestsChangesWithoutPublishingWhenThreadCapIsFull(t *testing.T
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
 	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the new defect published alongside the open thread",
+			len(fixture.state.streamedComments))
+	}
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 0 {
-		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
-	}
-}
-
-// A configured cap of exactly one always holds its slot for tail arbitration
-// rather than posting immediately, so nothing streams until every chunk has
-// answered. This proves the run still posts it once analysis finishes, which
-// is the one path none of the other cap tests exercise: they either start with
-// no capacity at all (an existing unresolved thread already spends it), or
-// never come close to exhausting it.
-func TestServiceStillPublishesTheSoleFindingWhenTheCapIsOne(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance:         9,
-		maximumUnresolvedComments: 1,
-		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings: []domain.Finding{{
-				Path:       "main.go",
-				StartLine:  2,
-				EndLine:    2,
-				Title:      "Severe defect",
-				Body:       "The changed line breaks core behavior.",
-				Importance: 9,
-			}},
-		}}},
-	})
-
-	if err := fixture.run(context.Background(), fixture.job()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	if len(fixture.state.streamedComments) != 1 {
-		t.Fatalf(
-			"streamed comments = %d, want the one finding posted once analysis finished",
-			len(fixture.state.streamedComments),
-		)
-	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+		t.Fatalf("comments = %v, want none: they posted as their chunk answered",
+			fixture.state.lastSubmitReview["comments"])
 	}
 }
 
@@ -2031,8 +3190,7 @@ func TestServiceApprovesWhenEveryFindingIsAlreadyResolved(t *testing.T) {
 	}
 
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance:         9,
-		maximumUnresolvedComments: 3,
+		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
 			CoverageComplete: true,
 			Findings:         []domain.Finding{resolvedFinding},
@@ -2064,6 +3222,89 @@ func TestServiceApprovesWhenEveryFindingIsAlreadyResolved(t *testing.T) {
 	}
 }
 
+// A run that posts a new finding must never approve over it.
+//
+// The verdict reads the service's own threads after publication, so the thread
+// this run just opened is one of its inputs. Reading them before analysis
+// would show none of this run's findings and approve the very defects it had
+// raised minutes earlier.
+func TestARunThatPostsANewFindingDoesNotApprove(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Severe defect",
+				Body:       "The changed line breaks core behavior.",
+				Importance: 9,
+			}},
+		}}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the finding posted", len(fixture.state.streamedComments))
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES over the thread this run opened",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// A blocking verdict must say what is holding it.
+//
+// A run that finds nothing new still blocks while an earlier thread is open,
+// and with nothing said about it the review reads as a silent repeat. One live
+// pull request carried three blocking reviews, two of them empty, and no
+// reader could tell that one unresolved thread was the whole cause.
+func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+		},
+		reconcileThreads: []githubapp.ReviewThread{{
+			NodeID:   "open-thread",
+			Resolved: false,
+			RootComment: domain.ReviewComment{
+				DatabaseID: 4242,
+				Author:     testBotLogin,
+				Body:       "The changed line breaks core behavior.",
+				Path:       "main.go",
+				StartLine:  2,
+				EndLine:    2,
+			},
+		}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	}
+
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok {
+		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+	}
+	for _, want := range []string{
+		"Waiting on:",
+		"main.go:2",
+		"https://github.com/owner/repo/pull/7#discussion_r4242",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary comment missing %q:\n%s", want, body)
+		}
+	}
+}
+
 // One open bot thread is a live objection, so the review keeps blocking even
 // when this run publishes no new comment.
 func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
@@ -2081,8 +3322,7 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 	}
 
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance:         9,
-		maximumUnresolvedComments: 3,
+		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
 			CoverageComplete: true,
 			Findings:         []domain.Finding{openFinding},
@@ -2145,8 +3385,7 @@ func TestServiceStopsPublicationWhenTheServiceShutsDown(t *testing.T) {
 // left the reader with nothing even though most of the diff had been read.
 func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance:         9,
-		maximumUnresolvedComments: 5,
+		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
 			CoverageComplete: true,
 			Findings: []domain.Finding{{
@@ -2192,84 +3431,73 @@ func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 	}
 }
 
-// A comment GitHub rejects must not turn a blocking review into an approval.
-// The defect is real whether or not its comment reached the page, so approving
-// there would ship it.
-func TestServiceStillRequestsChangesWhenACommentIsRejected(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance:         9,
-		maximumUnresolvedComments: 5,
-		createCommentStatus:       http.StatusUnprocessableEntity,
-		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings: []domain.Finding{{
-				Path:       "main.go",
-				StartLine:  2,
-				EndLine:    2,
-				Title:      "Severe defect",
-				Body:       "The changed line breaks core behavior.",
-				Importance: 9,
-			}},
-		}}},
-	})
-
-	if err := fixture.run(context.Background(), fixture.job()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES despite the rejected comment",
-			fixture.state.lastSubmitReview["event"])
-	}
-}
-
-// The check title is the one line a reader sees before opening anything. A
-// stage name tells them where the run was, not what went wrong, so it leaves
-// them no idea whether to retry, wait, or fix something.
+// The check title is the one line a reader sees before opening anything, so it
+// names the class of failure this service recognizes, and the stage when it
+// recognizes none. It never quotes the provider: a check run is as public and
+// as permanent as a comment, and a provider sentence can carry the request it
+// failed on, an internal endpoint, or a credential.
 //
-// The causes below are the ones production actually produced. The websocket
-// text is copied from the failure on pull request 66.
-func TestCheckTitleNamesTheCauseRatherThanTheStage(t *testing.T) {
+// The causes below are the ones production actually produced, driven here
+// through reconciliation, which is the stage that still fails a run outright
+// and still makes a model call of its own. The two that state only a provider
+// sentence fall back to the stage, and that sentence appears nowhere.
+func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 	cases := []struct {
-		name  string
-		cause error
-		want  string
+		name    string
+		cause   error
+		want    string
+		leaking string
 	}{
 		{
-			name:  "connection dropped",
-			cause: &stubProviderFailure{reason: "the connection carrying the answer closed early"},
-			want:  "Review stopped: the connection carrying the answer closed early",
+			name:    "connection dropped",
+			cause:   &stubProviderFailure{reason: "the connection carrying the answer closed early"},
+			want:    "Review failed while reconciling existing findings.",
+			leaking: "the connection carrying the answer closed early",
 		},
 		{
-			name:  "provider refused the request",
-			cause: &stubProviderFailure{reason: "scan codex SSE events: upstream_malformed_request"},
-			want:  "Review stopped: scan codex SSE events: upstream_malformed_request",
+			name:    "provider refused the request",
+			cause:   &stubProviderFailure{reason: "scan codex SSE events: upstream_malformed_request"},
+			want:    "Review failed while reconciling existing findings.",
+			leaking: "upstream_malformed_request",
 		},
 		{
-			name:  "no remaining usage",
-			cause: &stubProviderFailure{reason: "The usage limit has been reached", usage: true},
-			want:  "Review stopped: the model provider reported no remaining usage.",
+			name:    "no remaining usage",
+			cause:   &stubProviderFailure{reason: "The usage limit has been reached", usage: true},
+			want:    "Review stopped: the model provider reported no remaining usage.",
+			leaking: "The usage limit has been reached",
 		},
 		{
-			name:  "ran out of time",
-			cause: fmt.Errorf("review chunk 3/4: %w", context.DeadlineExceeded),
-			want:  "Review stopped: it ran out of time.",
+			name:    "ran out of time",
+			cause:   fmt.Errorf("resolve threads: %w", context.DeadlineExceeded),
+			want:    "Review stopped: it ran out of time.",
+			leaking: "context deadline exceeded",
 		},
 	}
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			fixture := newServiceFixture(t, serviceFixtureOptions{
-				model: &failingModel{err: testCase.cause},
+				reconcileErr: testCase.cause,
 			})
 
 			if err := fixture.run(context.Background(), fixture.job()); err == nil {
-				t.Fatal("Run: want the model failure")
+				t.Fatal("Run: want the reconciliation failure")
 			}
 
 			output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 			if !ok {
 				t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
+			}
+			for _, surface := range []string{
+				fmt.Sprint(output["title"]),
+				fmt.Sprint(output["summary"]),
+				fmt.Sprint(output["text"]),
+				failureSummaryComment(t, fixture),
+			} {
+				if strings.Contains(surface, testCase.leaking) {
+					t.Fatalf("a public surface published the provider's own words %q:\n%s",
+						testCase.leaking, surface)
+				}
 			}
 			if output["title"] != testCase.want {
 				t.Fatalf("title = %v, want %q", output["title"], testCase.want)
@@ -2279,7 +3507,8 @@ func TestCheckTitleNamesTheCauseRatherThanTheStage(t *testing.T) {
 }
 
 // stubProviderFailure states a cause the same way the model provider package
-// does, without the review package importing it.
+// does, without the review package importing it. Its sentence is the text no
+// public surface may reprint.
 type stubProviderFailure struct {
 	reason string
 	usage  bool
@@ -2289,36 +3518,14 @@ func (failure *stubProviderFailure) Error() string {
 	return "model provider: " + failure.reason
 }
 
-func (failure *stubProviderFailure) ProviderReason() string {
-	return failure.reason
-}
-
 func (failure *stubProviderFailure) UsageExceeded() bool {
 	return failure.usage
 }
 
-// dismissedStates reports the review states this run withdrew, in call order.
-func dismissedStates(dismissals []map[string]any) []string {
-	states := make([]string, 0, len(dismissals))
-	for _, item := range dismissals {
-		message, _ := item["message"].(string)
-		switch {
-		case strings.Contains(message, "approval no longer stands"):
-			states = append(states, "APPROVED")
-		case strings.Contains(message, "request no longer stands"):
-			states = append(states, "CHANGES_REQUESTED")
-		default:
-			states = append(states, "UNKNOWN:"+message)
-		}
-	}
-	return states
-}
-
 // botReviewPage builds one page of existing reviews for the fixture server.
 //
-// The verdicts sit on an earlier head, which is the case that matters: a
-// verdict on the head under review came from a review that finished, and this
-// run failing says nothing about that one.
+// The verdicts sit on an earlier head, which is the case that matters: it is
+// the state a failed run used to reach in and change.
 func botReviewPage(states ...string) [][]map[string]any {
 	page := make([]map[string]any, 0, len(states))
 	for index, state := range states {
@@ -2333,165 +3540,134 @@ func botReviewPage(states ...string) [][]map[string]any {
 	return [][]map[string]any{page}
 }
 
-// A failed review has no verdict, so the changes-requested it left on an
-// earlier head must not keep blocking the pull request.
+// A failed run knows nothing new about the head, so it touches no review
+// object at all: it submits none, edits none, and withdraws none. It says why
+// it stopped in the check run and in the one top level comment, which are the
+// two places that carry no verdict.
 //
-// Editing a review body cannot change its state, and the failure notice is a
-// comment review, which GitHub never treats as replacing an earlier verdict.
-// Branch protection here also leaves stale reviews standing across a push. So
-// without this dismissal the pull request stays blocked by a review whose
-// threads are all resolved, with nothing to fix and nothing to dismiss but the
-// review itself.
-func TestServiceDismissesItsBlockingReviewWhenTheReviewFails(t *testing.T) {
+// The earlier behavior withdrew every standing verdict here, which turned one
+// provider outage into a pull request whose review history the service had
+// silently rewritten.
+func TestAFailedRunChangesNoReviewState(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: botReviewPage("CHANGES_REQUESTED"),
-		model:       &failingModel{err: errors.New("provider exploded")},
-	})
-
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want the model failure")
-	}
-
-	states := dismissedStates(fixture.state.dismissals)
-	if len(states) != 1 || states[0] != "CHANGES_REQUESTED" {
-		t.Fatalf("dismissed = %v, want one CHANGES_REQUESTED withdrawal", states)
-	}
-	if fixture.state.dismissals[0]["review_id"] != "500" {
-		t.Fatalf("dismissed review id = %v, want 500", fixture.state.dismissals[0]["review_id"])
-	}
-}
-
-// The same failure withdraws an approval, because a review that did not finish
-// cannot vouch for the head either.
-func TestServiceDismissesItsApprovalWhenTheReviewFails(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: botReviewPage("APPROVED"),
-		model:       &failingModel{err: errors.New("provider exploded")},
-	})
-
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want the model failure")
-	}
-
-	states := dismissedStates(fixture.state.dismissals)
-	if len(states) != 1 || states[0] != "APPROVED" {
-		t.Fatalf("dismissed = %v, want one APPROVED withdrawal", states)
-	}
-}
-
-// The service can hold more than one verdict at once, because the review that
-// owns the visible summary body is separate from the review that carried the
-// last decision. Every one of them counts toward the pull request's review
-// decision, so leaving any behind leaves the pull request blocked.
-func TestServiceDismissesEveryStandingVerdictWhenTheReviewFails(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: botReviewPage("APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"),
-		model:       &failingModel{err: errors.New("provider exploded")},
-	})
-
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want the model failure")
-	}
-
-	states := dismissedStates(fixture.state.dismissals)
-	if len(states) != 2 {
-		t.Fatalf("dismissed = %v, want the approval and the block only", states)
-	}
-	if states[0] != "APPROVED" || states[1] != "CHANGES_REQUESTED" {
-		t.Fatalf("dismissed = %v, want APPROVED then CHANGES_REQUESTED", states)
-	}
-}
-
-// A verdict on the head under review came from a review that finished. This run
-// failing says nothing about that one, so withdrawing it would discard a
-// judgment the service still stands behind.
-func TestServiceKeepsItsVerdictForTheCurrentHeadWhenAReviewFails(t *testing.T) {
-	page := [][]map[string]any{{
-		{
-			"id":        float64(700),
-			"commit_id": testHeadSHA,
-			"state":     "APPROVED",
-			"body":      "a finished review of this head",
-			"user":      map[string]any{"login": testBotLogin},
-		},
-	}}
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: page,
-		model:       &failingModel{err: errors.New("provider exploded")},
-	})
-
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want the model failure")
-	}
-
-	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want none for the current head", fixture.state.dismissals)
-	}
-}
-
-// A verdict from another reviewer is theirs to withdraw, so the service leaves
-// it alone even when its own review fails.
-func TestServiceLeavesAnotherReviewersVerdictStandingWhenTheReviewFails(t *testing.T) {
-	page := [][]map[string]any{{
-		{
-			"id":        float64(600),
-			"commit_id": testHeadSHA,
-			"state":     "CHANGES_REQUESTED",
-			"body":      "a human blocked this",
-			"user":      map[string]any{"login": "someone-else"},
-		},
-	}}
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: page,
-		model:       &failingModel{err: errors.New("provider exploded")},
-	})
-
-	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want the model failure")
-	}
-
-	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
-	}
-}
-
-// A dismissal that fails must not swallow the reported cause or stop the
-// visible notice, because the notice is what tells a reader why work stopped.
-func TestServiceStillReportsTheCauseWhenDismissalFails(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages:         botReviewPage("CHANGES_REQUESTED"),
-		dismissReviewStatus: http.StatusForbidden,
-		model:               &failingModel{err: errors.New("provider exploded")},
+		reviewPages:  botReviewPage("APPROVED", "CHANGES_REQUESTED"),
+		reconcileErr: errors.New("reconcile exploded"),
 	})
 
 	err := fixture.run(context.Background(), fixture.job())
-	if err == nil || !strings.Contains(err.Error(), "provider exploded") {
-		t.Fatalf("Run error = %v, want the model failure", err)
+	if err == nil || !strings.Contains(err.Error(), "reconcile exploded") {
+		t.Fatalf("Run error = %v, want the failure surfaced", err)
+	}
+
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none", fixture.state.lastSubmitReview)
+	}
+	if fixture.state.lastUpdateReview != nil {
+		t.Fatalf("updated review = %v, want none", fixture.state.lastUpdateReview)
+	}
+	if len(fixture.state.dismissals) != 0 {
+		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
-	if fixture.state.lastSubmitReview == nil && fixture.state.lastUpdateReview == nil {
-		t.Fatal("no failure notice was written")
+
+	assertSanitizedFailureComment(
+		t,
+		fixture,
+		"Review failed while reconciling existing findings.",
+		"reconcile exploded",
+	)
+	if state := decodedSummaryState(t, fixture); state.Status != marker.StateFailed {
+		t.Fatalf("state status = %q, want %q", state.Status, marker.StateFailed)
+	}
+
+	// The cause is not lost, only private: both public surfaces point at the
+	// run identifier and neither reprints what the failure said.
+	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
+	if !ok {
+		t.Fatalf("check summary = %v, want string", checkOutput(t, fixture)["summary"])
+	}
+	if strings.Contains(checkSummary, "reconcile exploded") {
+		t.Fatalf("check summary published the raw cause:\n%s", checkSummary)
+	}
+	if !strings.Contains(checkSummary, "under run identifier `delivery-1`") {
+		t.Fatalf("check summary lost the pointer to the cause:\n%s", checkSummary)
 	}
 }
 
-// A successful review keeps its own verdict, so the dismissal runs only on the
-// failure path.
-func TestServiceDismissesNothingWhenTheReviewSucceeds(t *testing.T) {
+// A run that changes no review state must also not move the checkpoint the last
+// completed run recorded. Advancing it would skip a commit range nobody
+// reviewed; erasing it would re-review everything already done.
+func TestAFailedRunKeepsTheLastReviewedCommit(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: botReviewPage("CHANGES_REQUESTED"),
-		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
-		},
+		reconcileErr: errors.New("reconcile exploded"),
+	})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": "## Review\n\nan earlier run\n\n" + marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testStaleHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the reconciliation failure surfaced")
+	}
+
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok {
+		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+	}
+	state, ok := marker.DecodeState(body)
+	if !ok {
+		t.Fatalf("summary comment = %q, want a decodable state marker", body)
+	}
+	if state.LastReviewed != domain.HeadSHA(testStaleHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the earlier run's commit %q", state.LastReviewed, testStaleHeadSHA)
+	}
+	if state.Status != marker.StateFailed {
+		t.Fatalf("state status = %q, want %q", state.Status, marker.StateFailed)
+	}
+}
+
+// A run that leaves a chunk unread must not move the checkpoint either. The
+// next run computes its delta from that commit, so advancing it would skip the
+// very range this run could not read.
+func TestAnIncompleteRunKeepsTheLastReviewedCommit(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: errors.New("provider exploded")},
+	})
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": "## Review\n\nan earlier run\n\n" + marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testStaleHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
 	})
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want none on a successful review", fixture.state.dismissals)
+	state := decodedSummaryState(t, fixture)
+	if state.LastReviewed != domain.HeadSHA(testStaleHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the earlier run's commit %q", state.LastReviewed, testStaleHeadSHA)
+	}
+	if state.Status != marker.StateReviewing {
+		t.Fatalf("state status = %q, want %q", state.Status, marker.StateReviewing)
+	}
+	if len(state.Pending) != 1 {
+		t.Fatalf("pending = %v, want the unread chunk", state.Pending)
+	}
+	if state.RunID != "delivery-1" {
+		t.Fatalf("run id = %q, want this run's identifier", state.RunID)
 	}
 }
 
@@ -2559,14 +3735,28 @@ type serviceFixtureOptions struct {
 	reviewListStatus                int
 	submitReviewStatus              int
 	updateReviewStatus              int
-	dismissReviewStatus             int
 	createCommentStatus             int
-	reconcileErr                    error
-	reconcileThreads                []githubapp.ReviewThread
-	collector                       review.Collector
-	model                           review.Model
-	minimumImportance               int
-	maximumUnresolvedComments       int
+	// createCommentHangup drops the connection instead of answering, which is
+	// the failure a caller cannot tell apart from a comment that was created.
+	createCommentHangup bool
+	issueCommentStatus  int
+	listThreadsStatus   int
+	reconcileErr        error
+	reconcileThreads    []githubapp.ReviewThread
+	collector           review.Collector
+	model               review.Model
+	minimumImportance   int
+	reviewMaxFiles      int
+	reviewMaxChunks     int
+	chunkTimeout        time.Duration
+	// unsetReviewBudgets passes zero budgets to NewService, the way a caller
+	// that never set them would.
+	unsetReviewBudgets bool
+	// logWriter receives the service's own log. It is discarded by default,
+	// which is right for the tests that never read it and wrong for the one
+	// invariant that is about what those lines carry: a sink that throws them
+	// away lets any claim about them pass.
+	logWriter io.Writer
 }
 
 type serviceFixture struct {
@@ -2577,6 +3767,10 @@ type serviceFixture struct {
 }
 
 type serviceServerState struct {
+	// mu serializes the fixture server. Chunks are reviewed several at a time,
+	// so several requests reach this state at once and every field below would
+	// otherwise be written concurrently.
+	mu                              sync.Mutex
 	requestOrder                    []string
 	reviewPages                     [][]map[string]any
 	reviewPageIndex                 int
@@ -2589,32 +3783,42 @@ type serviceServerState struct {
 	pullRequestStatusAfterFirstRead int
 	reviewListStatus                int
 	lastSubmitReview                map[string]any
-	lastUpdateReview                map[string]any
-	lastCreateCheckRun              map[string]any
-	lastUpdateCheckRun              map[string]any
-	checkDetailsURL                 string
-	submitReviewStatus              int
-	updateReviewStatus              int
-	dismissReviewStatus             int
-	dismissals                      []map[string]any
-	createCommentStatus             int
-	streamedComments                []map[string]any
+	// submittedReviews are the reviews this pull request now carries, which
+	// ListReviews serves from the next call onward.
+	submittedReviews    []map[string]any
+	lastUpdateReview    map[string]any
+	lastCreateCheckRun  map[string]any
+	lastUpdateCheckRun  map[string]any
+	checkDetailsURL     string
+	submitReviewStatus  int
+	updateReviewStatus  int
+	dismissals          []map[string]any
+	createCommentStatus int
+	createCommentHangup bool
+	issueCommentStatus  int
+	listThreadsStatus   int
+	streamedComments    []map[string]any
+	// threadNodes is the GraphQL view of the pull request's review threads. A
+	// posted inline comment opens one, exactly as GitHub does, which is what
+	// makes the verdict's thread read see this run's own findings.
+	threadNodes         []map[string]any
+	issueComments       []map[string]any
+	issueCommentUpdates int
 }
 
-// failingModel fails every request, which drives the review down its failure
-// path without needing a real provider outage.
-type failingModel struct {
-	err error
-}
-
-func (model *failingModel) Review(context.Context, string) (review.Completion, error) {
-	return review.Completion{}, model.err
-}
-
+// recordingReconciler answers with the configured threads plus one thread per
+// inline comment the fixture server has accepted.
+//
+// That second half matters. In production the reconciler reads the pull
+// request's real threads, so a comment an earlier run posted comes back as an
+// open thread and suppresses the same finding on the next run. A double that
+// returned only a fixed list would let a re-reviewed chunk post its finding
+// twice and call it correct.
 type recordingReconciler struct {
 	callCount int
 	threads   []githubapp.ReviewThread
 	err       error
+	state     *serviceServerState
 }
 
 func (reconciler *recordingReconciler) Reconcile(
@@ -2622,15 +3826,53 @@ func (reconciler *recordingReconciler) Reconcile(
 	domain.ReviewJob,
 ) ([]githubapp.ReviewThread, error) {
 	reconciler.callCount++
-	return reconciler.threads, reconciler.err
+	if reconciler.err != nil {
+		return nil, reconciler.err
+	}
+	threads := append([]githubapp.ReviewThread{}, reconciler.threads...)
+	return append(threads, reconciler.state.postedThreads()...), nil
+}
+
+// postedThreads renders every inline comment this pull request has received as
+// the open thread GitHub would report for it.
+func (state *serviceServerState) postedThreads() []githubapp.ReviewThread {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	threads := make([]githubapp.ReviewThread, 0, len(state.streamedComments))
+	for index, comment := range state.streamedComments {
+		body, _ := comment["body"].(string)
+		path, _ := comment["path"].(string)
+		line, _ := comment["line"].(float64)
+		startLine := line
+		if start, ok := comment["start_line"].(float64); ok {
+			startLine = start
+		}
+		threads = append(threads, githubapp.ReviewThread{
+			NodeID:             fmt.Sprintf("posted-thread-%d", index+1),
+			Resolved:           false,
+			Outdated:           false,
+			ViewerCanResolve:   true,
+			ViewerCanUnresolve: true,
+			RootComment: domain.ReviewComment{
+				DatabaseID: int64(900 + index + 1),
+				Author:     testBotLogin,
+				Body:       body,
+				Path:       path,
+				StartLine:  int(startLine),
+				EndLine:    int(line),
+			},
+		})
+	}
+	return threads
 }
 
 type stubCollector struct{}
 
-func (stubCollector) Collect(
+func (stubCollector) CollectRange(
 	_ context.Context,
 	_ domain.PullRequestRef,
 	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
 ) (diff.ReviewInput, error) {
 	patch := strings.Join([]string{
 		"@@ -1,1 +1,4 @@",
@@ -2655,6 +3897,81 @@ func (stubCollector) Collect(
 			CoverageComplete:  true,
 		}},
 	}, nil
+}
+
+// recordingDeltaCollector records the base every CollectRange call received,
+// so a test can prove what the service actually asked the collector for
+// rather than only that a run completed.
+type recordingDeltaCollector struct {
+	mu         sync.Mutex
+	rangeBases []domain.HeadSHA
+}
+
+func (collector *recordingDeltaCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	base domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	collector.mu.Lock()
+	collector.rangeBases = append(collector.rangeBases, base)
+	collector.mu.Unlock()
+
+	patch := "@@ -1,1 +1,2 @@\n package main\n+added\n"
+	changed, hunks, err := diff.ChangedRightLines(patch)
+	if err != nil {
+		return diff.ReviewInput{}, err
+	}
+	return diff.ReviewInput{
+		PullRequest: pullRequest,
+		Files: []diff.FileContext{{
+			Path:              "main.go",
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    "package main\nadded\n",
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		}},
+	}, nil
+}
+
+func (collector *recordingDeltaCollector) bases() []domain.HeadSHA {
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	return append([]domain.HeadSHA{}, collector.rangeBases...)
+}
+
+// twoChunkCollector returns a diff large enough that the chunking path always
+// used to measure and to build the model prompt produces two chunks, so an
+// admission gate configured for one chunk refuses it.
+type twoChunkCollector struct{}
+
+func (twoChunkCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	padding := strings.Repeat("x\n", 30000)
+	files := make([]diff.FileContext, 0, 2)
+	for index := range 2 {
+		patch := fmt.Sprintf("@@ -1,1 +1,2 @@\n line%d\n+added%d\n", index, index)
+		changed, hunks, err := diff.ChangedRightLines(patch)
+		if err != nil {
+			return diff.ReviewInput{}, err
+		}
+		files = append(files, diff.FileContext{
+			Path:              fmt.Sprintf("file%d.go", index),
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    padding,
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		})
+	}
+	return diff.ReviewInput{PullRequest: pullRequest, Files: files}, nil
 }
 
 type serialGateModel struct {
@@ -2731,6 +4048,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	state := &serviceServerState{
 		reviewPages:                     [][]map[string]any{{}},
 		checkRuns:                       []map[string]any{},
+		issueComments:                   []map[string]any{},
 		nextCheckRunID:                  77,
 		headSHA:                         testHeadSHA,
 		headAfterAnalysis:               options.headAfterAnalysis,
@@ -2739,8 +4057,11 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		reviewListStatus:                options.reviewListStatus,
 		submitReviewStatus:              options.submitReviewStatus,
 		updateReviewStatus:              options.updateReviewStatus,
-		dismissReviewStatus:             options.dismissReviewStatus,
 		createCommentStatus:             options.createCommentStatus,
+		createCommentHangup:             options.createCommentHangup,
+		issueCommentStatus:              options.issueCommentStatus,
+		listThreadsStatus:               options.listThreadsStatus,
+		threadNodes:                     threadNodesFor(options.reconcileThreads),
 	}
 	if len(options.reviewPages) > 0 {
 		state.reviewPages = options.reviewPages
@@ -2751,11 +4072,14 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	if state.updateReviewStatus == 0 {
 		state.updateReviewStatus = http.StatusOK
 	}
-	if state.dismissReviewStatus == 0 {
-		state.dismissReviewStatus = http.StatusOK
-	}
 	if state.createCommentStatus == 0 {
 		state.createCommentStatus = http.StatusOK
+	}
+	if state.issueCommentStatus == 0 {
+		state.issueCommentStatus = http.StatusOK
+	}
+	if state.listThreadsStatus == 0 {
+		state.listThreadsStatus = http.StatusOK
 	}
 	if state.pullRequestStatus == 0 {
 		state.pullRequestStatus = http.StatusOK
@@ -2765,10 +4089,8 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if strings.Contains(request.URL.Path, "/issues/comments") {
-			http.Error(writer, "issue comments forbidden", http.StatusForbidden)
-			return
-		}
+		state.mu.Lock()
+		defer state.mu.Unlock()
 		if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
 			http.Error(writer, "replies forbidden", http.StatusForbidden)
 			return
@@ -2804,6 +4126,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	reconciler := &recordingReconciler{
 		threads: options.reconcileThreads,
 		err:     options.reconcileErr,
+		state:   state,
 	}
 	collector := options.collector
 	if collector == nil {
@@ -2814,9 +4137,21 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	if minimumImportance == 0 {
 		minimumImportance = testMinimumImportance
 	}
-	maximumUnresolvedComments := options.maximumUnresolvedComments
-	if maximumUnresolvedComments == 0 {
-		maximumUnresolvedComments = 10
+	chunkTimeout := options.chunkTimeout
+	if chunkTimeout == 0 {
+		chunkTimeout = config.DefaultReviewChunkTimeout
+	}
+	reviewMaxFiles := options.reviewMaxFiles
+	if reviewMaxFiles == 0 {
+		reviewMaxFiles = config.DefaultReviewMaxFiles
+	}
+	reviewMaxChunks := options.reviewMaxChunks
+	if reviewMaxChunks == 0 {
+		reviewMaxChunks = config.DefaultReviewMaxChunks
+	}
+	if options.unsetReviewBudgets {
+		reviewMaxFiles = 0
+		reviewMaxChunks = 0
 	}
 	if model == nil {
 		model = &sequenceModel{
@@ -2834,6 +4169,11 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		}
 	}
 
+	logWriter := options.logWriter
+	if logWriter == nil {
+		logWriter = io.Discard
+	}
+
 	service := review.NewService(
 		client,
 		collector,
@@ -2842,10 +4182,11 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		queue.NewKeyedLocker(),
 		testBotLogin,
 		minimumImportance,
-		maximumUnresolvedComments,
-		10*time.Minute,
+		reviewMaxFiles,
+		reviewMaxChunks,
+		chunkTimeout,
 		testClock(8*time.Second),
-		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		slog.New(slog.NewTextHandler(logWriter, nil)),
 	)
 
 	return &serviceFixture{
@@ -2890,14 +4231,92 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		return
 	}
 
+	if request.Method == http.MethodPost && request.URL.Path == "/graphql" {
+		writeServiceThreadPage(writer, state)
+		return
+	}
+
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/reviews") {
 		writeServiceReviewPage(writer, request, state)
+		return
+	}
+
+	// The service's one top level comment lives under the issue comments
+	// endpoint, distinct from the inline review comments matched below.
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/issues/") && strings.HasSuffix(request.URL.Path, "/comments") {
+		if state.issueCommentStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.issueCommentStatus, map[string]any{"message": "list issue comments failed"})
+			return
+		}
+		serviceWriteJSON(writer, http.StatusOK, state.issueComments)
+		return
+	}
+
+	if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/issues/") && strings.HasSuffix(request.URL.Path, "/comments") {
+		if state.issueCommentStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.issueCommentStatus, map[string]any{"message": "create issue comment failed"})
+			return
+		}
+		body, err := serviceReadJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		created := map[string]any{
+			"id":   float64(2000 + len(state.issueComments)),
+			"body": body["body"],
+			"user": map[string]any{"login": testBotLogin},
+		}
+		state.issueComments = append(state.issueComments, created)
+		serviceWriteJSON(writer, http.StatusCreated, created)
+		return
+	}
+
+	if request.Method == http.MethodPatch && strings.Contains(request.URL.Path, "/issues/comments/") {
+		if state.issueCommentStatus != http.StatusOK {
+			serviceWriteJSON(writer, state.issueCommentStatus, map[string]any{"message": "update issue comment failed"})
+			return
+		}
+		body, err := serviceReadJSONBody(request)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		idText := strings.TrimPrefix(request.URL.Path, "/repos/owner/repo/issues/comments/")
+		var updated map[string]any
+		for index, item := range state.issueComments {
+			if fmt.Sprintf("%.0f", item["id"]) != idText {
+				continue
+			}
+			item["body"] = body["body"]
+			state.issueComments[index] = item
+			updated = item
+		}
+		state.issueCommentUpdates++
+		serviceWriteJSON(writer, http.StatusOK, updated)
 		return
 	}
 
 	// Findings post one at a time as their chunks answer, so this endpoint
 	// carries every inline comment a review produces.
 	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/comments") {
+		// A dropped connection, distinct from an answer GitHub sent. The client
+		// cannot tell whether the comment was created, so the caller must treat
+		// it as unfinished rather than as a refusal.
+		if state.createCommentHangup {
+			hijacker, ok := writer.(http.Hijacker)
+			if !ok {
+				http.Error(writer, "cannot hijack", http.StatusInternalServerError)
+				return
+			}
+			connection, _, err := hijacker.Hijack()
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = connection.Close()
+			return
+		}
 		if state.createCommentStatus != http.StatusOK {
 			serviceWriteJSON(writer, state.createCommentStatus, map[string]any{
 				"message": "create review comment failed",
@@ -2910,6 +4329,20 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			return
 		}
 		state.streamedComments = append(state.streamedComments, body)
+		// A posted comment opens a review thread, which is one of the two
+		// inputs the verdict is computed from.
+		state.threadNodes = append(state.threadNodes, map[string]any{
+			"id":         fmt.Sprintf("streamed-thread-%d", len(state.streamedComments)),
+			"isResolved": false,
+			"comments": map[string]any{"nodes": []map[string]any{{
+				"databaseId": float64(900 + len(state.streamedComments)),
+				"body":       body["body"],
+				"path":       body["path"],
+				"line":       body["line"],
+				"startLine":  body["start_line"],
+				"author":     map[string]any{"login": testBotLogin},
+			}}},
+		})
 		serviceWriteJSON(writer, http.StatusCreated, map[string]any{
 			"id":   float64(900 + len(state.streamedComments)),
 			"body": body["body"],
@@ -2931,25 +4364,30 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			return
 		}
 		state.lastSubmitReview = body
-		serviceWriteJSON(writer, http.StatusOK, map[string]any{
-			"id":        float64(42),
+		// A submitted review is one GitHub lists from then on, which is how a
+		// later run finds the verdict an earlier one left. A fixture that kept
+		// them out of ListReviews would let a run leave a second standing
+		// review and call it one.
+		// GitHub reports the state its own way: the event REQUEST_CHANGES comes
+		// back as CHANGES_REQUESTED. A fixture that answered COMMENTED for every
+		// review would hide whether a standing verdict still blocks, which is
+		// what decides if a later run may rewrite it or must submit a new one.
+		created := map[string]any{
+			"id":        float64(4200 + len(state.submittedReviews)),
 			"commit_id": body["commit_id"],
-			"state":     "COMMENTED",
+			"state":     reviewStateForEvent(body["event"]),
 			"body":      body["body"],
 			"user":      map[string]any{"login": testBotLogin},
-		})
+		}
+		state.submittedReviews = append(state.submittedReviews, created)
+		serviceWriteJSON(writer, http.StatusOK, created)
 		return
 	}
 
-	// A dismissal is also a PUT under /reviews/, so it is matched before the
-	// update route, which would otherwise swallow it.
+	// Nothing in the service dismisses a review any more. The route stays so a
+	// test can prove that: an attempt would be recorded here rather than
+	// answered with a 404 nobody sees.
 	if request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/dismissals") {
-		if state.dismissReviewStatus != http.StatusOK {
-			serviceWriteJSON(writer, state.dismissReviewStatus, map[string]any{
-				"message": "dismiss review failed",
-			})
-			return
-		}
 		body, err := serviceReadJSONBody(request)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -3093,6 +4531,50 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 	writer.WriteHeader(http.StatusNotFound)
 }
 
+// threadNodesFor renders configured threads the way the GraphQL API returns
+// them, so the service reads its own threads through the real client rather
+// than through a hand-built double.
+func threadNodesFor(threads []githubapp.ReviewThread) []map[string]any {
+	nodes := make([]map[string]any, 0, len(threads))
+	for _, thread := range threads {
+		nodes = append(nodes, map[string]any{
+			"id":                 thread.NodeID,
+			"isResolved":         thread.Resolved,
+			"isOutdated":         thread.Outdated,
+			"viewerCanResolve":   thread.ViewerCanResolve,
+			"viewerCanUnresolve": thread.ViewerCanUnresolve,
+			"comments": map[string]any{"nodes": []map[string]any{{
+				"databaseId": float64(thread.RootComment.DatabaseID),
+				"body":       thread.RootComment.Body,
+				"path":       thread.RootComment.Path,
+				"line":       float64(thread.RootComment.EndLine),
+				"startLine":  float64(thread.RootComment.StartLine),
+				"author":     map[string]any{"login": thread.RootComment.Author},
+			}}},
+		})
+	}
+	return nodes
+}
+
+func writeServiceThreadPage(writer http.ResponseWriter, state *serviceServerState) {
+	if state.listThreadsStatus != http.StatusOK {
+		serviceWriteJSON(writer, state.listThreadsStatus, map[string]any{"message": "list review threads failed"})
+		return
+	}
+	serviceWriteJSON(writer, http.StatusOK, map[string]any{
+		"data": map[string]any{
+			"repository": map[string]any{
+				"pullRequest": map[string]any{
+					"reviewThreads": map[string]any{
+						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+						"nodes":    state.threadNodes,
+					},
+				},
+			},
+		},
+	})
+}
+
 func writeServiceReviewPage(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {
 	if state.reviewListStatus != http.StatusOK {
 		serviceWriteJSON(writer, state.reviewListStatus, map[string]any{"message": "list reviews failed"})
@@ -3105,6 +4587,9 @@ func writeServiceReviewPage(writer http.ResponseWriter, request *http.Request, s
 	}
 	page := state.reviewPages[state.reviewPageIndex]
 	state.reviewPageIndex++
+	if state.reviewPageIndex == len(state.reviewPages) {
+		page = append(append([]map[string]any{}, page...), state.submittedReviews...)
+	}
 	if state.reviewPageIndex < len(state.reviewPages) {
 		next := fmt.Sprintf("http://%s%s", request.Host, request.URL.Path)
 		if request.URL.RawQuery != "" {
@@ -3157,4 +4642,18 @@ func serviceReadJSONBody(request *http.Request) (map[string]any, error) {
 		return nil, err
 	}
 	return decoded, nil
+}
+
+// reviewStateForEvent maps a submitted review event to the state GitHub reports
+// for it afterwards. They are not the same word: REQUEST_CHANGES is submitted
+// and CHANGES_REQUESTED is read back.
+func reviewStateForEvent(event any) string {
+	switch fmt.Sprint(event) {
+	case string(domain.ReviewDecisionRequestChanges):
+		return "CHANGES_REQUESTED"
+	case string(domain.ReviewDecisionApprove):
+		return "APPROVED"
+	default:
+		return "COMMENTED"
+	}
 }

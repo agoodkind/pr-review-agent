@@ -109,10 +109,11 @@ test("production configuration reaches the Go service", function () {
     ["GITHUB_WEBHOOK_SECRET", "fixture-e"],
     ["OPENAI_KEY", "fixture-f"],
     ["PORT", "3000"],
-    ["REVIEW_MAX_UNRESOLVED_COMMENTS", "7"],
+    ["REVIEW_CHUNK_TIMEOUT", "5m"],
+    ["REVIEW_MAX_CHUNKS", "60"],
+    ["REVIEW_MAX_FILES", "100"],
     ["REVIEW_MIN_IMPORTANCE", "8"],
     ["REVIEW_MODEL", "fixture-review-model"],
-    ["REVIEW_TIMEOUT", "9m"],
     ["REVIEW_WORKERS", "5"],
   ]);
   const environment = createPrAgentEnvironment(bindings);
