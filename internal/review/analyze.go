@@ -5,146 +5,48 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// Analyze reviews every deterministic chunk and aggregates the model output.
-//
-// The now function supplies the clock used for per-chunk timing, so a test can
-// prove the timing without waiting for real model calls.
-func Analyze(
-	ctx context.Context,
-	model Model,
-	input diff.ReviewInput,
-	minimumImportance int,
-	now func() time.Time,
-	sink FindingSink,
-) (Analysis, error) {
-	logger := gklog.L(ctx)
-	// partial reports how far the analysis got. Every error path returns it, so
-	// a failed review can still say which model answered and how much it read.
-	partial := Analysis{
-		CoverageComplete: false,
-		Observed:         nil,
-		Anchored:         nil,
-		Decision:         "",
-		FilesReviewed:    len(input.Files),
-		Chunks:           0,
-		Models:           nil,
-	}
-
-	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
-	if err != nil {
-		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
-		return partial, fmt.Errorf("chunk input: %w", err)
-	}
-	partial.Chunks = len(chunks)
-
-	coverageComplete := inputCoverageComplete(input.Files)
-	for _, chunk := range chunks {
-		if !chunk.CoverageComplete {
-			coverageComplete = false
-			break
-		}
-	}
-
-	collector := newFindingCollector(input.Files, minimumImportance)
-	analysisStartedAt := now()
-	logger.InfoContext(ctx, "review model analysis started", slog.Int("chunks", len(chunks)))
-
-	stream := newChunkStream(sink, collector.fileIndex, minimumImportance)
-	outcomes := reviewChunksConcurrently(ctx, model, chunks, minimumImportance, now, stream)
-
-	// Outcomes fold back in chunk order even though the calls ran together, so
-	// deduplication and finding order stay identical to a serial review.
-	//
-	// A chunk that failed does not end the analysis. Its slice of the diff goes
-	// unread, which makes coverage incomplete, while every finding the other
-	// chunks produced stays valid and reaches the pull request.
-	var models modelSet
-	requests := 0
-	failures := make([]chunkFailure, 0)
-	for _, outcome := range outcomes {
-		requests += outcome.requests
-		for _, name := range outcome.models {
-			models.add(name)
-		}
-		if outcome.err != nil {
-			coverageComplete = false
-			failures = append(failures, chunkFailure{chunk: outcome.chunk, err: outcome.err})
-			continue
-		}
-		for _, result := range outcome.results {
-			if !result.CoverageComplete {
-				coverageComplete = false
-			}
-			collector.collect(result.Findings)
-		}
-	}
-
-	elapsed := now().Sub(analysisStartedAt)
-	logChunkFailures(ctx, failures, len(chunks), requests, elapsed)
-	// Every chunk failing means nothing was read, so there is no partial answer
-	// to publish and the first cause becomes the analysis failure.
-	if len(chunks) > 0 && len(failures) == len(chunks) {
-		partial.Models = models.names
-		partial.Observed = collector.observed
-		partial.Anchored = collector.anchored
-		return partial, failures[0].err
-	}
-	logger.InfoContext(
-		ctx,
-		"review model analysis completed",
-		slog.Int("chunks", len(chunks)),
-		slog.Int("chunks_failed", len(failures)),
-		slog.Int("model_requests", requests),
-		slog.Int("reported_findings", collector.reported),
-		slog.Bool("coverage_complete", coverageComplete),
-		slog.Duration("elapsed", elapsed),
-	)
-
-	sortFindings(collector.observed)
-	sortFindings(collector.anchored)
-
-	return Analysis{
-		CoverageComplete: coverageComplete,
-		Observed:         collector.observed,
-		Anchored:         collector.anchored,
-		Decision:         DecisionFor(collector.anchored, minimumImportance),
-		FilesReviewed:    len(input.Files),
-		Chunks:           len(chunks),
-		Models:           models.names,
-	}, nil
-}
-
-// chunkFailure records one chunk the analysis could not read.
+// chunkFailure records one chunk this run could not read.
 type chunkFailure struct {
 	chunk int
 	err   error
 }
 
-// logChunkFailures reports every chunk that failed in one line, so a reader can
-// tell how much of the diff went unread and why without opening each chunk.
-func logChunkFailures(
-	ctx context.Context,
-	failures []chunkFailure,
-	chunks int,
-	requests int,
-	elapsed time.Duration,
-) {
-	if len(failures) == 0 {
-		return
-	}
+// chunkFailureReasons names every chunk that failed and why, quoting the cause
+// verbatim. Only the service log carries these: a provider sentence is text
+// this service does not control, and every published surface is permanent.
+func chunkFailureReasons(failures []chunkFailure) []string {
 	reasons := make([]string, 0, len(failures))
 	for _, failure := range failures {
-		reasons = append(reasons, fmt.Sprintf("%d: %s", failure.chunk, failure.err.Error()))
+		reasons = append(reasons, fmt.Sprintf("chunk %d: %s", failure.chunk, failure.err.Error()))
+	}
+	return reasons
+}
+
+// unreadChunkNumbers names which chunks went unread, which is diagnosis a
+// reader can act on with no provider text reaching a public surface.
+func unreadChunkNumbers(failures []chunkFailure) string {
+	numbers := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		numbers = append(numbers, strconv.Itoa(failure.chunk))
+	}
+	return strings.Join(numbers, ", ")
+}
+
+// logChunkFailures reports every chunk that failed in one line, so a reader can
+// tell how much of the diff went unread and why without opening each chunk.
+func logChunkFailures(ctx context.Context, failures []chunkFailure, chunks int, requests int) {
+	if len(failures) == 0 {
+		return
 	}
 	gklog.L(ctx).ErrorContext(
 		ctx,
@@ -152,8 +54,7 @@ func logChunkFailures(
 		slog.Int("chunks", chunks),
 		slog.Int("chunks_failed", len(failures)),
 		slog.Int("model_requests", requests),
-		slog.Duration("elapsed", elapsed),
-		slog.Any("causes", reasons),
+		slog.Any("causes", chunkFailureReasons(failures)),
 	)
 }
 
@@ -212,10 +113,10 @@ func normalizeFinding(finding domain.Finding) domain.Finding {
 // eligibleFindings returns the findings from one chunk that anchor to changed
 // lines and meet the importance floor.
 //
-// Streaming and the final summary apply the same test, so a finding posted
-// while the review runs is exactly one the review would have published at the
-// end. Duplicates are not removed here, because the two callers track what they
-// have already seen in different ways.
+// This is the whole publication test. Everything it returns is posted, because
+// the review stands behind every defect it reports and rationing them is how a
+// reader ends up acting on the wrong one. Duplicates stay in, because the
+// caller suppresses them against what the pull request already carries.
 func eligibleFindings(
 	findings []domain.Finding,
 	fileIndex map[string]diff.FileContext,
@@ -259,9 +160,9 @@ func truncated(err error) bool {
 // coverage rather than failing outright.
 //
 // Every chunk records how long its model call took, which model answered, and
-// how many findings came back. Without that, a review that spends its whole
-// budget reports only the chunk it died on, and nobody can tell whether the
-// diff was too large or one call hung.
+// how many findings came back. Without that, a run that leaves chunks unread
+// names only the chunk it stopped on, and nobody can tell a slow provider from
+// one hung call.
 func reviewChunk(
 	ctx context.Context,
 	model Model,

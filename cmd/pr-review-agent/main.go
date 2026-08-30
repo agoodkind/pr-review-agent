@@ -93,10 +93,11 @@ func run(
 		slog.String("model", cfg.ReviewModel),
 		slog.String("reasoning_effort", config.ReasoningEffort),
 		slog.Bool("fallback_configured", cfg.HasFallback()),
-		slog.Duration("review_timeout", cfg.ReviewTimeout),
+		slog.Duration("review_chunk_timeout", cfg.ReviewChunkTimeout),
 		slog.Int("review_workers", cfg.ReviewWorkers),
 		slog.Int("minimum_importance", cfg.MinimumImportance),
-		slog.Int("maximum_unresolved_comments", cfg.MaximumUnresolvedComments),
+		slog.Int("review_max_files", cfg.ReviewMaxFiles),
+		slog.Int("review_max_chunks", cfg.ReviewMaxChunks),
 		slog.String("github_bot_login", cfg.GitHubBotLogin),
 	)
 	githubHTTP := &http.Client{Timeout: githubHTTPTimeout}

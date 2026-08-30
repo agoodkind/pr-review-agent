@@ -35,14 +35,25 @@ const (
 	MaximumPromptBytes = 80000
 	// MaximumOutputTokens is the maximum model completion size.
 	MaximumOutputTokens = 8000
-	// MaximumChunkConcurrency is how many chunks of one diff are reviewed at
-	// once. A review gets a single time budget for the whole diff, so reviewing
-	// chunks one at a time makes a large diff run out of time no matter how fast
-	// each call is. Four keeps the provider's concurrent load modest while
-	// cutting a thirteen chunk review to four waves.
+	// MaximumChunkConcurrency is how many chunks of one delta are reviewed at
+	// once. Each call still carries its own timeout, so nothing here is a clock
+	// spanning two calls; what this bounds is wall clock. A sixty chunk delta
+	// reviewed strictly one at a time would run for hours at the measured call
+	// durations, long past any reader's patience or a container's lifetime.
+	// Four keeps the provider's concurrent load modest while cutting that to
+	// fifteen waves.
 	MaximumChunkConcurrency = 4
 	// GitHubAPIVersion is the GitHub REST API version sent on every request.
 	GitHubAPIVersion = "2022-11-28"
+	// DefaultReviewMaxFiles is the file count budget past which a delta is
+	// declined before any model call.
+	DefaultReviewMaxFiles = 100
+	// DefaultReviewMaxChunks is the diff chunk budget past which a delta is
+	// declined before any model call.
+	DefaultReviewMaxChunks = 60
+	// DefaultReviewChunkTimeout is the timeout for one model call. The
+	// measured worst completed call was 2m19s.
+	DefaultReviewChunkTimeout = 5 * time.Minute
 	// WritingPolicy is injected into every review and reconciliation prompt.
 	WritingPolicy = "Use clean GitHub Markdown. Give each finding one short heading and direct prose. Limit each finding to the defect, impact, and fix in at most three short sentences. Put every code symbol, expression, environment variable, function name, type name, and literal in backticks. Set suggestion to the exact source replacement for the anchored changed line range only when that replacement is complete and safe; otherwise set suggestion to an empty string. Omit repetition, praise, introductions, numeric severity labels, unnecessary detail, progress messages, commands, replies, and typographic dashes."
 )
@@ -52,12 +63,18 @@ type LookupEnv func(string) (string, bool)
 
 // Config holds validated service configuration.
 type Config struct {
-	Port                         string
-	ReviewTimeout                time.Duration
-	ReviewWorkers                int
-	ReviewModel                  string
+	Port          string
+	ReviewWorkers int
+	ReviewModel   string
+	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
+	// timer, is what keeps a review finishable, so these are the only limits
+	// on how much work one invocation accepts.
+	ReviewMaxFiles  int
+	ReviewMaxChunks int
+	// ReviewChunkTimeout is the only clock in a review. It bounds one model
+	// call, and no clock spans two of them.
+	ReviewChunkTimeout           time.Duration
 	MinimumImportance            int
-	MaximumUnresolvedComments    int
 	GitHubAppID                  int64
 	GitHubPrivateKey             *rsa.PrivateKey
 	GitHubWebhookSecret          []byte
@@ -123,29 +140,35 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	} else {
 		cfg.ReviewWorkers = reviewWorkers
 	}
-	reviewTimeout, ok := loadReviewTimeout(lookup)
-	if !ok {
-		missing = append(missing, "REVIEW_TIMEOUT")
-	} else {
-		cfg.ReviewTimeout = reviewTimeout
-	}
 	minimumImportance, ok := loadMinimumImportance(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_MIN_IMPORTANCE")
 	} else {
 		cfg.MinimumImportance = minimumImportance
 	}
-	maximumComments, ok := loadMaximumUnresolvedComments(lookup)
-	if !ok {
-		missing = append(missing, "REVIEW_MAX_UNRESOLVED_COMMENTS")
-	} else {
-		cfg.MaximumUnresolvedComments = maximumComments
-	}
 	reviewModel, ok := loadRequiredText(lookup, "REVIEW_MODEL")
 	if !ok {
 		missing = append(missing, "REVIEW_MODEL")
 	} else {
 		cfg.ReviewModel = reviewModel
+	}
+	reviewMaxFiles, ok := loadReviewMaxFiles(lookup)
+	if !ok {
+		missing = append(missing, "REVIEW_MAX_FILES")
+	} else {
+		cfg.ReviewMaxFiles = reviewMaxFiles
+	}
+	reviewMaxChunks, ok := loadReviewMaxChunks(lookup)
+	if !ok {
+		missing = append(missing, "REVIEW_MAX_CHUNKS")
+	} else {
+		cfg.ReviewMaxChunks = reviewMaxChunks
+	}
+	reviewChunkTimeout, ok := loadReviewChunkTimeout(lookup)
+	if !ok {
+		missing = append(missing, "REVIEW_CHUNK_TIMEOUT")
+	} else {
+		cfg.ReviewChunkTimeout = reviewChunkTimeout
 	}
 	missing = append(missing, loadGitHub(lookup, &cfg)...)
 	missing = append(missing, loadClyde(lookup, &cfg)...)
@@ -190,28 +213,48 @@ func loadReviewWorkers(lookup LookupEnv) (int, bool) {
 	return workers, true
 }
 
-func loadReviewTimeout(lookup LookupEnv) (time.Duration, bool) {
-	value, ok := lookup("REVIEW_TIMEOUT")
+// loadReviewMaxFiles reads the file count admission budget. An unset value
+// takes the default, but a present, non-positive value is rejected rather
+// than silently falling back, so a typo cannot admit deltas the budget
+// exists to decline.
+func loadReviewMaxFiles(lookup LookupEnv) (int, bool) {
+	value, ok := lookup("REVIEW_MAX_FILES")
 	if !ok || strings.TrimSpace(value) == "" {
+		return DefaultReviewMaxFiles, true
+	}
+	maxFiles, err := strconv.Atoi(value)
+	if err != nil || maxFiles <= 0 {
 		return 0, false
+	}
+	return maxFiles, true
+}
+
+// loadReviewMaxChunks reads the diff chunk admission budget, following the
+// same default-unless-invalid pattern as loadReviewMaxFiles.
+func loadReviewMaxChunks(lookup LookupEnv) (int, bool) {
+	value, ok := lookup("REVIEW_MAX_CHUNKS")
+	if !ok || strings.TrimSpace(value) == "" {
+		return DefaultReviewMaxChunks, true
+	}
+	maxChunks, err := strconv.Atoi(value)
+	if err != nil || maxChunks <= 0 {
+		return 0, false
+	}
+	return maxChunks, true
+}
+
+// loadReviewChunkTimeout reads the timeout for one model call. An unset
+// value takes the default; a present, non-positive duration is rejected.
+func loadReviewChunkTimeout(lookup LookupEnv) (time.Duration, bool) {
+	value, ok := lookup("REVIEW_CHUNK_TIMEOUT")
+	if !ok || strings.TrimSpace(value) == "" {
+		return DefaultReviewChunkTimeout, true
 	}
 	timeout, err := time.ParseDuration(value)
 	if err != nil || timeout <= 0 {
 		return 0, false
 	}
 	return timeout, true
-}
-
-func loadMaximumUnresolvedComments(lookup LookupEnv) (int, bool) {
-	value, ok := lookup("REVIEW_MAX_UNRESOLVED_COMMENTS")
-	if !ok || strings.TrimSpace(value) == "" {
-		return 0, false
-	}
-	maximum, err := strconv.Atoi(value)
-	if err != nil || maximum < 0 {
-		return 0, false
-	}
-	return maximum, true
 }
 
 func loadMinimumImportance(lookup LookupEnv) (int, bool) {

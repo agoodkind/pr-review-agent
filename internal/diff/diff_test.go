@@ -13,7 +13,10 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
 
-const testHeadSHA = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+const (
+	testHeadSHA      = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+	testStaleHeadSHA = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
+)
 
 func TestChangedRightLinesMultipleHunks(t *testing.T) {
 	patch := strings.Join([]string{
@@ -309,6 +312,75 @@ func TestCollectorDeterministicPathOrder(t *testing.T) {
 	}
 }
 
+// The delta is the unit of work: a range since a previously reviewed commit
+// must compare against that commit rather than list the whole pull request
+// again, so a run never reviews the same commit range twice.
+func TestCollectorRangeComparesSinceTheGivenBase(t *testing.T) {
+	source := &fakeSource{
+		files: []githubapp.ChangedFile{{
+			Path:         "pkg/a.go",
+			Status:       "modified",
+			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+			PatchPresent: true,
+		}},
+		contents: map[string][]byte{
+			"pkg/a.go": []byte("line\nadded\n"),
+		},
+	}
+	collector := diff.NewCollector(source)
+	base := domain.HeadSHA(testStaleHeadSHA)
+	pullRequest := testPullRequest()
+
+	input, err := collector.CollectRange(context.Background(), testRef(), pullRequest, base)
+	if err != nil {
+		t.Fatalf("CollectRange: %v", err)
+	}
+	if source.compareCalls != 1 {
+		t.Fatalf("compare calls = %d, want 1", source.compareCalls)
+	}
+	if source.listCalls != 0 {
+		t.Fatalf("list changed files calls = %d, want 0: the range must not fetch the full file list", source.listCalls)
+	}
+	if source.lastCompareBase != base || source.lastCompareHead != pullRequest.Head {
+		t.Fatalf("compare range = %s...%s, want %s...%s",
+			source.lastCompareBase, source.lastCompareHead, base, pullRequest.Head)
+	}
+	if len(input.Files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(input.Files))
+	}
+}
+
+// An empty base means no prior review exists, so the range collector falls
+// back to the full file list rather than comparing against nothing.
+func TestCollectorRangeFallsBackToTheFullListWhenBaseIsEmpty(t *testing.T) {
+	source := &fakeSource{
+		files: []githubapp.ChangedFile{{
+			Path:         "pkg/a.go",
+			Status:       "modified",
+			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+			PatchPresent: true,
+		}},
+		contents: map[string][]byte{
+			"pkg/a.go": []byte("line\nadded\n"),
+		},
+	}
+	collector := diff.NewCollector(source)
+
+	input, err := collector.CollectRange(context.Background(), testRef(), testPullRequest(), "")
+	if err != nil {
+		t.Fatalf("CollectRange: %v", err)
+	}
+	if source.compareCalls != 0 {
+		t.Fatalf("compare calls = %d, want 0: an empty base means no prior review", source.compareCalls)
+	}
+	if source.listCalls != 1 {
+		t.Fatalf("list changed files calls = %d, want 1", source.listCalls)
+	}
+	if len(input.Files) != 1 {
+		t.Fatalf("file count = %d, want 1", len(input.Files))
+	}
+}
+
 func TestChunkInputEachHunkAppearsOnce(t *testing.T) {
 	patchOne := "@@ -1,1 +1,2 @@\n a\n+one\n"
 	patchTwo := "@@ -4,1 +5,2 @@\n d\n+two\n"
@@ -416,10 +488,14 @@ func TestChunkInputOversizedHunkIncomplete(t *testing.T) {
 }
 
 type fakeSource struct {
-	files    []githubapp.ChangedFile
-	contents map[string][]byte
-	getErr   error
-	getCalls int
+	files           []githubapp.ChangedFile
+	contents        map[string][]byte
+	getErr          error
+	getCalls        int
+	listCalls       int
+	compareCalls    int
+	lastCompareBase domain.HeadSHA
+	lastCompareHead domain.HeadSHA
 }
 
 func (source *fakeSource) ListChangedFiles(
@@ -428,6 +504,20 @@ func (source *fakeSource) ListChangedFiles(
 	_ domain.Repository,
 	_ int,
 ) ([]githubapp.ChangedFile, error) {
+	source.listCalls++
+	return source.files, nil
+}
+
+func (source *fakeSource) Compare(
+	_ context.Context,
+	_ int64,
+	_ domain.Repository,
+	base domain.HeadSHA,
+	head domain.HeadSHA,
+) ([]githubapp.ChangedFile, error) {
+	source.compareCalls++
+	source.lastCompareBase = base
+	source.lastCompareHead = head
 	return source.files, nil
 }
 

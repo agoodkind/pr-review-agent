@@ -13,10 +13,11 @@
     "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
     "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",
     "PORT": "3000",
-    "REVIEW_MAX_UNRESOLVED_COMMENTS": "3",
+    "REVIEW_CHUNK_TIMEOUT": "5m",
+    "REVIEW_MAX_CHUNKS": "60",
+    "REVIEW_MAX_FILES": "100",
     "REVIEW_MIN_IMPORTANCE": "6",
     "REVIEW_MODEL": "gpt-5.6-sol",
-    "REVIEW_TIMEOUT": "10m",
     "REVIEW_WORKERS": "4"
   },
   "containers": [

@@ -92,6 +92,7 @@ func chunkFromPieces(pieces []Piece, index int, total int) Chunk {
 type Source interface {
 	ListChangedFiles(context.Context, int64, domain.Repository, int) ([]githubapp.ChangedFile, error)
 	GetFile(context.Context, int64, domain.Repository, string, domain.HeadSHA) ([]byte, error)
+	Compare(context.Context, int64, domain.Repository, domain.HeadSHA, domain.HeadSHA) ([]githubapp.ChangedFile, error)
 }
 
 // Collector gathers pull request patches and file content for review.
@@ -121,6 +122,54 @@ func (collector *Collector) Collect(
 		return ReviewInput{}, fmt.Errorf("list changed files: %w", err)
 	}
 
+	return ReviewInput{
+		PullRequest: pullRequest,
+		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles),
+	}, nil
+}
+
+// CollectRange loads changed files, patches, and current content scoped to the
+// range since a previously reviewed commit. An empty base means no prior
+// review exists, so it collects the same full file list Collect does; a
+// review never repeats a commit range once the range since the last review is
+// the unit of work.
+func (collector *Collector) CollectRange(
+	ctx context.Context,
+	ref domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	base domain.HeadSHA,
+) (ReviewInput, error) {
+	if base == "" {
+		return collector.Collect(ctx, ref, pullRequest)
+	}
+
+	changedFiles, err := collector.source.Compare(
+		ctx,
+		ref.InstallationID,
+		ref.Repository,
+		base,
+		pullRequest.Head,
+	)
+	if err != nil {
+		slog.ErrorContext(ctx, "compare commit range", slog.String("err", err.Error()))
+		return ReviewInput{}, fmt.Errorf("compare %s to %s: %w", base, pullRequest.Head, err)
+	}
+
+	return ReviewInput{
+		PullRequest: pullRequest,
+		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles),
+	}, nil
+}
+
+// collectFiles orders changed files deterministically and collects each one's
+// patch metadata and current content, the shared work behind both Collect and
+// CollectRange.
+func (collector *Collector) collectFiles(
+	ctx context.Context,
+	ref domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	changedFiles []githubapp.ChangedFile,
+) []FileContext {
 	sort.Slice(changedFiles, func(left, right int) bool {
 		return changedFiles[left].Path < changedFiles[right].Path
 	})
@@ -129,11 +178,7 @@ func (collector *Collector) Collect(
 	for _, changedFile := range changedFiles {
 		files = append(files, collector.collectFile(ctx, ref, pullRequest, changedFile))
 	}
-
-	return ReviewInput{
-		PullRequest: pullRequest,
-		Files:       files,
-	}, nil
+	return files
 }
 
 func (collector *Collector) collectFile(

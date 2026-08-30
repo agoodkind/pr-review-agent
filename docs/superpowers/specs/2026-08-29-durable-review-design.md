@@ -24,8 +24,8 @@ no prompt outgrows the model's context.
 2. **Work is incremental.** Review the delta since the last reviewed commit.
    Never review the same commit range twice.
 3. **Progress checkpoints after every chunk.** A chunk is done when its
-   findings are on the page and the checkpoint has advanced. Death loses at
-   most one chunk.
+   findings are on the page and the checkpoint has advanced. Chunks run
+   several at a time, so death loses only the chunks in flight.
 4. **One clock per model call, none above it.** Each call carries its own
    request timeout, sized to the measured worst case of about five minutes
    (observed completions ran 6 seconds to 2 minutes 19 seconds). No clock
@@ -187,7 +187,8 @@ queue.
    reviewed head.
 2. `last_reviewed_commit` advances only after its chunks' findings are on
    the page.
-3. Killing the process at any point loses at most one chunk of work.
+3. Killing the process at any point loses only the chunks in flight. Every
+   checkpointed chunk survives, and the lost ones stay pending and visible.
 4. An admitted delta completes in one invocation, and no clock spans more
    than one model call.
 5. A failed run leaves the check red and every review object untouched.
@@ -206,8 +207,11 @@ queue.
 ## Acceptance
 
 mlx-swift-lm 8 is the live acceptance test. Its 173 chunk delta must be
-declined at admission with a visible skip notice and a check that neither
-blocks nor goes red, on the deployed service. A second, normal sized pull
-request must complete in one run with the same run identifier on the check,
-the comment, and the logs. A run with one induced chunk failure must show
-that chunk pending in the comment and finish on the next push.
+declined at admission with a visible skip notice, on the deployed service,
+and the check must not reach a passing conclusion, so the unreviewed delta
+cannot merge on the strength of having been declined. The check still reports
+the skip rather than a failure, because the review did not break. A second,
+normal sized pull request must complete in one run with the same run
+identifier on the check, the comment, and the logs. A run with one induced
+chunk failure must show that chunk pending in the comment and finish on the
+next push.

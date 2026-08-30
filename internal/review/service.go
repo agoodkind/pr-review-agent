@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/url"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"goodkind.io/gklog"
@@ -23,51 +22,46 @@ import (
 const (
 	checkSummaryFailure     = "Review failed."
 	checkSummaryCancelled   = "Review cancelled."
+	checkSummarySkipped     = "Review skipped."
 	checkFailureReviews     = "Review failed while reading existing reviews."
 	checkFailurePullRequest = "Review failed while loading the pull request."
 	checkFailureReconcile   = "Review failed while reconciling existing findings."
 	checkFailureDiff        = "Review failed while collecting the pull request diff."
+	checkFailureSkip        = "Review failed while recording the skipped review."
 	checkFailureAnalysis    = "Review failed during model analysis."
 	checkFailureRefresh     = "Review failed while refreshing the pull request head."
+	checkFailureThreads     = "Review failed while reading the open review threads."
 	checkFailureSummary     = "Review failed while updating the visible summary."
 	checkFailurePublish     = "Review failed while publishing the final decision."
 	checkFailurePanic       = "Review failed after an internal panic."
 	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
 	checkFailureDeadline    = "Review stopped: it ran out of time."
-	maxCheckFailureRunes    = 1000
-	// maxCheckTitleRunes is the longest title GitHub accepts for check output.
-	maxCheckTitleRunes       = 255
-	maximumCompletionTimeout = 30 * time.Second
-	// maximumPublicationTimeout caps the slice of the review budget reserved for
-	// publishing. Publication is a handful of GitHub calls, so this is generous
-	// for the work while staying small against a ten minute review.
-	maximumPublicationTimeout = 60 * time.Second
+	// checkTitleAlreadyReviewed names a run that found nothing owed, whether
+	// the durable state says so or an existing review marker does.
+	checkTitleAlreadyReviewed = "Already reviewed"
+	// checkConclusionDeclined is how a delta the admission gate refused ends.
+	//
+	// It is deliberately not "skipped". GitHub counts a required check concluded
+	// skipped as passing, and an unreviewed delta must not merge on the strength
+	// of having been declined. This conclusion holds the gate while the title
+	// and the summary still report a skip rather than a failure.
+	checkConclusionDeclined = "action_required"
+	// completionBudget bounds the calls that finish the visible check.
+	completionBudget = 30 * time.Second
+	// publicationBudget bounds one batch of GitHub writes. Every such batch is
+	// a handful of calls, so this is generous for the work while keeping a
+	// stalled write from holding the run open.
+	//
+	// It is a fixed value rather than a slice of a review wide budget, because
+	// there is no review wide budget: a run is bounded by admission, and the
+	// only clock over a model call is the per chunk timeout.
+	publicationBudget = 60 * time.Second
 )
 
-// GitHub loads pull request state and publishes review lifecycle updates.
-type GitHub interface {
-	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
-	ListReviews(context.Context, int64, domain.Repository, int) ([]githubapp.Review, error)
-	FindCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, bool, error)
-	CreateCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, error)
-	StartCheckRun(context.Context, int64, domain.Repository, int64, string) error
-	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string, string) error
-	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
-	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
-	DismissReview(context.Context, int64, domain.Repository, int, int64, string) error
-	CreateReviewComment(
-		context.Context,
-		int64,
-		domain.Repository,
-		int,
-		domain.HeadSHA,
-		githubapp.InlineComment,
-	) error
-}
-
-// Collector gathers pull request diff input for one review pass.
+// Collector gathers pull request diff input for one review pass, scoped to the
+// range since a previously reviewed commit when one is given.
 type Collector interface {
-	Collect(context.Context, domain.PullRequestRef, githubapp.PullRequest) (diff.ReviewInput, error)
+	CollectRange(context.Context, domain.PullRequestRef, githubapp.PullRequest, domain.HeadSHA) (diff.ReviewInput, error)
 }
 
 // Reconciler silently resolves earlier bot findings on the current head.
@@ -77,20 +71,24 @@ type Reconciler interface {
 
 // Service publishes one complete GitHub review per pull request head.
 type Service struct {
-	github                    GitHub
-	collector                 Collector
-	model                     Model
-	reconciler                Reconciler
-	locker                    *queue.KeyedLocker
-	botLogin                  string
-	checkName                 string
-	minimumImportance         int
-	maximumUnresolvedComments int
-	reviewTimeout             time.Duration
-	checkCompletionTimeout    time.Duration
-	publicationTimeout        time.Duration
-	now                       func() time.Time
-	logger                    *slog.Logger
+	github            GitHub
+	collector         Collector
+	model             Model
+	reconciler        Reconciler
+	locker            *queue.KeyedLocker
+	botLogin          string
+	checkName         string
+	minimumImportance int
+	reviewMaxFiles    int
+	reviewMaxChunks   int
+	// chunkTimeout is the only clock over a model call, and the only clock in
+	// a review at all. A run is bounded by admission instead, so a large diff
+	// cannot run out of time part way through and lose what it already read.
+	chunkTimeout           time.Duration
+	checkCompletionTimeout time.Duration
+	publicationTimeout     time.Duration
+	now                    func() time.Time
+	logger                 *slog.Logger
 }
 
 // NewService constructs a review publication service.
@@ -102,8 +100,9 @@ func NewService(
 	locker *queue.KeyedLocker,
 	botLogin string,
 	minimumImportance int,
-	maximumUnresolvedComments int,
-	reviewTimeout time.Duration,
+	reviewMaxFiles int,
+	reviewMaxChunks int,
+	chunkTimeout time.Duration,
 	now func() time.Time,
 	logger *slog.Logger,
 ) *Service {
@@ -113,27 +112,34 @@ func NewService(
 	if now == nil {
 		now = time.Now
 	}
-	// Publishing the review and completing the check each get a reserved slice
-	// of the budget, and analysis gets what remains. Reaching the analysis
-	// deadline then still leaves time to publish what the review already found,
-	// so a slow diff produces a partial review rather than nothing at all.
-	completionTimeout := min(reviewTimeout/4, maximumCompletionTimeout)
-	publicationTimeout := min(reviewTimeout/4, maximumPublicationTimeout)
+	// A non-positive budget refuses every real delta while admitting an empty
+	// one, which is the opposite of what a budget is for. Treat it the same way
+	// the configuration loader treats an unset variable.
+	if reviewMaxFiles <= 0 {
+		reviewMaxFiles = config.DefaultReviewMaxFiles
+	}
+	if reviewMaxChunks <= 0 {
+		reviewMaxChunks = config.DefaultReviewMaxChunks
+	}
+	if chunkTimeout <= 0 {
+		chunkTimeout = config.DefaultReviewChunkTimeout
+	}
 	return &Service{
-		github:                    github,
-		collector:                 collector,
-		model:                     model,
-		reconciler:                reconciler,
-		locker:                    locker,
-		botLogin:                  botLogin,
-		checkName:                 config.ReviewCheckName,
-		minimumImportance:         minimumImportance,
-		maximumUnresolvedComments: maximumUnresolvedComments,
-		reviewTimeout:             reviewTimeout - completionTimeout - publicationTimeout,
-		checkCompletionTimeout:    completionTimeout,
-		publicationTimeout:        publicationTimeout,
-		now:                       now,
-		logger:                    logger,
+		github:                 github,
+		collector:              collector,
+		model:                  model,
+		reconciler:             reconciler,
+		locker:                 locker,
+		botLogin:               botLogin,
+		checkName:              config.ReviewCheckName,
+		minimumImportance:      minimumImportance,
+		reviewMaxFiles:         reviewMaxFiles,
+		reviewMaxChunks:        reviewMaxChunks,
+		chunkTimeout:           chunkTimeout,
+		checkCompletionTimeout: completionBudget,
+		publicationTimeout:     publicationBudget,
+		now:                    now,
+		logger:                 logger,
 	}
 }
 
@@ -142,23 +148,25 @@ func NewService(
 // Every log line this run writes is captured alongside the service log, and the
 // capture is published in the check run body. A reader who opens a failed check
 // therefore sees what the review did, not only the stage that failed.
+//
+// The run carries no deadline of its own. Admission is what bounds it, and the
+// only clock inside it is the per chunk timeout, so a review can never run out
+// of time part way through and lose the chunks it already read.
 func (service *Service) Run(parent context.Context, job domain.ReviewJob) error {
-	ctx, cancel := context.WithTimeout(parent, service.reviewTimeout)
-	defer cancel()
 	recorder := runlog.NewRecorder()
 	logger := slog.New(runlog.Tee(service.logger.Handler(), recorder)).With(
 		slog.String("delivery_id", job.DeliveryID),
 		slog.String("repository", job.Repository.Owner+"/"+job.Repository.Name),
 		slog.Int("pull_request", job.Number),
 	)
-	ctx = gklog.WithLogger(ctx, logger)
+	ctx := gklog.WithLogger(parent, logger)
 	ctx = withRecorder(ctx, recorder)
 	ctx = withShutdown(ctx, parent)
 	logger.InfoContext(
 		ctx,
 		"review job started",
 		slog.Int("minimum_importance", service.minimumImportance),
-		slog.Int("maximum_unresolved_comments", service.maximumUnresolvedComments),
+		slog.Duration("chunk_timeout", service.chunkTimeout),
 	)
 	if job.CheckRunID == 0 {
 		return errors.New("review check was not admitted")
@@ -241,6 +249,7 @@ func (service *Service) runLocked(
 	}()
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
+
 	if service.checkAlreadySucceeded(ctx, checkRun) {
 		return nil
 	}
@@ -267,69 +276,120 @@ func (service *Service) runLocked(
 			ctx,
 			job,
 			checkRun.ID,
-			"Already reviewed",
+			checkTitleAlreadyReviewed,
 			"This head already has a PR-Agent review. No duplicate review was published.",
 		)
 	}
-
-	threads, err := service.reconciler.Reconcile(ctx, job)
-	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReconcile, err)
-	}
-	progress.threads = traceThreads(threads, service.botLogin)
-	progress.reached("thread reconciliation")
-	logger.InfoContext(
-		ctx,
-		"review threads reconciled",
-		slog.Any("bot_threads", progress.threads),
-	)
-
-	sink := service.newFindingSink(job, head, reviews, threads)
-	analysis, stage, err := service.readAndAnalyze(ctx, job, pullRequest, sink, progress)
-	// Every chunk has answered by the time readAndAnalyze returns, so whichever
-	// finding is holding the run's one contested tail slot can now be posted:
-	// no later arrival can still outrank it.
-	sink.Finalize(ctx)
-	progress.applyPublished(sink.Objections())
-	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), stage, err)
-	}
-
-	return service.publish(
-		ctx,
-		job,
-		head,
-		checkRun,
-		reviews,
-		threads,
-		analysis,
-		sink,
-		startedAt,
-		progress,
-	)
+	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress)
 }
 
-// publicationContext gives publication its own reserved budget, freed from the
-// analysis deadline but still bound to the service lifetime.
+// reviewOwedWork reviews everything this head still owes: the range since the
+// last reviewed commit, plus whatever an earlier run left pending.
 //
-// Analysis is the part that runs long, and the findings it produced are worth
-// nothing to the reader until they reach the pull request, so the analysis
-// deadline must not cancel the publish that follows it. Shutdown is different:
-// when the service is stopping, publication stops with it rather than holding
-// the process open writing to GitHub.
+// The durable state is read here rather than at the top of the run, because
+// every exit above it returns without a delta and would only pay for an issue
+// comment read nothing uses.
+func (service *Service) reviewOwedWork(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRun githubapp.CheckRun,
+	pullRequest githubapp.PullRequest,
+	reviews []githubapp.Review,
+	startedAt time.Time,
+	progress *reviewProgress,
+) error {
+	head := job.Head
+	state, hasState := service.loadDurableState(ctx, job)
+	// Nothing is owed when the checkpoint already names this head with no chunk
+	// pending. Deciding that here, rather than letting the collector compare a
+	// commit against itself, spends no API call proving what the state already
+	// says.
+	if hasState && state.LastReviewed == head && len(state.Pending) == 0 {
+		return service.succeed(
+			ctx,
+			job,
+			checkRun.ID,
+			checkTitleAlreadyReviewed,
+			"The durable review state already records this head as reviewed, with no chunks pending.",
+		)
+	}
+
+	// Admission runs before reconciliation. Reconciliation makes a model call
+	// and resolves threads, so running it first would spend both on the exact
+	// delta admission exists to refuse.
+	work, stop, err := service.collectAndAdmit(
+		ctx, job, pullRequest, checkRun, deltaBase(state, hasState), progress,
+	)
+	if stop {
+		return err
+	}
+
+	threads, err := service.reconcileThreads(ctx, job, checkRun.ID, progress)
+	if err != nil {
+		return err
+	}
+
+	selection := collectPublicationState(reviews, threads, service.botLogin)
+	pass := newChunkPass(work, service.minimumImportance, &selection)
+	state, err = service.reviewDelta(ctx, job, head, state, pass)
+	service.applyPass(ctx, pass, progress)
+	if err != nil {
+		if errors.Is(err, errHeadMoved) {
+			return service.cancelCheck(ctx, job, checkRun.ID)
+		}
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
+	return service.publish(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress)
+}
+
+// applyPass records what the chunk loop learned on the progress the failure and
+// summary outputs both render from.
+func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress *reviewProgress) {
+	logger := gklog.L(ctx)
+	analysis := pass.analysis()
+	unread := pass.unreadChunks()
+	posted, failed := pass.delivery()
+	progress.applyAnalysis(analysis)
+	progress.applyPublished(pass.publishedFindings())
+	logChunkFailures(ctx, unread, len(pass.work.Chunks), pass.requestCount())
+	logger.InfoContext(
+		ctx,
+		"review model analysis completed",
+		slog.Int("chunks", len(pass.work.Chunks)),
+		slog.Int("chunks_failed", len(unread)),
+		slog.Int("comments_posted", posted),
+		slog.Int("comments_undelivered", failed),
+		slog.Bool("coverage_complete", analysis.CoverageComplete),
+	)
+	if err := logAnalysis(ctx, analysis); err != nil {
+		logger.ErrorContext(ctx, "trace review analysis", slog.String("err", err.Error()))
+	}
+	progress.reached("model analysis")
+}
+
+// deltaBase names the commit the delta is measured from: the commit the last
+// completed run reviewed, or nothing at all on first contact.
+func deltaBase(state marker.State, hasState bool) domain.HeadSHA {
+	if !hasState {
+		return domain.HeadSHA("")
+	}
+	return state.LastReviewed
+}
+
+// publicationContext gives publication its own budget, freed from whatever the
+// caller's context carries but still bound to the service lifetime.
 func (service *Service) publicationContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return detachFromReviewDeadline(ctx, service.publicationTimeout)
 }
 
-// detachFromReviewDeadline gives one closing stage its own budget, freed from
-// the review deadline but still bound to the service lifetime.
+// detachFromReviewDeadline gives one stage of GitHub writes its own budget,
+// freed from the caller's context but still bound to the service lifetime.
 //
-// Every stage that runs after the review is over needs this: publishing the
-// verdict, writing the failure notice, and completing the check. The review
-// deadline has usually passed by then, and that is exactly when the reader most
-// needs the outcome, so it must not cancel the work that reports it. Shutdown
-// still does, because a stopping service must not hold the process open writing
-// to GitHub.
+// Every stage that reports an outcome needs this: posting a chunk's findings,
+// publishing the verdict, writing the failure notice, and completing the check.
+// A cancelled or expired caller is exactly when the reader most needs the
+// outcome, so it must not cancel the work that reports it. Shutdown still does,
+// because a stopping service must not hold the process open writing to GitHub.
 func detachFromReviewDeadline(
 	ctx context.Context,
 	budget time.Duration,
@@ -389,37 +449,6 @@ func shutdownFrom(ctx context.Context) context.Context {
 	return shutdown
 }
 
-// readAndAnalyze collects the diff and reviews it, returning the stage name to
-// report if either step fails.
-func (service *Service) readAndAnalyze(
-	ctx context.Context,
-	job domain.ReviewJob,
-	pullRequest githubapp.PullRequest,
-	sink FindingSink,
-	progress *reviewProgress,
-) (Analysis, string, error) {
-	logger := gklog.L(ctx)
-	input, err := service.collector.Collect(ctx, job.PullRequestRef, pullRequest)
-	if err != nil {
-		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
-		return Analysis{}, checkFailureDiff, fmt.Errorf("collect pull request diff: %w", err)
-	}
-	progress.reached("the diff")
-
-	analysis, err := Analyze(ctx, service.model, input, service.minimumImportance, service.now, sink)
-	progress.applyAnalysis(analysis)
-	if err != nil {
-		// The stage is the fallback wording. failureTitle picks the cause,
-		// including an internal panic, so this names no cause of its own.
-		return analysis, checkFailureAnalysis, err
-	}
-	progress.reached("model analysis")
-	if err := logAnalysis(ctx, analysis); err != nil {
-		return analysis, checkFailureAnalysis, err
-	}
-	return analysis, "", nil
-}
-
 // loadReviewHistory reads every prior review and reports whether this head was
 // already reviewed, which is how a redelivered webhook avoids a second review.
 func (service *Service) loadReviewHistory(
@@ -448,22 +477,24 @@ func (service *Service) loadReviewHistory(
 	return reviews, false, nil
 }
 
-// newFindingSink builds the destination that posts findings as each chunk
-// answers, so whatever the review has found reaches the pull request even when
-// the rest of the run never finishes.
-func (service *Service) newFindingSink(
+// reconcileThreads silently resolves earlier bot findings on the current head
+// and reports what survives, returning the check failure directly so the
+// caller does not repeat the two-step report-and-return pattern.
+func (service *Service) reconcileThreads(
+	ctx context.Context,
 	job domain.ReviewJob,
-	head domain.HeadSHA,
-	reviews []githubapp.Review,
-	threads []githubapp.ReviewThread,
-) *streamingSink {
-	state := collectPublicationState(
-		reviews,
-		threads,
-		service.botLogin,
-		service.maximumUnresolvedComments,
-	)
-	return newStreamingSink(service.github, job, head, &state, service.checkCompletionTimeout)
+	checkRunID int64,
+	progress *reviewProgress,
+) ([]githubapp.ReviewThread, error) {
+	logger := gklog.L(ctx)
+	threads, err := service.reconciler.Reconcile(ctx, job)
+	if err != nil {
+		return nil, service.failCheck(ctx, job, checkRunID, progress.summary(service.now()), checkFailureReconcile, err)
+	}
+	progress.threads = traceThreads(threads, service.botLogin)
+	progress.reached("thread reconciliation")
+	logger.InfoContext(ctx, "review threads reconciled", slog.Any("bot_threads", progress.threads))
+	return threads, nil
 }
 
 func (service *Service) newProgress(head domain.HeadSHA, startedAt time.Time) *reviewProgress {
@@ -511,22 +542,26 @@ func logAnalysis(ctx context.Context, analysis Analysis) error {
 	return nil
 }
 
+// publish closes out a review that read every chunk it owed. It reads both
+// verdict inputs after this run's findings are on the page, and submits nothing
+// at all when the head has moved on.
 func (service *Service) publish(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
 	checkRun githubapp.CheckRun,
 	reviews []githubapp.Review,
-	threads []githubapp.ReviewThread,
-	analysis Analysis,
-	sink *streamingSink,
+	pass *chunkPass,
+	state marker.State,
 	startedAt time.Time,
 	progress *reviewProgress,
 ) error {
 	ctx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
 
-	logger := gklog.L(ctx)
+	// Reading a commit proves it was reviewed, not that it is still the head. A
+	// verdict submitted here would judge a commit this run never read, so a
+	// moved head ends the run and leaves the work to the push that moved it.
 	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, err)
@@ -538,16 +573,26 @@ func (service *Service) publish(
 
 	// The findings already reached the pull request as their chunks answered, so
 	// the review submitted here carries the verdict and the summary alone.
-	publishedFindings := sink.Objections()
-	posted, failed := sink.Delivery()
-	logPublishedFindings(ctx, analysis.Anchored, publishedFindings, posted, failed)
+	analysis := pass.analysis()
+	published := pass.publishedFindings()
+	posted, failed := pass.delivery()
+	logPublishedFindings(ctx, analysis.Anchored, published, posted, failed)
 	progress.reached("finding selection")
 
-	decision := standingDecision(ctx, analysis, publishedFindings, threads, service.botLogin)
+	threads, err := service.openThreads(ctx, job, progress)
+	if err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureThreads, err)
+	}
 
+	// A head is fully reviewed only when every chunk it owed answered, every
+	// chunk covered its whole hunk, and every finding this run stands behind
+	// reached the page. A finding whose comment GitHub refused leaves the reader
+	// nothing to act on, so the run must not approve over it.
+	headFullyReviewed := len(state.Pending) == 0 && analysis.CoverageComplete && failed == 0
 	summary := Summary{
 		Head:              head,
-		Decision:          decision,
+		Decision:          reviewerDecision(threads, service.botLogin, headFullyReviewed),
+		Blocking:          blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed),
 		Models:            analysis.Models,
 		Duration:          service.now().Sub(startedAt),
 		FilesReviewed:     analysis.FilesReviewed,
@@ -556,13 +601,54 @@ func (service *Service) publish(
 		MinimumImportance: service.minimumImportance,
 		Observed:          analysis.Observed,
 		Eligible:          analysis.Anchored,
-		Published:         publishedFindings,
+		Published:         published,
 		PriorReviews:      traceReviews(reviews, service.botLogin),
 		Threads:           traceThreads(threads, service.botLogin),
 		Reached:           "",
 		Failed:            false,
 	}
+	if len(state.Pending) > 0 {
+		return service.concludeIncomplete(ctx, job, checkRun, reviews, state, pass, summary, progress)
+	}
+	return service.publishVerdict(ctx, job, checkRun, reviews, summary, state, progress)
+}
 
+// openThreads reads the service's own threads as they stand now, which is one
+// of the two inputs the verdict is computed from.
+//
+// It runs after this run's findings are posted. A snapshot taken before
+// analysis omits every thread this run just opened, and a verdict computed
+// from it would approve over defects the same run had raised minutes earlier.
+func (service *Service) openThreads(
+	ctx context.Context,
+	job domain.ReviewJob,
+	progress *reviewProgress,
+) ([]githubapp.ReviewThread, error) {
+	logger := gklog.L(ctx)
+	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		logger.ErrorContext(ctx, "list review threads for the verdict", slog.String("err", err.Error()))
+		return nil, fmt.Errorf("list review threads: %w", err)
+	}
+	progress.threads = traceThreads(threads, service.botLogin)
+	progress.reached("the thread refresh")
+	logger.InfoContext(ctx, "verdict threads loaded", slog.Any("bot_threads", progress.threads))
+	return threads, nil
+}
+
+// publishVerdict writes the verdict this run computed: the review carrying the
+// decision, the one top level comment carrying the summary and the durable
+// state, and the completed check.
+func (service *Service) publishVerdict(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRun githubapp.CheckRun,
+	reviews []githubapp.Review,
+	summary Summary,
+	state marker.State,
+	progress *reviewProgress,
+) error {
+	logger := gklog.L(ctx)
 	body, err := service.prepareReviewBody(ctx, job, reviews, summary)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
@@ -574,9 +660,9 @@ func (service *Service) publish(
 		job.Repository,
 		job.Number,
 		githubapp.SubmitReviewRequest{
-			CommitID: head,
+			CommitID: summary.Head,
 			Body:     body,
-			Event:    decision,
+			Event:    summary.Decision,
 			Comments: nil,
 		},
 	)
@@ -587,10 +673,20 @@ func (service *Service) publish(
 		ctx,
 		"review published",
 		slog.Int64("review_id", publishedReview.ID),
-		slog.String("event", string(decision)),
-		slog.Int("streamed_comments", len(publishedFindings)),
-		slog.Bool("visible_body", true),
+		slog.String("event", string(summary.Decision)),
+		slog.Int("streamed_comments", len(summary.Published)),
+		slog.Any("blocking", summary.Blocking),
 	)
+
+	// The one top level comment carries the same body plus the durable state
+	// the chunk loop advanced, so a later invocation resumes from a checkpoint
+	// this run actually reached rather than one it asserted.
+	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
+		Prose: RenderBody(summary),
+		State: state,
+	}); err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
+	}
 
 	if err := service.succeed(ctx, job, checkRun.ID, summary.Title(), RenderDetails(summary)); err != nil {
 		return err
@@ -666,143 +762,6 @@ func (service *Service) succeed(
 		return fmt.Errorf("complete check run: %w", err)
 	}
 	return nil
-}
-
-func (service *Service) failCheck(
-	ctx context.Context,
-	job domain.ReviewJob,
-	checkRunID int64,
-	progress Summary,
-	title string,
-	cause error,
-) error {
-	logger := gklog.L(ctx)
-	title = failureTitle(title, cause)
-	progress.Failed = true
-	detail := checkFailureDetail(cause)
-	// The check run reports the same cause and the same progress the comment
-	// carries, so both explain the failure rather than only naming a stage.
-	checkSummary := detail + "\n\n" + RenderDetails(progress)
-	var completeErr error
-	if checkRunID != 0 {
-		completeErr = service.completeCheckRun(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			checkRunID,
-			"failure",
-			title,
-			checkSummary,
-		)
-		if completeErr != nil {
-			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
-		}
-	}
-	service.clearFailedReviewState(ctx, job, progress, title, detail)
-	if completeErr != nil {
-		return fmt.Errorf("complete check run: %w", completeErr)
-	}
-	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
-	return cause
-}
-
-// clearFailedReviewState leaves the pull request in a state a reader can act
-// on. A failed review has no verdict, so any verdict the service left earlier
-// is withdrawn, and the visible summary says why the review stopped.
-//
-// Neither step can mask the reported cause, so a failure here is logged and the
-// remaining work still runs.
-func (service *Service) clearFailedReviewState(
-	ctx context.Context,
-	job domain.ReviewJob,
-	progress Summary,
-	title string,
-	detail string,
-) {
-	// All three steps share one budget on one detached context. Giving each its
-	// own would let a failing pull request hold the service for three times the
-	// configured window.
-	ctx, cancel := detachFromReviewDeadline(ctx, service.checkCompletionTimeout)
-	defer cancel()
-
-	logger := gklog.L(ctx)
-	reviews, err := service.listReviewsForFailure(ctx, job)
-	if err != nil {
-		return
-	}
-	if dismissErr := service.dismissStaleVerdicts(ctx, job, reviews); dismissErr != nil {
-		logger.ErrorContext(ctx, "dismiss stale verdicts", slog.String("err", dismissErr.Error()))
-	}
-	service.publishFailureNotice(ctx, job, reviews, progress, title, detail)
-}
-
-// failureTitle names why a review stopped, in the one line a reader sees in the
-// checks list before opening anything.
-//
-// A stage name alone tells the reader where the run was, not what went wrong,
-// so it leaves them no idea whether to retry, wait, or fix something. The cause
-// answers that, and the stage is the fallback for a failure that carries no
-// cause of its own.
-func failureTitle(stage string, cause error) string {
-	switch {
-	case usageExceeded(cause):
-		return checkFailureUsage
-	case errors.Is(cause, context.DeadlineExceeded):
-		return checkFailureDeadline
-	case isChunkPanic(cause):
-		return checkFailurePanic
-	}
-	if reason := providerReason(cause); reason != "" {
-		return boundTitle("Review stopped: " + reason)
-	}
-	if stage == "" {
-		return checkSummaryFailure
-	}
-	return stage
-}
-
-// boundTitle keeps a title inside the length GitHub accepts for check output.
-//
-// A provider can state a reason of any length, and a check update carrying an
-// over-long title is rejected outright. That would leave the check unfinished
-// and hide the failure it was reporting, which is worse than a shortened
-// sentence.
-func boundTitle(title string) string {
-	runes := []rune(title)
-	if len(runes) <= maxCheckTitleRunes {
-		return title
-	}
-	return string(runes[:maxCheckTitleRunes-3]) + "..."
-}
-
-// usageExceededError is any provider error that reports exhausted usage.
-type usageExceededError interface {
-	UsageExceeded() bool
-}
-
-// reasonedError is any failure that can state its own cause in a sentence. The
-// model provider package implements it, and stating the interface here keeps
-// that dependency pointing one way.
-type reasonedError interface {
-	ProviderReason() string
-}
-
-// providerReason returns the cause's own sentence, or an empty string when the
-// failure states none.
-func providerReason(cause error) string {
-	var target reasonedError
-	if !errors.As(cause, &target) {
-		return ""
-	}
-	return target.ProviderReason()
-}
-
-func usageExceeded(cause error) bool {
-	var target usageExceededError
-	if !errors.As(cause, &target) {
-		return false
-	}
-	return target.UsageExceeded()
 }
 
 func (service *Service) prepareReviewBody(
@@ -927,21 +886,6 @@ func repositoryURL(repo domain.Repository) string {
 		Host:   "github.com",
 		Path:   "/" + repo.Owner + "/" + repo.Name,
 	}).String()
-}
-
-func checkFailureDetail(cause error) string {
-	if cause == nil {
-		return "No failure detail was reported."
-	}
-	detail := strings.Join(strings.Fields(cause.Error()), " ")
-	if detail == "" {
-		return "No failure detail was reported."
-	}
-	detailRunes := []rune(detail)
-	if len(detailRunes) > maxCheckFailureRunes {
-		detail = string(detailRunes[:maxCheckFailureRunes-3]) + "..."
-	}
-	return detail
 }
 
 func hasBotReviewMarker(

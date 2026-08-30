@@ -11,19 +11,19 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-const (
-	// minimumFenceLength is the shortest Markdown code fence.
-	minimumFenceLength = 3
-	// shortHeadLength is how much of a head SHA the review details show.
-	shortHeadLength = 7
-)
+// shortHeadLength is how much of a head SHA the review details show.
+const shortHeadLength = 7
 
 // Summary is everything one published review reports about itself. The visible
 // comment and the check run both render from this one value, so the two can
 // never disagree.
 type Summary struct {
-	Head              domain.HeadSHA
-	Decision          domain.ReviewDecision
+	Head     domain.HeadSHA
+	Decision domain.ReviewDecision
+	// Blocking states what a requesting-changes verdict is waiting on, one
+	// entry per cause. A block that names nothing reads as a silent repeat, so
+	// a blocking verdict always carries at least one entry here.
+	Blocking          []string
 	Models            []string
 	Duration          time.Duration
 	FilesReviewed     int
@@ -97,12 +97,57 @@ func RenderDetails(summary Summary) string {
 
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(summary Summary) string {
-	return strings.Join([]string{
-		"## Review",
-		summary.Verdict(),
+	parts := []string{"## Review", summary.Verdict()}
+	if blocking := renderBlocking(summary.Blocking); blocking != "" {
+		parts = append(parts, blocking)
+	}
+	parts = append(
+		parts,
 		RenderDetails(summary),
-		marker.Summary() + "\n" + marker.Review(summary.Head),
-	}, "\n\n")
+		marker.Summary()+"\n"+marker.Review(summary.Head),
+	)
+	return strings.Join(parts, "\n\n")
+}
+
+// RenderPartialVerdictBody renders the body of the blocking review a run
+// submits for a head it could not fully read.
+//
+// It carries the partial marker and nothing else. The review marker would tell
+// the next run this head was already reviewed and suppress the run that
+// finishes it; the summary marker would make this the review later runs edit as
+// their visible summary. The partial marker is neither: it exists so the next
+// incomplete run finds this review and rewrites it, rather than leaving another
+// short blocking review beside it.
+//
+// There is no detail table here either. That table belongs to the comment, and
+// a second copy would be a second visible summary drifting away from the first.
+func RenderPartialVerdictBody(summary Summary, pending int) string {
+	parts := []string{
+		"## Review",
+		fmt.Sprintf(
+			"%s of this head could not be reviewed, so it cannot be approved yet. The next push reviews %s.",
+			chunkCount(pending),
+			chunkPronoun(pending),
+		),
+	}
+	if blocking := renderBlocking(summary.Blocking); blocking != "" {
+		parts = append(parts, blocking)
+	}
+	return strings.Join(parts, "\n\n") + "\n\n" + marker.Partial()
+}
+
+// renderBlocking lists what a blocking verdict is waiting on, so a reader can
+// go straight to the thing holding the pull request.
+func renderBlocking(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(reasons)+1)
+	lines = append(lines, "Waiting on:")
+	for _, reason := range reasons {
+		lines = append(lines, "- "+reason)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func formatReached(reached string) string {
@@ -159,37 +204,94 @@ func formatCountAndImportances(findings []domain.Finding) string {
 // finish. It carries the same detail table as a successful review, reporting
 // how far the review got, and it omits the review marker so the next attempt on
 // the same head is not suppressed as already reviewed.
+//
+// Both title and detail are wording this service wrote. The provider's own
+// message never reaches here, so neither is fenced or escaped: there is no
+// untrusted text in this body to contain.
 func RenderFailureBody(summary Summary, title string, detail string) string {
 	summary.Failed = true
 	parts := []string{"## Review", strings.TrimSpace(title)}
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
-		fence := codeFenceFor(trimmedDetail)
-		parts = append(parts, fence+"\n"+trimmedDetail+"\n"+fence)
+		parts = append(parts, trimmedDetail)
 	}
 	parts = append(parts, RenderDetails(summary), marker.Summary())
 	return strings.Join(parts, "\n\n")
 }
 
-// codeFenceFor returns a fence longer than any backtick run in the content, so
-// a provider message containing backticks cannot break out of the block.
-func codeFenceFor(content string) string {
-	longestRun := 0
-	currentRun := 0
-	for _, character := range content {
-		if character == '`' {
-			currentRun++
-			if currentRun > longestRun {
-				longestRun = currentRun
-			}
-			continue
+// RenderSkipBody renders the visible notice for a delta the admission gate
+// declined before any model call. It carries no review marker, because the
+// gate never touches a review object and the head it names was never reviewed.
+func RenderSkipBody(reason string) string {
+	return strings.Join([]string{
+		"## Review",
+		"Review skipped: " + reason + ".",
+	}, "\n\n")
+}
+
+// RenderProgressBody renders the visible comment between chunks, while the
+// review is still running.
+//
+// It shares no renderer with the finished summary on purpose. The summary
+// carries the review marker, which means this head was reviewed, and a comment
+// describing an unfinished review must never say that.
+func RenderProgressBody(head domain.HeadSHA, remaining int) string {
+	if remaining == 0 {
+		return strings.Join([]string{
+			"## Review",
+			"Reviewing `" + shortHead(head) + "`. Every chunk has been read.",
+		}, "\n\n")
+	}
+	return strings.Join([]string{
+		"## Review",
+		fmt.Sprintf("Reviewing `%s`. %s still to read.", shortHead(head), chunkCount(remaining)),
+	}, "\n\n")
+}
+
+// RenderIncompleteBody renders the visible comment for a pass that could not
+// read every chunk it owed.
+//
+// It states what is left and that the next push covers it, and it carries no
+// review marker for the same reason the progress body carries none. reason is
+// this service's own wording for what went wrong; the provider's own sentence
+// never reaches here, because a pull request comment is public and permanent.
+//
+// The table reports coverage rather than a stage. This run reached the end and
+// published a verdict, so there is no stage it stopped at, and a chunk nobody
+// read is exactly what the coverage row is for.
+func RenderIncompleteBody(summary Summary, pending int, reason string, detail string) string {
+	parts := []string{
+		"## Review",
+		fmt.Sprintf(
+			"%s could not be reviewed on `%s`. The next push reviews %s.",
+			chunkCount(pending),
+			shortHead(summary.Head),
+			chunkPronoun(pending),
+		),
+	}
+	for _, note := range []string{reason, renderBlocking(summary.Blocking), detail} {
+		if trimmed := strings.TrimSpace(note); trimmed != "" {
+			parts = append(parts, trimmed)
 		}
-		currentRun = 0
 	}
-	fenceLength := minimumFenceLength
-	if longestRun >= fenceLength {
-		fenceLength = longestRun + 1
+	parts = append(parts, RenderDetails(summary))
+	return strings.Join(parts, "\n\n")
+}
+
+// chunkCount names a number of chunks without the plural mismatch a bare
+// count leaves in a sentence a person reads.
+func chunkCount(count int) string {
+	if count == 1 {
+		return "1 chunk"
 	}
-	return strings.Repeat("`", fenceLength)
+	return fmt.Sprintf("%d chunks", count)
+}
+
+// chunkPronoun matches chunkCount, so the sentence around it agrees.
+func chunkPronoun(count int) string {
+	if count == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // RenderInline renders anchored findings as GitHub inline review comments.

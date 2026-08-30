@@ -573,7 +573,10 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 	}
 }
 
-func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
+// The service keeps its one top level comment across a second run on a new
+// head, updating it in place, while the reply endpoint stays untouched
+// because nothing in this pipeline threads a reply onto another comment.
+func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{
@@ -619,6 +622,20 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 
 	fixture.waitForClydeCalls(t, 3)
 	fixture.waitForSubmitReviews(t, 2)
+	// The comment is rewritten after the review is submitted, and again at every
+	// chunk checkpoint before it, so waiting on the review or on an update count
+	// races the rewrite this test reads. Wait for the state it asserts.
+	fixture.waitForSummaryHead(t, testCorrectedHead)
+	// The second run's summary comment names the first run's head, so the
+	// second run must have asked GitHub to compare that range rather than
+	// listing the whole pull request again.
+	if fixture.githubState.comparedRanges() < 1 {
+		t.Fatalf("compare range fetches = %d, want at least 1", fixture.githubState.comparedRanges())
+	}
+	if fixture.githubState.listedFilePages() != 0 {
+		t.Fatalf("full file list page fetches = %d, want 0: the second run must not list the whole pull request again",
+			fixture.githubState.listedFilePages())
+	}
 	secondReview := fixture.githubState.lastSubmitReview()
 	if secondReview["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
 		t.Fatalf("second review body = %q, want marker only", secondReview["body"])
@@ -634,6 +651,25 @@ func TestEndToEndNeverCallsIssueCommentOrReplyEndpoints(t *testing.T) {
 	)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
+	}
+	if fixture.githubState.issueCommentCount() != 1 {
+		t.Fatalf("issue comments = %d, want the one summary comment kept across both runs",
+			fixture.githubState.issueCommentCount())
+	}
+	if fixture.githubState.issueCommentUpdateCount() < 1 {
+		t.Fatalf("issue comment updates = %d, want the second run to update it in place",
+			fixture.githubState.issueCommentUpdateCount())
+	}
+	summaryBody := fixture.githubState.summaryCommentBody()
+	state, ok := marker.DecodeState(summaryBody)
+	if !ok {
+		t.Fatalf("summary comment body = %q, want a decodable state marker", summaryBody)
+	}
+	if state.LastReviewed != domain.HeadSHA(testCorrectedHead) {
+		t.Fatalf("last reviewed = %q, want %q", state.LastReviewed, testCorrectedHead)
+	}
+	if state.Status != marker.StateDone {
+		t.Fatalf("status = %q, want %q", state.Status, marker.StateDone)
 	}
 }
 
@@ -928,22 +964,25 @@ func wireAppFixture(
 	}
 
 	cfg := config.Config{
-		Port:                      "0",
-		ReviewTimeout:             10 * time.Minute,
-		ReviewWorkers:             4,
-		ReviewModel:               testReviewModel,
-		MinimumImportance:         testMinimumImportance,
-		MaximumUnresolvedComments: 100,
-		GitHubAppID:               12345,
-		GitHubPrivateKey:          privateKey,                // gitleaks:allow
-		GitHubWebhookSecret:       []byte(testWebhookSecret), // gitleaks:allow
-		GitHubBotLogin:            testBotLogin,
-		GitHubAPIBaseURL:          apiURL,
-		GitHubGraphQLURL:          graphqlURL,
-		ClydeBaseURL:              clydeURL,
-		ClydeAPIKey:               "fixture-clyde-key", // gitleaks:allow
-		CFAccessClientID:          "fixture-cf-id",     // gitleaks:allow
-		CFAccessClientSecret:      "fixture-cf-secret", // gitleaks:allow
+		Port:          "0",
+		ReviewWorkers: 4,
+		ReviewModel:   testReviewModel,
+		// Generous enough that no fixture diff, including the 101 file
+		// pagination fixture, trips the admission gate under test here.
+		ReviewMaxFiles:       1000,
+		ReviewMaxChunks:      1000,
+		ReviewChunkTimeout:   time.Minute,
+		MinimumImportance:    testMinimumImportance,
+		GitHubAppID:          12345,
+		GitHubPrivateKey:     privateKey,                // gitleaks:allow
+		GitHubWebhookSecret:  []byte(testWebhookSecret), // gitleaks:allow
+		GitHubBotLogin:       testBotLogin,
+		GitHubAPIBaseURL:     apiURL,
+		GitHubGraphQLURL:     graphqlURL,
+		ClydeBaseURL:         clydeURL,
+		ClydeAPIKey:          "fixture-clyde-key", // gitleaks:allow
+		CFAccessClientID:     "fixture-cf-id",     // gitleaks:allow
+		CFAccessClientSecret: "fixture-cf-secret", // gitleaks:allow
 	}
 
 	// Wrapped in correlation.SlogHandler to match the production handler
@@ -1077,6 +1116,22 @@ func (fixture *appFixture) waitForSubmitReviews(t *testing.T, count int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("submit review count = %d, want >= %d", fixture.githubState.submitReviewCount(), count)
+}
+
+// waitForSummaryHead waits until the durable state on the summary comment names
+// the given commit, which is the last thing a completed run writes.
+func (fixture *appFixture) waitForSummaryHead(t *testing.T, head string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		state, ok := marker.DecodeState(fixture.githubState.summaryCommentBody())
+		if ok && state.LastReviewed == domain.HeadSHA(head) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("summary comment = %q, want the state to name %q",
+		fixture.githubState.summaryCommentBody(), head)
 }
 
 func (fixture *appFixture) waitForResolveCalls(t *testing.T, count int) {
@@ -1342,8 +1397,11 @@ type githubServerState struct {
 	pullRequestReads     int32
 	forbiddenHits        int32
 	filePageFetches      int32
+	comparePageFetches   int32
 	threadPageFetches    int32
 	requests             int32
+	issueComments        []map[string]any
+	issueCommentUpdates  int32
 }
 
 func newGitHubServerState(head string) *githubServerState {
@@ -1441,6 +1499,75 @@ func (state *githubServerState) handleCreateReviewComment(
 	})
 }
 
+func (state *githubServerState) handleListIssueComments(writer http.ResponseWriter) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	writeJSON(writer, http.StatusOK, state.issueComments)
+}
+
+func (state *githubServerState) handleCreateIssueComment(writer http.ResponseWriter, request *http.Request) {
+	body, err := readJSONBody(request)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	created := map[string]any{
+		"id":   float64(2000 + len(state.issueComments)),
+		"body": body["body"],
+		"user": map[string]any{"login": testBotLogin},
+	}
+	state.issueComments = append(state.issueComments, created)
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+func (state *githubServerState) handleUpdateIssueComment(writer http.ResponseWriter, request *http.Request) {
+	body, err := readJSONBody(request)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	idText := strings.TrimPrefix(request.URL.Path, fmt.Sprintf("/repos/%s/%s/issues/comments/", testRepoOwner, testRepoName))
+	var updated map[string]any
+	for index, item := range state.issueComments {
+		if fmt.Sprintf("%.0f", item["id"]) != idText {
+			continue
+		}
+		item["body"] = body["body"]
+		state.issueComments[index] = item
+		updated = item
+	}
+	atomic.AddInt32(&state.issueCommentUpdates, 1)
+	writeJSON(writer, http.StatusOK, updated)
+}
+
+// issueCommentCount reports how many top level comments the service has
+// created, which must stay one across repeat runs.
+func (state *githubServerState) issueCommentCount() int {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return len(state.issueComments)
+}
+
+func (state *githubServerState) issueCommentUpdateCount() int32 {
+	return atomic.LoadInt32(&state.issueCommentUpdates)
+}
+
+// summaryCommentBody returns the body of the service's one top level
+// comment, the durable state marker included.
+func (state *githubServerState) summaryCommentBody() string {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if len(state.issueComments) == 0 {
+		return ""
+	}
+	body, _ := state.issueComments[len(state.issueComments)-1]["body"].(string)
+	return body
+}
+
 // streamedComments returns every inline comment that reached the pull request
 // while the review ran.
 func (state *githubServerState) streamedCommentBodies() []map[string]any {
@@ -1531,6 +1658,10 @@ func (state *githubServerState) listedFilePages() int32 {
 	return atomic.LoadInt32(&state.filePageFetches)
 }
 
+func (state *githubServerState) comparedRanges() int32 {
+	return atomic.LoadInt32(&state.comparePageFetches)
+}
+
 func (state *githubServerState) listedThreadPages() int32 {
 	return atomic.LoadInt32(&state.threadPageFetches)
 }
@@ -1607,6 +1738,23 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		return
 	}
 
+	// The service's one top level comment lives under the issue comments
+	// endpoint, distinct from the inline review comments matched below.
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/issues/") && strings.HasSuffix(request.URL.Path, "/comments") {
+		state.handleListIssueComments(writer)
+		return
+	}
+
+	if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/issues/") && strings.HasSuffix(request.URL.Path, "/comments") {
+		state.handleCreateIssueComment(writer, request)
+		return
+	}
+
+	if request.Method == http.MethodPatch && strings.Contains(request.URL.Path, "/issues/comments/") {
+		state.handleUpdateIssueComment(writer, request)
+		return
+	}
+
 	// Findings post one at a time as their chunks answer, so this endpoint
 	// carries every inline comment a review produces.
 	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/comments") {
@@ -1641,6 +1789,7 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	}
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/compare/") {
+		atomic.AddInt32(&state.comparePageFetches, 1)
 		state.mu.Lock()
 		files := state.compareFiles
 		state.mu.Unlock()
@@ -1829,6 +1978,15 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 		state.mu.Lock()
 		state.resolveCalls = append(state.resolveCalls, threadID)
 		state.lastResolveID = threadID
+		// Resolving a thread on GitHub is durable: a later read of the same
+		// thread reports it resolved. The verdict is computed from that read,
+		// so a fixture that only counted the call would keep blocking on a
+		// thread the run had already closed.
+		for _, node := range state.threads {
+			if node["id"] == threadID {
+				node["isResolved"] = true
+			}
+		}
 		state.mu.Unlock()
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"data": map[string]any{
@@ -2034,10 +2192,6 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 }
 
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
-	if strings.Contains(request.URL.Path, "/issues/comments") {
-		http.Error(writer, "issue comments forbidden", http.StatusForbidden)
-		return true
-	}
 	if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
 		http.Error(writer, "replies forbidden", http.StatusForbidden)
 		return true
