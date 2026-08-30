@@ -42,7 +42,9 @@ no prompt outgrows the model's context.
    reloaded and compared with the commit that was analyzed, because a push
    arriving mid run would otherwise receive an approval earned by the previous
    commit. When the head moved, the run submits no verdict and leaves the work
-   to the run that push triggers.
+   to the run that push triggers. The verdict itself names the analyzed commit,
+   so a push landing between the check and the write cannot leave an approval
+   attached to a commit nobody reviewed.
 6. **A block always says what is holding it.** When the verdict requests
    changes, the top level comment names the open threads it is waiting on. A
    run that finds nothing new still blocks while an earlier thread is
@@ -51,7 +53,16 @@ no prompt outgrows the model's context.
    no reader can tell from any of them that one unresolved thread is the only
    cause.
 7. **A failed run never touches review state.** It turns the check red with
-   the cause and writes the cause into the top level comment.
+   the cause and writes the cause into the top level comment. What reaches the
+   comment is a stable sanitized message, never the provider's raw error, which
+   can carry internal endpoints, request data, or credentials. The raw cause
+   goes to the logs, which are private and already retrievable by run
+   identifier.
+8. **Every write to the top level comment carries the state marker**, including
+   failure and skip notices. The marker is how the next run finds the comment.
+   A body written without it makes the next run miss the comment and create a
+   second one, which breaks the one comment guarantee at exactly the moment
+   something has already gone wrong.
 
 ## Durable state, all on the pull request
 
