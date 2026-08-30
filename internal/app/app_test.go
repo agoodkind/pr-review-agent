@@ -2001,15 +2001,22 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 		return
 	}
 
+	// The nodes are copied under the lock because a concurrent resolve mutates
+	// them in place. Encoding the shared maps after unlocking is a map read
+	// racing a map write, which the runtime escalates to a crash.
 	state.mu.Lock()
-	threads := state.threads
-	threadPages := state.threadPages
+	threads := copyThreadNodes(state.threads)
+	threadPageCount := len(state.threadPages)
 	threadPageIndex := state.threadPageIndex
+	var page []map[string]any
+	if threadPageIndex < threadPageCount {
+		page = copyThreadNodes(state.threadPages[threadPageIndex])
+	}
 	state.mu.Unlock()
 
-	if len(threadPages) > 0 {
+	if threadPageCount > 0 {
 		atomic.AddInt32(&state.threadPageFetches, 1)
-		if threadPageIndex >= len(threadPages) {
+		if threadPageIndex >= threadPageCount {
 			writeJSON(writer, http.StatusOK, map[string]any{
 				"data": map[string]any{
 					"repository": map[string]any{
@@ -2027,10 +2034,9 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 			})
 			return
 		}
-		page := threadPages[threadPageIndex]
 		state.mu.Lock()
 		state.threadPageIndex++
-		hasNext := state.threadPageIndex < len(threadPages)
+		hasNext := state.threadPageIndex < threadPageCount
 		state.mu.Unlock()
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"data": map[string]any{
@@ -2294,4 +2300,66 @@ func writeCompletionStream(writer http.ResponseWriter, content string) {
 		_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	}
 	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+}
+
+// The fixture serves review threads the way GitHub does, and GitHub serves
+// them while resolutions land. Encoding the shared thread maps outside the
+// lock while a resolve mutates them is a data race that go's map runtime
+// escalates to a crash, so it would surface as a mystery CI failure rather
+// than a soft assertion.
+func TestFixtureServesThreadsWhileResolutionsLand(t *testing.T) {
+	state := &githubServerState{
+		threads: []map[string]any{
+			{"id": "thread-1", "isResolved": false, "comments": map[string]any{"nodes": []map[string]any{}}},
+			{"id": "thread-2", "isResolved": false, "comments": map[string]any{"nodes": []map[string]any{}}},
+		},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		state.handleGraphQL(writer, request)
+	}))
+	t.Cleanup(server.Close)
+
+	listBody := []byte(`{"query":"query reviewThreads"}`)
+	resolveBody := []byte(`{"query":"mutation resolveReviewThread","variables":{"threadID":"thread-1"}}`)
+
+	var group sync.WaitGroup
+	for range 8 {
+		group.Add(2)
+		go func() {
+			defer group.Done()
+			for range 25 {
+				response, err := http.Post(server.URL, "application/json", bytes.NewReader(listBody))
+				if err == nil {
+					_, _ = io.Copy(io.Discard, response.Body)
+					_ = response.Body.Close()
+				}
+			}
+		}()
+		go func() {
+			defer group.Done()
+			for range 25 {
+				response, err := http.Post(server.URL, "application/json", bytes.NewReader(resolveBody))
+				if err == nil {
+					_, _ = io.Copy(io.Discard, response.Body)
+					_ = response.Body.Close()
+				}
+			}
+		}()
+	}
+	group.Wait()
+}
+
+// copyThreadNodes deep copies thread nodes one level down, which is the level
+// the resolve mutation writes. The nested comment nodes are never mutated
+// after construction, so sharing them is safe.
+func copyThreadNodes(nodes []map[string]any) []map[string]any {
+	copied := make([]map[string]any, 0, len(nodes))
+	for _, node := range nodes {
+		fresh := make(map[string]any, len(node))
+		for key, value := range node {
+			fresh[key] = value
+		}
+		copied = append(copied, fresh)
+	}
+	return copied
 }
