@@ -11,6 +11,7 @@ import (
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -427,10 +428,53 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
+	startLine, endLine := remapAnchor(changedFiles, normalizedPath, thread.Finding)
 	return threadContext{
-		currentContent: extractAnchorWindow(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine),
+		currentContent: extractAnchorWindow(fileBytes, startLine, endLine),
 		compareText:    formatCompareForPath(changedFiles, normalizedPath),
 	}, threadContextPresent
+}
+
+// remapAnchor moves the finding's coordinates from the head it was written
+// against to the current head.
+//
+// A window around the stale line shows the fix only while the shift stays
+// inside the radius, and nothing bounds the shift: a commit that inserts twenty
+// lines above the anchor moves the code the reconciler needs to see out of view,
+// and the model then reads unrelated code and keeps a fixed finding open. The
+// compare patch is already loaded here and records every shift exactly, so the
+// remapping needs no extra call. A file the patch does not cover, or a patch
+// this cannot read, keeps the coordinates it had.
+func remapAnchor(
+	changedFiles []githubapp.ChangedFile,
+	normalizedPath string,
+	finding domain.Finding,
+) (int, int) {
+	patch, ok := patchForPath(changedFiles, normalizedPath)
+	if !ok {
+		return finding.StartLine, finding.EndLine
+	}
+	startLine, startMapped := diff.MapLineToNewSide(patch, finding.StartLine)
+	endLine, endMapped := diff.MapLineToNewSide(patch, finding.EndLine)
+	if !startMapped || !endMapped || endLine < startLine {
+		return finding.StartLine, finding.EndLine
+	}
+	return startLine, endLine
+}
+
+// patchForPath returns the compare patch for one file, under the name it had at
+// the finding head or the name it carries now.
+func patchForPath(changedFiles []githubapp.ChangedFile, normalizedPath string) (string, bool) {
+	for _, file := range changedFiles {
+		if file.Path != normalizedPath && file.PreviousPath != normalizedPath {
+			continue
+		}
+		if !file.PatchPresent || strings.TrimSpace(file.Patch) == "" {
+			return "", false
+		}
+		return file.Patch, true
+	}
+	return "", false
 }
 
 // anchorWindowRadius is the context shown on each side of the anchor. GitHub

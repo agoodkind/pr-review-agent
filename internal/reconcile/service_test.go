@@ -427,9 +427,25 @@ func TestReconcileShowsFixedCodeAfterInsertionsAboveAnchor(t *testing.T) {
 
 	// GitHub reports line: null for outdated threads, so the decoded thread
 	// carries the original head's coordinates (line 2) while the fix now sits
-	// below three inserted lines.
-	currentFile := "line1\nnew line a\nnew line b\nnew line c\nfixed line\nline3"
+	// below thirty inserted lines, at line 32.
+	//
+	// The insertion is deliberately larger than the window radius. A smaller
+	// shift leaves the fix inside the window drawn around the stale line too, so
+	// the assertion below would hold whether or not the coordinates were
+	// remapped, and a remapping regression would pass unnoticed.
+	insertedLines := make([]string, 0, shiftedInsertionCount)
+	patchLines := []string{
+		fmt.Sprintf("@@ -1,3 +1,%d @@", shiftedInsertionCount+3),
+		" line1",
+	}
+	for index := range shiftedInsertionCount {
+		inserted := fmt.Sprintf("new line %d", index)
+		insertedLines = append(insertedLines, inserted)
+		patchLines = append(patchLines, "+"+inserted)
+	}
+	patchLines = append(patchLines, "-issue line", "+fixed line", " line3")
 
+	currentFile := "line1\n" + strings.Join(insertedLines, "\n") + "\nfixed line\nline3"
 	github := &fakeGitHub{
 		head: domain.HeadSHA(testCurrentHead),
 		threads: []githubapp.ReviewThread{
@@ -441,7 +457,7 @@ func TestReconcileShowsFixedCodeAfterInsertionsAboveAnchor(t *testing.T) {
 		compareFiles: []githubapp.ChangedFile{{
 			Path:         finding.Path,
 			Status:       "modified",
-			Patch:        "@@ -1,3 +1,6 @@\n line1\n+new line a\n+new line b\n+new line c\n-issue line\n+fixed line\n line3\n",
+			Patch:        strings.Join(patchLines, "\n") + "\n",
 			PatchPresent: true,
 		}},
 	}
@@ -464,7 +480,20 @@ func TestReconcileShowsFixedCodeAfterInsertionsAboveAnchor(t *testing.T) {
 	if !strings.Contains(promptCodeSection, "fixed line") {
 		t.Fatalf("current code section misses the shifted fix: %q", promptCodeSection)
 	}
+	// The window drawn around the stale line stops well before the fix, so its
+	// absence is what a coordinate regression would show. Asserting that the
+	// excerpt is not simply the whole file keeps this test honest if the fixture
+	// ever shrinks.
+	if strings.Contains(promptCodeSection, "new line 0") {
+		t.Fatalf("current code section still spans the stale anchor, so it would "+
+			"contain the fix without any remapping: %q", promptCodeSection)
+	}
 }
+
+// shiftedInsertionCount is how many lines the fixture inserts above the anchor.
+// It exceeds the reconciler's window radius, which is what makes the stale
+// window and the remapped window disjoint enough to tell apart.
+const shiftedInsertionCount = 30
 
 // currentCodeSection isolates the current-code excerpt so assertions cannot be
 // satisfied by the diff section of the prompt.
