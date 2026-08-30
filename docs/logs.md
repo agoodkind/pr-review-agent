@@ -26,8 +26,9 @@ permission. The account OAuth token that `wrangler` stores does not carry it, an
 error numbered 10000.
 
 Mint a scoped token from the account token kept at `~/Desktop/cftoken/token.txt`.
-The three permission group identifiers below are Workers Observability Read,
-Workers Scripts Read, and Containers Read.
+It carries one permission group, Workers Observability Read, because that is all
+the queries below use. It also expires on its own after a day, so a skipped or
+failed revocation cannot leave an account wide credential alive indefinitely.
 
 A bearer token passed with `-H` is visible in the process arguments to every
 other user on the host, so pass it through a curl config file instead. Write
@@ -40,7 +41,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$(<token.txt)" > account.conf
 curl -sS --fail-with-body --config account.conf \
     -X POST \
     -H "Content-Type: application/json" \
-    -d '{"name":"pr-agent-observability-read","policies":[{"effect":"allow","permission_groups":[{"id":"66c1ed49f4ed46098b75696a6d4ee3c9"},{"id":"cfd39eebc07c4e3ea849e4b3d2644637"},{"id":"1a71c399035b4950a1bd1466bbe4f420"}],"resources":{"com.cloudflare.api.account.ee7d7ca7d611ef8c2a07885e8362de0c":"*"}}]}' \
+    -d "{\"name\":\"pr-agent-observability-read\",\"expires_on\":\"$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)\",\"policies\":[{\"effect\":\"allow\",\"permission_groups\":[{\"id\":\"66c1ed49f4ed46098b75696a6d4ee3c9\"}],\"resources\":{\"com.cloudflare.api.account.ee7d7ca7d611ef8c2a07885e8362de0c\":\"*\"}}]}" \
     "https://api.cloudflare.com/client/v4/user/tokens" > created.json
 ```
 
@@ -109,15 +110,27 @@ set.
 There is no cursor. Page backwards through time: take the oldest timestamp a
 page returned and make it the next page's `to`. Stop when a page returns zero.
 
+Check the request and the response envelope before trusting that zero. A failed
+call still writes a JSON error body, whose event count reads as zero, which the
+loop would otherwise treat as a clean finish and hand you a partial dump that
+looks complete.
+
 ```bash
 URL="https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query"
 TO=$(( $(date +%s) * 1000 ))
 
 for i in $(seq 1 40); do
     jq -n --argjson to "$TO" '{queryId:"page",timeframe:{from:0,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > req.json
-    curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
-        -X POST -H "Content-Type: application/json" --data @req.json "$URL" > "page-$i.json"
-    N=$(jq '.result.events.events | length' "page-$i.json")
+    if ! curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+        -X POST -H "Content-Type: application/json" --data @req.json "$URL" > "page-$i.json"; then
+        echo "page $i request failed, the dump is incomplete" >&2
+        rm -f "page-$i.json"
+        exit 1
+    fi
+    if ! N=$(jq -er 'select(.success == true) | .result.events.events | arrays | length' "page-$i.json"); then
+        echo "page $i returned no event array, the dump is incomplete" >&2
+        exit 1
+    fi
     echo "page $i: $N events"
     if [[ "$N" -eq 0 ]]; then rm -f "page-$i.json"; break; fi
     TO=$(jq '.result.events.events | min_by(.timestamp).timestamp' "page-$i.json")
