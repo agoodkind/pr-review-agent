@@ -1687,18 +1687,12 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if !ok {
 		t.Fatalf("body = %v, want string", fixture.state.lastSubmitReview["body"])
 	}
-	if !strings.HasPrefix(body, "## Review\n\nNo severe findings.\n\n") {
-		t.Fatalf("body = %q, want the verdict first", body)
-	}
-	// The verdict review is short by design: the detail table lives on the one
-	// top level comment, and a review repeating it rendered as a second near
-	// identical Review box. It must still say its decision and carry the review
-	// marker a later run reads.
-	if strings.Contains(body, "| Model |") {
-		t.Fatalf("body = %q, want no detail table on the verdict review", body)
-	}
-	if _, found := marker.FindReview(body); !found {
-		t.Fatalf("body = %q, want the review marker for the analyzed head", body)
+	// An approving verdict body is the review marker and nothing else. The
+	// approval event carries the meaning and the one top level comment carries
+	// the prose and the table, so any prose here renders a second Review box
+	// saying what the comment above it already said.
+	if body != marker.Review(domain.HeadSHA(testHeadSHA)) {
+		t.Fatalf("approving verdict body = %q, want the review marker alone", body)
 	}
 	commentBody, ok := fixture.state.issueComments[0]["body"].(string)
 	if !ok || !strings.Contains(commentBody, "| Model | `"+testReviewModel+"` |") {

@@ -109,17 +109,37 @@ func RenderBody(summary Summary) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// RenderVerdictBody renders the review that carries the verdict.
+// blockingVerdictLead opens a blocking verdict body. It names the decision in
+// this service's own words rather than reusing the summary's verdict sentence,
+// because a body that repeats the comment is the thing this rendering exists to
+// stop.
+const blockingVerdictLead = "Changes requested."
+
+// RenderVerdictBody renders the body of the review that carries the verdict.
 //
-// It is short on purpose. The full summary, the detail table, and the durable
-// state live on the one top level comment; a verdict review repeating them
-// rendered as a second near identical Review box saying the same thing. What a
-// verdict must never be is empty: one live blocking review carried only an
-// HTML marker, so it named nothing to fix and no edit could satisfy it. This
-// body always states the decision, names what a block is waiting on, and
-// carries the review marker a later run reads to know the head was reviewed.
+// A verdict body must never restate the summary comment. Both used to open with
+// the same "## Review" heading and the same verdict sentence, so one approving
+// run published the identical text twice two seconds apart, and a reader saw two
+// matching Review boxes stacked around the approval event. Dropping the detail
+// table from this body halved the duplication and left the heading and the
+// sentence, which is still a second box saying what the first one said.
+//
+// An approving verdict therefore carries no prose at all. The approval event is
+// itself the message, and the comment above it already holds the summary and the
+// detail. The review marker stays, and is the whole body: hasBotReviewMarker
+// reads it to recognize a head this service has already reviewed, so a fully
+// empty body would blind that gate for every approval. As an HTML comment it
+// renders as nothing, which is the point.
+//
+// A blocking verdict keeps a body. One live blocking review carried only the
+// marker, so it named nothing to fix and no edit could satisfy it. This body
+// states the decision and what the block waits on, and nothing else, because
+// everything else is already in the comment.
 func RenderVerdictBody(summary Summary) string {
-	parts := []string{"## Review", summary.Verdict()}
+	if summary.Decision != domain.ReviewDecisionRequestChanges {
+		return marker.Review(summary.Head)
+	}
+	parts := []string{blockingVerdictLead}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}

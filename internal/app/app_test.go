@@ -407,7 +407,7 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", review["event"])
 	}
-	assertReviewBody(t, review["body"], "No severe findings.", testDefectiveHead)
+	assertVerdictBody(t, review["body"], testDefectiveHead, false)
 	comments, ok := review["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", review["comments"])
@@ -418,6 +418,115 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
+}
+
+// reviewBody returns the body of one submitted review.
+func reviewBody(t *testing.T, review map[string]any) string {
+	t.Helper()
+	body, ok := review["body"].(string)
+	if !ok {
+		t.Fatalf("review body = %v, want string", review["body"])
+	}
+	return body
+}
+
+// One approving run published the identical Review block twice, two seconds
+// apart: once as the summary comment and once as the approving review body.
+// Both opened with the same heading and the same verdict sentence, so the
+// reader saw two matching boxes stacked around the approval event.
+//
+// This counts across both surfaces rather than inspecting one, because the
+// defect is that the pull request carries two of a thing it should carry one of.
+func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-one-box",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForCheckConclusion(t, "success")
+	fixture.waitForSubmitReviews(t, 1)
+
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", review["event"])
+	}
+	comment := fixture.githubState.summaryCommentBody()
+	verdict := reviewBody(t, review)
+
+	headings := strings.Count(comment, "## Review") + strings.Count(verdict, "## Review")
+	if headings != 1 {
+		t.Fatalf("the pull request carries %d Review headings, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
+			headings, comment, verdict)
+	}
+	sentences := strings.Count(comment, "No severe findings.") +
+		strings.Count(verdict, "No severe findings.")
+	if sentences != 1 {
+		t.Fatalf("the pull request states the verdict sentence %d times, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
+			sentences, comment, verdict)
+	}
+	// The one block that survives is the comment's, and the review still carries
+	// the marker a later run reads to know this head was reviewed.
+	if !strings.Contains(comment, "## Review") {
+		t.Fatalf("summary comment = %q, want it to be the surviving Review block", comment)
+	}
+	assertVerdictBody(t, review["body"], testDefectiveHead, false)
+}
+
+// A blocking verdict keeps a body, because a block that names nothing to fix
+// leaves no edit that could satisfy it. It still must not read as a copy of the
+// summary comment.
+func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(domain.Finding{
+			Path:       testFindingPath,
+			StartLine:  3,
+			EndLine:    3,
+			Title:      "Missing validation",
+			Body:       "Validate the webhook payload before enqueue.",
+			Importance: testMinimumImportance,
+		})},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-blocking-body",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
+	}
+	body := reviewBody(t, review)
+
+	if !strings.Contains(body, "Waiting on:") {
+		t.Fatalf("blocking verdict body names nothing to fix: %q", body)
+	}
+	if !strings.Contains(body, testFindingPath+":3") {
+		t.Fatalf("blocking verdict body does not name the thread holding it: %q", body)
+	}
+	if strings.Contains(body, "<summary>Review details</summary>") {
+		t.Fatalf("blocking verdict body repeats the comment's detail table: %q", body)
+	}
+	assertVerdictBody(t, review["body"], testDefectiveHead, true)
 }
 
 func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
@@ -741,12 +850,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	// Every verdict review states its decision. The old behavior submitted a
 	// marker-only body once a summary review existed, and that body blocked a
 	// live pull request while naming nothing to fix.
-	assertReviewBody(
-		t,
-		fixture.githubState.lastSubmitReview()["body"],
-		"Severe findings are listed inline.",
-		testCorrectedHead,
-	)
+	assertVerdictBody(t, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -909,7 +1013,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if approval["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("second event = %v, want APPROVE", approval["event"])
 	}
-	assertReviewBody(t, approval["body"], "No severe findings.", testCorrectedHead)
+	assertVerdictBody(t, approval["body"], testCorrectedHead, false)
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
 		t.Fatalf("resolve count = %d, want 1", fixture.githubState.resolveCallCount())
@@ -2423,24 +2527,50 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(writer).Encode(payload)
 }
 
-// assertReviewBody checks the verdict review states its decision, never
-// repeats the detail table the comment carries, is never empty, and keeps the
-// review marker the service reads back. One live blocking review carried only
-// an HTML marker, so it named nothing to fix and no edit could satisfy it.
-func assertReviewBody(t *testing.T, value any, verdict string, head string) {
+// summaryProse is the wording that belongs to the one top level comment. A
+// verdict review body carrying any of it puts a second identical Review box on
+// the page, which is what a reader saw twice two seconds apart.
+var summaryProse = []string{
+	"## Review",
+	"No severe findings.",
+	"Severe findings are listed inline.",
+	"<summary>Review details</summary>",
+}
+
+// assertVerdictBody checks one verdict review body against the rule that it
+// never restates the summary comment, and keeps the review marker the service
+// reads back to recognize a head it already reviewed.
+//
+// An approving verdict is the marker alone, because the approval event is the
+// message and everything else is in the comment. A blocking one adds its
+// decision and what it waits on, because a block naming nothing to fix leaves
+// no edit that could satisfy it.
+func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	t.Helper()
 	body, ok := value.(string)
 	if !ok {
 		t.Fatalf("body = %v, want string", value)
 	}
-	if !strings.HasPrefix(body, "## Review\n\n"+verdict+"\n\n") {
-		t.Fatalf("body = %q, want the verdict %q first", body, verdict)
-	}
-	if strings.Contains(body, "<summary>Review details</summary>") {
-		t.Fatalf("body = %q, want no detail table: it lives on the one top level comment", body)
+	for _, prose := range summaryProse {
+		if strings.Contains(body, prose) {
+			t.Fatalf("verdict body repeats the summary comment's %q, so the reader sees two Review boxes: %q",
+				prose, body)
+		}
 	}
 	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
 		t.Fatalf("body = %q, want the review marker for %s", body, head)
+	}
+	if !blocking {
+		if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head)) {
+			t.Fatalf("approving verdict body carries visible prose beside the marker: %q", body)
+		}
+		return
+	}
+	if !strings.Contains(body, "Changes requested.") {
+		t.Fatalf("blocking verdict body does not state its decision: %q", body)
+	}
+	if !strings.Contains(body, "Waiting on:") {
+		t.Fatalf("blocking verdict body names nothing to fix, so no edit can satisfy it: %q", body)
 	}
 }
 
