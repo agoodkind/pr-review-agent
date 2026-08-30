@@ -63,6 +63,12 @@ no prompt outgrows the model's context.
    A body written without it makes the next run miss the comment and create a
    second one, which breaks the one comment guarantee at exactly the moment
    something has already gone wrong.
+9. **Only the app's own comment counts as state.** The lookup matches on
+   authenticated author identity first and the marker second. A marker alone is
+   not a credential: anyone who can comment on a pull request can write one, and
+   a forged marker naming a later commit would make the service skip the very
+   changes it was asked to review. That is a review bypass, so authorship is the
+   gate and the marker only locates the comment behind it.
 
 ## Durable state, all on the pull request
 
