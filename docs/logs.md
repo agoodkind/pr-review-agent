@@ -115,33 +115,46 @@ call still writes a JSON error body, whose event count reads as zero, which the
 loop would otherwise treat as a clean finish and hand you a partial dump that
 looks complete.
 
+Two more ways a dump ends up quietly partial. A fixed page count stops on a full
+page and looks like a finish, so the loop below runs until a page is empty and
+fails loudly if it ever hits its safety cap. Leftover page files from an earlier
+run merge into a later shorter one, so each run writes into its own directory.
+
 ```bash
 URL="https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query"
+DUMP=$(mktemp -d "${TMPDIR:-/tmp}/pr-agent-logs.XXXXXX")
 TO=$(( $(date +%s) * 1000 ))
+MAX_PAGES=200
+i=0
 
-for i in $(seq 1 40); do
-    jq -n --argjson to "$TO" '{queryId:"page",timeframe:{from:0,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > req.json
-    if ! curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
-        -X POST -H "Content-Type: application/json" --data @req.json "$URL" > "page-$i.json"; then
-        echo "page $i request failed, the dump is incomplete" >&2
-        rm -f "page-$i.json"
+while true; do
+    i=$(( i + 1 ))
+    if [[ "$i" -gt "$MAX_PAGES" ]]; then
+        echo "hit the $MAX_PAGES page safety cap before exhausting the data, the dump is incomplete" >&2
         exit 1
     fi
-    if ! N=$(jq -er 'select(.success == true) | .result.events.events | arrays | length' "page-$i.json"); then
+    jq -n --argjson to "$TO" '{queryId:"page",timeframe:{from:0,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > "$DUMP/req.json"
+    if ! curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+        -X POST -H "Content-Type: application/json" --data @"$DUMP/req.json" "$URL" > "$DUMP/page-$i.json"; then
+        echo "page $i request failed, the dump is incomplete" >&2
+        exit 1
+    fi
+    if ! N=$(jq -er 'select(.success == true) | .result.events.events | arrays | length' "$DUMP/page-$i.json"); then
         echo "page $i returned no event array, the dump is incomplete" >&2
         exit 1
     fi
     echo "page $i: $N events"
-    if [[ "$N" -eq 0 ]]; then rm -f "page-$i.json"; break; fi
-    TO=$(jq '.result.events.events | min_by(.timestamp).timestamp' "page-$i.json")
+    if [[ "$N" -eq 0 ]]; then rm -f "$DUMP/page-$i.json"; break; fi
+    TO=$(jq '.result.events.events | min_by(.timestamp).timestamp' "$DUMP/page-$i.json")
 done
+echo "pages are in $DUMP"
 ```
 
 Merge the pages into one array. The boundary timestamp repeats across pages, so
 deduplicate on the record identifier:
 
 ```bash
-jq -s '[.[].result.events.events[]] | unique_by(.timestamp, .["$metadata"].id)' page-*.json > all-events.json
+jq -s '[.[].result.events.events[]] | unique_by(.timestamp, .["$metadata"].id)' "$DUMP"/page-*.json > all-events.json
 jq 'length' all-events.json
 jq -r '(min_by(.timestamp).timestamp/1000|todate) + " to " + (max_by(.timestamp).timestamp/1000|todate)' all-events.json
 ```
