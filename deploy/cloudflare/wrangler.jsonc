@@ -36,6 +36,10 @@
       {
         "name": "PR_AGENT",
         "class_name": "PrAgentContainer"
+      },
+      {
+        "name": "REPLAY_QUEUE",
+        "class_name": "WebhookReplayQueue"
       }
     ]
   },
@@ -43,6 +47,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["PrAgentContainer"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["WebhookReplayQueue"]
     }
   ]
 }
