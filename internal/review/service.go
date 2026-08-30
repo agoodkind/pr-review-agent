@@ -608,7 +608,7 @@ func (service *Service) publish(
 		Failed:            false,
 	}
 	if len(state.Pending) > 0 {
-		return service.concludeIncomplete(ctx, job, checkRun, reviews, state, pass, summary, progress)
+		return service.concludeIncomplete(ctx, job, checkRun, state, pass, summary, progress)
 	}
 	return service.publishVerdict(ctx, job, checkRun, reviews, summary, state, progress)
 }

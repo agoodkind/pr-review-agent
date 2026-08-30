@@ -541,37 +541,31 @@ func TestAModelRefusalIsNotRetriedAndLeavesItsChunkPending(t *testing.T) {
 	if state := decodedSummaryState(t, fixture); len(state.Pending) != 1 {
 		t.Fatalf("pending = %v, want the refused chunk", state.Pending)
 	}
-	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+	assertNoVerdictOverAnUnreadHead(t, fixture)
 }
 
-// assertBlockingVerdictOverAnUnreadHead proves a run that could not read the
-// whole head blocks it and says why, and that the verdict it submits carries no
-// review marker.
+// assertNoVerdictOverAnUnreadHead proves a run that could not read the
+// whole head touched no review object and still held the merge gate.
 //
-// Withholding the verdict is what leaves the previous run's approval standing
-// over a head nobody finished reading, and a review marker here would tell the
-// next run this head was already reviewed and suppress the run that finishes it.
-func assertBlockingVerdictOverAnUnreadHead(t *testing.T, fixture *serviceFixture) {
+// A failure to read is not a finding. An earlier design submitted a blocking
+// review here, and a model provider outage then blocked every open pull
+// request with requested changes nobody had requested. The check concluding
+// without passing is what holds the gate; the review objects stay untouched so
+// the pull request carries no judgment the run never earned.
+func assertNoVerdictOverAnUnreadHead(t *testing.T, fixture *serviceFixture) {
 	t.Helper()
-	if fixture.state.lastSubmitReview == nil {
-		t.Fatal("no verdict was submitted, want a blocking one over a head that was not fully read")
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("a verdict was submitted over a head that was not fully read: %v",
+			fixture.state.lastSubmitReview)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastUpdateReview != nil {
+		t.Fatalf("a review was updated over a head that was not fully read: %v",
+			fixture.state.lastUpdateReview)
 	}
-	body, ok := fixture.state.lastSubmitReview["body"].(string)
-	if !ok {
-		t.Fatalf("verdict body = %v, want a string", fixture.state.lastSubmitReview["body"])
+	if len(fixture.state.dismissals) != 0 {
+		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
 	}
-	if !strings.Contains(body, "could not be reviewed") {
-		t.Fatalf("verdict body does not say what is holding it:\n%s", body)
-	}
-	if _, found := marker.FindReview(body); found {
-		t.Fatalf("verdict body carries a review marker, which suppresses the run that finishes the head:\n%s", body)
-	}
-	if marker.HasSummary(body) {
-		t.Fatalf("verdict body carries the summary marker, which makes it a second visible summary:\n%s", body)
-	}
+	assertDeclinedCheckDoesNotPass(t, fixture)
 }
 
 // twoChunkSameFileCollector returns one file whose two hunks are each large
@@ -710,7 +704,7 @@ func TestAnInvalidModelResultLeavesItsChunkPending(t *testing.T) {
 	if state := decodedSummaryState(t, fixture); len(state.Pending) != 1 {
 		t.Fatalf("pending = %v, want the chunk whose answer was rejected", state.Pending)
 	}
-	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+	assertNoVerdictOverAnUnreadHead(t, fixture)
 }
 
 // sequenceModel answers a fixed sequence of results, one per chunk, in the
@@ -802,7 +796,7 @@ func TestEveryChunkFailingLeavesEveryChunkPendingAndBlocksTheHead(t *testing.T) 
 	if state.LastReviewed != "" {
 		t.Fatalf("last reviewed = %q, want no checkpoint at all", state.LastReviewed)
 	}
-	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+	assertNoVerdictOverAnUnreadHead(t, fixture)
 	// A head with unread chunks must not merge either. GitHub counts a check
 	// concluded neutral as satisfying the gate exactly as it counts one
 	// concluded skipped, so this asserts the class rather than one string.
@@ -1100,7 +1094,7 @@ func TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost(t *testing.T) {
 	}
 	// The defect is real whether or not its comment reached the page, so the
 	// run must never approve over it.
-	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+	assertNoVerdictOverAnUnreadHead(t, fixture)
 }
 
 // A comment GitHub answered and refused is not a transient failure. Retrying it
@@ -1241,7 +1235,7 @@ func TestAFailedChunkStaysPendingAndTheNextRunFinishesIt(t *testing.T) {
 	if first.Status != marker.StateReviewing {
 		t.Fatalf("status = %q, want %q", first.Status, marker.StateReviewing)
 	}
-	assertBlockingVerdictOverAnUnreadHead(t, fixture)
+	assertNoVerdictOverAnUnreadHead(t, fixture)
 	// A head with unread chunks must not merge either. GitHub counts a check
 	// concluded neutral as satisfying the gate exactly as it counts one
 	// concluded skipped, so this asserts the class rather than one string.
@@ -1425,10 +1419,13 @@ func TestAnAlreadyReadChunkIsNotAnalyzedTwice(t *testing.T) {
 	}
 }
 
-// Two incomplete runs must leave one blocking review, not one each. A reader
-// facing a stack of short verdicts cannot tell which still describes the pull
-// request.
-func TestTwoIncompleteRunsLeaveOneBlockingReview(t *testing.T) {
+// An incomplete run is not a judgment, so it must leave no review object at
+// all. An earlier design submitted a blocking review here, and a model
+// provider outage then turned every open pull request into a wall of requested
+// changes nobody had requested, each indistinguishable from a human reviewer
+// objecting. The merge gate does not need the review: the check concludes
+// without passing.
+func TestAnIncompleteRunTouchesNoReviewObject(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         twoChunkCollector{},
 		minimumImportance: 9,
@@ -1438,32 +1435,26 @@ func TestTwoIncompleteRunsLeaveOneBlockingReview(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
-	if len(fixture.state.submittedReviews) != 1 {
-		t.Fatalf("submitted reviews after the first run = %d, want 1", len(fixture.state.submittedReviews))
-	}
-	if fixture.state.lastUpdateReview != nil {
-		t.Fatalf("updated review = %v, want none on the first run", fixture.state.lastUpdateReview)
-	}
-
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 
-	if len(fixture.state.submittedReviews) != 1 {
-		t.Fatalf("submitted reviews = %d, want the first one rewritten rather than a second left beside it",
+	if len(fixture.state.submittedReviews) != 0 {
+		t.Fatalf("submitted reviews = %d, want none: a failure to read is not a finding",
 			len(fixture.state.submittedReviews))
 	}
-	if fixture.state.lastUpdateReview == nil {
-		t.Fatal("the second run submitted a new review instead of rewriting its own standing verdict")
+	if fixture.state.lastUpdateReview != nil {
+		t.Fatalf("updated review = %v, want none", fixture.state.lastUpdateReview)
 	}
-	body, ok := fixture.state.lastUpdateReview["body"].(string)
-	if !ok || !marker.HasPartial(body) {
-		t.Fatalf("rewritten body = %v, want the partial verdict marker", fixture.state.lastUpdateReview["body"])
+	if len(fixture.state.dismissals) != 0 {
+		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
 	}
-	// An update changes a body and not a state, so the standing request for
-	// changes is still standing.
-	if !strings.Contains(body, "could not be reviewed") {
-		t.Fatalf("rewritten body does not say what is holding it:\n%s", body)
+	// The gate still holds and the reader still learns what happened: the one
+	// comment names the owed work, and the check does not pass.
+	assertDeclinedCheckDoesNotPass(t, fixture)
+	comments := bodiesOf(fixture.state.issueComments)
+	if len(comments) != 1 || !strings.Contains(comments[0], "could not be reviewed") {
+		t.Fatalf("comments = %v, want exactly one naming the unread chunks", comments)
 	}
 }
 

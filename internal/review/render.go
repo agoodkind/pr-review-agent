@@ -109,33 +109,6 @@ func RenderBody(summary Summary) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// RenderPartialVerdictBody renders the body of the blocking review a run
-// submits for a head it could not fully read.
-//
-// It carries the partial marker and nothing else. The review marker would tell
-// the next run this head was already reviewed and suppress the run that
-// finishes it; the summary marker would make this the review later runs edit as
-// their visible summary. The partial marker is neither: it exists so the next
-// incomplete run finds this review and rewrites it, rather than leaving another
-// short blocking review beside it.
-//
-// There is no detail table here either. That table belongs to the comment, and
-// a second copy would be a second visible summary drifting away from the first.
-func RenderPartialVerdictBody(summary Summary, pending int) string {
-	parts := []string{
-		"## Review",
-		fmt.Sprintf(
-			"%s of this head could not be reviewed, so it cannot be approved yet. The next push reviews %s.",
-			chunkCount(pending),
-			chunkPronoun(pending),
-		),
-	}
-	if blocking := renderBlocking(summary.Blocking); blocking != "" {
-		parts = append(parts, blocking)
-	}
-	return strings.Join(parts, "\n\n") + "\n\n" + marker.Partial()
-}
-
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can
 // go straight to the thing holding the pull request.
 func renderBlocking(reasons []string) string {

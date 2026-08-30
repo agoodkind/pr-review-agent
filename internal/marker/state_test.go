@@ -164,22 +164,3 @@ func TestStateMarkerWithoutACompletedListStillDecodes(t *testing.T) {
 		t.Fatalf("completed = %v, want none: the older marker recorded none", decoded.Completed)
 	}
 }
-
-// The partial verdict marker is neither of the other two on purpose, so a
-// review carrying it is not mistaken for a reviewed head or for the summary.
-func TestPartialMarkerIsDistinctFromTheReviewAndSummaryMarkers(t *testing.T) {
-	body := "## Review\n\nsomething went unread\n\n" + Partial()
-
-	if !HasPartial(body) {
-		t.Fatalf("HasPartial(%q) = false, want true", body)
-	}
-	if HasSummary(body) {
-		t.Fatal("a partial verdict is not the editable summary")
-	}
-	if _, found := FindReview(body); found {
-		t.Fatal("a partial verdict must not claim the head was reviewed")
-	}
-	if HasPartial("## Review\n\nno severe findings\n\n" + Summary()) {
-		t.Fatal("the summary marker was read as a partial verdict")
-	}
-}

@@ -15,17 +15,9 @@ import (
 )
 
 const (
-	reviewPrefix  = "<!-- pr-review-agent:review:v1 head="
-	findingPrefix = "<!-- pr-review-agent:finding:v1 head="
-	summaryMarker = "<!-- pr-review-agent:summary:v1 -->"
-	// partialMarker names the blocking review a run leaves when it could not
-	// read every chunk. It is deliberately neither the review marker nor the
-	// summary marker: the review marker would say this head was reviewed and
-	// suppress the run that finishes it, and the summary marker would make this
-	// the review later runs edit as their visible summary. This one exists so a
-	// later incomplete run replaces its own last verdict rather than stacking
-	// another short blocking review on the pull request.
-	partialMarker    = "<!-- pr-review-agent:partial:v1 -->"
+	reviewPrefix     = "<!-- pr-review-agent:review:v1 head="
+	findingPrefix    = "<!-- pr-review-agent:finding:v1 head="
+	summaryMarker    = "<!-- pr-review-agent:summary:v1 -->"
 	markerSuffix     = " -->"
 	suggestionPrefix = "```suggestion\n"
 	suggestionSuffix = "\n```"
@@ -71,18 +63,6 @@ func Summary() string {
 // HasSummary reports whether a review owns the editable summary.
 func HasSummary(body string) bool {
 	return strings.Contains(body, summaryMarker)
-}
-
-// Partial returns the marker for the blocking verdict a run leaves behind when
-// it could not read every chunk it owed.
-func Partial() string {
-	return partialMarker
-}
-
-// HasPartial reports whether a review is that verdict, and so the one a later
-// incomplete run replaces rather than repeats.
-func HasPartial(body string) bool {
-	return strings.Contains(body, partialMarker)
 }
 
 // Finding returns the finding marker for one head and finding pair.

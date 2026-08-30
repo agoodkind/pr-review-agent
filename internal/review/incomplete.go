@@ -2,10 +2,12 @@ package review
 
 // This file is what a run that could not read every chunk leaves behind.
 //
-// It is neither a success nor a failure. The run reached the end and knows what
-// it read, so it publishes a verdict and a summary like any other; it just
-// cannot claim the head. The three outputs say so consistently: a blocking
-// review, a comment naming what is still owed, and a check that does not pass.
+// It is neither a success nor a failure, and it is not a judgment. A failure to
+// read is not a finding: the run learned nothing about the code, so it has no
+// grounds to request changes and no grounds to approve. It touches no review
+// object at all. The two outputs that remain say what happened without ruling
+// on the head: the one top level comment names what is still owed, and the
+// check holds the merge gate without passing.
 
 import (
 	"context"
@@ -19,17 +21,14 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// blockingReviewState is how GitHub reports a review that is still holding the
-// pull request. It is not the event name: submitting sends REQUEST_CHANGES and
-// reading back reports CHANGES_REQUESTED.
-const blockingReviewState = "CHANGES_REQUESTED"
-
 // concludeIncomplete ends a pass that could not read every chunk.
 //
-// It submits a blocking verdict. The run does not know what the chunks it never
-// read contain, and withholding the verdict to avoid a wrong approval is what
-// leaves the previous run's approval standing over a head nobody finished
-// reading. The comment names what is left and that the next push reviews it.
+// It submits no verdict. An earlier design submitted a blocking review here, so
+// a model provider outage turned every open pull request into a wall of
+// requested changes that nobody had requested, and each looked exactly like a
+// human reviewer objecting. The merge gate does not need the review: the check
+// concludes without passing, so a required check holds the head anyway, and a
+// repository that does not require the check has chosen not to gate on it.
 //
 // The check does not reach a passing conclusion. GitHub counts a required check
 // concluded neutral as satisfying the gate, exactly as it counts one concluded
@@ -41,7 +40,6 @@ func (service *Service) concludeIncomplete(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRun githubapp.CheckRun,
-	reviews []githubapp.Review,
 	state marker.State,
 	pass *chunkPass,
 	summary Summary,
@@ -50,11 +48,6 @@ func (service *Service) concludeIncomplete(
 	logger := gklog.L(ctx)
 	pending := len(state.Pending)
 	unread := pass.unreadChunks()
-	if err := service.publishPartialVerdict(ctx, job, reviews, summary, pending); err != nil {
-		return service.failCheck(
-			ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePublish, err,
-		)
-	}
 	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
 		Prose: RenderIncompleteBody(summary, pending, chunkFailureReason(unread), publicFailureDetail(job)),
 		State: state,
@@ -78,94 +71,9 @@ func (service *Service) concludeIncomplete(
 		ctx,
 		"review job left chunks pending",
 		slog.Int("pending", pending),
-		slog.String("decision", string(summary.Decision)),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
 	return nil
-}
-
-// publishPartialVerdict leaves exactly one blocking review saying this head
-// could not be fully read.
-//
-// A run that finds the previous one rewrites it rather than submitting a
-// second. Two incomplete runs in a row would otherwise leave two short blocking
-// reviews, three would leave three, and a reader would have to work out which
-// of them still describes the pull request.
-//
-// Rewriting keeps the block: an update changes a review's body and not its
-// state, so the standing request for changes stays exactly as it was.
-func (service *Service) publishPartialVerdict(
-	ctx context.Context,
-	job domain.ReviewJob,
-	reviews []githubapp.Review,
-	summary Summary,
-	pending int,
-) error {
-	logger := gklog.L(ctx)
-	body := RenderPartialVerdictBody(summary, pending)
-	if existing, found := findPartialReview(reviews, service.botLogin); found {
-		if _, err := service.github.UpdateReview(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			job.Number,
-			existing.ID,
-			body,
-		); err != nil {
-			logger.ErrorContext(ctx, "update partial verdict", slog.String("err", err.Error()))
-			return fmt.Errorf("update partial verdict: %w", err)
-		}
-		logger.InfoContext(ctx, "partial verdict updated", slog.Int64("review_id", existing.ID))
-		return nil
-	}
-
-	// The event is always a request for changes, never the summary's decision.
-	// A run that read every chunk it managed to reach and found nothing open
-	// computes an approval, and submitting that here would approve a head whose
-	// unread chunks nobody has seen. What the run did read says nothing about
-	// what it did not.
-	published, err := service.github.SubmitReview(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-		githubapp.SubmitReviewRequest{
-			CommitID: summary.Head,
-			Body:     body,
-			Event:    domain.ReviewDecisionRequestChanges,
-			Comments: nil,
-		},
-	)
-	if err != nil {
-		logger.ErrorContext(ctx, "submit partial verdict", slog.String("err", err.Error()))
-		return fmt.Errorf("submit partial verdict: %w", err)
-	}
-	logger.InfoContext(ctx, "partial verdict submitted", slog.Int64("review_id", published.ID))
-	return nil
-}
-
-// findPartialReview returns the service's own partial verdict, but only while
-// it is still blocking.
-//
-// Rewriting a review changes its body and not its state, so a partial verdict
-// somebody dismissed cannot be brought back by an update. Reusing one would
-// leave the pull request mergeable with unread chunks while the comment claims
-// otherwise, which is worse than the duplicate review the reuse exists to
-// avoid. A dismissed one is left where it is and a new blocking review is
-// submitted beside it.
-func findPartialReview(reviews []githubapp.Review, botLogin string) (githubapp.Review, bool) {
-	for _, item := range reviews {
-		if item.Author != botLogin {
-			continue
-		}
-		if item.State != blockingReviewState {
-			continue
-		}
-		if marker.HasPartial(item.Body) {
-			return item, true
-		}
-	}
-	return githubapp.Review{ID: 0, CommitID: "", Author: "", Body: "", State: ""}, false
 }
 
 // incompleteCheckDetail is what the check run says about a run that could not
