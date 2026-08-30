@@ -16,12 +16,30 @@ withdraws it. Every block below was cleared by hand.
 | configs 292 | Fixed all 4 findings | Resolved 1 of 4 threads, kept blocking on the rest |
 | tack 154 | Fixed, resolved threads, pushed `f5e5bf0` | The new head's run died mid chunk, so the stale `CHANGES_REQUESTED` stood with no re-review |
 | tack 123 | Nothing left open | Blocked a green pull request with an empty body verdict |
+| tack 156 | Fixed 2 findings in `b7dd0c4`, answered the third as a deliberate no change | Re-reviewed the new head, found nothing, and blocked again with a marker only body, holding an armed auto merge with 21 green checks |
+| configs 298 | Fixed the earlier round's findings | Final round found nothing and still blocked, review id 5059218794 |
 | pr-review-agent 69 | Resolved every thread | Nothing reacts to resolution without a push, so the verdict stood |
 
 Mechanism: GitHub review state is sticky per reviewer. The service writes
 `CHANGES_REQUESTED` and treats the submission as the end of its job. A fix
 and push clears it only if the next run succeeds. Thread resolution triggers
 nothing. A failed run touches nothing.
+
+The obvious fix is the wrong one. Operators reading tack 156 proposed that a
+round finding nothing should stop requesting changes. That would break as
+soon as a real finding from an earlier round is still open, because it ties
+the verdict to one run's output rather than to what stands unresolved. The
+verdict must follow the service's own open threads, which is what makes a
+fixed pull request unblock itself and a disputed one keep blocking with a
+visible reason.
+
+No recovery path exists short of dismissal. The check run carries a bare
+repository URL with no run identifier, so `gh run rerun` cannot target it: an
+external service posts it through the checks API rather than a workflow. A
+`/review` comment produced no fresh verdict in four minutes on tack 154. Both
+tack blocks cleared only through an operator authorized dismissal of the
+review, and on a repository requiring thread resolution the merge fired only
+after every thread was also resolved by hand.
 
 ## 2. A block that shows nothing to act on
 
