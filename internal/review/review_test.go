@@ -2335,6 +2335,126 @@ func TestThreadResolutionCannotApproveAPartiallyReviewedHead(t *testing.T) {
 	}
 }
 
+// botThreadAt is one bot review thread anchored at one line, which is the shape
+// the blocking list names.
+func botThreadAt(nodeID string, line int, resolved bool) githubapp.ReviewThread {
+	return githubapp.ReviewThread{
+		NodeID:   nodeID,
+		Resolved: resolved,
+		RootComment: domain.ReviewComment{
+			DatabaseID: int64(700 + line),
+			Author:     testBotLogin,
+			Body:       "an earlier finding",
+			Path:       "main.go",
+			StartLine:  line,
+			EndLine:    line,
+		},
+	}
+}
+
+// reviewedStateComment is the summary comment a completed run leaves, carrying
+// prose and the durable state naming the head as reviewed.
+func reviewedStateComment(head domain.HeadSHA, prose string) map[string]any {
+	return map[string]any{
+		"id": float64(1),
+		"body": prose + "\n\n" + marker.EncodeState(marker.State{
+			LastReviewed: head,
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	}
+}
+
+// A verdict belongs to the commit it was submitted for. A pull request force
+// pushed back to a commit it already carried has verdicts from more than one
+// head in its review list, and taking the newest of them lets one head's
+// conclusion decide another head's fate. Here the only standing verdict names a
+// different commit, so this head has nothing to reconcile against and nothing
+// may be submitted from it.
+func TestAVerdictFromAnotherHeadIsNotReusedAtThisHead(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: blockingVerdictReviewPage(domain.HeadSHA(testStaleHeadSHA), true),
+	})
+	fixture.state.issueComments = append(
+		fixture.state.issueComments,
+		reviewedStateComment(head, "## Review\n\nan earlier run"),
+	)
+	// Every thread is resolved, so a verdict borrowed from the other head would
+	// disagree with thread state and publish an approval this head never earned.
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{botThreadAt("thread-a", 2, true)})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none: the only standing verdict names another commit",
+			fixture.state.lastSubmitReview)
+	}
+}
+
+// Resolving one of several blocking threads leaves the verdict where it was, so
+// the refresh submits no review. The summary still has to be rewritten, because
+// its blocking list names one entry per open thread and would otherwise keep
+// naming a thread that is already closed.
+func TestARefreshUpdatesTheBlockingListWhenTheVerdictDoesNotMove(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: blockingVerdictReviewPage(head, true),
+	})
+	// The comment the last full run left, naming both threads it was waiting on.
+	fixture.state.issueComments = append(
+		fixture.state.issueComments,
+		reviewedStateComment(head, "## Review\n\nSevere findings are listed inline.\n\n"+
+			"Waiting on:\n- main.go:2\n- main.go:5"),
+	)
+	// One of the two is resolved. The other still blocks, so the verdict stands.
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{
+		botThreadAt("thread-fixed", 2, true),
+		botThreadAt("thread-open", 5, false),
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none: the verdict did not move",
+			fixture.state.lastSubmitReview)
+	}
+	body := fixture.state.issueComments[0]["body"].(string)
+	if !strings.Contains(body, "main.go:5") {
+		t.Fatalf("summary comment = %q, want the thread still open named", body)
+	}
+	if strings.Contains(body, "main.go:2") {
+		t.Fatalf("summary comment still names the thread that was resolved, so a reader "+
+			"goes looking for something already dealt with:\n%s", body)
+	}
+}
+
+// A GitHub failure during the refresh must reach the caller. The refresh used
+// to log and swallow, so a failed refresh was indistinguishable from one that
+// found nothing to do. The check is still completed successfully first, because
+// this head is reviewed whatever the refresh managed.
+func TestAFailedVerdictRefreshIsReportedAndKeepsTheCheckGreen(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages:        blockingVerdictReviewPage(head, true),
+		submitReviewStatus: http.StatusInternalServerError,
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{botThreadAt("thread-fixed", 2, true)})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: want the refresh failure reported rather than swallowed")
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want success: the head is reviewed whatever the refresh did",
+			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
 func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{

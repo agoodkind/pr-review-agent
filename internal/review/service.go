@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/url"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"goodkind.io/gklog"
@@ -252,8 +251,9 @@ func (service *Service) runLocked(
 	ctx = gklog.WithLogger(ctx, logger)
 
 	if service.checkAlreadySucceeded(ctx, checkRun) {
-		service.refreshVerdictAtReviewedHead(ctx, job, nil)
-		return nil
+		// The check is already completed and successful, so there is nothing to
+		// conclude here and the refresh failure is the whole outcome.
+		return service.refreshVerdictAtReviewedHead(ctx, job, nil)
 	}
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
@@ -274,14 +274,20 @@ func (service *Service) runLocked(
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err)
 	}
 	if reviewed {
-		service.refreshVerdictAtReviewedHead(ctx, job, reviews)
-		return service.succeed(
+		// The check is concluded first and the refresh failure reported after.
+		// This head is reviewed either way, so the check must keep saying so
+		// whatever the refresh did.
+		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
+		if err := service.succeed(
 			ctx,
 			job,
 			checkRun.ID,
 			checkTitleAlreadyReviewed,
 			"This head already has a PR-Agent review. No duplicate review was published.",
-		)
+		); err != nil {
+			return err
+		}
+		return refreshErr
 	}
 	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress)
 }
@@ -308,14 +314,17 @@ func (service *Service) reviewOwedWork(
 	// commit against itself, spends no API call proving what the state already
 	// says.
 	if hasState && state.LastReviewed == head && len(state.Pending) == 0 {
-		service.refreshVerdictAtReviewedHead(ctx, job, reviews)
-		return service.succeed(
+		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
+		if err := service.succeed(
 			ctx,
 			job,
 			checkRun.ID,
 			checkTitleAlreadyReviewed,
 			"The durable review state already records this head as reviewed, with no chunks pending.",
-		)
+		); err != nil {
+			return err
+		}
+		return refreshErr
 	}
 
 	// Admission runs before reconciliation. Reconciliation makes a model call
@@ -820,121 +829,6 @@ func repositoryURL(repo domain.Repository) string {
 		Host:   "github.com",
 		Path:   "/" + repo.Owner + "/" + repo.Name,
 	}).String()
-}
-
-// refreshVerdictAtReviewedHead reconciles the standing verdict with current
-// thread state at a head that is already reviewed, submitting a fresh verdict
-// review only when the two disagree. A pull_request_review_thread delivery
-// lands here, which is what lets resolving a thread unblock a pull request
-// with no push. Failures are logged rather than failing the run: the head is
-// reviewed, and the check must keep saying so.
-//
-// reviews is the review list the caller already loaded, or nil when the run
-// exited before loading one.
-func (service *Service) refreshVerdictAtReviewedHead(
-	ctx context.Context,
-	job domain.ReviewJob,
-	reviews []githubapp.Review,
-) {
-	logger := gklog.L(ctx)
-	ctx, cancel := service.publicationContext(ctx)
-	defer cancel()
-	if reviews == nil {
-		listed, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
-		if err != nil {
-			logger.ErrorContext(ctx, "list reviews for verdict refresh", slog.String("err", err.Error()))
-			return
-		}
-		reviews = listed
-	}
-	verdict, found := latestBotVerdictReview(reviews, service.botLogin)
-	if !found {
-		return
-	}
-	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
-	if err != nil {
-		logger.ErrorContext(ctx, "list threads for verdict refresh", slog.String("err", err.Error()))
-		return
-	}
-	// The standing verdict says whether its run fully reviewed the head. A
-	// thread resolution changes nothing about how much was reviewed, so that
-	// part of the block must survive the refresh.
-	headFullyReviewed := !strings.Contains(verdict.Body, unreviewedHeadReason)
-	decision := reviewerDecision(threads, service.botLogin, headFullyReviewed)
-	if reviewStateFor(decision) == verdict.State {
-		return
-	}
-	service.submitRefreshedVerdict(ctx, job, decision, threads, headFullyReviewed)
-}
-
-// submitRefreshedVerdict publishes the verdict a refresh computed: a fresh
-// verdict review at the reviewed head plus the summary comment prose, with the
-// durable state kept exactly as the last completed run wrote it.
-func (service *Service) submitRefreshedVerdict(
-	ctx context.Context,
-	job domain.ReviewJob,
-	decision domain.ReviewDecision,
-	threads []githubapp.ReviewThread,
-	headFullyReviewed bool,
-) {
-	logger := gklog.L(ctx)
-	// A verdict submitted at a moved head would judge a commit nobody is
-	// looking at any more, so the refresh checks the head one last time.
-	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
-	if err != nil {
-		logger.ErrorContext(ctx, "refresh verdict head check", slog.String("err", err.Error()))
-		return
-	}
-	if currentPullRequest.Head != job.Head {
-		logger.InfoContext(ctx, "verdict refresh skipped", slog.String("reason", "head_moved"))
-		return
-	}
-	summary := Summary{
-		Head:              job.Head,
-		Decision:          decision,
-		Blocking:          blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed),
-		Models:            nil,
-		Duration:          0,
-		FilesReviewed:     0,
-		Chunks:            0,
-		CoverageComplete:  headFullyReviewed,
-		MinimumImportance: service.minimumImportance,
-		Observed:          nil,
-		Eligible:          nil,
-		Published:         nil,
-		PriorReviews:      nil,
-		Threads:           traceThreads(threads, service.botLogin),
-		Reached:           "",
-		Failed:            false,
-	}
-	submitted, err := service.github.SubmitReview(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-		githubapp.SubmitReviewRequest{
-			CommitID: job.Head,
-			Body:     RenderVerdictBody(summary),
-			Event:    decision,
-			Comments: nil,
-		},
-	)
-	if err != nil {
-		logger.ErrorContext(ctx, "submit refreshed verdict", slog.String("err", err.Error()))
-		return
-	}
-	logger.InfoContext(
-		ctx,
-		"review verdict refreshed",
-		slog.Int64("review_id", submitted.ID),
-		slog.String("event", string(decision)),
-		slog.Any("blocking", summary.Blocking),
-	)
-	if err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State) summaryCommentContent {
-		return summaryCommentContent{Prose: renderVerdictRefreshProse(summary), State: state}
-	}); err != nil {
-		logger.ErrorContext(ctx, "update summary after verdict refresh", slog.String("err", err.Error()))
-	}
 }
 
 func hasBotReviewMarker(

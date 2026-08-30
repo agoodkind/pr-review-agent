@@ -123,12 +123,28 @@ const (
 )
 
 // latestBotVerdictReview returns the newest review of the service's own that
-// still carries a verdict; COMMENTED and DISMISSED reviews decide nothing.
-func latestBotVerdictReview(reviews []githubapp.Review, botLogin string) (githubapp.Review, bool) {
+// still carries a verdict for this head; COMMENTED and DISMISSED reviews decide
+// nothing.
+//
+// The head is part of the test, not context. A pull request force pushed back to
+// a commit it already carried has verdicts from more than one head in one list,
+// and a scan that took the newest of them judged this head by what some other
+// head concluded. The commit a review names is what settles which head it spoke
+// for.
+//
+// The review marker is deliberately not also required. Every verdict body
+// carries one, so it would exclude nothing a matching commit does not already
+// exclude, and a verdict whose marker never reached the review list is exactly
+// the case the durable state path exists to refresh.
+func latestBotVerdictReview(
+	reviews []githubapp.Review,
+	botLogin string,
+	head domain.HeadSHA,
+) (githubapp.Review, bool) {
 	latest := githubapp.Review{ID: 0, CommitID: "", Author: "", Body: "", State: ""}
 	found := false
 	for _, item := range reviews {
-		if item.Author != botLogin {
+		if item.Author != botLogin || item.CommitID != head {
 			continue
 		}
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
