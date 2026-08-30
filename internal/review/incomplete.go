@@ -19,6 +19,11 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
+// blockingReviewState is how GitHub reports a review that is still holding the
+// pull request. It is not the event name: submitting sends REQUEST_CHANGES and
+// reading back reports CHANGES_REQUESTED.
+const blockingReviewState = "CHANGES_REQUESTED"
+
 // concludeIncomplete ends a pass that could not read every chunk.
 //
 // It submits a blocking verdict. The run does not know what the chunks it never
@@ -114,6 +119,11 @@ func (service *Service) publishPartialVerdict(
 		return nil
 	}
 
+	// The event is always a request for changes, never the summary's decision.
+	// A run that read every chunk it managed to reach and found nothing open
+	// computes an approval, and submitting that here would approve a head whose
+	// unread chunks nobody has seen. What the run did read says nothing about
+	// what it did not.
 	published, err := service.github.SubmitReview(
 		ctx,
 		job.InstallationID,
@@ -122,7 +132,7 @@ func (service *Service) publishPartialVerdict(
 		githubapp.SubmitReviewRequest{
 			CommitID: summary.Head,
 			Body:     body,
-			Event:    summary.Decision,
+			Event:    domain.ReviewDecisionRequestChanges,
 			Comments: nil,
 		},
 	)
@@ -134,10 +144,21 @@ func (service *Service) publishPartialVerdict(
 	return nil
 }
 
-// findPartialReview returns the service's own standing partial verdict.
+// findPartialReview returns the service's own partial verdict, but only while
+// it is still blocking.
+//
+// Rewriting a review changes its body and not its state, so a partial verdict
+// somebody dismissed cannot be brought back by an update. Reusing one would
+// leave the pull request mergeable with unread chunks while the comment claims
+// otherwise, which is worse than the duplicate review the reuse exists to
+// avoid. A dismissed one is left where it is and a new blocking review is
+// submitted beside it.
 func findPartialReview(reviews []githubapp.Review, botLogin string) (githubapp.Review, bool) {
 	for _, item := range reviews {
 		if item.Author != botLogin {
+			continue
+		}
+		if item.State != blockingReviewState {
 			continue
 		}
 		if marker.HasPartial(item.Body) {

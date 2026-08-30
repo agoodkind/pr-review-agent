@@ -4368,10 +4368,14 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		// later run finds the verdict an earlier one left. A fixture that kept
 		// them out of ListReviews would let a run leave a second standing
 		// review and call it one.
+		// GitHub reports the state its own way: the event REQUEST_CHANGES comes
+		// back as CHANGES_REQUESTED. A fixture that answered COMMENTED for every
+		// review would hide whether a standing verdict still blocks, which is
+		// what decides if a later run may rewrite it or must submit a new one.
 		created := map[string]any{
 			"id":        float64(4200 + len(state.submittedReviews)),
 			"commit_id": body["commit_id"],
-			"state":     "COMMENTED",
+			"state":     reviewStateForEvent(body["event"]),
 			"body":      body["body"],
 			"user":      map[string]any{"login": testBotLogin},
 		}
@@ -4638,4 +4642,18 @@ func serviceReadJSONBody(request *http.Request) (map[string]any, error) {
 		return nil, err
 	}
 	return decoded, nil
+}
+
+// reviewStateForEvent maps a submitted review event to the state GitHub reports
+// for it afterwards. They are not the same word: REQUEST_CHANGES is submitted
+// and CHANGES_REQUESTED is read back.
+func reviewStateForEvent(event any) string {
+	switch fmt.Sprint(event) {
+	case string(domain.ReviewDecisionRequestChanges):
+		return "CHANGES_REQUESTED"
+	case string(domain.ReviewDecisionApprove):
+		return "APPROVED"
+	default:
+		return "COMMENTED"
+	}
 }
