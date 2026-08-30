@@ -50,20 +50,32 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
 
-	verdict, threads, found, err := service.loadVerdictRefreshInputs(ctx, job, reviews)
-	if err != nil || !found {
+	inputs, err := service.loadVerdictRefreshInputs(ctx, job, reviews)
+	if err != nil || !inputs.found {
 		return err
 	}
-	// The standing verdict says whether its run fully reviewed the head. A
-	// thread resolution changes nothing about how much was reviewed, so that
-	// part of the block must survive the refresh.
-	headFullyReviewed := !strings.Contains(verdict.Body, unreviewedHeadReason)
+	// How much of the head was reviewed is recovered from the review that named
+	// this head, because that is the run that knew. What the pull request
+	// currently shows is a separate question, answered by the newest verdict
+	// whatever head it named. A thread resolution changes neither.
+	headFullyReviewed := !strings.Contains(inputs.verdict.Body, unreviewedHeadReason)
 	return service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
-		decision:          reviewerDecision(threads, service.botLogin, headFullyReviewed),
-		standingState:     verdict.State,
-		threads:           threads,
+		decision:          reviewerDecision(inputs.threads, service.botLogin, headFullyReviewed),
+		standingState:     inputs.standingState,
+		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
 	})
+}
+
+// verdictRefreshInputs is everything a refresh decides from.
+type verdictRefreshInputs struct {
+	// verdict is the review that named this head, which is where how much was
+	// reviewed is recovered from.
+	verdict githubapp.Review
+	// standingState is what GitHub shows for this service now, across all heads.
+	standingState string
+	threads       []githubapp.ReviewThread
+	found         bool
 }
 
 // loadVerdictRefreshInputs reads the standing verdict and the current threads a
@@ -73,26 +85,34 @@ func (service *Service) loadVerdictRefreshInputs(
 	ctx context.Context,
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
-) (githubapp.Review, []githubapp.ReviewThread, bool, error) {
+) (verdictRefreshInputs, error) {
 	logger := gklog.L(ctx)
+	missing := verdictRefreshInputs{
+		verdict: emptyReview(), standingState: "", threads: nil, found: false,
+	}
 	if reviews == nil {
 		listed, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 		if err != nil {
 			logger.ErrorContext(ctx, "list reviews for verdict refresh", slog.String("err", err.Error()))
-			return emptyReview(), nil, false, fmt.Errorf("list reviews for verdict refresh: %w", err)
+			return missing, fmt.Errorf("list reviews for verdict refresh: %w", err)
 		}
 		reviews = listed
 	}
 	verdict, found := latestBotVerdictReview(reviews, service.botLogin, job.Head)
 	if !found {
-		return emptyReview(), nil, false, nil
+		return missing, nil
 	}
 	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.ErrorContext(ctx, "list threads for verdict refresh", slog.String("err", err.Error()))
-		return emptyReview(), nil, false, fmt.Errorf("list threads for verdict refresh: %w", err)
+		return missing, fmt.Errorf("list threads for verdict refresh: %w", err)
 	}
-	return verdict, threads, true, nil
+	return verdictRefreshInputs{
+		verdict:       verdict,
+		standingState: latestBotVerdictState(reviews, service.botLogin),
+		threads:       threads,
+		found:         true,
+	}, nil
 }
 
 // refreshedVerdict is what one refresh computed from current thread state.

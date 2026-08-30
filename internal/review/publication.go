@@ -156,6 +156,30 @@ func latestBotVerdictReview(
 	return latest, found
 }
 
+// latestBotVerdictState is the state GitHub currently shows for this service on
+// the pull request: its newest review carrying a verdict, whatever head that
+// review named. It is the empty string when the service has submitted none.
+//
+// Which head a review named decides what that run concluded, and decides nothing
+// about what the pull request shows now. A force push back to a commit that was
+// already reviewed leaves a newer review from the head in between, and GitHub
+// keeps counting that newer one. Comparing a recomputed decision against the
+// matching head's older review found the two equal, submitted nothing, and left
+// the newer verdict standing over thread state that no longer supported it.
+func latestBotVerdictState(reviews []githubapp.Review, botLogin string) string {
+	state := ""
+	for _, item := range reviews {
+		if item.Author != botLogin {
+			continue
+		}
+		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
+			continue
+		}
+		state = item.State
+	}
+	return state
+}
+
 // reviewStateFor is the state GitHub reports once a decision is submitted.
 func reviewStateFor(decision domain.ReviewDecision) string {
 	switch decision {

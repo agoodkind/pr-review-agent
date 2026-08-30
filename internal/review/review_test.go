@@ -2446,6 +2446,55 @@ func TestAVerdictFromAnotherHeadIsNotReusedAtThisHead(t *testing.T) {
 	}
 }
 
+// A force push back to a commit that was already reviewed leaves a newer verdict
+// from the head in between, and GitHub keeps showing that newer one. Comparing
+// the recomputed decision against this head's older review found them equal and
+// submitted nothing, so an approval earned by another commit stayed standing
+// over an open thread.
+func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	stale := domain.HeadSHA(testStaleHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{
+			// This head was blocked first.
+			{
+				"id":        float64(41),
+				"commit_id": string(head),
+				"state":     "CHANGES_REQUESTED",
+				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"user":      map[string]any{"login": testBotLogin},
+			},
+			// Then another head was approved, and the branch was forced back here.
+			// This is the review GitHub still counts.
+			{
+				"id":        float64(42),
+				"commit_id": string(stale),
+				"state":     "APPROVED",
+				"body":      "## Review\n\nNo severe findings.\n\n" + marker.Review(stale),
+				"user":      map[string]any{"login": testBotLogin},
+			},
+		}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted, so the newer approval still stands over an open thread")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES to displace the approval from the other head",
+			fixture.state.lastSubmitReview["event"])
+	}
+	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA {
+		t.Fatalf("commit_id = %v, want the head this run is judging",
+			fixture.state.lastSubmitReview["commit_id"])
+	}
+}
+
 // Resolving one of several blocking threads leaves the verdict where it was, so
 // the refresh submits no review. The summary still has to be rewritten, because
 // its blocking list names one entry per open thread and would otherwise keep
