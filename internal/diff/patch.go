@@ -105,7 +105,7 @@ func MapLineToNewSide(patch string, oldLine int) (int, bool) {
 
 	offset := 0
 	for _, hunk := range hunks {
-		if oldLine < hunk.header.oldStart {
+		if precedesHunk(hunk.header, oldLine) {
 			return oldLine + offset, true
 		}
 		if oldLine < hunk.header.oldStart+hunk.header.oldCount {
@@ -114,6 +114,20 @@ func MapLineToNewSide(patch string, oldLine int) (int, bool) {
 		offset += hunk.header.newCount - hunk.header.oldCount
 	}
 	return oldLine + offset, true
+}
+
+// precedesHunk reports whether a line on the old side sits before this hunk.
+//
+// A pure insertion consumes no old line, and git writes its position as the line
+// it inserts after: "@@ -5,0 +6,1 @@" adds a line after old line 5. Old line 5
+// itself is untouched and stays where it was, so it precedes the hunk. Treating
+// it as covered instead pushed it forward by everything the insertion added and
+// pointed the anchor at the newly inserted text.
+func precedesHunk(header hunkHeader, oldLine int) bool {
+	if header.oldCount == 0 {
+		return oldLine <= header.oldStart
+	}
+	return oldLine < header.oldStart
 }
 
 // patchHunk is one hunk header with the body lines that follow it.
