@@ -426,26 +426,27 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	lines, present := extractLines(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine)
-	if !present {
-		return emptyThreadContext(), threadContextRemoved
-	}
-
 	return threadContext{
-		currentContent: lines,
+		currentContent: extractAnchorWindow(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine),
 		compareText:    formatCompareForPath(changedFiles, normalizedPath),
 	}, threadContextPresent
 }
 
-func extractLines(content []byte, startLine, endLine int) (string, bool) {
-	if startLine < 1 || endLine < startLine {
-		return "", false
-	}
+// anchorWindowRadius is the context shown on each side of the anchor. GitHub
+// reports only the original head's coordinates for outdated threads, so later
+// commits shift the anchor and an exact-line excerpt would show unrelated code.
+const anchorWindowRadius = 15
+
+// extractAnchorWindow returns the lines around the anchor, clamped to the file
+// bounds. An anchor past the end of a shortened file still yields the file's
+// tail: only a removed file skips the model, never a shorter one.
+func extractAnchorWindow(content []byte, startLine, endLine int) string {
 	lines := strings.Split(string(content), "\n")
-	if startLine > len(lines) || endLine > len(lines) {
-		return "", false
-	}
-	return strings.Join(lines[startLine-1:endLine], "\n"), true
+	startLine = min(max(startLine, 1), len(lines))
+	endLine = min(max(endLine, startLine), len(lines))
+	windowStart := max(startLine-anchorWindowRadius, 1)
+	windowEnd := min(endLine+anchorWindowRadius, len(lines))
+	return strings.Join(lines[windowStart-1:windowEnd], "\n")
 }
 
 func formatCompareForPath(changedFiles []githubapp.ChangedFile, path string) string {
@@ -483,7 +484,7 @@ func formatThreadSection(
 	builder.WriteString(thread.Finding.Body)
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
-	builder.WriteString("\n\nCurrent code:\n")
+	builder.WriteString("\n\nCurrent code around the anchor (line numbers may have shifted):\n")
 	builder.WriteString(contextText.currentContent)
 	builder.WriteString("\n\nDiff from finding head to current head:\n")
 	builder.WriteString(contextText.compareText)

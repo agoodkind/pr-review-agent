@@ -347,7 +347,7 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 	}
 }
 
-func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
+func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 	finding := sampleFinding()
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
@@ -359,9 +359,10 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 		threads: []githubapp.ReviewThread{
 			ownedThread("thread-missing", body, finding, false),
 		},
-		files: map[string][]byte{
-			finding.Path: []byte("line1"),
-		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:   finding.Path,
+			Status: "removed",
+		}},
 	}
 	model := &fakeModel{}
 
@@ -371,7 +372,7 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(model.prompts) != 0 {
-		t.Fatalf("model prompt count = %d, want 0 for removed anchor", len(model.prompts))
+		t.Fatalf("model prompt count = %d, want 0 for removed file", len(model.prompts))
 	}
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-missing" {
 		t.Fatalf("resolve calls = %v, want [thread-missing]", github.resolveCalls)
@@ -379,6 +380,105 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 	if !threads[0].Resolved {
 		t.Fatal("thread remains unresolved")
 	}
+}
+
+func TestReconcileSendsShortenedFileAnchorToModel(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-shortened", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte("line1"),
+		},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-shortened",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "cannot prove the defect gone",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1 for shortened file", len(model.prompts))
+	}
+	if len(github.resolveCalls) != 0 {
+		t.Fatalf("resolve calls = %v, want none without a model verdict", github.resolveCalls)
+	}
+}
+
+func TestReconcileShowsFixedCodeAfterInsertionsAboveAnchor(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	// GitHub reports line: null for outdated threads, so the decoded thread
+	// carries the original head's coordinates (line 2) while the fix now sits
+	// below three inserted lines.
+	currentFile := "line1\nnew line a\nnew line b\nnew line c\nfixed line\nline3"
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-shifted", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte(currentFile),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        "@@ -1,3 +1,6 @@\n line1\n+new line a\n+new line b\n+new line c\n-issue line\n+fixed line\n line3\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-shifted",
+			Resolution:   domain.ResolutionResolved,
+			Reason:       "fixed",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	}
+	promptCodeSection := currentCodeSection(t, model.prompts[0])
+	if !strings.Contains(promptCodeSection, "fixed line") {
+		t.Fatalf("current code section misses the shifted fix: %q", promptCodeSection)
+	}
+}
+
+// currentCodeSection isolates the current-code excerpt so assertions cannot be
+// satisfied by the diff section of the prompt.
+func currentCodeSection(t *testing.T, prompt string) string {
+	t.Helper()
+	_, after, found := strings.Cut(prompt, "Current code")
+	if !found {
+		t.Fatalf("prompt has no current code section: %q", prompt)
+	}
+	section, _, found := strings.Cut(after, "\n\nDiff from finding head to current head:")
+	if !found {
+		t.Fatalf("prompt has no diff section: %q", prompt)
+	}
+	return section
 }
 
 func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
