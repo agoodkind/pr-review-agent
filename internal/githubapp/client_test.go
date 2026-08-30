@@ -903,9 +903,19 @@ func emptyThreadPage(hasNext bool) map[string]any {
 	}
 }
 
+// failForbiddenEndpoint refuses the endpoints no test in this file should
+// reach. Reply posting is forbidden everywhere. Issue comment writes are
+// legitimate service behavior, but every test of them builds its own handler,
+// so one reaching this shared harness is a test calling something it did not
+// mean to; the tripwire was narrowed away once and restored, because it costs
+// nothing and catches exactly that.
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
 	if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
 		http.Error(writer, "replies forbidden", http.StatusForbidden)
+		return true
+	}
+	if strings.Contains(request.URL.Path, "/issues/comments") {
+		http.Error(writer, "issue comment writes use their own test handler", http.StatusForbidden)
 		return true
 	}
 	return false
