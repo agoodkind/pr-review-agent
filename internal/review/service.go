@@ -219,7 +219,7 @@ func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cau
 		return nil
 	}
 	now := service.now()
-	progress := service.newProgress(job.Head, now).summary(now)
+	progress := service.newProgress(job, now).summary(now)
 	return service.failCheck(parent, job, job.CheckRunID, progress, checkSummaryFailure, cause)
 }
 
@@ -231,7 +231,7 @@ func (service *Service) runLocked(
 	logger := gklog.L(ctx)
 	head := job.Head
 	startedAt := service.now()
-	progress := service.newProgress(head, startedAt)
+	progress := service.newProgress(job, startedAt)
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -250,7 +250,9 @@ func (service *Service) runLocked(
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
 
-	if service.checkAlreadySucceeded(ctx, checkRun) {
+	// A forced run is asked for precisely because the visible check no longer
+	// says anything useful, so a completed check is what it exists to redo.
+	if !job.Forced && service.checkAlreadySucceeded(ctx, checkRun) {
 		// The check is already completed and successful, so there is nothing to
 		// conclude here and the refresh failure is the whole outcome.
 		return service.refreshVerdictAtReviewedHead(ctx, job, nil)
@@ -309,11 +311,20 @@ func (service *Service) reviewOwedWork(
 ) error {
 	head := job.Head
 	state, hasState := service.loadDurableState(ctx, job)
+	if job.Forced {
+		// A label asks for the whole pull request again, so nothing an earlier
+		// run recorded may narrow this one. The chunk lists go, and deltaBase
+		// measures from no baseline at all. The marker itself stays where it is:
+		// this run rewrites it the way any run does, so the next ordinary push
+		// resumes from what this run actually reviewed.
+		state.Pending = nil
+		state.Completed = nil
+	}
 	// Nothing is owed when the checkpoint already names this head with no chunk
 	// pending. Deciding that here, rather than letting the collector compare a
 	// commit against itself, spends no API call proving what the state already
 	// says.
-	if hasState && state.LastReviewed == head && len(state.Pending) == 0 {
+	if !job.Forced && hasState && state.LastReviewed == head && len(state.Pending) == 0 {
 		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
 		if err := service.succeed(
 			ctx,
@@ -331,7 +342,7 @@ func (service *Service) reviewOwedWork(
 	// and resolves threads, so running it first would spend both on the exact
 	// delta admission exists to refuse.
 	work, stop, err := service.collectAndAdmit(
-		ctx, job, pullRequest, checkRun, deltaBase(state, hasState), progress,
+		ctx, job, pullRequest, checkRun, deltaBase(state, hasState, job.Forced), progress,
 	)
 	if stop {
 		return err
@@ -385,9 +396,10 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 }
 
 // deltaBase names the commit the delta is measured from: the commit the last
-// completed run reviewed, or nothing at all on first contact.
-func deltaBase(state marker.State, hasState bool) domain.HeadSHA {
-	if !hasState {
+// completed run reviewed, or nothing at all on first contact and on a forced
+// run, which is asked for the whole pull request rather than a range.
+func deltaBase(state marker.State, hasState bool, forced bool) domain.HeadSHA {
+	if forced || !hasState {
 		return domain.HeadSHA("")
 	}
 	return state.LastReviewed
@@ -487,7 +499,9 @@ func (service *Service) loadReviewHistory(
 		"review history loaded",
 		slog.Any("bot_reviews", progress.priorReviews),
 	)
-	if hasBotReviewMarker(reviews, service.botLogin, head) {
+	// A forced run reviews this head again on purpose, so the marker an earlier
+	// run left is exactly what it is asked to look past.
+	if !job.Forced && hasBotReviewMarker(reviews, service.botLogin, head) {
 		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
 		return reviews, true, nil
 	}
@@ -514,8 +528,8 @@ func (service *Service) reconcileThreads(
 	return threads, nil
 }
 
-func (service *Service) newProgress(head domain.HeadSHA, startedAt time.Time) *reviewProgress {
-	return newReviewProgress(head, startedAt, service.minimumImportance)
+func (service *Service) newProgress(job domain.ReviewJob, startedAt time.Time) *reviewProgress {
+	return newReviewProgress(job.Head, startedAt, service.minimumImportance, job.Forced)
 }
 
 // checkAlreadySucceeded reports whether this head already carries a completed
@@ -623,6 +637,7 @@ func (service *Service) publish(
 		Threads:           traceThreads(threads, service.botLogin),
 		Reached:           "",
 		Failed:            false,
+		Forced:            job.Forced,
 	}
 	if len(state.Pending) > 0 {
 		return service.concludeIncomplete(ctx, job, checkRun, state, pass, summary, progress)

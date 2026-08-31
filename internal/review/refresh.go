@@ -168,6 +168,9 @@ func (service *Service) applyRefreshedVerdict(
 		Threads:           traceThreads(refreshed.threads, service.botLogin),
 		Reached:           "",
 		Failed:            false,
+		// A refresh runs only at a head some earlier run already reviewed, which
+		// is a gate a forced run never reaches.
+		Forced: false,
 	}
 	if reviewStateFor(refreshed.decision) != refreshed.standingState {
 		if err := service.submitRefreshedVerdict(ctx, job, summary); err != nil {

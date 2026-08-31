@@ -24,6 +24,9 @@ type PullRequestEvent struct {
 	Number         int
 	Head           domain.HeadSHA
 	Draft          bool
+	// Forced marks a delivery that asked for a fresh full review, which only a
+	// labeled event carrying a domain.ForceReviewLabelPrefix label does.
+	Forced bool
 }
 
 // Job converts the webhook event into a review job.
@@ -33,6 +36,7 @@ func (event PullRequestEvent) Job() domain.ReviewJob {
 		CheckRunID:         0,
 		CheckRunStatus:     "",
 		CheckRunConclusion: "",
+		Forced:             event.Forced,
 		PullRequestRef: domain.PullRequestRef{
 			Repository:     event.Repository,
 			Number:         event.Number,
@@ -73,11 +77,15 @@ const (
 	actionReopened       pullRequestAction = "reopened"
 	actionReadyForReview pullRequestAction = "ready_for_review"
 	actionSynchronize    pullRequestAction = "synchronize"
+	// actionLabeled is supported only for the labels this service owns. Every
+	// other label a person adds is answered and ignored, which is decided in
+	// ParsePullRequest because the action alone cannot tell them apart.
+	actionLabeled pullRequestAction = "labeled"
 )
 
 func (action pullRequestAction) supported() bool {
 	switch action {
-	case actionOpened, actionReopened, actionReadyForReview, actionSynchronize:
+	case actionOpened, actionReopened, actionReadyForReview, actionSynchronize, actionLabeled:
 		return true
 	default:
 		return false
@@ -110,6 +118,7 @@ func emptyEvent() PullRequestEvent {
 		Number:         0,
 		Head:           "",
 		Draft:          false,
+		Forced:         false,
 	}
 }
 
@@ -148,10 +157,23 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 		return emptyEvent(), false, nil
 	}
 
+	// A label is only a trigger when it is one of this service's own. Any other
+	// label on any pull request would otherwise start a review, which is the
+	// opposite of what a person adding a label expects.
+	forced := false
+	if action == actionLabeled {
+		if !domain.ForcesReview(payload.Label.Name) {
+			return emptyEvent(), false, nil
+		}
+		forced = true
+	}
+
+	// A draft is never reviewed, and a label does not change that. Marking a
+	// pull request ready for review remains the way to ask for a first review.
 	if action != actionReadyForReview && payload.PullRequest.Draft {
 		return emptyEvent(), false, nil
 	}
-	return eventFromPayload(deliveryID, payload)
+	return eventFromPayload(deliveryID, payload, forced)
 }
 
 // ParseReviewThread parses a resolved or unresolved review thread delivery.
@@ -174,7 +196,7 @@ func ParseReviewThread(eventType string, deliveryID string, body []byte) (PullRe
 	if payload.PullRequest.Draft {
 		return emptyEvent(), false, nil
 	}
-	return eventFromPayload(deliveryID, payload)
+	return eventFromPayload(deliveryID, payload, false)
 }
 
 func decodePayload(deliveryID string, body []byte) (pullRequestPayload, bool, error) {
@@ -188,7 +210,11 @@ func decodePayload(deliveryID string, body []byte) (pullRequestPayload, bool, er
 	return payload, true, nil
 }
 
-func eventFromPayload(deliveryID string, payload pullRequestPayload) (PullRequestEvent, bool, error) {
+func eventFromPayload(
+	deliveryID string,
+	payload pullRequestPayload,
+	forced bool,
+) (PullRequestEvent, bool, error) {
 	if payload.Installation.ID == 0 {
 		return emptyEvent(), false, errors.New("missing installation id")
 	}
@@ -218,6 +244,7 @@ func eventFromPayload(deliveryID string, payload pullRequestPayload) (PullReques
 		Number: payload.PullRequest.Number,
 		Head:   head,
 		Draft:  payload.PullRequest.Draft,
+		Forced: forced,
 	}, true, nil
 }
 
@@ -239,4 +266,9 @@ type pullRequestPayload struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 	} `json:"pull_request"`
+	// Label carries the label a labeled delivery added. It is absent on every
+	// other action, which decodes as an empty name and matches no prefix.
+	Label struct {
+		Name string `json:"name"`
+	} `json:"label"`
 }

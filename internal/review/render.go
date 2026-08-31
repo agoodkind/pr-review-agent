@@ -42,7 +42,19 @@ type Summary struct {
 	// Failed marks a review that stopped early, so the detail table reports
 	// progress rather than a result.
 	Failed bool
+	// Forced marks a run a label asked for. Such a run measures from no baseline
+	// at all, so its statistics describe the whole pull request while an
+	// ordinary run's describe the range since the last reviewed commit. A reader
+	// comparing two summaries cannot tell those apart unless the run says so.
+	Forced bool
 }
+
+// forcedRunNote is how a forced run explains itself in the summary comment. It
+// names the label prefix because that is what a reader searches for to find
+// what triggered the run.
+const forcedRunNote = "Triggered by a `" + domain.ForceReviewLabelPrefix +
+	"` label, so this run reviewed the whole pull request rather than only the delta " +
+	"since the last reviewed commit."
 
 // Verdict states the outcome in one plain sentence.
 //
@@ -114,6 +126,9 @@ func RenderDetails(summary Summary) string {
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(summary Summary) string {
 	parts := []string{"## Review", summary.Verdict()}
+	if summary.Forced {
+		parts = append(parts, forcedRunNote)
+	}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}

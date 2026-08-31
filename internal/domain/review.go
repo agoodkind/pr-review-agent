@@ -25,6 +25,22 @@ func ParseHeadSHA(value string) (HeadSHA, error) {
 	return HeadSHA(value), nil
 }
 
+// ForceReviewLabelPrefix names the labels that ask for a fresh full review.
+//
+// It is the only re-trigger a person has. A run that died leaves a red check
+// nothing clears, because only a pull request webhook starts a run and the
+// check names no run identifier anyone can use. A configuration change is the
+// same shape of problem from the other side: a running container keeps the
+// environment it booted with, so a value corrected minutes ago is still not the
+// value the next review runs under. Adding a label with this prefix answers
+// both, by restarting the container and reviewing the whole pull request again.
+const ForceReviewLabelPrefix = "test-review-agent-"
+
+// ForcesReview reports whether a label name asks for a fresh full review.
+func ForcesReview(labelName string) bool {
+	return strings.HasPrefix(labelName, ForceReviewLabelPrefix)
+}
+
 // Repository identifies a GitHub repository owner and name pair.
 type Repository struct {
 	Owner string
@@ -178,6 +194,13 @@ type ReviewJob struct {
 	CheckRunID         int64
 	CheckRunStatus     string
 	CheckRunConclusion string
+	// Forced marks a run a ForceReviewLabelPrefix label asked for. Such a run
+	// reviews the whole pull request from scratch: it ignores the commit the
+	// last completed run reviewed, the chunks earlier runs read, and every gate
+	// that would otherwise report this head as already reviewed. It still
+	// respects the admission budgets, because an oversized delta is oversized
+	// however it was triggered.
+	Forced bool
 	PullRequestRef
 }
 
