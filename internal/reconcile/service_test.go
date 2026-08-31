@@ -571,6 +571,48 @@ func TestReconcileDoesNotRemapThroughADivergedComparison(t *testing.T) {
 	}
 }
 
+// A removed file is the one answer divergence cannot spoil. The comparison says
+// the path is gone from the current commit, and that holds whatever commit it
+// measured from, so the anchor cannot have survived. Refusing it because the
+// range is diverged would leave an obsolete thread open forever.
+func TestReconcileResolvesARemovedFileEvenOnADivergedComparison(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		// The branches diverged, so no window could be trusted here.
+		mergeBase: domain.HeadSHA("e7f8b4fdfaf828ef157a37e2f5d4f4424963af65"),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-removed", body, finding, false),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:   finding.Path,
+			Status: "removed",
+		}},
+	}
+	model := &fakeModel{}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	threads, err := service.Reconcile(context.Background(), testJob())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 0 {
+		t.Fatalf("model prompt count = %d, want 0: a removed file needs no model", len(model.prompts))
+	}
+	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-removed" {
+		t.Fatalf("resolve calls = %v, want [thread-removed]: the file the finding anchors to is gone",
+			github.resolveCalls)
+	}
+	if !threads[0].Resolved {
+		t.Fatal("an obsolete thread was left open because the comparison happened to be diverged")
+	}
+}
+
 // currentCodeSection isolates the current-code excerpt so assertions cannot be
 // satisfied by the diff section of the prompt.
 func currentCodeSection(t *testing.T, prompt string) string {

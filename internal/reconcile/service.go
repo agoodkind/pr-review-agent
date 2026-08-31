@@ -408,23 +408,11 @@ func (service *Service) loadThreadContext(
 	}
 	changedFiles := comparison.Files
 
-	// GitHub compares from where two commits last agreed, so once the finding
-	// commit and the current one diverge the patches describe a range the
-	// finding's coordinates were never in. There is then no way to say where the
-	// anchor went: the recorded line does not identify it here either, and a
-	// window drawn on it can show unrelated clean code that reads as the defect
-	// being gone. The thread is left unreconciled instead, which keeps it open
-	// for a person rather than resolving it on evidence that is not about it.
-	if comparison.MergeBase == "" || comparison.MergeBase != thread.FindingHead {
-		gklog.L(ctx).WarnContext(
-			ctx,
-			"thread context unavailable, the comparison is not measured from the finding commit",
-			slog.String("thread", thread.NodeID),
-			slog.String("merge_base", string(comparison.MergeBase)),
-		)
-		return emptyThreadContext(), threadContextUnavailable
-	}
-
+	// The removed file is settled before anything else, because it is the one
+	// answer divergence cannot spoil. A comparison saying this path is gone from
+	// the current commit says so whatever it measured from, and the anchor cannot
+	// survive a file that no longer exists. Refusing that answer on the grounds
+	// that the range is diverged would leave an obsolete thread open forever.
 	currentPath := normalizedPath
 	for _, file := range changedFiles {
 		if file.Path == normalizedPath && file.Status == "removed" {
@@ -433,6 +421,24 @@ func (service *Service) loadThreadContext(
 		if file.PreviousPath == normalizedPath && file.Path != "" {
 			currentPath = file.Path
 		}
+	}
+
+	// Everything past here reads a window of code and asks whether the defect is
+	// still in it, and that needs coordinates the comparison can place. GitHub
+	// compares from where two commits last agreed, so once the finding commit and
+	// the current one diverge the patches describe a range the finding's
+	// coordinates were never in, and the recorded line does not identify it at
+	// the current commit either. A window drawn on it can show unrelated clean
+	// code that reads as the defect being gone, so the thread is left
+	// unreconciled and stays open for a person.
+	if comparison.MergeBase == "" || comparison.MergeBase != thread.FindingHead {
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"thread context unavailable, the comparison is not measured from the finding commit",
+			slog.String("thread", thread.NodeID),
+			slog.String("merge_base", string(comparison.MergeBase)),
+		)
+		return emptyThreadContext(), threadContextUnavailable
 	}
 
 	fileBytes, err := service.github.GetFile(

@@ -104,10 +104,25 @@ const (
 	paragraphSeparator = " "
 )
 
+// nextLine is U+0085 NEXT LINE, which starts a new line in enough renderers to
+// count as one here.
+//
+// It is built from its code point rather than written as a literal, because the
+// character is invisible in a source file: a substituted or corrupted one would
+// leave a gap here that reading the file could never show.
+const nextLine = string(rune(0x85))
+
 // replyLineBreaks reduces every shape of line break to one.
+//
+// Every break a reply body can carry has to be in here. One that is missing lets
+// the body put text at the start of a line with no name in front of it, and that
+// line reads as another speaker answering the finding.
 var replyLineBreaks = strings.NewReplacer(
-	"\r\n", "\n",
-	"\r", "\n",
+	"\r\n", "\n", // carriage return then line feed, taken as one break
+	"\r", "\n", // U+000D carriage return
+	"\v", "\n", // U+000B vertical tab
+	"\f", "\n", // U+000C form feed
+	nextLine, "\n",
 	lineSeparator, "\n",
 	paragraphSeparator, "\n",
 )
