@@ -325,6 +325,109 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 	}
 }
 
+// A person has no other way to re-trigger a review. A run that died leaves a
+// red check nothing clears, because only a pull request webhook starts a run,
+// and a configuration change reaches the container only when it restarts. A
+// label answers both, so it has to review a head every other delivery would be
+// suppressed at, and review the whole pull request rather than a delta.
+func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-label-opened",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	_ = opened.Body.Close()
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckCompletions(t, 1)
+	// This head now carries both gates a redelivery is stopped by: the review
+	// marker on the submitted review, and a durable state naming it reviewed.
+	fixture.waitForSummaryHead(t, testDefectiveHead)
+
+	labeled := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-label-forced",
+		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+	})
+	if labeled.StatusCode != http.StatusAccepted {
+		t.Fatalf("labeled status = %d, want 202", labeled.StatusCode)
+	}
+	_ = labeled.Body.Close()
+
+	fixture.waitForClydeCalls(t, 2)
+	fixture.waitForCheckCompletions(t, 2)
+	if fixture.githubState.submitReviewCount() != 2 {
+		t.Fatalf("submit review count = %d, want 2: the label must publish a second review",
+			fixture.githubState.submitReviewCount())
+	}
+	// A run measuring from the baseline the first run wrote would compare that
+	// commit against itself. The forced run measures from nothing, so it lists
+	// the whole pull request the way first contact does.
+	if ranges := fixture.githubState.comparedRanges(); ranges != 0 {
+		t.Fatalf("compare range fetches = %d, want 0: a forced run reviews the whole pull request", ranges)
+	}
+	summary := fixture.githubState.summaryCommentBody()
+	if !strings.Contains(summary, "Triggered by a `"+domain.ForceReviewLabelPrefix+"` label") {
+		t.Fatalf("summary comment does not say the label triggered the run: %q", summary)
+	}
+	if !strings.Contains(summary, "reviewed the whole pull request") {
+		t.Fatalf("summary comment does not say the run covered the whole pull request: %q", summary)
+	}
+}
+
+// Only this service's own labels re-trigger a review. Any other label a person
+// adds is answered and ignored, exactly like an unsupported action, because a
+// label is otherwise an ordinary thing to put on a pull request.
+func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-other-label-opened",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	_ = opened.Body.Close()
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckCompletions(t, 1)
+	before := fixture.githubState.summaryCommentBody()
+
+	labeled := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-other-label",
+		body:       labeledPayload(testDefectiveHead, "needs-review"),
+	})
+	if labeled.StatusCode != http.StatusAccepted {
+		t.Fatalf("labeled status = %d, want 202", labeled.StatusCode)
+	}
+	_ = labeled.Body.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	if calls := fixture.clydeState.requestCount(); calls != 1 {
+		t.Fatalf("clyde requests = %d, want 1: a label this service does not own reviews nothing", calls)
+	}
+	if count := fixture.githubState.submitReviewCount(); count != 1 {
+		t.Fatalf("submit review count = %d, want 1", count)
+	}
+	if after := fixture.githubState.summaryCommentBody(); after != before {
+		t.Fatalf("summary comment changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -1403,6 +1506,39 @@ func signBody(body []byte) string {
 func openedPayload(head string) []byte {
 	payload := map[string]any{
 		"action": "opened",
+		"installation": map[string]any{
+			"id": float64(testInstallation),
+		},
+		"repository": map[string]any{
+			"name": testRepoName,
+			"owner": map[string]any{
+				"login": testRepoOwner,
+			},
+		},
+		"pull_request": map[string]any{
+			"number": float64(testPRNumber),
+			"draft":  false,
+			"head": map[string]any{
+				"sha": head,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+// labeledPayload is a labeled delivery adding one label to the pull request.
+// GitHub carries the label alongside the usual installation, repository, and
+// pull request objects.
+func labeledPayload(head string, labelName string) []byte {
+	payload := map[string]any{
+		"action": "labeled",
+		"label": map[string]any{
+			"name": labelName,
+		},
 		"installation": map[string]any{
 			"id": float64(testInstallation),
 		},

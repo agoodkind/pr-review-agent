@@ -1615,6 +1615,76 @@ func TestAnAlreadyReadChunkIsNotAnalyzedTwice(t *testing.T) {
 	}
 }
 
+// A forced run pays for every chunk again on purpose. The completed list an
+// earlier run left names chunks it already read, and honoring it would make the
+// forced run a partial one, which is the opposite of what the label asks for.
+func TestAForcedRunReadsEveryChunkAgainIncludingTheOnesAlreadyRead(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first := decodedSummaryState(t, fixture)
+	if len(first.Completed) != 1 {
+		t.Fatalf("completed after the first run = %v, want the chunk that answered", first.Completed)
+	}
+
+	model.heal()
+	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
+		t.Fatalf("forced Run: %v", err)
+	}
+
+	if times := timesReviewed(model, "file0.go"); times != 2 {
+		t.Fatalf("file0.go was analyzed %d times, want twice: a forced run re-reads the chunks recorded as done",
+			times)
+	}
+	if times := timesReviewed(model, "file1.go"); times != 2 {
+		t.Fatalf("file1.go was analyzed %d times, want twice", times)
+	}
+}
+
+// A forced run asks for the whole pull request, not for permission to review
+// one. An oversized delta is oversized however it was triggered, so admission
+// declines it exactly as it declines an ordinary one, and the check stops short
+// of any conclusion GitHub counts as passing.
+func TestAForcedRunStillDeclinesAnOversizedDelta(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:       twoChunkCollector{},
+		reviewMaxChunks: 1,
+	})
+
+	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "action_required" {
+		t.Fatalf("conclusion = %v, want action_required: a forced oversized delta must not read as passing",
+			conclusion)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatal("a declined delta submitted a review")
+	}
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("issue comments = %d, want 1", len(fixture.state.issueComments))
+	}
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok {
+		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+	}
+	if !strings.Contains(body, "Review skipped:") {
+		t.Fatalf("summary comment = %q, want it to say the review was skipped", body)
+	}
+	skipped, ok := marker.DecodeState(body)
+	if !ok || skipped.Status != marker.StateSkipped {
+		t.Fatalf("state = %+v ok=%v, want a decodable skipped marker", skipped, ok)
+	}
+}
+
 // An incomplete run is not a judgment, so it must leave no review object at
 // all. An earlier design submitted a blocking review here, and a model
 // provider outage then turned every open pull request into a wall of requested
@@ -5431,6 +5501,15 @@ func (fixture *serviceFixture) job() domain.ReviewJob {
 			Head:           domain.HeadSHA(testHeadSHA),
 		},
 	}
+}
+
+// forcedJob is the same job a ForceReviewLabelPrefix label produces, which is
+// the one delivery that reviews a pull request from scratch.
+func (fixture *serviceFixture) forcedJob() domain.ReviewJob {
+	job := fixture.job()
+	job.DeliveryID = "delivery-forced"
+	job.Forced = true
+	return job
 }
 
 func handleServiceRequest(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {
