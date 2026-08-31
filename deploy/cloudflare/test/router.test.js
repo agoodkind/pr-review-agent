@@ -174,6 +174,80 @@ test("a service answer that is not 500 passes through untouched and queues nothi
   assert.equal(queued.length, 0);
 });
 
+// The container reads its environment once, at start. A chunk timeout changed
+// to 6 seconds and restored 5 minutes later still governed a real pull request
+// 13 minutes after the restore, because nothing had restarted the container.
+// A forced review therefore has to reach a fresh container, and the worker is
+// the only part that owns one.
+function createRestartEnvironment(events) {
+  return {
+    PR_AGENT: {
+      getByName(name) {
+        assert.equal(name, "github-app");
+        return {
+          async restartForForcedReview() {
+            events.push("restart");
+          },
+          async fetch() {
+            events.push("forward");
+            return new Response("proxied", { status: 202 });
+          },
+        };
+      },
+    },
+  };
+}
+
+function labeledWebhookRequest(action, labelName) {
+  const body = JSON.stringify({
+    action,
+    label: { name: labelName },
+    pull_request: { head: { sha: "e6949cd" } },
+  });
+  return new Request("https://reviewer.example/api/v1/github_webhooks", {
+    body,
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-github-event": "pull_request",
+      "x-github-delivery": "delivery-label-1",
+    },
+  });
+}
+
+test("a label this service owns stops the container before the delivery is forwarded", async function () {
+  const events = [];
+
+  const response = await routeRequest(
+    labeledWebhookRequest("labeled", "test-review-agent-rerun"),
+    createRestartEnvironment(events),
+  );
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(events, ["restart", "forward"]);
+});
+
+test("no other delivery stops the container", async function () {
+  const cases = [
+    ["labeled", "needs-review"],
+    ["labeled", "review-agent-test"],
+    ["unlabeled", "test-review-agent-rerun"],
+    ["synchronize", ""],
+    ["opened", ""],
+  ];
+
+  for (const [action, labelName] of cases) {
+    const events = [];
+    const response = await routeRequest(
+      labeledWebhookRequest(action, labelName),
+      createRestartEnvironment(events),
+    );
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(events, ["forward"], `${action} ${labelName} stopped the container`);
+  }
+});
+
 test("health probe exits when the endpoint returns HTTP 200", async function (context) {
   const server = http.createServer(function handleRequest(_request, response) {
     response.writeHead(200);

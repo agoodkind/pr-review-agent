@@ -1,6 +1,21 @@
 import { entryFromDelivery, forwardFailed } from "./replaylogic.js";
 import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
 
+// FORCE_REVIEW_LABEL_PREFIX names the labels that ask for a fresh full review.
+// The Go service matches the same prefix on the delivery this worker forwards;
+// what the worker adds is the restart, because only the worker owns the
+// container.
+const FORCE_REVIEW_LABEL_PREFIX = "test-review-agent-";
+
+// forcesReview reports whether a delivery is one of those labels being added.
+function forcesReview(metadata) {
+  return (
+    metadata.eventType === "pull_request" &&
+    metadata.action === "labeled" &&
+    metadata.label.startsWith(FORCE_REVIEW_LABEL_PREFIX)
+  );
+}
+
 export async function routeRequest(request, env) {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health") {
@@ -23,6 +38,20 @@ export async function routeRequest(request, env) {
   let response = null;
   try {
     const container = env.PR_AGENT.getByName("github-app");
+    if (forcesReview(metadata)) {
+      // A restart that fails is logged and the delivery forwarded anyway. The
+      // review is the point and the fresh environment is what the restart adds,
+      // so refusing to review would cost more than reviewing on the old
+      // instance. The log line is what tells an operator which one they got.
+      try {
+        await container.restartForForcedReview();
+        console.log(JSON.stringify({ message: "container restarted for forced review", ...metadata }));
+      } catch (error) {
+        console.error(
+          JSON.stringify({ message: "container restart failed", ...metadata, error: String(error) }),
+        );
+      }
+    }
     response = await container.fetch(request);
   } catch (error) {
     console.error(JSON.stringify({ message: "webhook forward threw", ...metadata, error: String(error) }));
@@ -81,7 +110,7 @@ async function readWebhookMetadata(request) {
   const deliveryId = request.headers.get("x-github-delivery") ?? "";
   const eventType = request.headers.get("x-github-event") ?? "";
   if (eventType !== "pull_request") {
-    return { deliveryId, eventType, action: "", head: "" };
+    return { deliveryId, eventType, action: "", head: "", label: "" };
   }
 
   try {
@@ -91,8 +120,11 @@ async function readWebhookMetadata(request) {
       eventType,
       action: payload.action ?? "",
       head: payload.pull_request?.head?.sha ?? "",
+      // The label object is present only on a labeled or unlabeled delivery.
+      // Every other action reads as an empty name, which matches no prefix.
+      label: payload.label?.name ?? "",
     };
   } catch {
-    return { deliveryId, eventType, action: "invalid_json", head: "" };
+    return { deliveryId, eventType, action: "invalid_json", head: "", label: "" };
   }
 }
