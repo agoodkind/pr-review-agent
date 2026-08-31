@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -347,7 +348,7 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 	}
 }
 
-func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
+func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 	finding := sampleFinding()
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
@@ -359,9 +360,10 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 		threads: []githubapp.ReviewThread{
 			ownedThread("thread-missing", body, finding, false),
 		},
-		files: map[string][]byte{
-			finding.Path: []byte("line1"),
-		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:   finding.Path,
+			Status: "removed",
+		}},
 	}
 	model := &fakeModel{}
 
@@ -371,7 +373,7 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(model.prompts) != 0 {
-		t.Fatalf("model prompt count = %d, want 0 for removed anchor", len(model.prompts))
+		t.Fatalf("model prompt count = %d, want 0 for removed file", len(model.prompts))
 	}
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-missing" {
 		t.Fatalf("resolve calls = %v, want [thread-missing]", github.resolveCalls)
@@ -379,6 +381,251 @@ func TestReconcileResolvesRemovedFindingAnchorWithoutModel(t *testing.T) {
 	if !threads[0].Resolved {
 		t.Fatal("thread remains unresolved")
 	}
+}
+
+func TestReconcileSendsShortenedFileAnchorToModel(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-shortened", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte("line1"),
+		},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-shortened",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "cannot prove the defect gone",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1 for shortened file", len(model.prompts))
+	}
+	if len(github.resolveCalls) != 0 {
+		t.Fatalf("resolve calls = %v, want none without a model verdict", github.resolveCalls)
+	}
+}
+
+func TestReconcileShowsFixedCodeAfterInsertionsAboveAnchor(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	// GitHub reports line: null for outdated threads, so the decoded thread
+	// carries the original head's coordinates (line 2) while the fix now sits
+	// below thirty inserted lines, at line 32.
+	//
+	// The insertion is deliberately larger than the window radius. A smaller
+	// shift leaves the fix inside the window drawn around the stale line too, so
+	// the assertion below would hold whether or not the coordinates were
+	// remapped, and a remapping regression would pass unnoticed.
+	insertedLines := make([]string, 0, shiftedInsertionCount)
+	patchLines := []string{
+		fmt.Sprintf("@@ -1,3 +1,%d @@", shiftedInsertionCount+3),
+		" line1",
+	}
+	for index := range shiftedInsertionCount {
+		inserted := fmt.Sprintf("new line %d", index)
+		insertedLines = append(insertedLines, inserted)
+		patchLines = append(patchLines, "+"+inserted)
+	}
+	patchLines = append(patchLines, "-issue line", "+fixed line", " line3")
+
+	currentFile := "line1\n" + strings.Join(insertedLines, "\n") + "\nfixed line\nline3"
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-shifted", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte(currentFile),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        strings.Join(patchLines, "\n") + "\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-shifted",
+			Resolution:   domain.ResolutionResolved,
+			Reason:       "fixed",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	}
+	promptCodeSection := currentCodeSection(t, model.prompts[0])
+	if !strings.Contains(promptCodeSection, "fixed line") {
+		t.Fatalf("current code section misses the shifted fix: %q", promptCodeSection)
+	}
+	// The window drawn around the stale line stops well before the fix, so its
+	// absence is what a coordinate regression would show. Asserting that the
+	// excerpt is not simply the whole file keeps this test honest if the fixture
+	// ever shrinks.
+	if strings.Contains(promptCodeSection, "new line 0") {
+		t.Fatalf("current code section still spans the stale anchor, so it would "+
+			"contain the fix without any remapping: %q", promptCodeSection)
+	}
+}
+
+// shiftedInsertionCount is how many lines the fixture inserts above the anchor.
+// It exceeds the reconciler's window radius, which is what makes the stale
+// window and the remapped window disjoint enough to tell apart.
+const shiftedInsertionCount = 30
+
+// GitHub does not diff the finding commit against the current one directly. Once
+// the two diverge, through a force push or a rebase, it diffs from where they
+// last agreed, so the patches describe a range the finding's coordinates were
+// never in.
+//
+// There is then no honest window to show. The recorded line does not identify
+// the finding at the current commit either, so a window drawn on it can be
+// unrelated clean code that reads as the defect being gone, and the model
+// resolves a thread on evidence that is not about it. The thread is left
+// unreconciled instead, so it stays open for a person.
+func TestReconcileDoesNotRemapThroughADivergedComparison(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	// The same shape as the shifted-anchor fixture, so the only difference is
+	// which commit the patch is measured from.
+	insertedLines := make([]string, 0, shiftedInsertionCount)
+	patchLines := []string{
+		fmt.Sprintf("@@ -1,3 +1,%d @@", shiftedInsertionCount+3),
+		" line1",
+	}
+	for index := range shiftedInsertionCount {
+		inserted := fmt.Sprintf("new line %d", index)
+		insertedLines = append(insertedLines, inserted)
+		patchLines = append(patchLines, "+"+inserted)
+	}
+	patchLines = append(patchLines, "-issue line", "+fixed line", " line3")
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		// The branches diverged, so the patch is measured from neither head.
+		mergeBase: domain.HeadSHA("e7f8b4fdfaf828ef157a37e2f5d4f4424963af65"),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-diverged", body, finding, false),
+		},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\n" + strings.Join(insertedLines, "\n") + "\nfixed line\nline3"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        strings.Join(patchLines, "\n") + "\n",
+			PatchPresent: true,
+		}},
+	}
+	// Scripted to resolve, so a thread that does reach the model resolves and the
+	// assertion below cannot pass by accident.
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-diverged",
+			Resolution:   domain.ResolutionResolved,
+			Reason:       "fixed",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	threads, err := service.Reconcile(context.Background(), testJob())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 0 {
+		t.Fatalf("the thread was sent to the model on a window that is not about it:\n%s", model.prompts[0])
+	}
+	if len(github.resolveCalls) != 0 {
+		t.Fatalf("resolve calls = %v, want none: nothing here shows whether the defect is gone",
+			github.resolveCalls)
+	}
+	if threads[0].Resolved {
+		t.Fatal("the thread was resolved on a comparison that never contained the finding")
+	}
+}
+
+// A removed file is the one answer divergence cannot spoil. The comparison says
+// the path is gone from the current commit, and that holds whatever commit it
+// measured from, so the anchor cannot have survived. Refusing it because the
+// range is diverged would leave an obsolete thread open forever.
+func TestReconcileResolvesARemovedFileEvenOnADivergedComparison(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	github := &fakeGitHub{
+		head: domain.HeadSHA(testCurrentHead),
+		// The branches diverged, so no window could be trusted here.
+		mergeBase: domain.HeadSHA("e7f8b4fdfaf828ef157a37e2f5d4f4424963af65"),
+		threads: []githubapp.ReviewThread{
+			ownedThread("thread-removed", body, finding, false),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:   finding.Path,
+			Status: "removed",
+		}},
+	}
+	model := &fakeModel{}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	threads, err := service.Reconcile(context.Background(), testJob())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 0 {
+		t.Fatalf("model prompt count = %d, want 0: a removed file needs no model", len(model.prompts))
+	}
+	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-removed" {
+		t.Fatalf("resolve calls = %v, want [thread-removed]: the file the finding anchors to is gone",
+			github.resolveCalls)
+	}
+	if !threads[0].Resolved {
+		t.Fatal("an obsolete thread was left open because the comparison happened to be diverged")
+	}
+}
+
+// currentCodeSection isolates the current-code excerpt so assertions cannot be
+// satisfied by the diff section of the prompt.
+func currentCodeSection(t *testing.T, prompt string) string {
+	t.Helper()
+	_, after, found := strings.Cut(prompt, "Current code")
+	if !found {
+		t.Fatalf("prompt has no current code section: %q", prompt)
+	}
+	section, _, found := strings.Cut(after, "\n\nDiff from finding head to current head:")
+	if !found {
+		t.Fatalf("prompt has no diff section: %q", prompt)
+	}
+	return section
 }
 
 func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
@@ -422,6 +669,132 @@ func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
 	}
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none", github.resolveCalls)
+	}
+}
+
+// A thread reply is the author's side of the dispute. The reconciler prompt
+// must carry it, or a reply disproving the finding can never move the model.
+func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	const replyText = "Declined: the compose file configures no authorizer, so this check cannot fire."
+	thread := ownedThread("thread-replied", body, finding, false)
+	thread.Replies = []domain.ReviewComment{{
+		DatabaseID: 801,
+		Author:     "other-user",
+		Body:       replyText,
+		Path:       finding.Path,
+		StartLine:  finding.StartLine,
+		EndLine:    finding.EndLine,
+	}}
+
+	github := &fakeGitHub{
+		head:    domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{thread},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\nissue line\nline3\n"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-replied",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "the defect still applies",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	}
+	if !strings.Contains(model.prompts[0], replyText) {
+		t.Fatalf("prompt missing the author reply: %q", model.prompts[0])
+	}
+	if !strings.Contains(model.prompts[0], "other-user") {
+		t.Fatalf("prompt does not attribute the reply: %q", model.prompts[0])
+	}
+}
+
+// Nothing bounds how much a thread accumulates, and an oversized thread is sent
+// on its own rather than dropped, so one long argument becomes a request too
+// large for the model that fails every time it is retried and never reconciles.
+// The prompt keeps the most recent replies and says how many it left out.
+func TestReconcileBoundsALongThreadAndSaysWhatItOmitted(t *testing.T) {
+	finding := sampleFinding()
+	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+
+	const replyCount = 60
+	thread := ownedThread("thread-long", body, finding, false)
+	for index := range replyCount {
+		thread.Replies = append(thread.Replies, domain.ReviewComment{
+			DatabaseID: int64(800 + index),
+			Author:     "other-user",
+			// Each reply is a substantial paragraph, as a real argument is.
+			Body:      fmt.Sprintf("reply %d: %s", index, strings.Repeat("word ", 60)),
+			Path:      finding.Path,
+			StartLine: finding.StartLine,
+			EndLine:   finding.EndLine,
+		})
+	}
+
+	github := &fakeGitHub{
+		head:    domain.HeadSHA(testCurrentHead),
+		threads: []githubapp.ReviewThread{thread},
+		files: map[string][]byte{
+			finding.Path: []byte("line1\nissue line\nline3\n"),
+		},
+		compareFiles: []githubapp.ChangedFile{{
+			Path:         finding.Path,
+			Status:       "modified",
+			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+			PatchPresent: true,
+		}},
+	}
+	model := &fakeModel{
+		resolutions: []domain.ThreadResolution{{
+			ThreadNodeID: "thread-long",
+			Resolution:   domain.ResolutionOpen,
+			Reason:       "the defect still applies",
+		}},
+	}
+
+	service := reconcile.NewService(github, model, testBotLogin, nil)
+	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
+	}
+	prompt := model.prompts[0]
+	if len(prompt) > config.MaximumPromptBytes {
+		t.Fatalf("prompt is %d bytes, over the %d byte budget, so it fails every time it is retried",
+			len(prompt), config.MaximumPromptBytes)
+	}
+	// The newest reply is the one that answers the current state of the code.
+	if !strings.Contains(prompt, fmt.Sprintf("reply %d:", replyCount-1)) {
+		t.Fatalf("prompt dropped the most recent reply:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "older replies are not shown") {
+		t.Fatalf("prompt does not say the discussion was cut, so the excerpt reads as all of it:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "reply 0:") {
+		t.Fatalf("prompt kept the oldest reply, so nothing was actually bounded:\n%s", prompt)
 	}
 }
 
@@ -489,10 +862,13 @@ type fakeGitHub struct {
 	getFileErrors  map[string]error
 	compareFiles   []githubapp.ChangedFile
 	compareError   error
-	resolveErrors  map[string]error
-	resolveCalls   []string
-	replyCalls     int
-	getPullCount   int
+	// mergeBase overrides the commit the compare patches are measured from, for
+	// the diverged case where it is neither the finding head nor the current one.
+	mergeBase     domain.HeadSHA
+	resolveErrors map[string]error
+	resolveCalls  []string
+	replyCalls    int
+	getPullCount  int
 }
 
 func (fake *fakeGitHub) ListReviewThreads(
@@ -521,16 +897,24 @@ func (fake *fakeGitHub) GetFile(
 	return content, nil
 }
 
+// Compare answers the way GitHub does: the patches are measured from where the
+// two commits last agreed. mergeBase names that commit, defaulting to the
+// finding head, which is the case where the head is an ancestor of the current
+// head and the patches really are measured from it.
 func (fake *fakeGitHub) Compare(
 	_ context.Context,
 	_ int64,
 	_ domain.Repository,
-	_, _ domain.HeadSHA,
-) ([]githubapp.ChangedFile, error) {
+	base, _ domain.HeadSHA,
+) (githubapp.Comparison, error) {
 	if fake.compareError != nil {
-		return nil, fake.compareError
+		return githubapp.Comparison{}, fake.compareError
 	}
-	return fake.compareFiles, nil
+	mergeBase := base
+	if fake.mergeBase != "" {
+		mergeBase = fake.mergeBase
+	}
+	return githubapp.Comparison{MergeBase: mergeBase, Files: fake.compareFiles}, nil
 }
 
 func (fake *fakeGitHub) GetPullRequest(

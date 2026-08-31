@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --test test/*.test.js && wrangler deploy --dry-run",
+    "check": "node --test test/*.test.js && wrangler deploy --dry-run --containers-rollout none",
+    "deploy": "node scripts/deploy-with-image.mjs",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

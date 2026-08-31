@@ -86,6 +86,127 @@ func TestAppJWTContainsExpectedClaimsAndValidSignature(t *testing.T) {
 	}
 }
 
+// threadCommentNode is one comment as the GraphQL API reports it.
+func threadCommentNode(databaseID int, body string, author string) map[string]any {
+	return map[string]any{
+		"databaseId": float64(databaseID),
+		"body":       body,
+		"path":       "main.go",
+		"line":       float64(2),
+		"startLine":  float64(2),
+		"author":     map[string]any{"login": author},
+	}
+}
+
+// A long argument on one finding runs past the first page of that thread's
+// comments. Those later replies are the author's answer, which reconciliation
+// weighs and the dispute guard reads, so dropping them in silence decides from
+// partial context. Every page has to be followed.
+func TestListReviewThreadsFollowsEveryPageOfAThreadsComments(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	commentPageRequests := 0
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
+			writeJSON(writer, http.StatusCreated, map[string]any{
+				"token":      "ghs_installation",
+				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+			})
+			return
+		}
+
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// The follow-up query addresses one thread by node id; the listing walks
+		// the pull request's threads.
+		if strings.Contains(payload.Query, "PullRequestReviewThread") {
+			commentPageRequests++
+			writeJSON(writer, http.StatusOK, map[string]any{
+				"data": map[string]any{
+					"node": map[string]any{
+						"comments": map[string]any{
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							"nodes": []map[string]any{
+								threadCommentNode(3, "third comment", "other-user"),
+								threadCommentNode(4, "fourth comment", "other-user"),
+							},
+						},
+					},
+				},
+			})
+			return
+		}
+
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"data": map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"reviewThreads": map[string]any{
+							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
+							"nodes": []map[string]any{{
+								"id":         "thread-long",
+								"isResolved": false,
+								"isOutdated": false,
+								"comments": map[string]any{
+									"pageInfo": map[string]any{
+										"hasNextPage": true,
+										"endCursor":   "comment-cursor-1",
+									},
+									"nodes": []map[string]any{
+										threadCommentNode(1, "the finding", testBotLogin),
+										threadCommentNode(2, "second comment", "other-user"),
+									},
+								},
+							}},
+						},
+					},
+				},
+			},
+		})
+	})
+
+	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 1)
+	if err != nil {
+		t.Fatalf("ListReviewThreads: %v", err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("threads = %d, want 1", len(threads))
+	}
+	if commentPageRequests != 1 {
+		t.Fatalf("comment page requests = %d, want the second page fetched once", commentPageRequests)
+	}
+	if threads[0].RootComment.Body != "the finding" {
+		t.Fatalf("root comment = %q, want the finding", threads[0].RootComment.Body)
+	}
+
+	bodies := make([]string, 0, len(threads[0].Replies))
+	for _, reply := range threads[0].Replies {
+		bodies = append(bodies, reply.Body)
+	}
+	want := []string{"second comment", "third comment", "fourth comment"}
+	if len(bodies) != len(want) {
+		t.Fatalf("replies = %v, want every reply across both pages %v", bodies, want)
+	}
+	for index, body := range want {
+		if bodies[index] != body {
+			t.Fatalf("replies = %v, want %v in thread order", bodies, want)
+		}
+	}
+}
+
 func TestInstallationTokenIsCachedAndRefreshedBeforeExpiry(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	now := time.Unix(1_700_000_000, 0)
@@ -459,6 +580,67 @@ func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
 	}
 }
 
+func TestListReviewThreadsDecodesRepliesAfterTheRootComment(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	state.threadPages = []map[string]any{{
+		"repository": map[string]any{
+			"pullRequest": map[string]any{
+				"reviewThreads": map[string]any{
+					"pageInfo": map[string]any{
+						"hasNextPage": false,
+						"endCursor":   "",
+					},
+					"nodes": []map[string]any{{
+						"id":         "thread-replied",
+						"isResolved": false,
+						"comments": map[string]any{
+							"nodes": []map[string]any{
+								{
+									"databaseId": float64(1),
+									"body":       "the finding",
+									"path":       "main.go",
+									"line":       float64(3),
+									"startLine":  float64(3),
+									"author": map[string]any{
+										"__typename": "Bot",
+										"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
+									},
+								},
+								{
+									"databaseId": float64(2),
+									"body":       "declined: the configured stack has no authorizer",
+									"path":       "main.go",
+									"line":       float64(3),
+									"startLine":  float64(3),
+									"author":     map[string]any{"login": "author-user"},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
+	}}
+
+	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 6)
+	if err != nil {
+		t.Fatalf("ListReviewThreads: %v", err)
+	}
+	if threads[0].RootComment.Body != "the finding" {
+		t.Fatalf("root body = %q, want the first comment", threads[0].RootComment.Body)
+	}
+	if len(threads[0].Replies) != 1 {
+		t.Fatalf("replies = %d, want the one reply after the root", len(threads[0].Replies))
+	}
+	reply := threads[0].Replies[0]
+	if reply.Author != "author-user" || reply.Body != "declined: the configured stack has no authorizer" {
+		t.Fatalf("reply = %+v, want the author's reply decoded", reply)
+	}
+}
+
 func TestListReviewThreadsUsesOriginalLinesForOutdatedComments(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
@@ -574,6 +756,12 @@ func TestCreateAndUpdateIssueComment(t *testing.T) {
 	}
 	if lastMethod != http.MethodPost || lastPath != "/repos/owner/repo/issues/7/comments" {
 		t.Fatalf("request = %s %s, want POST the issue comments path", lastMethod, lastPath)
+	}
+	// The create half asserted method and path but never the body, so a create
+	// that posted the wrong text, or none, passed. Both halves share one
+	// writer, and the update half is the only place that caught it.
+	if !strings.Contains(lastBody, "hello") {
+		t.Fatalf("create body = %q, want the text the caller asked to post", lastBody)
 	}
 
 	if _, err := client.UpdateIssueComment(context.Background(), 99, repo, 4242, "second"); err != nil {
@@ -897,9 +1085,19 @@ func emptyThreadPage(hasNext bool) map[string]any {
 	}
 }
 
+// failForbiddenEndpoint refuses the endpoints no test in this file should
+// reach. Reply posting is forbidden everywhere. Issue comment writes are
+// legitimate service behavior, but every test of them builds its own handler,
+// so one reaching this shared harness is a test calling something it did not
+// mean to; the tripwire was narrowed away once and restored, because it costs
+// nothing and catches exactly that.
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
 	if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
 		http.Error(writer, "replies forbidden", http.StatusForbidden)
+		return true
+	}
+	if strings.Contains(request.URL.Path, "/issues/comments") {
+		http.Error(writer, "issue comment writes use their own test handler", http.StatusForbidden)
 		return true
 	}
 	return false
@@ -979,4 +1177,54 @@ func base64RawURLDecode(value string) ([]byte, error) {
 	pad := strings.Repeat("=", (4-len(value)%4)%4)
 	standard := strings.NewReplacer("-", "+", "_", "/").Replace(value + pad)
 	return base64.StdEncoding.DecodeString(standard)
+}
+
+// The summary comment is found by listing the pull request's comments, and a
+// busy pull request pages them. A lookup that read only the first page would
+// miss the marker and create a second top level comment, which is the one
+// comment guarantee broken by pagination rather than by logic.
+func TestListIssueCommentsReadsEveryPage(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	pages := [][]map[string]any{
+		{{"id": float64(1), "body": "first page", "user": map[string]any{"login": "someone"}}},
+		{{"id": float64(2), "body": "marker lives here", "user": map[string]any{"login": "bot"}}},
+	}
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
+			writeJSON(writer, http.StatusCreated, map[string]any{
+				"token":      "ghs_installation",
+				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+			})
+			return
+		}
+		// GitHub paginates through the Link header, and the client follows
+		// exactly that, so the fixture speaks it too.
+		pageIndex := 0
+		if request.URL.Query().Get("page") == "2" {
+			pageIndex = 1
+		} else {
+			writer.Header().Set(
+				"Link",
+				fmt.Sprintf("<http://%s%s?page=2>; rel=\"next\"", request.Host, request.URL.Path),
+			)
+		}
+		writeJSON(writer, http.StatusOK, pages[pageIndex])
+	})
+
+	comments, err := client.ListIssueComments(context.Background(), 99, testRepo(), 7)
+	if err != nil {
+		t.Fatalf("ListIssueComments: %v", err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("comments = %d, want both pages read", len(comments))
+	}
+	if comments[1].Body != "marker lives here" {
+		t.Fatalf("second comment = %q, want the one only page two carries", comments[1].Body)
+	}
+	if comments[1].Author != "bot" {
+		t.Fatalf("author = %q, want the login decoded from the page", comments[1].Author)
+	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -27,7 +28,7 @@ type GitHub interface {
 		domain.Repository,
 		domain.HeadSHA,
 		domain.HeadSHA,
-	) ([]githubapp.ChangedFile, error)
+	) (githubapp.Comparison, error)
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
 	ResolveReviewThread(context.Context, int64, string) error
 }
@@ -122,7 +123,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		}
 		prepared = append(prepared, preparedThread{
 			thread: thread,
-			text:   formatThreadSection(thread, currentHead, contextText),
+			text:   formatThreadSection(thread, currentHead, contextText, service.botLogin),
 		})
 	}
 
@@ -371,6 +372,7 @@ func selectOwnedThreads(
 			ViewerCanResolve:   thread.ViewerCanResolve,
 			ViewerCanUnresolve: thread.ViewerCanUnresolve,
 			RootComment:        thread.RootComment,
+			Replies:            thread.Replies,
 			Finding:            finding,
 			FindingHead:        findingHead,
 		})
@@ -393,7 +395,7 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	changedFiles, err := service.github.Compare(
+	comparison, err := service.github.Compare(
 		ctx,
 		job.InstallationID,
 		job.Repository,
@@ -404,7 +406,13 @@ func (service *Service) loadThreadContext(
 		gklog.L(ctx).ErrorContext(ctx, "compare finding head", slog.String("err", err.Error()))
 		return emptyThreadContext(), threadContextUnavailable
 	}
+	changedFiles := comparison.Files
 
+	// The removed file is settled before anything else, because it is the one
+	// answer divergence cannot spoil. A comparison saying this path is gone from
+	// the current commit says so whatever it measured from, and the anchor cannot
+	// survive a file that no longer exists. Refusing that answer on the grounds
+	// that the range is diverged would leave an obsolete thread open forever.
 	currentPath := normalizedPath
 	for _, file := range changedFiles {
 		if file.Path == normalizedPath && file.Status == "removed" {
@@ -413,6 +421,24 @@ func (service *Service) loadThreadContext(
 		if file.PreviousPath == normalizedPath && file.Path != "" {
 			currentPath = file.Path
 		}
+	}
+
+	// Everything past here reads a window of code and asks whether the defect is
+	// still in it, and that needs coordinates the comparison can place. GitHub
+	// compares from where two commits last agreed, so once the finding commit and
+	// the current one diverge the patches describe a range the finding's
+	// coordinates were never in, and the recorded line does not identify it at
+	// the current commit either. A window drawn on it can show unrelated clean
+	// code that reads as the defect being gone, so the thread is left
+	// unreconciled and stays open for a person.
+	if comparison.MergeBase == "" || comparison.MergeBase != thread.FindingHead {
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"thread context unavailable, the comparison is not measured from the finding commit",
+			slog.String("thread", thread.NodeID),
+			slog.String("merge_base", string(comparison.MergeBase)),
+		)
+		return emptyThreadContext(), threadContextUnavailable
 	}
 
 	fileBytes, err := service.github.GetFile(
@@ -426,26 +452,75 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	lines, present := extractLines(fileBytes, thread.Finding.StartLine, thread.Finding.EndLine)
-	if !present {
-		return emptyThreadContext(), threadContextRemoved
-	}
-
+	startLine, endLine := remapAnchor(comparison, normalizedPath, thread.Finding)
 	return threadContext{
-		currentContent: lines,
+		currentContent: extractAnchorWindow(fileBytes, startLine, endLine),
 		compareText:    formatCompareForPath(changedFiles, normalizedPath),
 	}, threadContextPresent
 }
 
-func extractLines(content []byte, startLine, endLine int) (string, bool) {
-	if startLine < 1 || endLine < startLine {
-		return "", false
+// remapAnchor moves the finding's coordinates from the head it was written
+// against to the current head.
+//
+// A window around the stale line shows the fix only while the shift stays
+// inside the radius, and nothing bounds the shift: a commit that inserts twenty
+// lines above the anchor moves the code the reconciler needs to see out of view,
+// and the model then reads unrelated code and keeps a fixed finding open. The
+// compare patch is already loaded here and records every shift exactly, so the
+// remapping needs no extra call.
+//
+// The caller has already established that the patch is measured from the commit
+// the finding was written against; a comparison that is not gets no context at
+// all rather than a remapped or a stale window. What is left here is the case
+// where the patch simply says nothing about this file, or cannot be read, and
+// the recorded coordinates are then still the best available.
+func remapAnchor(
+	comparison githubapp.Comparison,
+	normalizedPath string,
+	finding domain.Finding,
+) (int, int) {
+	patch, ok := patchForPath(comparison.Files, normalizedPath)
+	if !ok {
+		return finding.StartLine, finding.EndLine
 	}
+	startLine, startMapped := diff.MapLineToNewSide(patch, finding.StartLine)
+	endLine, endMapped := diff.MapLineToNewSide(patch, finding.EndLine)
+	if !startMapped || !endMapped || endLine < startLine {
+		return finding.StartLine, finding.EndLine
+	}
+	return startLine, endLine
+}
+
+// patchForPath returns the compare patch for one file, under the name it had at
+// the finding head or the name it carries now.
+func patchForPath(changedFiles []githubapp.ChangedFile, normalizedPath string) (string, bool) {
+	for _, file := range changedFiles {
+		if file.Path != normalizedPath && file.PreviousPath != normalizedPath {
+			continue
+		}
+		if !file.PatchPresent || strings.TrimSpace(file.Patch) == "" {
+			return "", false
+		}
+		return file.Patch, true
+	}
+	return "", false
+}
+
+// anchorWindowRadius is the context shown on each side of the anchor. GitHub
+// reports only the original head's coordinates for outdated threads, so later
+// commits shift the anchor and an exact-line excerpt would show unrelated code.
+const anchorWindowRadius = 15
+
+// extractAnchorWindow returns the lines around the anchor, clamped to the file
+// bounds. An anchor past the end of a shortened file still yields the file's
+// tail: only a removed file skips the model, never a shorter one.
+func extractAnchorWindow(content []byte, startLine, endLine int) string {
 	lines := strings.Split(string(content), "\n")
-	if startLine > len(lines) || endLine > len(lines) {
-		return "", false
-	}
-	return strings.Join(lines[startLine-1:endLine], "\n"), true
+	startLine = min(max(startLine, 1), len(lines))
+	endLine = min(max(endLine, startLine), len(lines))
+	windowStart := max(startLine-anchorWindowRadius, 1)
+	windowEnd := min(endLine+anchorWindowRadius, len(lines))
+	return strings.Join(lines[windowStart-1:windowEnd], "\n")
 }
 
 func formatCompareForPath(changedFiles []githubapp.ChangedFile, path string) string {
@@ -465,6 +540,7 @@ func formatThreadSection(
 	thread domain.OwnedThread,
 	currentHead domain.HeadSHA,
 	contextText threadContext,
+	botLogin string,
 ) string {
 	var builder strings.Builder
 	builder.WriteString("Thread node id: ")
@@ -483,7 +559,23 @@ func formatThreadSection(
 	builder.WriteString(thread.Finding.Body)
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
-	builder.WriteString("\n\nCurrent code:\n")
+	if len(thread.Replies) > 0 {
+		// The replies are not labelled as the author's. Anyone who can comment on
+		// a pull request can reply on a thread, so calling them all the author's
+		// response would let a passer by, or this service quoting itself, stand as
+		// the answer that resolves a finding.
+		lines, omitted := review.FormatReplies(thread.Replies, botLogin, review.MaximumReplyBytes)
+		builder.WriteString("\n\nReplies on this thread, oldest first. The name before each one is who wrote it")
+		if omitted > 0 {
+			fmt.Fprintf(&builder, ", and %d older replies are not shown", omitted)
+		}
+		builder.WriteString(":")
+		for _, line := range lines {
+			builder.WriteString("\n")
+			builder.WriteString(line)
+		}
+	}
+	builder.WriteString("\n\nCurrent code around the anchor (line numbers may have shifted):\n")
 	builder.WriteString(contextText.currentContent)
 	builder.WriteString("\n\nDiff from finding head to current head:\n")
 	builder.WriteString(contextText.compareText)
@@ -539,7 +631,7 @@ func buildBatchPrompt(batch []preparedThread, index, total int) string {
 	var builder strings.Builder
 	builder.WriteString("Reconcile bot threads after a new commit. Batch ")
 	fmt.Fprintf(&builder, "%d/%d", index, total)
-	builder.WriteString(". Resolve a thread when the current code no longer has its defect. Keep it open only when the defect still exists. Use uncertain only when the supplied code and diff cannot decide.\n")
+	builder.WriteString(". Resolve a thread when the current code no longer has its defect. Keep it open only when the defect still exists. Use uncertain only when the supplied code and diff cannot decide. Author replies are context: verify their claims against the supplied code and diff, and resolve when a reply's disproof of the finding holds up there.\n")
 	var body strings.Builder
 	for itemIndex, item := range batch {
 		if itemIndex > 0 {

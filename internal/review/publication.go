@@ -115,6 +115,96 @@ func threadCommentURL(thread githubapp.ReviewThread, ref domain.PullRequestRef) 
 	)
 }
 
+// GitHub reports review states, not the events that produced them: the event
+// REQUEST_CHANGES reads back as CHANGES_REQUESTED and APPROVE as APPROVED.
+const (
+	reviewStateApproved         = "APPROVED"
+	reviewStateChangesRequested = "CHANGES_REQUESTED"
+	// reviewStateDismissed is a verdict somebody withdrew. It is not a verdict
+	// and it does not restore the one before it.
+	reviewStateDismissed = "DISMISSED"
+)
+
+// latestBotVerdictReview returns the newest review of the service's own that
+// still carries a verdict for this head; COMMENTED and DISMISSED reviews decide
+// nothing.
+//
+// The head is part of the test, not context. A pull request force pushed back to
+// a commit it already carried has verdicts from more than one head in one list,
+// and a scan that took the newest of them judged this head by what some other
+// head concluded. The commit a review names is what settles which head it spoke
+// for.
+//
+// The review marker is deliberately not also required. Every verdict body
+// carries one, so it would exclude nothing a matching commit does not already
+// exclude, and a verdict whose marker never reached the review list is exactly
+// the case the durable state path exists to refresh.
+func latestBotVerdictReview(
+	reviews []githubapp.Review,
+	botLogin string,
+	head domain.HeadSHA,
+) (githubapp.Review, bool) {
+	latest := githubapp.Review{ID: 0, CommitID: "", Author: "", Body: "", State: ""}
+	found := false
+	for _, item := range reviews {
+		if item.Author != botLogin || item.CommitID != head {
+			continue
+		}
+		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
+			continue
+		}
+		latest = item
+		found = true
+	}
+	return latest, found
+}
+
+// latestBotVerdictState is the state GitHub currently shows for this service on
+// the pull request: its newest review carrying a verdict, whatever head that
+// review named. It is the empty string when the service has submitted none.
+//
+// Which head a review named decides what that run concluded, and decides nothing
+// about what the pull request shows now. A force push back to a commit that was
+// already reviewed leaves a newer review from the head in between, and GitHub
+// keeps counting that newer one. Comparing a recomputed decision against the
+// matching head's older review found the two equal, submitted nothing, and left
+// the newer verdict standing over thread state that no longer supported it.
+func latestBotVerdictState(reviews []githubapp.Review, botLogin string) string {
+	state := ""
+	for _, item := range reviews {
+		if item.Author != botLogin {
+			continue
+		}
+		// A dismissal withdraws the verdict rather than restoring the one before
+		// it. Passing over it would leave the older state standing, and a refresh
+		// that then found that state equal to the decision it recomputed would
+		// submit nothing, leaving the pull request carrying no verdict at all.
+		if item.State == reviewStateDismissed {
+			state = ""
+			continue
+		}
+		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
+			continue
+		}
+		state = item.State
+	}
+	return state
+}
+
+// reviewStateFor is the state GitHub reports once a decision is submitted.
+func reviewStateFor(decision domain.ReviewDecision) string {
+	switch decision {
+	case domain.ReviewDecisionApprove:
+		return reviewStateApproved
+	case domain.ReviewDecisionRequestChanges:
+		return reviewStateChangesRequested
+	case domain.ReviewDecisionComment:
+		return "COMMENTED"
+	default:
+		return ""
+	}
+}
+
 // logPublishedFindings records what the review found against what reached the
 // pull request, so a reader can tell a suppressed finding from a lost one.
 func logPublishedFindings(

@@ -81,6 +81,117 @@ func ValidRange(changed map[int]struct{}, hunks map[int]int, startLine, endLine 
 	return true
 }
 
+// MapLineToNewSide maps one line number from a patch's old side to the line it
+// occupies on the new side.
+//
+// GitHub reports only the original head's coordinates for an outdated review
+// thread, so every commit that inserts above the anchor leaves those
+// coordinates pointing at unrelated code. The patch between the two heads
+// already records how far each line moved, so this is arithmetic rather than a
+// guess and it costs no model call.
+//
+// A line inside a hunk takes the position that hunk gives it, and a deleted line
+// takes the place it was removed from. A line after a hunk moves by everything
+// the hunks before it added and removed. A patch with no hunk, or a body this
+// cannot read, maps nothing, and the caller keeps the coordinates it had.
+func MapLineToNewSide(patch string, oldLine int) (int, bool) {
+	if oldLine < 1 {
+		return 0, false
+	}
+	hunks, err := splitPatchHunks(patch)
+	if err != nil || len(hunks) == 0 {
+		return 0, false
+	}
+
+	offset := 0
+	for _, hunk := range hunks {
+		if precedesHunk(hunk.header, oldLine) {
+			return oldLine + offset, true
+		}
+		if oldLine < hunk.header.oldStart+hunk.header.oldCount {
+			return mapLineInsideHunk(hunk, oldLine)
+		}
+		offset += hunk.header.newCount - hunk.header.oldCount
+	}
+	return oldLine + offset, true
+}
+
+// precedesHunk reports whether a line on the old side sits before this hunk.
+//
+// A pure insertion consumes no old line, and git writes its position as the line
+// it inserts after: "@@ -5,0 +6,1 @@" adds a line after old line 5. Old line 5
+// itself is untouched and stays where it was, so it precedes the hunk. Treating
+// it as covered instead pushed it forward by everything the insertion added and
+// pointed the anchor at the newly inserted text.
+func precedesHunk(header hunkHeader, oldLine int) bool {
+	if header.oldCount == 0 {
+		return oldLine <= header.oldStart
+	}
+	return oldLine < header.oldStart
+}
+
+// patchHunk is one hunk header with the body lines that follow it.
+type patchHunk struct {
+	header hunkHeader
+	body   []string
+}
+
+// splitPatchHunks breaks a patch into its hunks. Lines before the first header
+// are patch preamble and belong to no hunk.
+func splitPatchHunks(patch string) ([]patchHunk, error) {
+	hunks := make([]patchHunk, 0)
+	for line := range strings.SplitSeq(patch, "\n") {
+		if strings.HasPrefix(line, "@@") {
+			header, err := parseHunkHeader(line)
+			if err != nil {
+				return nil, err
+			}
+			hunks = append(hunks, patchHunk{header: header, body: make([]string, 0)})
+			continue
+		}
+		if len(hunks) == 0 {
+			continue
+		}
+		last := len(hunks) - 1
+		hunks[last].body = append(hunks[last].body, line)
+	}
+	return hunks, nil
+}
+
+// mapLineInsideHunk walks one hunk body to the position the target line holds
+// on the new side.
+//
+// An unrecognized body line ends the walk rather than being skipped. Skipping
+// one would leave the two cursors disagreeing about where they are and return a
+// confidently wrong line, and the caller has a defined fallback for not knowing.
+func mapLineInsideHunk(hunk patchHunk, oldLine int) (int, bool) {
+	oldCursor := hunk.header.oldStart
+	newCursor := hunk.header.newStart
+	for _, line := range hunk.body {
+		if line == "" || line == `\ No newline at end of file` {
+			continue
+		}
+		switch line[0] {
+		case '+':
+			newCursor++
+		case '-':
+			if oldCursor == oldLine {
+				return newCursor, true
+			}
+			oldCursor++
+		case ' ':
+			if oldCursor == oldLine {
+				return newCursor, true
+			}
+			oldCursor++
+			newCursor++
+		default:
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
 func parsePatch(patch string) (parsedPatch, error) {
 	lines := strings.Split(patch, "\n")
 	result := parsedPatch{

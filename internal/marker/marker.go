@@ -15,26 +15,22 @@ import (
 )
 
 const (
-	reviewPrefix  = "<!-- pr-review-agent:review:v1 head="
-	findingPrefix = "<!-- pr-review-agent:finding:v1 head="
-	summaryMarker = "<!-- pr-review-agent:summary:v1 -->"
-	// partialMarker names the blocking review a run leaves when it could not
-	// read every chunk. It is deliberately neither the review marker nor the
-	// summary marker: the review marker would say this head was reviewed and
-	// suppress the run that finishes it, and the summary marker would make this
-	// the review later runs edit as their visible summary. This one exists so a
-	// later incomplete run replaces its own last verdict rather than stacking
-	// another short blocking review on the pull request.
-	partialMarker    = "<!-- pr-review-agent:partial:v1 -->"
+	reviewPrefix     = "<!-- pr-review-agent:review:v1 head="
+	findingPrefix    = "<!-- pr-review-agent:finding:v1 head="
+	summaryMarker    = "<!-- pr-review-agent:summary:v1 -->"
 	markerSuffix     = " -->"
 	suggestionPrefix = "```suggestion\n"
 	suggestionSuffix = "\n```"
 )
 
 var (
-	reviewPattern  = regexp.MustCompile(`<!-- pr-review-agent:review:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) -->`)
+	reviewPattern = regexp.MustCompile(`<!-- pr-review-agent:review:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) -->`)
+	// findingPattern accepts a marker with or without a claim key. Every comment
+	// published before the key existed has none, and those comments outlive this
+	// change on every open pull request, so a pattern requiring one would stop
+	// recognizing the service's own findings.
 	findingPattern = regexp.MustCompile(
-		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) importance=([1-9]|10) id=([0-9a-f]{64}) -->`,
+		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) importance=([1-9]|10) id=([0-9a-f]{64})(?: claim=([0-9a-f]{64}))? -->`,
 	)
 )
 
@@ -43,6 +39,10 @@ type FindingMarker struct {
 	Head       domain.HeadSHA
 	Importance int
 	ID         string
+	// ClaimKey identifies what the finding is about rather than how it was
+	// worded. It is empty on a marker written before the key existed, and an
+	// empty key matches nothing.
+	ClaimKey string
 }
 
 // Review returns the review marker for one head SHA.
@@ -73,43 +73,40 @@ func HasSummary(body string) bool {
 	return strings.Contains(body, summaryMarker)
 }
 
-// Partial returns the marker for the blocking verdict a run leaves behind when
-// it could not read every chunk it owed.
-func Partial() string {
-	return partialMarker
-}
-
-// HasPartial reports whether a review is that verdict, and so the one a later
-// incomplete run replaces rather than repeats.
-func HasPartial(body string) bool {
-	return strings.Contains(body, partialMarker)
-}
-
 // Finding returns the finding marker for one head and finding pair.
+//
+// The claim key is included when the finding carries an evidence line to derive
+// it from, and left out otherwise. A finding with no evidence cannot be
+// published anyway, so in practice every new marker carries one; leaving it out
+// rather than writing an empty value keeps a keyless marker exactly the shape
+// the ones already on open pull requests have.
 func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
 	id, err := FindingID(finding)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(
-		"%s%s importance=%d id=%s%s",
+	body := fmt.Sprintf(
+		"%s%s importance=%d id=%s",
 		findingPrefix,
 		head,
 		finding.Importance,
 		id,
-		markerSuffix,
-	), nil
+	)
+	if claim, claimErr := ClaimKey(finding.Path, finding.Evidence); claimErr == nil {
+		body += " claim=" + claim
+	}
+	return body + markerSuffix, nil
 }
 
 // FindFinding extracts a finding marker from a comment body.
 func FindFinding(body string) (FindingMarker, bool) {
 	matches := findingPattern.FindStringSubmatch(body)
-	if len(matches) != 4 {
-		return FindingMarker{Head: "", Importance: 0, ID: ""}, false
+	if len(matches) != 5 {
+		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: ""}, false
 	}
 	head, err := domain.ParseHeadSHA(matches[1])
 	if err != nil {
-		return FindingMarker{Head: "", Importance: 0, ID: ""}, false
+		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: ""}, false
 	}
 	var importance int
 	if matches[2] == "10" {
@@ -117,7 +114,63 @@ func FindFinding(body string) (FindingMarker, bool) {
 	} else {
 		importance = int(matches[2][0] - '0')
 	}
-	return FindingMarker{Head: head, Importance: importance, ID: matches[3]}, true
+	// matches[4] is empty for a marker written before the claim key existed.
+	return FindingMarker{
+		Head:       head,
+		Importance: importance,
+		ID:         matches[3],
+		ClaimKey:   matches[4],
+	}, true
+}
+
+// ClaimKey identifies what a finding is about rather than how it is worded.
+//
+// Rewording is the whole failure this exists for. One live pull request received
+// the same ask five times under five different titles across two different
+// paths, so any key derived from the title is a key that changes every time the
+// model reaches for different words. The evidence line does not change: it is
+// the one field the model must copy verbatim out of the source it was shown, so
+// two findings resting on the same line are making a claim about the same code.
+//
+// The key is a hash rather than the line itself. The marker sits in a published
+// comment, and a quoted source line there would put code in the reader's face
+// for no reason. A hash compares exactly and shows nothing.
+func ClaimKey(pathValue string, evidence string) (string, error) {
+	normalizedPath, err := NormalizePath(pathValue)
+	if err != nil {
+		return "", err
+	}
+	line := normalizeEvidenceLine(evidence)
+	if line == "" {
+		return "", errors.New("finding carries no evidence line")
+	}
+
+	var buffer bytes.Buffer
+	writeLengthHex(&buffer, len(normalizedPath))
+	buffer.WriteString(normalizedPath)
+	writeLengthHex(&buffer, len(line))
+	buffer.WriteString(line)
+
+	sum := sha256.Sum256(buffer.Bytes())
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// normalizeEvidenceLine reduces one quoted source line to the form two findings
+// about the same code agree on.
+//
+// The source shown to the model is a diff, so the same line arrives with or
+// without the marker the diff put on it depending on whether the model kept it.
+// Indentation and inner spacing also move under a reformat while the line stays
+// the same line. Neither difference is a different claim.
+func normalizeEvidenceLine(evidence string) string {
+	line := strings.TrimSpace(evidence)
+	if line == "" {
+		return ""
+	}
+	if line[0] == '+' || line[0] == '-' {
+		line = strings.TrimSpace(line[1:])
+	}
+	return strings.Join(strings.Fields(line), " ")
 }
 
 // EncodeFindingBody renders the inline finding body with its marker.
@@ -169,11 +222,14 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 
 	finding := domain.Finding{
-		Path:       comment.Path,
-		StartLine:  comment.StartLine,
-		EndLine:    comment.EndLine,
-		Title:      title,
-		Body:       body,
+		Path:      comment.Path,
+		StartLine: comment.StartLine,
+		EndLine:   comment.EndLine,
+		Title:     title,
+		Body:      body,
+		// The published comment never carries evidence, so a decoded finding
+		// has none to recover.
+		Evidence:   "",
 		Suggestion: suggestion,
 		Importance: marker.Importance,
 	}

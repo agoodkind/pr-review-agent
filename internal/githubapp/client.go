@@ -88,6 +88,9 @@ type ReviewThread struct {
 	ViewerCanResolve   bool
 	ViewerCanUnresolve bool
 	RootComment        domain.ReviewComment
+	// Replies are the comments under the root, in thread order. They carry the
+	// author's response to a finding, which reconciliation shows the model.
+	Replies []domain.ReviewComment
 }
 
 // APIError is a sanitized GitHub API failure with an HTTP status code.

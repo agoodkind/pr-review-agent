@@ -114,7 +114,7 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		return
 	}
 
-	event, supported, err := webhook.ParsePullRequest(eventType, deliveryID, body)
+	event, supported, err := webhook.ParseEvent(eventType, deliveryID, body)
 	if err != nil {
 		http.Error(writer, "malformed payload", http.StatusBadRequest)
 		return

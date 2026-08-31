@@ -22,7 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
+	"strings"
 	"sync"
 
 	"goodkind.io/gklog"
@@ -81,6 +83,12 @@ func removeChunkID(pending []string, id string) []string {
 type chunkPass struct {
 	work      deltaWork
 	selection *publicationState
+	// disputes and disputePrompt are what the pull request has already been
+	// told, as keys for the backstop and as prose for the prompt. Both are built
+	// once and never written again, so the chunks read them concurrently without
+	// the lock.
+	disputes      disputeContext
+	disputePrompt string
 
 	mu        sync.Mutex
 	collector *findingCollector
@@ -116,20 +124,27 @@ func isChunkPanic(err error) bool {
 	return errors.As(err, &target)
 }
 
-func newChunkPass(work deltaWork, minimumImportance int, selection *publicationState) *chunkPass {
+func newChunkPass(
+	work deltaWork,
+	minimumImportance int,
+	selection *publicationState,
+	disputes disputeContext,
+) *chunkPass {
 	return &chunkPass{
-		work:      work,
-		selection: selection,
-		mu:        sync.Mutex{},
-		collector: newFindingCollector(work.Files, minimumImportance),
-		models:    modelSet{names: nil, seen: nil},
-		published: make([]domain.Finding, 0),
-		failures:  make([]chunkFailure, 0),
-		coverage:  inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
-		requests:  0,
-		posted:    0,
-		failed:    0,
-		panicked:  nil,
+		work:          work,
+		selection:     selection,
+		disputes:      disputes,
+		disputePrompt: disputes.promptSection(),
+		mu:            sync.Mutex{},
+		collector:     newFindingCollector(work.Files, minimumImportance),
+		models:        modelSet{names: nil, seen: nil},
+		published:     make([]domain.Finding, 0),
+		failures:      make([]chunkFailure, 0),
+		coverage:      inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
+		requests:      0,
+		posted:        0,
+		failed:        0,
+		panicked:      nil,
 	}
 }
 
@@ -549,6 +564,7 @@ func (service *Service) reviewOneChunk(
 		service.model,
 		chunk,
 		service.minimumImportance,
+		pass.disputePrompt,
 		&models,
 		&requests,
 		service.now,
@@ -563,7 +579,7 @@ func (service *Service) reviewOneChunk(
 	for _, result := range results {
 		findings = append(findings, result.Findings...)
 	}
-	return service.postChunkFindings(ctx, job, head, findings, pass)
+	return service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
 }
 
 // postCandidate pairs one finding with its rendered comment, so ordering
@@ -586,11 +602,12 @@ func (service *Service) postChunkFindings(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
+	chunkText string,
 	findings []domain.Finding,
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
-	posts := service.renderChunkFindings(ctx, head, findings, pass)
+	posts := service.renderChunkFindings(ctx, head, chunkText, findings, pass)
 	if len(posts) == 0 {
 		return nil
 	}
@@ -604,9 +621,16 @@ func (service *Service) postChunkFindings(
 		return err
 	}
 
+	// Each failed post is classified by its own error, never by the batch it
+	// shares. A refusal is GitHub answering no, which no later attempt can
+	// change, so it is final for that one comment. A transient failure is the
+	// only thing that leaves the chunk pending: batching them together let one
+	// dropped connection turn a refusal into an endless retry, because the
+	// mixed batch never took the refused path.
 	delivered := 0
 	refused := 0
-	var firstErr error
+	var refusedErr error
+	var transientErr error
 	for _, post := range posts {
 		err := service.github.CreateReviewComment(
 			ctx,
@@ -625,12 +649,13 @@ func (service *Service) postChunkFindings(
 				slog.String("err", err.Error()),
 			)
 			pass.recordUndelivered()
-			var apiErr githubapp.APIError
-			if errors.As(err, &apiErr) {
+			if commentRefusal(err) {
 				refused++
-			}
-			if firstErr == nil {
-				firstErr = err
+				if refusedErr == nil {
+					refusedErr = err
+				}
+			} else if transientErr == nil {
+				transientErr = err
 			}
 			continue
 		}
@@ -645,13 +670,35 @@ func (service *Service) postChunkFindings(
 		slog.Int("refused", refused),
 		slog.Int("failed", len(posts)-delivered),
 	)
-	if firstErr == nil {
-		return nil
+	if transientErr != nil {
+		return fmt.Errorf("post chunk findings: %w", transientErr)
 	}
-	if refused == len(posts)-delivered {
-		return fmt.Errorf("%w: %w", errCommentRefused, firstErr)
+	if refusedErr != nil {
+		return fmt.Errorf("%w: %w", errCommentRefused, refusedErr)
 	}
-	return fmt.Errorf("post chunk findings: %w", firstErr)
+	return nil
+}
+
+// commentRefusal reports whether GitHub read this comment and rejected it for
+// what it is, which no later attempt can change. A rate limit or a server
+// error is GitHub failing to answer, not answering no: treating those as
+// refusals checkpointed the chunk and silently dropped its findings, when the
+// next run would have posted them fine.
+//
+// GitHub reports its primary and secondary rate limits as 403 as often as 429,
+// so a 403 whose message says rate limit is a failure to answer too.
+func commentRefusal(err error) bool {
+	var apiErr githubapp.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode == http.StatusRequestTimeout {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(apiErr.Message), "rate limit") {
+		return false
+	}
+	return apiErr.StatusCode >= http.StatusBadRequest && apiErr.StatusCode < http.StatusInternalServerError
 }
 
 // recordDelivered records one finding whose comment reached the page.
@@ -671,13 +718,15 @@ func (pass *chunkPass) recordUndelivered() {
 }
 
 // renderChunkFindings turns one chunk's findings into the comments to post,
-// dropping the ones an earlier review or an earlier chunk already carried.
+// dropping the ones an earlier review or an earlier chunk already carried and
+// the ones this pull request has already answered.
 //
 // It runs under the pass lock, because the suppression state it reads and
 // writes is what makes two chunks reporting one defect post it once.
 func (service *Service) renderChunkFindings(
 	ctx context.Context,
 	head domain.HeadSHA,
+	chunkText string,
 	findings []domain.Finding,
 	pass *chunkPass,
 ) []postCandidate {
@@ -686,9 +735,19 @@ func (service *Service) renderChunkFindings(
 	defer pass.mu.Unlock()
 
 	pass.collector.collect(findings)
-	eligible := eligibleFindings(findings, pass.collector.fileIndex, pass.collector.minimumImportance)
+	grounded := groundedFindings(ctx, findings, pass.collector.fileIndex, chunkText)
+	eligible := eligibleFindings(grounded, pass.collector.fileIndex, pass.collector.minimumImportance)
 	posts := make([]postCandidate, 0, len(eligible))
+	withheld := make([]withheldFinding, 0)
 	for _, finding := range eligible {
+		if thread, answered := pass.disputes.answered(finding); answered {
+			withheld = append(withheld, withheldFinding{
+				Path:   finding.Path,
+				Title:  finding.Title,
+				Thread: thread,
+			})
+			continue
+		}
 		keys := keysFor(finding)
 		if pass.selection.suppressed(keys) {
 			continue
@@ -710,6 +769,7 @@ func (service *Service) renderChunkFindings(
 		pass.selection.remember(keys)
 		posts = append(posts, postCandidate{finding: finding, comment: rendered[0]})
 	}
+	logWithheldFindings(ctx, withheld)
 	return posts
 }
 

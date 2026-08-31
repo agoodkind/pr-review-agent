@@ -151,7 +151,13 @@ piece. That is true only when every individual delta fits the budget.
 5. Reconcile: for each own open thread whose lines the delta touched, decide
    whether the new code fixes it, and resolve the ones it does.
 6. Recompute the verdict from the threads now open and whether the head is
-   fully reviewed. Replace the verdict review.
+   fully reviewed. Replace the verdict review. A head with chunks still
+   pending gets no verdict at all: a failure to read is not a finding, so the
+   run has no grounds to request changes and no grounds to approve, and it
+   touches no review object. The check concluding without passing is what
+   holds the merge gate. Submitting a blocking review here was tried once,
+   and one model provider outage then blocked every open pull request with
+   requested changes nobody had requested.
 7. Rewrite the top level comment's summary. Complete the check.
 
 A chunk whose model call fails stays pending and visible in the marker. It

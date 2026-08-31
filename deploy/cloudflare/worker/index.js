@@ -3,7 +3,10 @@ import { env } from "cloudflare:workers";
 
 import { createPrAgentEnvironment } from "./configuration.js";
 import { containerLifecycleEvent, containerStoppedEvent } from "./lifecycle.js";
+import { WebhookReplayQueue } from "./replay.js";
 import { routeRequest } from "./router.js";
+
+export { WebhookReplayQueue };
 
 export class PrAgentContainer extends Container {
   defaultPort = 3000;

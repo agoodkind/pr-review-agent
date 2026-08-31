@@ -90,11 +90,17 @@ func ParseResolution(value string) (Resolution, error) {
 
 // Finding is one validated review finding anchored to changed code.
 type Finding struct {
-	Path       string `json:"path"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-	Title      string `json:"title"`
-	Body       string `json:"body"`
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
+	// Evidence is the exact source line the finding relies on, copied verbatim
+	// from the code the model was shown. Publication drops a finding whose
+	// evidence does not appear in that source, so a claim about code the model
+	// never saw cannot reach the pull request. An answer without it decodes,
+	// and the missing evidence makes the finding ungrounded.
+	Evidence   string `json:"evidence"`
 	Suggestion string `json:"suggestion"`
 	Importance int    `json:"importance"`
 }
@@ -185,8 +191,12 @@ type OwnedThread struct {
 	ViewerCanResolve   bool
 	ViewerCanUnresolve bool
 	RootComment        ReviewComment
-	Finding            Finding
-	FindingHead        HeadSHA
+	// Replies are the comments under the finding, in thread order. They carry
+	// the pull request author's response, which reconciliation shows the model
+	// as untrusted context.
+	Replies     []ReviewComment
+	Finding     Finding
+	FindingHead HeadSHA
 }
 
 // ThreadResolution is the model decision for one owned thread.

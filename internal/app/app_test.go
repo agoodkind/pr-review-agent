@@ -223,6 +223,108 @@ func TestUnsupportedEventReturns202(t *testing.T) {
 	}
 }
 
+// A resolved review thread must move the verdict with no push: the
+// pull_request_review_thread delivery at the already reviewed head finds the
+// standing CHANGES_REQUESTED disagreeing with all-resolved thread state and
+// submits an APPROVE.
+func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
+	withIntegrationLock(t)
+	defectiveFinding := domain.Finding{
+		Path:       testFindingPath,
+		StartLine:  3,
+		EndLine:    3,
+		Title:      "Missing validation",
+		Body:       "Validate the webhook payload before enqueue.",
+		Importance: testMinimumImportance,
+	}
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(defectiveFinding)},
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-opened",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckConclusion(t, "success")
+	blocking := fixture.githubState.lastSubmitReview()
+	if blocking["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("first event = %v, want REQUEST_CHANGES", blocking["event"])
+	}
+
+	// A person resolves the finding's thread on GitHub; no commit is pushed.
+	fixture.githubState.markAllThreadsResolved()
+
+	resolved := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request_review_thread",
+		deliveryID: "delivery-thread-resolved",
+		body:       reviewThreadPayload("resolved", testDefectiveHead),
+	})
+	if resolved.StatusCode != http.StatusAccepted {
+		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
+	}
+
+	fixture.waitForSubmitReviews(t, 2)
+	approval := fixture.githubState.lastSubmitReview()
+	if approval["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("refreshed event = %v, want APPROVE", approval["event"])
+	}
+	if commit := approval["commit_id"]; commit != testDefectiveHead {
+		t.Fatalf("refreshed commit = %v, want the reviewed head", commit)
+	}
+	if fixture.githubState.lastCheckConclusion() != "success" {
+		t.Fatalf("conclusion = %q, want success kept", fixture.githubState.lastCheckConclusion())
+	}
+}
+
+// A resolution delivery at a head with chunks still pending re-runs the owed
+// work; it must not approve a head nobody finished reading.
+func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeStatus: http.StatusInternalServerError,
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-opened-pending",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	fixture.waitForClydeCalls(t, 1)
+	fixture.waitForCheckCompletions(t, 1)
+	fixture.waitForCheckConclusion(t, "action_required")
+
+	resolved := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request_review_thread",
+		deliveryID: "delivery-thread-pending",
+		body:       reviewThreadPayload("resolved", testDefectiveHead),
+	})
+	if resolved.StatusCode != http.StatusAccepted {
+		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
+	}
+	// The second run has to be finished before anything is asserted about it.
+	// Its model call starting says only that it began, and the conclusion it
+	// leaves is the one the first run already left, so neither tells the two
+	// runs apart. The completion count does.
+	fixture.waitForClydeCalls(t, 2)
+	fixture.waitForCheckCompletions(t, 2)
+	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "action_required" {
+		t.Fatalf("conclusion = %q, want action_required after the second run", conclusion)
+	}
+	if count := fixture.githubState.submitReviewCount(); count != 0 {
+		t.Fatalf("submit review count = %d, want 0 with chunks pending", count)
+	}
+}
+
 func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -305,7 +407,7 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", review["event"])
 	}
-	assertReviewBody(t, review["body"], "No severe findings.", testDefectiveHead)
+	assertVerdictBody(t, review["body"], testDefectiveHead, false)
 	comments, ok := review["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", review["comments"])
@@ -316,6 +418,115 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
+}
+
+// reviewBody returns the body of one submitted review.
+func reviewBody(t *testing.T, review map[string]any) string {
+	t.Helper()
+	body, ok := review["body"].(string)
+	if !ok {
+		t.Fatalf("review body = %v, want string", review["body"])
+	}
+	return body
+}
+
+// One approving run published the identical Review block twice, two seconds
+// apart: once as the summary comment and once as the approving review body.
+// Both opened with the same heading and the same verdict sentence, so the
+// reader saw two matching boxes stacked around the approval event.
+//
+// This counts across both surfaces rather than inspecting one, because the
+// defect is that the pull request carries two of a thing it should carry one of.
+func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-one-box",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForCheckConclusion(t, "success")
+	fixture.waitForSubmitReviews(t, 1)
+
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", review["event"])
+	}
+	comment := fixture.githubState.summaryCommentBody()
+	verdict := reviewBody(t, review)
+
+	headings := strings.Count(comment, "## Review") + strings.Count(verdict, "## Review")
+	if headings != 1 {
+		t.Fatalf("the pull request carries %d Review headings, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
+			headings, comment, verdict)
+	}
+	sentences := strings.Count(comment, "No severe findings.") +
+		strings.Count(verdict, "No severe findings.")
+	if sentences != 1 {
+		t.Fatalf("the pull request states the verdict sentence %d times, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
+			sentences, comment, verdict)
+	}
+	// The one block that survives is the comment's, and the review still carries
+	// the marker a later run reads to know this head was reviewed.
+	if !strings.Contains(comment, "## Review") {
+		t.Fatalf("summary comment = %q, want it to be the surviving Review block", comment)
+	}
+	assertVerdictBody(t, review["body"], testDefectiveHead, false)
+}
+
+// A blocking verdict keeps a body, because a block that names nothing to fix
+// leaves no edit that could satisfy it. It still must not read as a copy of the
+// summary comment.
+func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(domain.Finding{
+			Path:       testFindingPath,
+			StartLine:  3,
+			EndLine:    3,
+			Title:      "Missing validation",
+			Body:       "Validate the webhook payload before enqueue.",
+			Importance: testMinimumImportance,
+		})},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-blocking-body",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
+	}
+	body := reviewBody(t, review)
+
+	if !strings.Contains(body, "Waiting on:") {
+		t.Fatalf("blocking verdict body names nothing to fix: %q", body)
+	}
+	if !strings.Contains(body, testFindingPath+":3") {
+		t.Fatalf("blocking verdict body does not name the thread holding it: %q", body)
+	}
+	if strings.Contains(body, "<summary>Review details</summary>") {
+		t.Fatalf("blocking verdict body repeats the comment's detail table: %q", body)
+	}
+	assertVerdictBody(t, review["body"], testDefectiveHead, true)
 }
 
 func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
@@ -636,19 +847,10 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 		t.Fatalf("full file list page fetches = %d, want 0: the second run must not list the whole pull request again",
 			fixture.githubState.listedFilePages())
 	}
-	secondReview := fixture.githubState.lastSubmitReview()
-	if secondReview["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
-		t.Fatalf("second review body = %q, want marker only", secondReview["body"])
-	}
-	if fixture.githubState.summaryReviewCount() != 1 {
-		t.Fatalf("summary review count = %d, want 1", fixture.githubState.summaryReviewCount())
-	}
-	assertReviewBody(
-		t,
-		fixture.githubState.summaryReviewBody(),
-		"Severe findings are listed inline.",
-		testCorrectedHead,
-	)
+	// Every verdict review states its decision. The old behavior submitted a
+	// marker-only body once a summary review existed, and that body blocked a
+	// live pull request while naming nothing to fix.
+	assertVerdictBody(t, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -811,15 +1013,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if approval["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("second event = %v, want APPROVE", approval["event"])
 	}
-	if approval["body"] != marker.Review(domain.HeadSHA(testCorrectedHead)) {
-		t.Fatalf("approval body = %v, want hidden marker", approval["body"])
-	}
-	assertReviewBody(
-		t,
-		fixture.githubState.summaryReviewBody(),
-		"No severe findings.",
-		testCorrectedHead,
-	)
+	assertVerdictBody(t, approval["body"], testCorrectedHead, false)
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
 		t.Fatalf("resolve count = %d, want 1", fixture.githubState.resolveCallCount())
@@ -1094,6 +1288,23 @@ func (fixture *appFixture) waitForClydeCalls(t *testing.T, count int32) {
 	t.Fatalf("clyde requests = %d, want >= %d", fixture.clydeState.requestCount(), count)
 }
 
+// waitForCheckCompletions waits until count runs have concluded their check.
+// It counts completions rather than reading a conclusion value, so a test can
+// wait for a specific run to finish even when it concludes the way the run
+// before it did.
+func (fixture *appFixture) waitForCheckCompletions(t *testing.T, count int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&fixture.githubState.checkCompletions) >= count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("check completions = %d, want >= %d",
+		atomic.LoadInt32(&fixture.githubState.checkCompletions), count)
+}
+
 func (fixture *appFixture) waitForCheckConclusion(t *testing.T, conclusion string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -1216,6 +1427,33 @@ func openedPayload(head string) []byte {
 	return body
 }
 
+func reviewThreadPayload(action string, head string) []byte {
+	payload := map[string]any{
+		"action": action,
+		"installation": map[string]any{
+			"id": float64(testInstallation),
+		},
+		"repository": map[string]any{
+			"name": testRepoName,
+			"owner": map[string]any{
+				"login": testRepoOwner,
+			},
+		},
+		"pull_request": map[string]any{
+			"number": float64(testPRNumber),
+			"draft":  false,
+			"head": map[string]any{
+				"sha": head,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
 func synchronizePayload(head string) []byte {
 	payload := map[string]any{
 		"action": "synchronize",
@@ -1244,6 +1482,12 @@ func synchronizePayload(head string) []byte {
 }
 
 func defectiveReviewContent(finding domain.Finding) string {
+	evidence := finding.Evidence
+	if evidence == "" {
+		// The line the defective fixture diff adds, so the finding passes the
+		// evidence grounding gate the way an honest model answer does.
+		evidence = "// missing validation"
+	}
 	payload := map[string]any{
 		"coverage_complete": true,
 		"findings": []map[string]any{{
@@ -1252,6 +1496,7 @@ func defectiveReviewContent(finding domain.Finding) string {
 			"end_line":   finding.EndLine,
 			"title":      finding.Title,
 			"body":       finding.Body,
+			"evidence":   evidence,
 			"importance": finding.Importance,
 		}},
 	}
@@ -1267,7 +1512,7 @@ func approveReviewContent() string {
 }
 
 func typographicReviewContent() string {
-	return `{"summary":"Issue — details","coverage_complete":true,"findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","importance":9}]}`
+	return `{"summary":"Issue — details","coverage_complete":true,"findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","evidence":"// missing validation","importance":9}]}`
 }
 
 func buildChangedFiles(count int) []map[string]any {
@@ -1402,6 +1647,12 @@ type githubServerState struct {
 	requests             int32
 	issueComments        []map[string]any
 	issueCommentUpdates  int32
+	// checkCompletions counts every check run update that carried a conclusion.
+	// A conclusion value alone cannot tell one run from the next, because the
+	// second run of a pull request usually concludes the same way the first did,
+	// so a test that waits on the value can read the earlier run's result and
+	// assert against a run that has not finished.
+	checkCompletions int32
 }
 
 func newGitHubServerState(head string) *githubServerState {
@@ -1692,6 +1943,16 @@ func (state *githubServerState) setCompareFiles(files []map[string]any) {
 	state.compareFiles = files
 }
 
+// markAllThreadsResolved is a person resolving every open thread in the GitHub
+// UI: the threads stay listed, and later reads report them resolved.
+func (state *githubServerState) markAllThreadsResolved() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for _, node := range state.threads {
+		node["isResolved"] = true
+	}
+}
+
 func (state *githubServerState) setThreads(threads []map[string]any) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1793,7 +2054,13 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		state.mu.Lock()
 		files := state.compareFiles
 		state.mu.Unlock()
-		writeJSON(writer, http.StatusOK, map[string]any{"files": files})
+		// GitHub always names the commit it measured the patches from. Here the
+		// requested base is an ancestor of the head, so it is that base, which is
+		// the case callers may map coordinates through.
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"merge_base_commit": map[string]any{"sha": compareBaseFromPath(request.URL.Path)},
+			"files":             files,
+		})
 		return
 	}
 
@@ -1874,6 +2141,9 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 		}
 		if conclusion, ok := body["conclusion"].(string); ok {
 			item["conclusion"] = conclusion
+			if conclusion != "" {
+				atomic.AddInt32(&state.checkCompletions, 1)
+			}
 		}
 		state.checkRuns[index] = item
 	}
@@ -1883,6 +2153,20 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 		"status":     body["status"],
 		"conclusion": body["conclusion"],
 	})
+}
+
+// githubReviewStateForEvent maps a submitted review event to the state GitHub
+// reports for it afterwards: REQUEST_CHANGES is submitted and CHANGES_REQUESTED
+// is read back, APPROVE comes back as APPROVED.
+func githubReviewStateForEvent(event any) string {
+	switch fmt.Sprint(event) {
+	case string(domain.ReviewDecisionRequestChanges):
+		return "CHANGES_REQUESTED"
+	case string(domain.ReviewDecisionApprove):
+		return "APPROVED"
+	default:
+		return "COMMENTED"
+	}
 }
 
 func (state *githubServerState) handleListReviews(writer http.ResponseWriter) {
@@ -1922,7 +2206,7 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		"id":        float64(100 + len(state.submitReviews)),
 		"commit_id": commitID,
 		"body":      reviewBody,
-		"state":     body["event"],
+		"state":     githubReviewStateForEvent(body["event"]),
 		"user":      map[string]any{"login": testBotLogin},
 	}
 	if len(state.listReviewPages) == 0 {
@@ -2001,15 +2285,22 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 		return
 	}
 
+	// The nodes are copied under the lock because a concurrent resolve mutates
+	// them in place. Encoding the shared maps after unlocking is a map read
+	// racing a map write, which the runtime escalates to a crash.
 	state.mu.Lock()
-	threads := state.threads
-	threadPages := state.threadPages
+	threads := copyThreadNodes(state.threads)
+	threadPageCount := len(state.threadPages)
 	threadPageIndex := state.threadPageIndex
+	var page []map[string]any
+	if threadPageIndex < threadPageCount {
+		page = copyThreadNodes(state.threadPages[threadPageIndex])
+	}
 	state.mu.Unlock()
 
-	if len(threadPages) > 0 {
+	if threadPageCount > 0 {
 		atomic.AddInt32(&state.threadPageFetches, 1)
-		if threadPageIndex >= len(threadPages) {
+		if threadPageIndex >= threadPageCount {
 			writeJSON(writer, http.StatusOK, map[string]any{
 				"data": map[string]any{
 					"repository": map[string]any{
@@ -2027,10 +2318,9 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 			})
 			return
 		}
-		page := threadPages[threadPageIndex]
 		state.mu.Lock()
 		state.threadPageIndex++
-		hasNext := state.threadPageIndex < len(threadPages)
+		hasNext := state.threadPageIndex < threadPageCount
 		state.mu.Unlock()
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"data": map[string]any{
@@ -2101,6 +2391,20 @@ func (state *githubServerState) handleListChangedFiles(writer http.ResponseWrite
 	writeJSON(writer, http.StatusOK, files)
 }
 
+// compareBaseFromPath reads the base commit out of a compare request path,
+// which looks like /repos/owner/repo/compare/{base}...{head}.
+func compareBaseFromPath(path string) string {
+	_, after, found := strings.Cut(path, "/compare/")
+	if !found {
+		return ""
+	}
+	base, _, found := strings.Cut(after, "...")
+	if !found {
+		return ""
+	}
+	return base
+}
+
 func paginateMapPages(items []map[string]any, pageSize int) [][]map[string]any {
 	if len(items) == 0 {
 		return nil
@@ -2165,25 +2469,30 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	if isReconcile && state.reconcileStatus != 0 {
 		status = state.reconcileStatus
 	}
+	failed := status != 0 && status != http.StatusOK
 	var content string
-	if isReconcile {
-		if len(state.reconcileResponses) == 0 {
-			content = reconcileResolvedContent("thread-owned")
-		} else {
-			content = state.reconcileResponses[state.reconcileIndex]
-			if state.reconcileIndex < len(state.reconcileResponses)-1 {
-				state.reconcileIndex++
+	// A failing endpoint serves no content, and a fixture configured with only
+	// a status has no responses to index.
+	if !failed {
+		if isReconcile {
+			if len(state.reconcileResponses) == 0 {
+				content = reconcileResolvedContent("thread-owned")
+			} else {
+				content = state.reconcileResponses[state.reconcileIndex]
+				if state.reconcileIndex < len(state.reconcileResponses)-1 {
+					state.reconcileIndex++
+				}
 			}
-		}
-	} else {
-		content = state.responses[state.index]
-		if state.index < len(state.responses)-1 {
-			state.index++
+		} else {
+			content = state.responses[state.index]
+			if state.index < len(state.responses)-1 {
+				state.index++
+			}
 		}
 	}
 	state.mu.Unlock()
 
-	if status != 0 && status != http.StatusOK {
+	if failed {
 		http.Error(writer, "clyde request failed", status)
 		return
 	}
@@ -2238,28 +2547,50 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(writer).Encode(payload)
 }
 
-// assertReviewBody checks the published comment leads with the verdict, carries
-// the review details, and keeps the markers the service reads back.
-func assertReviewBody(t *testing.T, value any, verdict string, head string) {
+// summaryProse is the wording that belongs to the one top level comment. A
+// verdict review body carrying any of it puts a second identical Review box on
+// the page, which is what a reader saw twice two seconds apart.
+var summaryProse = []string{
+	"## Review",
+	"No severe findings.",
+	"Severe findings are listed inline.",
+	"<summary>Review details</summary>",
+}
+
+// assertVerdictBody checks one verdict review body against the rule that it
+// never restates the summary comment, and keeps the review marker the service
+// reads back to recognize a head it already reviewed.
+//
+// An approving verdict is the marker alone, because the approval event is the
+// message and everything else is in the comment. A blocking one adds its
+// decision and what it waits on, because a block naming nothing to fix leaves
+// no edit that could satisfy it.
+func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	t.Helper()
 	body, ok := value.(string)
 	if !ok {
 		t.Fatalf("body = %v, want string", value)
 	}
-	if !strings.HasPrefix(body, "## Review\n\n"+verdict+"\n\n") {
-		t.Fatalf("body = %q, want the verdict %q first", body, verdict)
-	}
-	if !strings.Contains(body, "<summary>Review details</summary>") {
-		t.Fatalf("body = %q, want the review details", body)
-	}
-	if !strings.Contains(body, "| Model | `"+testReviewModel+"` |") {
-		t.Fatalf("body = %q, want the model that answered", body)
-	}
-	if !marker.HasSummary(body) {
-		t.Fatalf("body = %q, want the summary marker", body)
+	for _, prose := range summaryProse {
+		if strings.Contains(body, prose) {
+			t.Fatalf("verdict body repeats the summary comment's %q, so the reader sees two Review boxes: %q",
+				prose, body)
+		}
 	}
 	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
 		t.Fatalf("body = %q, want the review marker for %s", body, head)
+	}
+	if !blocking {
+		if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head)) {
+			t.Fatalf("approving verdict body carries visible prose beside the marker: %q", body)
+		}
+		return
+	}
+	if !strings.Contains(body, "Changes requested.") {
+		t.Fatalf("blocking verdict body does not state its decision: %q", body)
+	}
+	if !strings.Contains(body, "Waiting on:") {
+		t.Fatalf("blocking verdict body names nothing to fix, so no edit can satisfy it: %q", body)
 	}
 }
 
@@ -2294,4 +2625,19 @@ func writeCompletionStream(writer http.ResponseWriter, content string) {
 		_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	}
 	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
+}
+
+// copyThreadNodes deep copies thread nodes one level down, which is the level
+// the resolve mutation writes. The nested comment nodes are never mutated
+// after construction, so sharing them is safe.
+func copyThreadNodes(nodes []map[string]any) []map[string]any {
+	copied := make([]map[string]any, 0, len(nodes))
+	for _, node := range nodes {
+		fresh := make(map[string]any, len(node))
+		for key, value := range node {
+			fresh[key] = value
+		}
+		copied = append(copied, fresh)
+	}
+	return copied
 }

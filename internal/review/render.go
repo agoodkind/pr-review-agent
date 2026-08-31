@@ -109,31 +109,58 @@ func RenderBody(summary Summary) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// RenderPartialVerdictBody renders the body of the blocking review a run
-// submits for a head it could not fully read.
+// blockingVerdictLead opens a blocking verdict body. It names the decision in
+// this service's own words rather than reusing the summary's verdict sentence,
+// because a body that repeats the comment is the thing this rendering exists to
+// stop.
+const blockingVerdictLead = "Changes requested."
+
+// RenderVerdictBody renders the body of the review that carries the verdict.
 //
-// It carries the partial marker and nothing else. The review marker would tell
-// the next run this head was already reviewed and suppress the run that
-// finishes it; the summary marker would make this the review later runs edit as
-// their visible summary. The partial marker is neither: it exists so the next
-// incomplete run finds this review and rewrites it, rather than leaving another
-// short blocking review beside it.
+// A verdict body must never restate the summary comment. Both used to open with
+// the same "## Review" heading and the same verdict sentence, so one approving
+// run published the identical text twice two seconds apart, and a reader saw two
+// matching Review boxes stacked around the approval event. Dropping the detail
+// table from this body halved the duplication and left the heading and the
+// sentence, which is still a second box saying what the first one said.
 //
-// There is no detail table here either. That table belongs to the comment, and
-// a second copy would be a second visible summary drifting away from the first.
-func RenderPartialVerdictBody(summary Summary, pending int) string {
-	parts := []string{
-		"## Review",
-		fmt.Sprintf(
-			"%s of this head could not be reviewed, so it cannot be approved yet. The next push reviews %s.",
-			chunkCount(pending),
-			chunkPronoun(pending),
-		),
+// An approving verdict therefore carries no prose at all. The approval event is
+// itself the message, and the comment above it already holds the summary and the
+// detail. The review marker stays, and is the whole body: hasBotReviewMarker
+// reads it to recognize a head this service has already reviewed, so a fully
+// empty body would blind that gate for every approval. As an HTML comment it
+// renders as nothing, which is the point.
+//
+// A blocking verdict keeps a body. One live blocking review carried only the
+// marker, so it named nothing to fix and no edit could satisfy it. This body
+// states the decision and what the block waits on, and nothing else, because
+// everything else is already in the comment.
+func RenderVerdictBody(summary Summary) string {
+	if summary.Decision != domain.ReviewDecisionRequestChanges {
+		return marker.Review(summary.Head)
 	}
+	parts := []string{blockingVerdictLead}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
-	return strings.Join(parts, "\n\n") + "\n\n" + marker.Partial()
+	parts = append(parts, marker.Review(summary.Head))
+	return strings.Join(parts, "\n\n")
+}
+
+// renderVerdictRefreshProse is the summary comment prose for a verdict
+// refreshed from thread state alone. It reports no run statistics because no
+// model ran; the verdict and what it still waits on are the whole story.
+func renderVerdictRefreshProse(summary Summary) string {
+	parts := []string{"## Review", summary.Verdict()}
+	if blocking := renderBlocking(summary.Blocking); blocking != "" {
+		parts = append(parts, blocking)
+	}
+	parts = append(
+		parts,
+		"Verdict refreshed from review thread state on `"+shortHead(summary.Head)+"` with no new push.",
+		marker.Summary()+"\n"+marker.Review(summary.Head),
+	)
+	return strings.Join(parts, "\n\n")
 }
 
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can
@@ -306,12 +333,18 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			slog.Error("normalize finding path", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("normalize finding path: %w", err)
 		}
+		// The evidence reaches the encoder, and no further. It is hashed into the
+		// marker's claim key, which is what lets a later run recognize a reworded
+		// restatement of this same claim; the rendered body still never prints it,
+		// so the reader sees no quoted source line they already have beside the
+		// comment.
 		body, err := marker.EncodeFindingBody(head, domain.Finding{
 			Path:       normalizedPath,
 			StartLine:  finding.StartLine,
 			EndLine:    finding.EndLine,
 			Title:      sanitizeProse(finding.Title),
 			Body:       sanitizeProse(finding.Body),
+			Evidence:   finding.Evidence,
 			Suggestion: finding.Suggestion,
 			Importance: finding.Importance,
 		})

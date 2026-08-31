@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
@@ -63,6 +64,114 @@ test("webhooks reach the Go review container", async function () {
 
   assert.equal(response.status, 202);
   assert.equal(forwardedRequests.length, 1);
+});
+
+// GitHub delivers a webhook once and never redelivers a failure on its own.
+// One live container outage answered 500 to 33 deliveries, and each affected
+// pull request was left with a required check that simply never appeared,
+// blocked with nothing a person could point at. A delivery the container
+// cannot take is queued and GitHub is answered 202, because the worker now
+// owns it.
+const testWebhookSecret = "test-webhook-secret"; // gitleaks:allow
+
+function signBody(body) {
+  return "sha256=" + createHmac("sha256", testWebhookSecret).update(body).digest("hex"); // gitleaks:allow
+}
+
+function createFailingEnvironment(mode, queued) {
+  return {
+    GITHUB_WEBHOOK_SECRET: testWebhookSecret, // gitleaks:allow
+    PR_AGENT: {
+      getByName() {
+        return {
+          async fetch() {
+            if (mode === "throw") {
+              throw new Error("There is no container instance that can be provided");
+            }
+            return new Response("no container", { status: 500 });
+          },
+        };
+      },
+    },
+    REPLAY_QUEUE: {
+      getByName(name) {
+        assert.equal(name, "webhook-replays");
+        return {
+          async fetch(request) {
+            queued.push(await request.json());
+            return Response.json({ queued: true });
+          },
+        };
+      },
+    },
+  };
+}
+
+function signedWebhookRequest(signature) {
+  const body = JSON.stringify({ action: "opened", pull_request: { head: { sha: "e6949cd" } } });
+  return new Request("https://reviewer.example/api/v1/github_webhooks", {
+    body,
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-github-event": "pull_request",
+      "x-github-delivery": "delivery-lost-1",
+      "x-hub-signature-256": signature ?? signBody(body),
+    },
+  });
+}
+
+test("a delivery the container fetch throws on is queued and GitHub answered 202", async function () {
+  const queued = [];
+  const response = await routeRequest(signedWebhookRequest(), createFailingEnvironment("throw", queued));
+
+  assert.equal(response.status, 202);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].id, "delivery-lost-1");
+  assert.equal(queued[0].path, "/api/v1/github_webhooks");
+  assert.match(queued[0].headers["x-hub-signature-256"], /^sha256=/);
+  assert.match(queued[0].body, /opened/);
+});
+
+// The signature is normally checked by the Go service, which is exactly the
+// part that is unavailable when the queue is in play. An unverified queue
+// would let anyone fill the replay store with forged bodies during an outage.
+test("a forged delivery is refused during an outage and queues nothing", async function () {
+  const queued = [];
+  const response = await routeRequest(
+    signedWebhookRequest("sha256=" + "0".repeat(64)),
+    createFailingEnvironment("throw", queued),
+  );
+
+  assert.equal(response.status, 401);
+  assert.equal(queued.length, 0);
+});
+
+test("a delivery answered 500 is queued, because the Go service never returns 500", async function () {
+  const queued = [];
+  const response = await routeRequest(signedWebhookRequest(), createFailingEnvironment("status500", queued));
+
+  assert.equal(response.status, 202);
+  assert.equal(queued.length, 1);
+});
+
+test("a service answer that is not 500 passes through untouched and queues nothing", async function () {
+  const queued = [];
+  const environment = createFailingEnvironment("throw", queued);
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async fetch() {
+          return new Response("invalid signature", { status: 401 });
+        },
+      };
+    },
+  };
+
+  const response = await routeRequest(signedWebhookRequest(), environment);
+
+  assert.equal(response.status, 401);
+  assert.equal(queued.length, 0);
 });
 
 test("health probe exits when the endpoint returns HTTP 200", async function (context) {
