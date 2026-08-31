@@ -1776,6 +1776,70 @@ func TestTheSameForcedDeliveryAdmittedTwiceReviewsOnce(t *testing.T) {
 	}
 }
 
+// A check run is created before it is started, so a create that lands and a
+// start that fails leaves a check run this delivery owns, queued, with nothing
+// running. Refusing the redelivery on the strength of that check run existing
+// would leave the pull request carrying a check nobody will ever clear and no
+// way to ask for the review again, which is the stale block this whole service
+// exists to prevent.
+func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:               model,
+		startCheckRunStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if _, wasAdmitted, err := fixture.service.Admit(context.Background(), job); err == nil {
+		t.Fatal("first Admit: want the start failure surfaced")
+	} else if wasAdmitted {
+		t.Fatal("first Admit: a job whose check never started must not be admitted")
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want the one this delivery created", len(fixture.state.checkRuns))
+	}
+	stranded := fixture.state.checkRuns[0]
+	if stranded["status"] != "queued" {
+		t.Fatalf("check status = %v, want queued: the start never landed", stranded["status"])
+	}
+
+	// GitHub recovers and the delivery arrives again.
+	fixture.state.startCheckRunStatus = 0
+	resumed, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("redelivered Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the redelivery refused itself, leaving a check nobody can clear and no way back in")
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: the resumed delivery reuses the check it already created",
+			len(fixture.state.checkRuns))
+	}
+	if resumed.CheckRunID != int64(stranded["id"].(float64)) {
+		t.Fatalf("check run id = %d, want the stranded check run resumed", resumed.CheckRunID)
+	}
+	if resumed.CheckRunStatus != "in_progress" {
+		t.Fatalf("check status = %q, want in_progress: the resumed check must be started",
+			resumed.CheckRunStatus)
+	}
+
+	// The resumed job is real work, so it reviews and concludes its check.
+	if err := fixture.service.Run(context.Background(), resumed); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if model.callCount != 1 {
+		t.Fatalf("model calls = %d, want 1", model.callCount)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want the resumed check concluded",
+			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
 // A second label event is a genuinely new force request, and carries its own
 // delivery identifier. The identifier rather than the fact of being forced is
 // what separates a repeat from a new request.
@@ -5219,6 +5283,7 @@ type serviceFixtureOptions struct {
 	pullRequestStatus               int
 	pullRequestStatusAfterFirstRead int
 	reviewListStatus                int
+	startCheckRunStatus             int
 	submitReviewStatus              int
 	updateReviewStatus              int
 	createCommentStatus             int
@@ -5273,7 +5338,10 @@ type serviceServerState struct {
 	pullRequestStatus               int
 	pullRequestStatusAfterFirstRead int
 	reviewListStatus                int
-	lastSubmitReview                map[string]any
+	// startCheckRunStatus fails the PATCH that starts a check run, leaving it
+	// created and queued.
+	startCheckRunStatus int
+	lastSubmitReview    map[string]any
 	// submittedReviews are the reviews this pull request now carries, which
 	// ListReviews serves from the next call onward.
 	submittedReviews    []map[string]any
@@ -5567,6 +5635,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		pullRequestStatus:               options.pullRequestStatus,
 		pullRequestStatusAfterFirstRead: options.pullRequestStatusAfterFirstRead,
 		reviewListStatus:                options.reviewListStatus,
+		startCheckRunStatus:             options.startCheckRunStatus,
 		submitReviewStatus:              options.submitReviewStatus,
 		updateReviewStatus:              options.updateReviewStatus,
 		createCommentStatus:             options.createCommentStatus,
@@ -6012,6 +6081,12 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		body, err := serviceReadJSONBody(request)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A start that GitHub refuses leaves the check run created and queued,
+		// which is the window the resume path exists for.
+		if body["status"] == "in_progress" && state.startCheckRunStatus != 0 {
+			http.Error(writer, "start check run failed", state.startCheckRunStatus)
 			return
 		}
 		state.lastUpdateCheckRun = body
