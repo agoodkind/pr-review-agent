@@ -11,6 +11,9 @@ func TestReplyLineBreaksCoversEveryBreakCodePoint(t *testing.T) {
 		0x000B, // vertical tab
 		0x000C, // form feed
 		0x000D, // carriage return
+		0x001C, // file separator
+		0x001D, // group separator
+		0x001E, // record separator
 		0x0085, // next line
 		0x2028, // line separator
 		0x2029, // paragraph separator

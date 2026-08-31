@@ -122,6 +122,9 @@ var replyLineBreaks = strings.NewReplacer(
 	"\r", "\n", // U+000D carriage return
 	"\v", "\n", // U+000B vertical tab
 	"\f", "\n", // U+000C form feed
+	"\x1c", "\n", // U+001C file separator
+	"\x1d", "\n", // U+001D group separator
+	"\x1e", "\n", // U+001E record separator
 	nextLine, "\n",
 	lineSeparator, "\n",
 	paragraphSeparator, "\n",

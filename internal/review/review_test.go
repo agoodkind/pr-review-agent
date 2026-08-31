@@ -2593,6 +2593,9 @@ func TestEveryLineBreakInAReplyKeepsItsSpeaker(t *testing.T) {
 		0x000B, // vertical tab
 		0x000C, // form feed
 		0x000D, // carriage return
+		0x001C, // file separator
+		0x001D, // group separator
+		0x001E, // record separator
 		0x0085, // next line
 		0x2028, // line separator
 		0x2029, // paragraph separator
@@ -2621,7 +2624,7 @@ func TestEveryLineBreakInAReplyKeepsItsSpeaker(t *testing.T) {
 func splitOnAnyLineBreak(value string) []string {
 	return strings.FieldsFunc(value, func(character rune) bool {
 		switch character {
-		case '\n', '\v', '\f', '\r', 0x0085, 0x2028, 0x2029:
+		case '\n', '\v', '\f', '\r', 0x001C, 0x001D, 0x001E, 0x0085, 0x2028, 0x2029:
 			return true
 		default:
 			return false
