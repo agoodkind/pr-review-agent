@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -84,52 +85,80 @@ func emptyCheckRun() CheckRun {
 	}
 }
 
-// listCheckRuns returns every check run of one name on one head, newest last as
-// GitHub lists them.
+// Check run listing filters, as GitHub documents them for the check runs
+// endpoint. The endpoint defaults to latest, which returns only the most recent
+// check run of a given name.
+const (
+	checkRunFilterLatest = "latest"
+	checkRunFilterAll    = "all"
+)
+
+// checkRunPageSize is the largest page GitHub serves for this listing.
+const checkRunPageSize = 100
+
+// listCheckRuns returns the check runs of one name on one head under one
+// filter, following pagination to exhaustion.
+//
+// Both parts matter and neither is optional. GitHub documents this endpoint as
+// paginated at 30 per page by default, and documents filter as defaulting to
+// latest, which returns only the most recent check run of a name. A forced
+// review deliberately creates more than one check run of the same name on one
+// head, so a caller that took the defaults would be shown one of them and would
+// have to page to see the rest.
 func (client *Client) listCheckRuns(
 	ctx context.Context,
 	installationID int64,
 	repo domain.Repository,
 	head domain.HeadSHA,
 	name string,
+	filter string,
 ) ([]CheckRun, error) {
-	path := client.repoPath(repo, fmt.Sprintf("/commits/%s/check-runs", url.PathEscape(string(head))))
 	query := url.Values{}
 	query.Set("check_name", name)
+	query.Set("filter", filter)
+	query.Set("per_page", strconv.Itoa(checkRunPageSize))
+	path := client.repoPath(
+		repo,
+		fmt.Sprintf("/commits/%s/check-runs", url.PathEscape(string(head))),
+	) + "?" + query.Encode()
 
-	body, err := client.doREST(ctx, installationID, "GET", path, query, nil)
+	runs := make([]CheckRun, 0)
+	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
+		var response checkRunsListResponse
+		if err := json.Unmarshal(page, &response); err != nil {
+			client.logger.ErrorContext(ctx, "decode check runs page", slog.String("err", err.Error()))
+			return 0, errors.New("decode check runs page")
+		}
+		for _, item := range response.CheckRuns {
+			if item.Name != name {
+				continue
+			}
+			headSHA, err := parseHeadSHA(item.HeadSHA)
+			if err != nil {
+				return 0, err
+			}
+			runs = append(runs, CheckRun{
+				ID:         item.ID,
+				Name:       item.Name,
+				Head:       headSHA,
+				Status:     item.Status,
+				Conclusion: item.Conclusion,
+				ExternalID: item.ExternalID,
+			})
+		}
+		return len(response.CheckRuns), nil
+	})
 	if err != nil {
 		return nil, err
-	}
-
-	var response checkRunsListResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		client.logger.ErrorContext(ctx, "decode check runs", slog.String("err", err.Error()))
-		return nil, errors.New("decode check runs")
-	}
-
-	runs := make([]CheckRun, 0, len(response.CheckRuns))
-	for _, item := range response.CheckRuns {
-		if item.Name != name {
-			continue
-		}
-		headSHA, err := parseHeadSHA(item.HeadSHA)
-		if err != nil {
-			return nil, err
-		}
-		runs = append(runs, CheckRun{
-			ID:         item.ID,
-			Name:       item.Name,
-			Head:       headSHA,
-			Status:     item.Status,
-			Conclusion: item.Conclusion,
-			ExternalID: item.ExternalID,
-		})
 	}
 	return runs, nil
 }
 
-// FindCheckRun returns one check run by head SHA and name.
+// FindCheckRun returns the most recent check run by head SHA and name.
+//
+// It asks for the latest filter deliberately. This is the lookup that answers
+// "what does this head currently report", so the newest check run of the name
+// is the whole answer and the ones it replaced are noise.
 func (client *Client) FindCheckRun(
 	ctx context.Context,
 	installationID int64,
@@ -137,7 +166,7 @@ func (client *Client) FindCheckRun(
 	head domain.HeadSHA,
 	name string,
 ) (CheckRun, bool, error) {
-	runs, err := client.listCheckRuns(ctx, installationID, repo, head, name)
+	runs, err := client.listCheckRuns(ctx, installationID, repo, head, name, checkRunFilterLatest)
 	if err != nil {
 		return emptyCheckRun(), false, err
 	}
@@ -155,6 +184,11 @@ func (client *Client) FindCheckRun(
 // cache lives in the container, and the delivery this matters for is the one
 // that restarts the container, so by the time a redelivery arrives there is no
 // in process record of the first one left to consult.
+//
+// It asks for every check run rather than the latest, because the one it is
+// looking for is precisely the one a newer check run of the same name has
+// replaced. Under the endpoint's default filter that check run is invisible,
+// and a redelivery that cannot see its own work does it again.
 func (client *Client) FindCheckRunByExternalID(
 	ctx context.Context,
 	installationID int64,
@@ -166,7 +200,7 @@ func (client *Client) FindCheckRunByExternalID(
 	if externalID == "" {
 		return emptyCheckRun(), false, nil
 	}
-	runs, err := client.listCheckRuns(ctx, installationID, repo, head, name)
+	runs, err := client.listCheckRuns(ctx, installationID, repo, head, name, checkRunFilterAll)
 	if err != nil {
 		return emptyCheckRun(), false, err
 	}

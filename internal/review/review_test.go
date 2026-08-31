@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1837,6 +1838,97 @@ func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v, want the resumed check concluded",
 			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+// A process that died mid review leaves a check run in progress with nothing
+// driving it. Reading that as work in flight would drop the delivery's only
+// retry and leave a check that can never conclude, so the redelivery resumes it.
+//
+// A review that is genuinely running is never reached here: the handler claims
+// each delivery identifier before admission, so a redelivery arriving at the
+// process running that review is answered from the claim.
+func TestAForcedDeliveryWhoseProcessDiedMidReviewIsResumed(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+	job := fixture.forcedJob()
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":          float64(4242),
+		"name":        config.ReviewCheckName,
+		"head_sha":    testHeadSHA,
+		"status":      "in_progress",
+		"conclusion":  "",
+		"external_id": job.DeliveryID,
+	})
+
+	resumed, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("a check nothing is driving was read as work in flight, dropping the delivery's only retry")
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want the abandoned one resumed rather than a second created",
+			len(fixture.state.checkRuns))
+	}
+	if resumed.CheckRunID != 4242 {
+		t.Fatalf("check run id = %d, want the abandoned check run 4242", resumed.CheckRunID)
+	}
+
+	if err := fixture.service.Run(context.Background(), resumed); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want the resumed check concluded",
+			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+// The check run a redelivery is looking for is exactly the one newer check runs
+// of the same name have replaced, and a pull request labelled more than once
+// accumulates them. GitHub documents this listing as returning only the most
+// recent check run of a name unless asked for all, and as paginated, so a
+// lookup that takes either default cannot see its own earlier work and forces
+// the review again.
+//
+// The check run sought here is neither the newest nor on the first page, so
+// taking either default loses it.
+func TestAForcedRedeliveryFindsItsCheckRunBehindNewerOnesAndPageBoundaries(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	job := fixture.forcedJob()
+	const soughtIndex = 2
+	for index := range 5 {
+		externalID := fmt.Sprintf("delivery-other-%d", index)
+		if index == soughtIndex {
+			externalID = job.DeliveryID
+		}
+		fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+			"id":          float64(500 + index),
+			"name":        config.ReviewCheckName,
+			"head_sha":    testHeadSHA,
+			"status":      "completed",
+			"conclusion":  "success",
+			"external_id": externalID,
+		})
+	}
+	if soughtIndex < serviceCheckRunPageSize {
+		t.Fatalf("the sought check run sits on the first page, so this test proves nothing about pagination")
+	}
+
+	_, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if wasAdmitted {
+		t.Fatal("the redelivery could not see the check run it created, so it forces the whole review again")
+	}
+	if len(fixture.state.checkRuns) != 5 {
+		t.Fatalf("check runs = %d, want 5: the redelivery must not create a duplicate",
+			len(fixture.state.checkRuns))
 	}
 }
 
@@ -5533,6 +5625,38 @@ func (twoChunkCollector) CollectRange(
 	return diff.ReviewInput{PullRequest: pullRequest, Files: files}, nil
 }
 
+// serviceCheckRunPageSize is how many check runs the fixture serves per page.
+// GitHub paginates this listing, and a page smaller than the caller asked for
+// is a normal answer, so a deliberately small one is what shows whether a
+// caller follows the links.
+const serviceCheckRunPageSize = 2
+
+// writeServiceCheckRunPage serves one page of a check run listing and links the
+// next, the way GitHub's paginated endpoint does.
+func writeServiceCheckRunPage(
+	writer http.ResponseWriter,
+	request *http.Request,
+	matches []map[string]any,
+) {
+	page := 1
+	if parsed, err := strconv.Atoi(request.URL.Query().Get("page")); err == nil && parsed > 0 {
+		page = parsed
+	}
+	start := min((page-1)*serviceCheckRunPageSize, len(matches))
+	end := min(start+serviceCheckRunPageSize, len(matches))
+	if end < len(matches) {
+		nextURL := *request.URL
+		nextQuery := nextURL.Query()
+		nextQuery.Set("page", strconv.Itoa(page+1))
+		nextURL.RawQuery = nextQuery.Encode()
+		writer.Header().Set("Link", `<http://`+request.Host+nextURL.RequestURI()+`>; rel="next"`)
+	}
+	serviceWriteJSON(writer, http.StatusOK, map[string]any{
+		"total_count": len(matches),
+		"check_runs":  matches[start:end],
+	})
+}
+
 // selfRangeEmptyCollector answers a range the way GitHub's compare does: a
 // range asked for from a commit to that same commit holds nothing.
 //
@@ -6046,10 +6170,14 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 				matches = append(matches, item)
 			}
 		}
-		serviceWriteJSON(writer, http.StatusOK, map[string]any{
-			"total_count": len(matches),
-			"check_runs":  matches,
-		})
+		// GitHub documents filter as defaulting to latest, which returns only
+		// the most recent check run of a name. Modelling that is what lets a
+		// test show that a caller taking the default cannot see the check runs
+		// a newer one replaced.
+		if query.Get("filter") != "all" && len(matches) > 1 {
+			matches = matches[len(matches)-1:]
+		}
+		writeServiceCheckRunPage(writer, request, matches)
 		return
 	}
 

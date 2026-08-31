@@ -30,6 +30,10 @@ const (
 	// checkRunInProgress is the state StartCheckRun sets, and what a running
 	// review reports until it concludes.
 	checkRunInProgress = "in_progress"
+	// checkRunCompleted is the state CompleteCheckRun sets. It is the only
+	// terminal state this service writes, and the only one that says a force
+	// request was carried through rather than abandoned part way.
+	checkRunCompleted = "completed"
 )
 
 // forcedAdmission is what an earlier arrival of this same delivery left behind
@@ -38,9 +42,21 @@ type forcedAdmission struct {
 	checkRun githubapp.CheckRun
 	// found is whether this delivery already created a check run at this head.
 	found bool
-	// accepted is whether that check run was started, which is what says the
-	// force was taken on rather than abandoned before any work began.
-	accepted bool
+	// settled is whether that check run reached a terminal state, which is the
+	// only evidence available here that the force request was carried through.
+	//
+	// Nothing weaker will do. A check run is created before it is started and
+	// started before the review runs, and a process that died anywhere in that
+	// window leaves one behind that no longer has anything driving it. Reading
+	// such a check run as proof the work was taken would leave the pull request
+	// on a check that can never conclude, with no way to ask again, which is the
+	// stale block this service exists to prevent.
+	//
+	// The service has no durable record of acceptance to consult instead: its
+	// review queue is in memory and dies with the container. The terminal state
+	// is therefore the strongest true signal, and everything short of it is
+	// resumed.
+	settled bool
 }
 
 // emptyForcedAdmission is the answer for a delivery that left nothing behind.
@@ -49,25 +65,31 @@ func emptyForcedAdmission() forcedAdmission {
 		checkRun: githubapp.CheckRun{
 			ID: 0, Name: "", Head: "", Status: "", Conclusion: "", ExternalID: "",
 		},
-		found:    false,
-		accepted: false,
+		found:   false,
+		settled: false,
 	}
 }
 
 // priorForcedAdmission reports what an earlier arrival of this forced delivery
-// left behind, and whether it got far enough to count as taken on.
+// left behind, and whether it was carried through.
 //
-// A check run existing is not proof that the work was accepted, because it is
-// created before it is started. A create that lands and a start that fails
-// leaves a check run this delivery owns, queued, with nothing running. Refusing
-// the redelivery on the strength of that check run existing would strand the
-// pull request on a check that can never conclude, so the predicate is the
-// state and not the existence.
+// A check run existing is not proof of anything except that a create landed. It
+// is created before it is started and started before the review runs, so a
+// process that died anywhere in that window leaves one behind with nothing
+// driving it. The predicate is therefore the state and not the existence.
 //
 // The states are the ones this service itself writes, not names read off a
 // field: CreateCheckRun sends queued, StartCheckRun sends in_progress, and
 // CompleteCheckRun sends completed. The check run looked up here is always one
-// this service created, so queued means the start never landed.
+// this service created, so anything short of completed means the run that owned
+// it stopped before it finished.
+//
+// A review that is genuinely still running is not reached here at all. The
+// handler claims each delivery identifier in the delivery cache before
+// admission, so a redelivery arriving at the process that is running the review
+// is answered from that claim and never reaches this code. Anything that does
+// reach it comes from a process that no longer holds the claim, which is to say
+// a process that is gone.
 func (service *Service) priorForcedAdmission(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -92,17 +114,19 @@ func (service *Service) priorForcedAdmission(
 	if !found {
 		return emptyForcedAdmission(), nil
 	}
-	if checkRun.Status == checkRunQueued {
+	settled := checkRun.Status == checkRunCompleted
+	if !settled {
 		logger.InfoContext(
 			ctx,
-			"resuming a forced review whose check never started",
+			"resuming a forced review that never finished",
 			slog.Int64("check_run_id", checkRun.ID),
+			slog.String("status", checkRun.Status),
 		)
 	}
 	return forcedAdmission{
 		checkRun: checkRun,
 		found:    true,
-		accepted: checkRun.Status != checkRunQueued,
+		settled:  settled,
 	}, nil
 }
 
@@ -119,10 +143,12 @@ func (service *Service) priorForcedAdmission(
 // identifier and is a genuinely new force request, which is why the identifier
 // rather than the fact of being forced is the key.
 //
-// A redelivery whose earlier attempt never started its check run is resumed
-// rather than refused: it reuses that check run instead of creating a second,
-// starts it, and is admitted, so the work the first attempt never accepted
-// happens now.
+// A redelivery whose earlier attempt did not finish is resumed rather than
+// refused: it reuses that check run instead of creating a second, starts it if
+// the start never landed, and is admitted, so the caller enqueues the work the
+// earlier attempt never completed. Only a check run that reached a terminal
+// state is refused, because only that says the force request was carried
+// through.
 func (service *Service) ensureCheckRun(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -133,7 +159,7 @@ func (service *Service) ensureCheckRun(
 	if err != nil {
 		return githubapp.CheckRun{}, false, err
 	}
-	if prior.found && prior.accepted {
+	if prior.found && prior.settled {
 		logger.InfoContext(
 			ctx,
 			"review job suppressed",
