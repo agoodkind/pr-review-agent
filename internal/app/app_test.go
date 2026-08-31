@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -425,6 +426,79 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	}
 	if after := fixture.githubState.summaryCommentBody(); after != before {
 		t.Fatalf("summary comment changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// A label decides that a review runs, never how it runs. Anyone with triage
+// access on a repository can add one, so a label that could set a timeout, a
+// budget, or a model would be fault injection reaching production. The text
+// after the prefix is an opaque identifier: it is recorded on one log line so
+// an operator can tie the run back to the label they added, and read nowhere
+// else.
+func TestAConfigurationShapedLabelChangesNoTimeoutAndNoBudget(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	labels := []string{
+		domain.ForceReviewLabelPrefix + "REVIEW_CHUNK_TIMEOUT=1s",
+		domain.ForceReviewLabelPrefix + "REVIEW_MAX_CHUNKS=0",
+		domain.ForceReviewLabelPrefix + "REVIEW_MIN_IMPORTANCE=1",
+		domain.ForceReviewLabelPrefix + "REVIEW_MODEL=other-model",
+	}
+	for index, label := range labels {
+		response := fixture.postWebhook(t, webhookRequestOptions{
+			eventType:  "pull_request",
+			deliveryID: fmt.Sprintf("delivery-config-label-%d", index),
+			body:       labeledPayload(testDefectiveHead, label),
+		})
+		if response.StatusCode != http.StatusAccepted {
+			t.Fatalf("%s status = %d, want 202", label, response.StatusCode)
+		}
+		_ = response.Body.Close()
+		fixture.waitForCheckCompletions(t, int32(index+1))
+
+		// A budget the label had lowered would decline this delta instead of
+		// reviewing it, and the check would stop short of success.
+		if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "success" {
+			t.Fatalf("%s conclusion = %q, want success: the review budgets are unchanged",
+				label, conclusion)
+		}
+	}
+
+	// The run start line reports the values each run actually used.
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != len(labels) {
+		t.Fatalf("review job started lines = %d, want %d", len(started), len(labels))
+	}
+	for _, record := range started {
+		if record["chunk_timeout"] != float64(time.Minute) {
+			t.Fatalf("chunk_timeout = %v, want the configured %v", record["chunk_timeout"], time.Minute)
+		}
+		if record["minimum_importance"] != float64(testMinimumImportance) {
+			t.Fatalf("minimum_importance = %v, want the configured %d",
+				record["minimum_importance"], testMinimumImportance)
+		}
+	}
+	for _, model := range fixture.clydeState.models() {
+		if model != testReviewModel {
+			t.Fatalf("model = %q, want the configured %q", model, testReviewModel)
+		}
+	}
+
+	// The whole label reaches telemetry, unparsed, which is its only use.
+	accepted := fixture.logLinesContaining("webhook delivery accepted")
+	logged := make([]string, 0, len(accepted))
+	for _, record := range accepted {
+		name, _ := record["label"].(string)
+		logged = append(logged, name)
+	}
+	for _, label := range labels {
+		if !slices.Contains(logged, label) {
+			t.Fatalf("label %q was not logged for correlation, logged: %v", label, logged)
+		}
 	}
 }
 
@@ -2557,7 +2631,10 @@ func paginateMapPages(items []map[string]any, pageSize int) [][]map[string]any {
 }
 
 type clydeServerState struct {
-	mu                 sync.Mutex
+	mu sync.Mutex
+	// requestedModels is the model named on each request, which is the only
+	// place a changed model name would show up.
+	requestedModels    []string
 	responses          []string
 	reconcileResponses []string
 	index              int
@@ -2575,6 +2652,13 @@ func (state *clydeServerState) requestCount() int32 {
 
 func (state *clydeServerState) reconcileRequestCount() int32 {
 	return atomic.LoadInt32(&state.reconcileRequests)
+}
+
+// models returns the model named on every request this server has answered.
+func (state *clydeServerState) models() []string {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return append([]string{}, state.requestedModels...)
 }
 
 func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.Request) {
@@ -2601,6 +2685,9 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	}
 
 	state.mu.Lock()
+	if model, ok := body["model"].(string); ok {
+		state.requestedModels = append(state.requestedModels, model)
+	}
 	status := state.status
 	if isReconcile && state.reconcileStatus != 0 {
 		status = state.reconcileStatus

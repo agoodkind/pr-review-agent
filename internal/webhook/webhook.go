@@ -27,6 +27,18 @@ type PullRequestEvent struct {
 	// Forced marks a delivery that asked for a fresh full review, which only a
 	// labeled event carrying a domain.ForceReviewLabelPrefix label does.
 	Forced bool
+	// Label is the full name of the label that forced this delivery, and it is
+	// an opaque identifier. Nothing reads the text after the prefix. It never
+	// names a timeout, a budget, a model, or any other setting, because a label
+	// anyone with triage access can add must not be able to change how the
+	// service behaves; the label decides only that a review runs, never how.
+	//
+	// It exists so an operator can tie a run back to the label they added, so
+	// it goes to one log line at admission and no further. It is deliberately
+	// absent from domain.ReviewJob: the review never sees it, so it cannot
+	// reach a pull request comment or the published run log, where a label name
+	// would be text a person outside this service chose.
+	Label string
 }
 
 // Job converts the webhook event into a review job.
@@ -119,6 +131,7 @@ func emptyEvent() PullRequestEvent {
 		Head:           "",
 		Draft:          false,
 		Forced:         false,
+		Label:          "",
 	}
 }
 
@@ -233,6 +246,13 @@ func eventFromPayload(
 		return emptyEvent(), false, errors.New("invalid head sha")
 	}
 
+	// The only label ever recorded is one that forced a run, and it is recorded
+	// whole. The prefix is matched, and the rest is never read.
+	label := ""
+	if forced {
+		label = payload.Label.Name
+	}
+
 	return PullRequestEvent{
 		Action:         payload.Action,
 		DeliveryID:     deliveryID,
@@ -245,6 +265,7 @@ func eventFromPayload(
 		Head:   head,
 		Draft:  payload.PullRequest.Draft,
 		Forced: forced,
+		Label:  label,
 	}, true, nil
 }
 

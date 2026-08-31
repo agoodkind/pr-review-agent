@@ -129,6 +129,11 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		slog.Int("pull_request", event.Number),
 		slog.String("head", string(event.Head)),
 		slog.String("action", event.Action),
+		// The label that forced this delivery, recorded so an operator can tie
+		// the run back to the label they added. It is the only use it has: it
+		// is not carried into the review job, and nothing reads the text after
+		// the prefix. Every other delivery logs it empty.
+		slog.String("label", event.Label),
 	)
 	// One correlation identifier covers the whole run so every log line this
 	// delivery produces, and later the check run and pull request comment, can
