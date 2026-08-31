@@ -180,12 +180,24 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		Head:       job.Head,
 		Status:     job.CheckRunStatus,
 		Conclusion: job.CheckRunConclusion,
+		// The delivery that created this check run is not carried on the job,
+		// and nothing after admission reads it: it exists to make admission
+		// idempotent, which has already happened by the time a run starts.
+		ExternalID: "",
 	}
 	return service.runLocked(ctx, job, checkRun)
 }
 
-// Admit creates or resumes the visible check before background review work starts.
-func (service *Service) Admit(parent context.Context, job domain.ReviewJob) (domain.ReviewJob, error) {
+// Admit creates or resumes the visible check before background review work
+// starts, and reports whether this delivery was admitted at all.
+//
+// A delivery this service has already admitted is not admitted again. The
+// caller enqueues nothing for it, because everything it asked for is already
+// running or already done.
+func (service *Service) Admit(
+	parent context.Context,
+	job domain.ReviewJob,
+) (domain.ReviewJob, bool, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), service.checkCompletionTimeout)
 	defer cancel()
 	logger := service.logger.With(
@@ -196,9 +208,12 @@ func (service *Service) Admit(parent context.Context, job domain.ReviewJob) (dom
 	)
 	ctx = gklog.WithLogger(ctx, logger)
 
-	checkRun, err := service.ensureCheckRun(ctx, job, job.Head)
+	checkRun, admitted, err := service.ensureCheckRun(ctx, job, job.Head)
 	if err != nil {
-		return job, err
+		return job, false, err
+	}
+	if !admitted {
+		return job, false, nil
 	}
 	job.CheckRunID = checkRun.ID
 	job.CheckRunStatus = checkRun.Status
@@ -210,7 +225,7 @@ func (service *Service) Admit(parent context.Context, job domain.ReviewJob) (dom
 		slog.String("status", checkRun.Status),
 		slog.String("conclusion", checkRun.Conclusion),
 	)
-	return job, nil
+	return job, true, nil
 }
 
 // Reject completes an admitted check when background work cannot accept it.
@@ -731,12 +746,50 @@ func (service *Service) publishVerdict(
 	return nil
 }
 
+// ensureCheckRun returns the check run this job reports through, and whether
+// the job was admitted at all.
+//
+// A forced job is not admitted twice. GitHub reuses a delivery identifier when
+// it redelivers, and the replay queue replays the delivery a container could
+// not take, so the same force request can arrive more than once. Admitting it
+// again would create a second check run and pay for the whole analysis a second
+// time, publishing a duplicate review over the first.
+//
+// The check run this delivery already created is what says it was admitted, and
+// it has to be, because the in process delivery cache cannot answer here: the
+// forced path destroys the container, so by the time a redelivery arrives that
+// cache is a fresh empty one. A second label event carries its own delivery
+// identifier and is a genuinely new force request, which is why the identifier
+// rather than the fact of being forced is the key.
 func (service *Service) ensureCheckRun(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
-) (githubapp.CheckRun, error) {
+) (githubapp.CheckRun, bool, error) {
 	logger := gklog.L(ctx)
+	if job.Forced {
+		admittedRun, alreadyAdmitted, err := service.github.FindCheckRunByExternalID(
+			ctx,
+			job.InstallationID,
+			job.Repository,
+			head,
+			service.checkName,
+			job.DeliveryID,
+		)
+		if err != nil {
+			logger.ErrorContext(ctx, "find check run by delivery", slog.String("err", err.Error()))
+			return githubapp.CheckRun{}, false, fmt.Errorf("find check run by delivery: %w", err)
+		}
+		if alreadyAdmitted {
+			logger.InfoContext(
+				ctx,
+				"review job suppressed",
+				slog.String("reason", "duplicate_force"),
+				slog.Int64("check_run_id", admittedRun.ID),
+			)
+			return admittedRun, false, nil
+		}
+	}
 	checkRun, found, err := service.github.FindCheckRun(
 		ctx,
 		job.InstallationID,
@@ -746,7 +799,7 @@ func (service *Service) ensureCheckRun(
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "find check run", slog.String("err", err.Error()))
-		return githubapp.CheckRun{}, fmt.Errorf("find check run: %w", err)
+		return githubapp.CheckRun{}, false, fmt.Errorf("find check run: %w", err)
 	}
 	// A forced run gets its own check run rather than inheriting the one this
 	// head already carries.
@@ -764,10 +817,11 @@ func (service *Service) ensureCheckRun(
 			job.Repository,
 			head,
 			service.checkName,
+			job.DeliveryID,
 		)
 		if err != nil {
 			logger.ErrorContext(ctx, "create check run", slog.String("err", err.Error()))
-			return githubapp.CheckRun{}, fmt.Errorf("create check run: %w", err)
+			return githubapp.CheckRun{}, false, fmt.Errorf("create check run: %w", err)
 		}
 	}
 	if checkRun.Status == "queued" {
@@ -779,11 +833,11 @@ func (service *Service) ensureCheckRun(
 			repositoryURL(job.Repository),
 		); err != nil {
 			logger.ErrorContext(ctx, "start check run", slog.String("err", err.Error()))
-			return githubapp.CheckRun{}, fmt.Errorf("start check run: %w", err)
+			return githubapp.CheckRun{}, false, fmt.Errorf("start check run: %w", err)
 		}
 		checkRun.Status = "in_progress"
 	}
-	return checkRun, nil
+	return checkRun, true, nil
 }
 
 func (service *Service) succeed(

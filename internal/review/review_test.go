@@ -1663,9 +1663,12 @@ func TestAForcedRunHoldsTheRequiredCheckPendingFromAdmission(t *testing.T) {
 		"conclusion": "success",
 	})
 
-	admitted, err := fixture.service.Admit(context.Background(), fixture.forcedJob())
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.forcedJob())
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the forced job was not admitted")
 	}
 
 	if admitted.CheckRunID == 4242 {
@@ -1698,9 +1701,12 @@ func TestAnOrdinaryRunReusesTheCheckRunItsHeadCarries(t *testing.T) {
 		"conclusion": "",
 	})
 
-	admitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the ordinary job was not admitted")
 	}
 
 	if admitted.CheckRunID != 4242 {
@@ -1708,6 +1714,95 @@ func TestAnOrdinaryRunReusesTheCheckRunItsHeadCarries(t *testing.T) {
 	}
 	if fixture.state.lastCreateCheckRun != nil {
 		t.Fatal("an ordinary run created a second check run for a head that already had one")
+	}
+}
+
+// GitHub reuses a delivery identifier when it redelivers, and the replay queue
+// replays the delivery a container could not take, so the same force request
+// arrives more than once. Admitting it twice would create a second check run
+// and pay for the whole analysis again, publishing a duplicate review over the
+// first.
+//
+// Nothing in process can catch this, which is why the check run carries the
+// delivery: the forced path destroys the container, so the delivery cache that
+// would otherwise recognize the repeat is a fresh empty one by the time the
+// repeat arrives. This test admits the same delivery twice against the same
+// GitHub state, which is exactly what the redelivery sees.
+func TestTheSameForcedDeliveryAdmittedTwiceReviewsOnce(t *testing.T) {
+	// Two answers are scripted although one run is expected, so a second
+	// analysis is counted rather than failing on an unscripted call and leaving
+	// the count at one.
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs after the first delivery = %d, want 1", len(fixture.state.checkRuns))
+	}
+
+	// The redelivery carries the same identifier and meets the same GitHub
+	// state. It is reviewed only if admission admits it, exactly as the handler
+	// enqueues it only then.
+	redelivered, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("redelivered Admit: %v", err)
+	}
+	if wasAdmitted {
+		if err := fixture.service.Run(context.Background(), redelivered); err != nil {
+			t.Fatalf("redelivered Run: %v", err)
+		}
+	}
+
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: a redelivery is the same force request",
+			len(fixture.state.checkRuns))
+	}
+	if model.callCount != 1 {
+		t.Fatalf("model calls = %d, want 1: a redelivery must not pay for the analysis again",
+			model.callCount)
+	}
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want 1: a redelivery must not publish a duplicate review",
+			len(fixture.state.submittedReviews))
+	}
+	if wasAdmitted {
+		t.Fatal("the redelivered force request was admitted a second time")
+	}
+}
+
+// A second label event is a genuinely new force request, and carries its own
+// delivery identifier. The identifier rather than the fact of being forced is
+// what separates a repeat from a new request.
+func TestASecondLabelEventIsANewForceRequest(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	first := fixture.forcedJob()
+	if err := fixture.run(context.Background(), first); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	second := fixture.forcedJob()
+	second.DeliveryID = "delivery-forced-again"
+	if err := fixture.run(context.Background(), second); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if len(fixture.state.checkRuns) != 2 {
+		t.Fatalf("check runs = %d, want 2: a new label event is a new force request",
+			len(fixture.state.checkRuns))
+	}
+	if model.callCount != 2 {
+		t.Fatalf("model calls = %d, want 2", model.callCount)
 	}
 }
 
@@ -4143,7 +4238,7 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 
-	admitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	admitted, _, err := fixture.service.Admit(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
 	}
@@ -4753,7 +4848,7 @@ func TestServiceStopsPublicationWhenTheServiceShutsDown(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	admitted, err := fixture.service.Admit(ctx, fixture.job())
+	admitted, _, err := fixture.service.Admit(ctx, fixture.job())
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
 	}
@@ -5622,10 +5717,16 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 }
 
+// run admits the job and reviews it, the way one webhook delivery does. A job
+// admission refuses, because this delivery was already admitted, reviews
+// nothing, exactly as the handler enqueues nothing for it.
 func (fixture *serviceFixture) run(ctx context.Context, job domain.ReviewJob) error {
-	admitted, err := fixture.service.Admit(ctx, job)
+	admitted, wasAdmitted, err := fixture.service.Admit(ctx, job)
 	if err != nil {
 		return err
+	}
+	if !wasAdmitted {
+		return nil
 	}
 	return fixture.service.Run(ctx, admitted)
 }
@@ -5890,12 +5991,17 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			return
 		}
 		state.lastCreateCheckRun = body
+		// Every created check run gets its own id, the way GitHub assigns one,
+		// and keeps the delivery that created it so a redelivery can find it.
+		createdID := state.nextCheckRunID
+		state.nextCheckRunID++
 		created := map[string]any{
-			"id":         float64(state.nextCheckRunID),
-			"name":       body["name"],
-			"head_sha":   body["head_sha"],
-			"status":     body["status"],
-			"conclusion": "",
+			"id":          float64(createdID),
+			"name":        body["name"],
+			"head_sha":    body["head_sha"],
+			"status":      body["status"],
+			"conclusion":  "",
+			"external_id": body["external_id"],
 		}
 		state.checkRuns = append(state.checkRuns, created)
 		serviceWriteJSON(writer, http.StatusCreated, created)

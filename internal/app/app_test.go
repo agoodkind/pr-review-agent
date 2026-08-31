@@ -2333,6 +2333,9 @@ func (state *githubServerState) handleCreateCheckRun(writer http.ResponseWriter,
 		"head_sha":   body["head_sha"],
 		"status":     body["status"],
 		"conclusion": "",
+		// The delivery that created this check run, which is how a redelivery
+		// of that same delivery recognizes its own earlier admission.
+		"external_id": body["external_id"],
 	}
 	state.checkRuns = append(state.checkRuns, created)
 	writeJSON(writer, http.StatusCreated, created)

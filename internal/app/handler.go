@@ -19,7 +19,7 @@ import (
 var errReviewQueueFull = errors.New("review queue full")
 
 type reviewAdmitter interface {
-	Admit(context.Context, domain.ReviewJob) (domain.ReviewJob, error)
+	Admit(context.Context, domain.ReviewJob) (domain.ReviewJob, bool, error)
 	Reject(context.Context, domain.ReviewJob, error) error
 }
 
@@ -148,11 +148,19 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		return
 	}
 
-	job, err := handler.admitter.Admit(ctx, event.Job())
+	job, admitted, err := handler.admitter.Admit(ctx, event.Job())
 	if err != nil {
 		handler.cache.Release(deliveryID)
 		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", err.Error()))
 		http.Error(writer, "review admission failed", http.StatusBadGateway)
+		return
+	}
+	// This delivery was already admitted, on GitHub, by an earlier arrival of
+	// itself. The claim is kept rather than released, because a redelivery is a
+	// duplicate and not something to try again.
+	if !admitted {
+		logger.InfoContext(ctx, "webhook delivery suppressed", slog.String("reason", "already_admitted"))
+		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
 
