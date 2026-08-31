@@ -1648,6 +1648,125 @@ func TestAForcedRunReadsEveryChunkAgainIncludingTheOnesAlreadyRead(t *testing.T)
 	}
 }
 
+// A completed successful check satisfies branch protection. A forced run that
+// inherited the check run this head already carries would leave the pull
+// request mergeable for its whole duration, so the change the label was added
+// to re-examine could merge on the strength of the verdict being replaced.
+func TestAForcedRunHoldsTheRequiredCheckPendingFromAdmission(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":         float64(4242),
+		"name":       config.ReviewCheckName,
+		"head_sha":   string(head),
+		"status":     "completed",
+		"conclusion": "success",
+	})
+
+	admitted, err := fixture.service.Admit(context.Background(), fixture.forcedJob())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+
+	if admitted.CheckRunID == 4242 {
+		t.Fatal("the forced run inherited the completed check run, so the head stays mergeable while it runs")
+	}
+	if admitted.CheckRunStatus != "in_progress" {
+		t.Fatalf("check status = %q, want in_progress before any review work", admitted.CheckRunStatus)
+	}
+	if admitted.CheckRunConclusion == "success" {
+		t.Fatalf("check conclusion = %q, want no passing conclusion standing over a forced run",
+			admitted.CheckRunConclusion)
+	}
+	if fixture.state.lastCreateCheckRun == nil {
+		t.Fatal("no check run was created for the forced job")
+	}
+	if fixture.state.lastCreateCheckRun["head_sha"] != string(head) {
+		t.Fatalf("created check head = %v, want %q", fixture.state.lastCreateCheckRun["head_sha"], head)
+	}
+}
+
+// An ordinary run keeps using the check run its head already carries, so a
+// redelivery does not litter the checks list with duplicates.
+func TestAnOrdinaryRunReusesTheCheckRunItsHeadCarries(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":         float64(4242),
+		"name":       config.ReviewCheckName,
+		"head_sha":   testHeadSHA,
+		"status":     "in_progress",
+		"conclusion": "",
+	})
+
+	admitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+
+	if admitted.CheckRunID != 4242 {
+		t.Fatalf("check run id = %d, want the existing 4242 reused", admitted.CheckRunID)
+	}
+	if fixture.state.lastCreateCheckRun != nil {
+		t.Fatal("an ordinary run created a second check run for a head that already had one")
+	}
+}
+
+// A forced pass derives its chunks from the whole pull request, so the ids it
+// leaves pending name whole pull request chunks. Writing those beside the old
+// baseline leaves a marker that contradicts itself, and the next run compares
+// that commit against the head, finds an empty range, and advances the baseline
+// over chunks nobody ever read.
+func TestAnIncompleteForcedRunLeavesAResumableCheckpoint(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         selfRangeEmptyCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+	// An earlier ordinary run recorded this head as reviewed.
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+			Completed:    nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
+		t.Fatalf("forced Run: %v", err)
+	}
+
+	incomplete := decodedSummaryState(t, fixture)
+	if len(incomplete.Pending) == 0 {
+		t.Fatalf("state = %+v, want the chunk that failed left pending", incomplete)
+	}
+	if incomplete.LastReviewed != "" {
+		t.Fatalf("last reviewed = %q, want empty: the pending ids name whole pull request chunks",
+			incomplete.LastReviewed)
+	}
+
+	// The next ordinary run must be able to derive a range those ids appear in,
+	// read the chunk that was left, and only then call the head reviewed.
+	model.heal()
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if times := timesReviewed(model, "file1.go"); times != 2 {
+		t.Fatalf("file1.go was analyzed %d times, want twice: the next run must finish the pending chunk", times)
+	}
+	done := decodedSummaryState(t, fixture)
+	if len(done.Pending) != 0 {
+		t.Fatalf("state = %+v, want nothing pending once the chunk was read", done)
+	}
+	if done.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head only after every chunk was read", done.LastReviewed)
+	}
+}
+
 // A forced run asks for the whole pull request, not for permission to review
 // one. An oversized delta is oversized however it was triggered, so admission
 // declines it exactly as it declines an ordinary one, and the check stops short
@@ -5249,6 +5368,26 @@ func (twoChunkCollector) CollectRange(
 		})
 	}
 	return diff.ReviewInput{PullRequest: pullRequest, Files: files}, nil
+}
+
+// selfRangeEmptyCollector answers a range the way GitHub's compare does: a
+// range asked for from a commit to that same commit holds nothing.
+//
+// twoChunkCollector discards the base, so a test built on it cannot show what a
+// stale baseline costs. It is exactly that emptiness that turns a checkpoint
+// naming the head into chunks nobody can ever resume.
+type selfRangeEmptyCollector struct{}
+
+func (selfRangeEmptyCollector) CollectRange(
+	ctx context.Context,
+	ref domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	base domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	if base == pullRequest.Head {
+		return diff.ReviewInput{PullRequest: pullRequest, Files: nil, MergeBase: base}, nil
+	}
+	return twoChunkCollector{}.CollectRange(ctx, ref, pullRequest, base)
 }
 
 type serialGateModel struct {

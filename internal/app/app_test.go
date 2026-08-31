@@ -2322,8 +2322,13 @@ func (state *githubServerState) handleCreateCheckRun(writer http.ResponseWriter,
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	// Every created check run gets its own id, the way GitHub assigns one. Two
+	// check runs sharing an id let a single update write to both, which both
+	// hides that they are separate and counts one completion twice.
+	createdID := state.nextCheckRunID
+	state.nextCheckRunID++
 	created := map[string]any{
-		"id":         float64(state.nextCheckRunID),
+		"id":         float64(createdID),
 		"name":       body["name"],
 		"head_sha":   body["head_sha"],
 		"status":     body["status"],
@@ -2342,10 +2347,12 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	checkID := strings.TrimPrefix(request.URL.Path, fmt.Sprintf("/repos/%s/%s/check-runs/", testRepoOwner, testRepoName))
+	updatedID := float64(0)
 	for index, item := range state.checkRuns {
 		if fmt.Sprintf("%.0f", item["id"]) != checkID {
 			continue
 		}
+		updatedID, _ = item["id"].(float64)
 		if status, ok := body["status"].(string); ok && status != "" {
 			item["status"] = status
 		}
@@ -2358,7 +2365,7 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 		state.checkRuns[index] = item
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"id":         float64(state.nextCheckRunID),
+		"id":         updatedID,
 		"name":       config.ReviewCheckName,
 		"status":     body["status"],
 		"conclusion": body["conclusion"],

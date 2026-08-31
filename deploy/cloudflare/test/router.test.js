@@ -181,6 +181,7 @@ test("a service answer that is not 500 passes through untouched and queues nothi
 // the only part that owns one.
 function createRestartEnvironment(events) {
   return {
+    GITHUB_WEBHOOK_SECRET: testWebhookSecret, // gitleaks:allow
     PR_AGENT: {
       getByName(name) {
         assert.equal(name, "github-app");
@@ -198,7 +199,7 @@ function createRestartEnvironment(events) {
   };
 }
 
-function labeledWebhookRequest(action, labelName) {
+function labeledWebhookRequest(action, labelName, signature) {
   const body = JSON.stringify({
     action,
     label: { name: labelName },
@@ -211,6 +212,7 @@ function labeledWebhookRequest(action, labelName) {
       "content-type": "application/json",
       "x-github-event": "pull_request",
       "x-github-delivery": "delivery-label-1",
+      "x-hub-signature-256": signature ?? signBody(body),
     },
   });
 }
@@ -225,6 +227,37 @@ test("a label this service owns stops the container before the delivery is forwa
 
   assert.equal(response.status, 202);
   assert.deepEqual(events, ["restart", "forward"]);
+});
+
+// Destroying the container is the one action this worker takes before the Go
+// service ever sees the body. Unverified it is a denial of service anyone who
+// can reach this worker can run: post a labeled payload, kill the review in
+// flight, repeat. The delivery is still forwarded, because the Go service is
+// what refuses a forged signature; what must not happen is the restart.
+test("a forged forcing delivery restarts nothing", async function () {
+  for (const signature of ["sha256=" + "0".repeat(64), "", "not-a-signature"]) {
+    const events = [];
+    const response = await routeRequest(
+      labeledWebhookRequest("labeled", "test-review-agent-rerun", signature),
+      createRestartEnvironment(events),
+    );
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(events, ["forward"], `signature ${JSON.stringify(signature)} restarted the container`);
+  }
+});
+
+// A worker with no signing key configured can verify nothing, so it must
+// restart nothing rather than treat an unverifiable delivery as trusted.
+test("a forcing delivery restarts nothing when no signing key is configured", async function () {
+  const events = [];
+  const environment = createRestartEnvironment(events);
+  delete environment.GITHUB_WEBHOOK_SECRET;
+
+  const response = await routeRequest(labeledWebhookRequest("labeled", "test-review-agent-rerun"), environment);
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(events, ["forward"]);
 });
 
 test("no other delivery stops the container", async function () {

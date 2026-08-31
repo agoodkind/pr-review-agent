@@ -16,6 +16,39 @@ function forcesReview(metadata) {
   );
 }
 
+// restartOnForcedReview destroys the container when a signed delivery carries
+// one of this service's labels, so the review that follows starts a new one.
+//
+// The signature is checked here rather than left to the Go service. Every other
+// delivery is only forwarded, and the service verifies it before acting, but
+// destroying the container is an action this worker takes before the service
+// ever sees the body. Unverified, it is a denial of service anyone who can
+// reach this worker can run: post a labeled payload, kill whatever review is
+// in flight, and repeat. The verifier is the service log one because both use
+// GitHub's own scheme and key.
+async function restartOnForcedReview(container, env, request, body, metadata) {
+  if (!forcesReview(metadata)) {
+    return;
+  }
+  const signature = request.headers.get("x-hub-signature-256") ?? "";
+  if (!(await verifyServiceLogSignature(env.GITHUB_WEBHOOK_SECRET, body, signature))) {
+    // The delivery still goes to the Go service, which refuses it the way it
+    // refuses any forged delivery. What it does not do is restart anything.
+    console.error(JSON.stringify({ message: "container restart refused, invalid signature", ...metadata }));
+    return;
+  }
+  // A restart that fails is logged and the delivery forwarded anyway. The
+  // review is the point and the fresh environment is what the restart adds, so
+  // refusing to review would cost more than reviewing on the old instance. The
+  // log line is what tells an operator which one they got.
+  try {
+    await container.restartForForcedReview();
+    console.log(JSON.stringify({ message: "container restarted for forced review", ...metadata }));
+  } catch (error) {
+    console.error(JSON.stringify({ message: "container restart failed", ...metadata, error: String(error) }));
+  }
+}
+
 export async function routeRequest(request, env) {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health") {
@@ -38,20 +71,7 @@ export async function routeRequest(request, env) {
   let response = null;
   try {
     const container = env.PR_AGENT.getByName("github-app");
-    if (forcesReview(metadata)) {
-      // A restart that fails is logged and the delivery forwarded anyway. The
-      // review is the point and the fresh environment is what the restart adds,
-      // so refusing to review would cost more than reviewing on the old
-      // instance. The log line is what tells an operator which one they got.
-      try {
-        await container.restartForForcedReview();
-        console.log(JSON.stringify({ message: "container restarted for forced review", ...metadata }));
-      } catch (error) {
-        console.error(
-          JSON.stringify({ message: "container restart failed", ...metadata, error: String(error) }),
-        );
-      }
-    }
+    await restartOnForcedReview(container, env, request, body, metadata);
     response = await container.fetch(request);
   } catch (error) {
     console.error(JSON.stringify({ message: "webhook forward threw", ...metadata, error: String(error) }));

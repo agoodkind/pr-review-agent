@@ -250,8 +250,10 @@ func (service *Service) runLocked(
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
 
-	// A forced run is asked for precisely because the visible check no longer
-	// says anything useful, so a completed check is what it exists to redo.
+	// A forced run must never stop on a conclusion an earlier run reached, since
+	// redoing that run is the whole point. Admission gives it its own check run,
+	// so this is normally not a completed check at all; the guard keeps that
+	// true if a forced job ever reaches here carrying one.
 	if !job.Forced && service.checkAlreadySucceeded(ctx, checkRun) {
 		// The check is already completed and successful, so there is nothing to
 		// conclude here and the refresh failure is the whole outcome.
@@ -313,10 +315,18 @@ func (service *Service) reviewOwedWork(
 	state, hasState := service.loadDurableState(ctx, job)
 	if job.Forced {
 		// A label asks for the whole pull request again, so nothing an earlier
-		// run recorded may narrow this one. The chunk lists go, and deltaBase
-		// measures from no baseline at all. The marker itself stays where it is:
+		// run recorded may narrow this one. The marker itself stays where it is:
 		// this run rewrites it the way any run does, so the next ordinary push
 		// resumes from what this run actually reviewed.
+		//
+		// The baseline goes with the chunk lists, and it has to. This pass
+		// derives its chunks from the whole pull request, so the ids it leaves
+		// pending name whole pull request chunks. Writing those beside the old
+		// baseline would leave a marker that contradicts itself: the next run
+		// would compare that commit against the head, derive an empty range,
+		// find none of the pending ids in it, and advance the baseline over
+		// chunks nobody ever read.
+		state.LastReviewed = ""
 		state.Pending = nil
 		state.Completed = nil
 	}
@@ -738,7 +748,16 @@ func (service *Service) ensureCheckRun(
 		logger.ErrorContext(ctx, "find check run", slog.String("err", err.Error()))
 		return githubapp.CheckRun{}, fmt.Errorf("find check run: %w", err)
 	}
-	if !found {
+	// A forced run gets its own check run rather than inheriting the one this
+	// head already carries.
+	//
+	// That check run is completed, and a completed successful check satisfies
+	// branch protection. Inheriting it would leave the pull request mergeable
+	// for the whole forced run, so the change the label was added to re-examine
+	// could merge on the strength of the verdict being replaced. A fresh check
+	// run is created queued and started below, so the required check is pending
+	// from the moment the delivery is admitted and before any review work runs.
+	if !found || job.Forced {
 		checkRun, err = service.github.CreateCheckRun(
 			ctx,
 			job.InstallationID,
