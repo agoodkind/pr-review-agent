@@ -83,9 +83,11 @@ func removeChunkID(pending []string, id string) []string {
 type chunkPass struct {
 	work      deltaWork
 	selection *publicationState
-	// disputePrompt is what the pull request has already been told, rendered
-	// for the chunk prompt. It is built once and never written again, so the
-	// chunks read it concurrently without the lock.
+	// disputes and disputePrompt are what the pull request has already been
+	// told, as keys for the backstop and as prose for the prompt. Both are built
+	// once and never written again, so the chunks read them concurrently without
+	// the lock.
+	disputes      disputeContext
 	disputePrompt string
 
 	mu        sync.Mutex
@@ -131,6 +133,7 @@ func newChunkPass(
 	return &chunkPass{
 		work:          work,
 		selection:     selection,
+		disputes:      disputes,
 		disputePrompt: disputes.promptSection(),
 		mu:            sync.Mutex{},
 		collector:     newFindingCollector(work.Files, minimumImportance),
@@ -735,7 +738,16 @@ func (service *Service) renderChunkFindings(
 	grounded := groundedFindings(ctx, findings, pass.collector.fileIndex, chunkText)
 	eligible := eligibleFindings(grounded, pass.collector.fileIndex, pass.collector.minimumImportance)
 	posts := make([]postCandidate, 0, len(eligible))
+	withheld := make([]withheldFinding, 0)
 	for _, finding := range eligible {
+		if thread, answered := pass.disputes.answered(finding); answered {
+			withheld = append(withheld, withheldFinding{
+				Path:   finding.Path,
+				Title:  finding.Title,
+				Thread: thread,
+			})
+			continue
+		}
 		keys := keysFor(finding)
 		if pass.selection.suppressed(keys) {
 			continue
@@ -757,6 +769,7 @@ func (service *Service) renderChunkFindings(
 		pass.selection.remember(keys)
 		posts = append(posts, postCandidate{finding: finding, comment: rendered[0]})
 	}
+	logWithheldFindings(ctx, withheld)
 	return posts
 }
 

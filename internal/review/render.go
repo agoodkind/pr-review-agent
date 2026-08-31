@@ -333,8 +333,10 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			slog.Error("normalize finding path", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("normalize finding path: %w", err)
 		}
-		// Evidence stays out of the published comment: it is a publication gate
-		// input, and the reader already sees the anchored lines beside the
+		// The evidence reaches the encoder, and no further. It is hashed into the
+		// marker's claim key, which is what lets a later run recognize a reworded
+		// restatement of this same claim; the rendered body still never prints it,
+		// so the reader sees no quoted source line they already have beside the
 		// comment.
 		body, err := marker.EncodeFindingBody(head, domain.Finding{
 			Path:       normalizedPath,
@@ -342,7 +344,7 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			EndLine:    finding.EndLine,
 			Title:      sanitizeProse(finding.Title),
 			Body:       sanitizeProse(finding.Body),
-			Evidence:   "",
+			Evidence:   finding.Evidence,
 			Suggestion: finding.Suggestion,
 			Importance: finding.Importance,
 		})

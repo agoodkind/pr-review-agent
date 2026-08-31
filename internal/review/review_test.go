@@ -2037,6 +2037,10 @@ func TestAFindingWhoseEvidenceIsNotAWholeShownLineIsDropped(t *testing.T) {
 // dispute tests is a model quoting the same line twice under two titles.
 const disputeEvidenceLine = "if err := publish(ctx); err != nil {"
 
+// disputeOtherLine is the other line disputeCollector shows, so a test can make
+// a second claim that rests on different code.
+const disputeOtherLine = "package main"
+
 // disputeCollector returns one file whose single changed line is
 // disputeEvidenceLine, anchored at line 2.
 type disputeCollector struct{}
@@ -2071,25 +2075,52 @@ func (disputeCollector) CollectRange(
 }
 
 // answeredThreadFinding is the claim already standing on the pull request. It
-// anchors at line 1, away from the line the new finding anchors to, so neither
-// the finding identity nor the anchor key can suppress the repeat and only the
-// dispute guard is under test.
+// anchors at line 1, away from the line a new finding anchors to, so neither the
+// finding identity nor the anchor key can suppress a repeat and only the claim
+// key is under test.
+//
+// Its evidence is the changed line, which is what the claim key is derived from.
 func answeredThreadFinding() domain.Finding {
 	return domain.Finding{
 		Path:       "main.go",
 		StartLine:  1,
 		EndLine:    1,
 		Title:      "Check the publish error",
-		Body:       "The call `" + disputeEvidenceLine + "` ignores its failure.",
-		Evidence:   "",
+		Body:       "This call ignores its failure.",
+		Evidence:   disputeEvidenceLine,
+		Suggestion: "",
+		Importance: 9,
+	}
+}
+
+// keylessThreadFinding is a finding as it was published before claim keys
+// existed: no evidence, so its marker carries no key.
+func keylessThreadFinding() domain.Finding {
+	keyless := answeredThreadFinding()
+	keyless.Evidence = ""
+	return keyless
+}
+
+// rewordedRepeat is the standing claim coming back under a different title, on a
+// different line, resting on the same source line. This is the shape the live
+// republishes took: nothing about the wording matches, and the code it is about
+// is the same code.
+func rewordedRepeat() domain.Finding {
+	return domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Publish failure is not handled",
+		Body:       "This call can fail and nothing reacts to it.",
+		Evidence:   disputeEvidenceLine,
 		Suggestion: "",
 		Importance: 9,
 	}
 }
 
 // newFindingOnTheSameFile is a genuinely different defect on the file the open
-// thread objects to. It must publish: nothing about an open thread on one line
-// answers a separate claim about another.
+// thread objects to. It rests on a different source line, so it is a different
+// claim, and it must publish: an open thread answers its own claim and no other.
 func newFindingOnTheSameFile() domain.Finding {
 	return domain.Finding{
 		Path:       "main.go",
@@ -2097,17 +2128,28 @@ func newFindingOnTheSameFile() domain.Finding {
 		EndLine:    2,
 		Title:      "Publish result is discarded",
 		Body:       "A separate defect on the same file as the open thread.",
-		Evidence:   disputeEvidenceLine,
+		Evidence:   disputeOtherLine,
 		Suggestion: "",
 		Importance: 9,
 	}
 }
 
-// answeredThread is one bot thread carrying answeredThreadFinding, with the
-// author's reply under it, as ListReviewThreads reports one.
+// answeredThread is one bot thread carrying answeredThreadFinding, with a reply
+// under it, as ListReviewThreads reports one.
 func answeredThread(t *testing.T, resolved bool, reply string) githubapp.ReviewThread {
 	t.Helper()
-	finding := answeredThreadFinding()
+	return threadCarrying(t, answeredThreadFinding(), resolved, reply)
+}
+
+// threadCarrying is one bot thread whose root comment is the published form of
+// finding, marker and all.
+func threadCarrying(
+	t *testing.T,
+	finding domain.Finding,
+	resolved bool,
+	reply string,
+) githubapp.ReviewThread {
+	t.Helper()
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testStaleHeadSHA), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -2152,6 +2194,113 @@ func disputeFixture(t *testing.T, thread githubapp.ReviewThread) *serviceFixture
 	})
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{thread})
 	return fixture
+}
+
+// disputeFixtureWith wires a run whose one chunk answers with findings, against
+// one standing thread.
+func disputeFixtureWith(
+	t *testing.T,
+	thread githubapp.ReviewThread,
+	findings ...domain.Finding,
+) *serviceFixture {
+	t.Helper()
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         disputeCollector{},
+		minimumImportance: 9,
+		reconcileThreads:  []githubapp.ReviewThread{thread},
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         findings,
+		}}},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{thread})
+	return fixture
+}
+
+// A claim already open on the pull request must not come back reworded.
+//
+// One live pull request received the same ask five times across five pushes,
+// under five different titles and across two different paths. Nothing about the
+// wording repeated, so every suppression keyed on wording caught none of them.
+// The claim key is keyed on the code instead: the path and the evidence line the
+// finding rests on.
+func TestARewordedRestatementOfAnOpenClaimIsNotPublished(t *testing.T) {
+	fixture := disputeFixtureWith(
+		t,
+		answeredThread(t, false, "Declined: publish already logs and retries."),
+		rewordedRepeat(),
+	)
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 0 {
+		t.Fatalf("streamed comments = %v, want none: this claim is already open under another title",
+			bodiesOf(fixture.state.streamedComments))
+	}
+	// Withholding the repeat must not drop the question. The standing thread is
+	// still open, so it still holds the pull request.
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES while the answered thread is open",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// Two claims resting on two different source lines are two claims, whatever file
+// they share. Withholding the second would be the containment failure again.
+func TestTwoDistinctClaimsOnOneFileBothPublish(t *testing.T) {
+	fixture := disputeFixtureWith(
+		t,
+		answeredThread(t, false, ""),
+		rewordedRepeat(),
+		newFindingOnTheSameFile(),
+	)
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	bodies := bodiesOf(fixture.state.streamedComments)
+	if len(bodies) != 1 {
+		t.Fatalf("streamed comments = %v, want only the separate claim: the repeat is already open "+
+			"and the separate defect is not", bodies)
+	}
+	if !strings.Contains(bodies[0], "Publish result is discarded") {
+		t.Fatalf("published comment = %q, want the claim that rests on different code", bodies[0])
+	}
+}
+
+// A resolved thread is a settled question. A defect reintroduced after a fix has
+// to be raised again, so a resolved claim key suppresses nothing.
+func TestAClaimOnAResolvedThreadIsPublishedAgain(t *testing.T) {
+	fixture := disputeFixtureWith(t, answeredThread(t, true, ""), rewordedRepeat())
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the finding published: a resolved thread settles nothing "+
+			"about a defect that came back", len(fixture.state.streamedComments))
+	}
+}
+
+// Every comment published before the claim key existed carries no key, and those
+// comments outlive this change on every open pull request. They must decode as
+// they always did and suppress nothing, or the first run after this ships either
+// crashes on them or withholds against a key it never wrote.
+func TestAMarkerWithoutAClaimKeySuppressesNothing(t *testing.T) {
+	thread := threadCarrying(t, keylessThreadFinding(), false, "")
+	if _, found := marker.FindFinding(thread.RootComment.Body); !found {
+		t.Fatalf("a marker with no claim key stopped decoding: %q", thread.RootComment.Body)
+	}
+	fixture := disputeFixtureWith(t, thread, rewordedRepeat())
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("streamed comments = %d, want the finding published: an old marker carries no key "+
+			"and can match nothing", len(fixture.state.streamedComments))
+	}
 }
 
 // An open thread argues against repeating its own claim, and against nothing
