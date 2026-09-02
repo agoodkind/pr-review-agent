@@ -30,6 +30,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/runlog"
 )
 
 // unreadHunk names one piece of the head nobody read, in the terms a reader can
@@ -208,7 +209,7 @@ func structuralShortfallNotice(
 	pending int,
 ) string {
 	count := len(shortfall.Hunks)
-	parts := []string{
+	return strings.Join([]string{
 		fmt.Sprintf(
 			"`%s` carries %s this service cannot read, and a later run reaches the same limit on %s.",
 			shortHead(head),
@@ -217,34 +218,76 @@ func structuralShortfallNotice(
 		),
 		renderUnreadHunks(shortfall.Hunks),
 		"Read " + hunkPronoun(count) + " yourself, or split the pull request so every change is " +
-			"small enough to review. Everything else on this head was reviewed, and anything " +
-			"found there is already inline.",
-	}
-	if pending > 0 {
-		parts = append(parts, fmt.Sprintf(
-			"%s also went unread this run for a separate reason, and a later run retries %s.",
-			chunkCount(pending),
-			chunkPronoun(pending),
-		))
-	}
-	return strings.Join(parts, "\n\n")
+			"small enough to review.",
+		remainingWorkSentence(pending),
+	}, "\n\n")
 }
 
+// remainingWorkSentence says what this run still owes beyond the hunks above.
+//
+// It used to claim that everything else on the head was reviewed whatever else
+// had happened, which is false the moment a chunk is left pending: those chunks
+// were not read either, and a reader told the rest was covered has no reason to
+// wait for the run that covers them.
+func remainingWorkSentence(pending int) string {
+	if pending == 0 {
+		return "Everything else on this head was reviewed, and anything found there is already inline."
+	}
+	return fmt.Sprintf(
+		"%s went unread as well and a later run retries %s, so the rest of this head is not covered yet. "+
+			"Anything found so far is already inline.",
+		chunkCount(pending),
+		chunkPronoun(pending),
+	)
+}
+
+// maximumListedUnreadHunks bounds the list a notice prints.
+//
+// A check run output is capped by size, and one line per unread hunk over a
+// pull request touching hundreds of files runs past that cap, which leaves the
+// check unfinished and reports nothing at all. The count in the sentence above
+// stays exact; only the list is cut.
+const maximumListedUnreadHunks = 40
+
+// maximumUnreadHunkLabelBytes bounds one line of that list, because a single
+// repository path can be long enough to crowd out the rest on its own.
+const maximumUnreadHunkLabelBytes = 220
+
 // renderUnreadHunks lists what nobody read, one line each.
+//
+// The list is a fenced block rather than markdown bullets. Every path and hunk
+// header in it is repository controlled: someone who can name a file can put a
+// backtick or a newline in that name, and inside an inline code span either one
+// closes the span and turns the rest into markdown on a body this service signs.
+// A fenced block plus the line break escaping the run log already applies to the
+// same problem leaves nothing that can close it.
 func renderUnreadHunks(hunks []unreadHunk) string {
-	lines := make([]string, 0, len(hunks)+1)
-	lines = append(lines, "Not read:")
-	for _, hunk := range hunks {
-		lines = append(lines, "- "+describeUnreadHunk(hunk))
+	listed := hunks
+	omitted := 0
+	if len(listed) > maximumListedUnreadHunks {
+		omitted = len(listed) - maximumListedUnreadHunks
+		listed = listed[:maximumListedUnreadHunks]
+	}
+	lines := make([]string, 0, len(listed)+4)
+	lines = append(lines, "Not read:", "```")
+	for _, hunk := range listed {
+		lines = append(lines, describeUnreadHunk(hunk))
+	}
+	lines = append(lines, "```")
+	if omitted > 0 {
+		lines = append(lines, fmt.Sprintf("and %d more not listed here.", omitted))
 	}
 	return strings.Join(lines, "\n")
 }
 
 // describeUnreadHunk names one unread piece the way a reader can go and find it.
 func describeUnreadHunk(hunk unreadHunk) string {
-	label := "`" + hunk.Path + "`"
+	label := runlog.EscapeLineBreaks(hunk.Path)
 	if hunk.Header != "" {
-		label += " `" + hunk.Header + "`"
+		label += " " + runlog.EscapeLineBreaks(hunk.Header)
+	}
+	if len(label) > maximumUnreadHunkLabelBytes {
+		label = label[:maximumUnreadHunkLabelBytes] + "..."
 	}
 	if hunk.Reason == "" {
 		return label
