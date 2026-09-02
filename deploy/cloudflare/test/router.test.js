@@ -174,21 +174,17 @@ test("a service answer that is not 500 passes through untouched and queues nothi
   assert.equal(queued.length, 0);
 });
 
-// The container reads its environment once, at start. A chunk timeout changed
-// to 6 seconds and restored 5 minutes later still governed a real pull request
-// 13 minutes after the restore, because nothing had restarted the container.
-// A forced review therefore has to reach a fresh container, and the worker is
-// the only part that owns one.
-function createRestartEnvironment(events, queued) {
+// createForwardingEnvironment answers every forward and records that it
+// happened, with a replay queue bound so a test can prove a delivery did not
+// reach it. Without the binding, a queued delivery would fail on the missing
+// binding and read as some other fault.
+function createForwardingEnvironment(events, queued) {
   return {
     GITHUB_WEBHOOK_SECRET: testWebhookSecret, // gitleaks:allow
     PR_AGENT: {
       getByName(name) {
         assert.equal(name, "github-app");
         return {
-          async restartForForcedReview() {
-            events.push("restart");
-          },
           async fetch() {
             events.push("forward");
             return new Response("proxied", { status: 202 });
@@ -196,9 +192,6 @@ function createRestartEnvironment(events, queued) {
         };
       },
     },
-    // A queue is bound so a test can prove a delivery did not reach it. Without
-    // one, a delivery that was queued would fail on the missing binding and read
-    // as some other fault.
     REPLAY_QUEUE: {
       getByName(name) {
         assert.equal(name, "webhook-replays");
@@ -213,11 +206,11 @@ function createRestartEnvironment(events, queued) {
   };
 }
 
-function labeledWebhookRequest(action, labelName, signature, draft) {
+function labeledWebhookRequest(action, labelName, signature) {
   const body = JSON.stringify({
     action,
     label: { name: labelName },
-    pull_request: { draft: draft === true, head: { sha: "e6949cd" } },
+    pull_request: { draft: false, head: { sha: "e6949cd" } },
   });
   return new Request("https://reviewer.example/api/v1/github_webhooks", {
     body,
@@ -231,190 +224,15 @@ function labeledWebhookRequest(action, labelName, signature, draft) {
   });
 }
 
-test("a label this service owns stops the container before the delivery is forwarded", async function () {
-  const events = [];
-
-  const response = await routeRequest(
-    labeledWebhookRequest("labeled", "test-review-agent-rerun"),
-    createRestartEnvironment(events),
-  );
-
-  assert.equal(response.status, 202);
-  assert.deepEqual(events, ["restart", "forward"]);
-});
-
-// Destroying the container is the one action this worker takes before the Go
-// service ever sees the body. Unverified it is a denial of service anyone who
-// can reach this worker can run: post a labeled payload, kill the review in
-// flight, repeat. The delivery is still forwarded, because the Go service is
-// what refuses a forged signature; what must not happen is the restart.
-test("a forged forcing delivery restarts nothing", async function () {
-  for (const signature of ["sha256=" + "0".repeat(64), "", "not-a-signature"]) {
-    const events = [];
-    const response = await routeRequest(
-      labeledWebhookRequest("labeled", "test-review-agent-rerun", signature),
-      createRestartEnvironment(events),
-    );
-
-    assert.equal(response.status, 202);
-    assert.deepEqual(events, ["forward"], `signature ${JSON.stringify(signature)} restarted the container`);
-  }
-});
-
-// A restart that fails must not let the forced review proceed. The container
-// reads its environment once at start, so reviewing on the instance the restart
-// could not replace answers for the configuration the label was added to get rid
-// of, and answers with the authority of a completed check.
-//
-// The failure travels out to the forwarding handler, which queues the delivery
-// the way it queues any the container could not take, so the request is retried
-// rather than lost. Only a signed delivery reaches the restart, so it is also
-// one the replay path accepts.
-test("a forced review whose restart fails is queued rather than run on the old container", async function () {
-  const events = [];
-  const queued = [];
-  const environment = createRestartEnvironment(events, queued);
-  environment.PR_AGENT = {
-    getByName() {
-      return {
-        async restartForForcedReview() {
-          throw new Error("destroy failed");
-        },
-        async fetch() {
-          events.push("forward");
-          return new Response("proxied", { status: 202 });
-        },
-      };
-    },
-  };
-
-  const response = await routeRequest(labeledWebhookRequest("labeled", "test-review-agent-rerun"), environment);
-
-  assert.equal(response.status, 202);
-  assert.deepEqual(events, [], "the review ran on the container the restart failed to replace");
-  assert.equal(queued.length, 1, "the forced delivery was dropped rather than queued for replay");
-  assert.equal(queued[0].id, "delivery-label-1");
-});
-
-// A worker with no signing key configured can verify nothing, so it must
-// restart nothing rather than treat an unverifiable delivery as trusted.
-//
-// It must also say which of the two it is. A missing key and a forged signature
-// both stop the restart, and reporting the misconfiguration as a bad signature
-// sends whoever is asking why forced restarts never happen looking for a forgery
-// that never happened, while the signature on every one of those deliveries was
-// good.
-test("a forcing delivery restarts nothing when no signing key is configured", async function () {
-  const events = [];
-  const environment = createRestartEnvironment(events);
-  delete environment.GITHUB_WEBHOOK_SECRET;
-  const logged = [];
-  const realError = console.error;
-  console.error = function (line) {
-    logged.push(line);
-  };
-
-  let response;
-  try {
-    response = await routeRequest(labeledWebhookRequest("labeled", "test-review-agent-rerun"), environment);
-  } finally {
-    console.error = realError;
-  }
-
-  const refusals = logged.filter(function (line) {
-    return line.includes("container restart refused");
-  });
-  assert.equal(refusals.length, 1, `refusal lines = ${JSON.stringify(logged)}`);
-  assert.match(refusals[0], /no signing key configured/);
-  assert.doesNotMatch(refusals[0], /invalid signature/);
-
-  assert.equal(response.status, 202);
-  assert.deepEqual(events, ["forward"]);
-});
-
-// The Go service refuses a labeled delivery on a draft outright, because a
-// draft is never reviewed and a label does not change that. A worker that
-// restarted anyway would destroy whatever review is in flight and produce no
-// review in its place, and anyone who can add a label could repeat that at will.
-//
-// The forcing label is the same one that restarts a non-draft pull request, so
-// the draft flag is the only thing separating this case from that one.
-test("a forcing label on a draft pull request restarts nothing", async function () {
-  const events = [];
-  const queued = [];
-
-  const response = await routeRequest(
-    labeledWebhookRequest("labeled", "test-review-agent-rerun", undefined, true),
-    createRestartEnvironment(events, queued),
-  );
-
-  assert.equal(response.status, 202);
-  assert.deepEqual(events, ["forward"]);
-  assert.equal(queued.length, 0);
-});
-
-// A draft flag the payload does not carry, or carries as something other than
-// true, must not suppress the restart. Reading any of those as a draft would
-// silently disable the label on ordinary pull requests.
-test("a forcing label restarts when the draft flag is absent or not true", async function () {
-  for (const draft of [undefined, false, "true", 0, null]) {
-    const events = [];
-    const body = JSON.stringify({
-      action: "labeled",
-      label: { name: "test-review-agent-rerun" },
-      pull_request: { draft, head: { sha: "e6949cd" } },
-    });
-    const request = new Request("https://reviewer.example/api/v1/github_webhooks", {
-      body,
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-github-event": "pull_request",
-        "x-github-delivery": "delivery-label-1",
-        "x-hub-signature-256": signBody(body),
-      },
-    });
-
-    const response = await routeRequest(request, createRestartEnvironment(events, []));
-
-    assert.equal(response.status, 202, `draft ${JSON.stringify(draft)}`);
-    assert.deepEqual(events, ["restart", "forward"], `draft ${JSON.stringify(draft)}`);
-  }
-});
-
-// The label name comes out of a body nobody has verified, and the forcing check
-// reads it before the signature is checked, so it has to survive whatever the
-// sender wrote. A name of any type but a string is no label: the delivery is
-// forwarded for the Go service to judge, exactly as every other delivery is.
-//
-// Before this the prefix test called a string method on it and threw, in the one
-// place this worker cannot afford to. The delivery then never reached the
-// container at all: an unsigned one was answered 401 and a signed one was
-// diverted into the replay queue, where every attempt would throw the same way.
-test("a label name that is not a string is no label rather than an error", async function () {
-  const forgedSignature = "sha256=" + "0".repeat(64);
-  for (const labelName of [12345, 3.14, true, { nested: "object" }, ["array"]]) {
-    for (const signed of [true, false]) {
-      const events = [];
-      const queued = [];
-      const request = signed
-        ? labeledWebhookRequest("labeled", labelName)
-        : labeledWebhookRequest("labeled", labelName, forgedSignature);
-      const where = `label ${JSON.stringify(labelName)} signed=${signed}`;
-
-      const response = await routeRequest(request, createRestartEnvironment(events, queued));
-
-      assert.equal(response.status, 202, where);
-      assert.deepEqual(events, ["forward"], where);
-      assert.equal(queued.length, 0, where);
-    }
-  }
-});
-
-test("no other delivery stops the container", async function () {
+// This worker decides nothing about a delivery, so a forcing label reaches the
+// container exactly as every other delivery does. Nothing here inspects the
+// label, and nothing restarts anything: a restart takes down whatever reviews
+// are in flight, and the label asks for a full review rather than for other
+// people's work to be killed.
+test("a forcing label is forwarded like any other delivery", async function () {
   const cases = [
+    ["labeled", "test-review-agent-rerun"],
     ["labeled", "needs-review"],
-    ["labeled", "review-agent-test"],
     ["unlabeled", "test-review-agent-rerun"],
     ["synchronize", ""],
     ["opened", ""],
@@ -422,13 +240,53 @@ test("no other delivery stops the container", async function () {
 
   for (const [action, labelName] of cases) {
     const events = [];
+    const queued = [];
+
     const response = await routeRequest(
       labeledWebhookRequest(action, labelName),
-      createRestartEnvironment(events),
+      createForwardingEnvironment(events, queued),
     );
 
-    assert.equal(response.status, 202);
-    assert.deepEqual(events, ["forward"], `${action} ${labelName} stopped the container`);
+    assert.equal(response.status, 202, `${action} ${labelName}`);
+    assert.deepEqual(events, ["forward"], `${action} ${labelName} did not reach the container`);
+    assert.equal(queued.length, 0, `${action} ${labelName} was queued`);
+  }
+});
+
+// The metadata is built from a body nobody has verified and goes straight into
+// a log line, so what a stranger puts in the payload must not be able to throw
+// there. It once did, when a reader called a string method on the label.
+//
+// That reader is gone with the restart, so this asserts the narrowing where it
+// is still observable: the line the worker logs carries a string for the label
+// whatever the payload held.
+test("a label name that is not a string reaches the log as a string", async function () {
+  for (const labelName of [12345, 3.14, true, { nested: "object" }, ["array"]]) {
+    const events = [];
+    const logged = [];
+    const realLog = console.log;
+    console.log = function (line) {
+      logged.push(line);
+    };
+
+    let response;
+    try {
+      response = await routeRequest(
+        labeledWebhookRequest("labeled", labelName),
+        createForwardingEnvironment(events, []),
+      );
+    } finally {
+      console.log = realLog;
+    }
+
+    const where = `label ${JSON.stringify(labelName)}`;
+    assert.equal(response.status, 202, where);
+    assert.deepEqual(events, ["forward"], where);
+    const forwarding = logged.find(function (line) {
+      return line.includes('"message":"webhook forwarding"');
+    });
+    assert.ok(forwarding, `${where}: no forwarding line was logged`);
+    assert.equal(JSON.parse(forwarding).label, "", where);
   }
 });
 
