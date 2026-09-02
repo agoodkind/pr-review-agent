@@ -230,6 +230,208 @@ func TestTwoChunksReportingOneClaimPublishItOnce(t *testing.T) {
 	}
 }
 
+// sharedClaimSentence is the canonical label two restatements of one defect
+// carry. The two arrive capitalized and punctuated differently, which is what a
+// model writing the same label twice actually produces.
+const sharedClaimSentence = "The publish error is ignored"
+
+// claimTextRestatement is one wording of the shared claim: its own title, its
+// own line, its own quoted source line, and the one label in common.
+func claimTextRestatement(title string, line int, evidence string, importance int) domain.Finding {
+	return domain.Finding{
+		Path:       "main.go",
+		StartLine:  line,
+		EndLine:    line,
+		Title:      title,
+		Body:       "The failure of this call is not handled.",
+		Evidence:   evidence,
+		Claim:      sharedClaimSentence,
+		Suggestion: "",
+		Importance: importance,
+	}
+}
+
+// Two restatements of one defect share no title, no anchor, and no quoted
+// source line, so identity, the anchor range, and the claim key all pass them.
+// The claim sentence is what they have in common, and it is the only thing that
+// recognizes this shape. One live pull request received the same ask five times
+// this way.
+//
+// The survivor is the higher rated of the two.
+func TestOneChunkPublishesOneCommentForOneClaimStatedTwice(t *testing.T) {
+	bodies := publishedBodies(t, oneChunkFixture(
+		t,
+		claimTextRestatement("Publish failure is ignored", 2, "added", 9),
+		claimTextRestatement("publish error goes unchecked.", 4, "third", 10),
+	))
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one: both name the same defect", bodies)
+	}
+	if !strings.Contains(bodies[0], "publish error goes unchecked") {
+		t.Fatalf("published comment = %q, want the higher rated of the two restatements", bodies[0])
+	}
+}
+
+// crossChunkClaimText is one chunk's answer: the shared claim sentence, worded
+// its own way and resting on that chunk's own file.
+func crossChunkClaimText(title string, path string) domain.ReviewResult {
+	return domain.ReviewResult{
+		CoverageComplete: true,
+		Findings: []domain.Finding{{
+			Path:       path,
+			StartLine:  2,
+			EndLine:    2,
+			Title:      title,
+			Body:       "The failure of this call is not handled.",
+			Evidence:   sharedClaimLine,
+			Claim:      sharedClaimSentence,
+			Suggestion: "",
+			Importance: 9,
+		}},
+	}
+}
+
+// No chunk sees another chunk's answer, so two chunks naming one defect on two
+// files is the cross-run failure happening inside a single run. The two quote
+// the same line of two different files, so their claim keys differ on the path
+// and only the claim sentence joins them.
+func TestTwoChunksNamingOneDefectPublishItOnce(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoFileChunkCollector{},
+		minimumImportance: 9,
+		model: &sequenceModel{results: []domain.ReviewResult{
+			crossChunkClaimText("Publish failure is ignored", "file0.go"),
+			crossChunkClaimText("Publish error goes unchecked", "file1.go"),
+		}},
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one: both chunks name the same defect", bodies)
+	}
+}
+
+// claimThreadFinding is the claim already standing on the pull request, carrying
+// the claim sentence its marker hashes into claimtext.
+func claimThreadFinding() domain.Finding {
+	return domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Standing claim",
+		Body:       "The failure of this call is not handled.",
+		Evidence:   "added",
+		Claim:      sharedClaimSentence,
+		Suggestion: "",
+		Importance: 9,
+	}
+}
+
+// claimThreadFixture wires a run whose one chunk names the defect a thread
+// already carries, from another line and under another title.
+func claimThreadFixture(t *testing.T, resolved bool) *serviceFixture {
+	t.Helper()
+	return newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		reconcileThreads: []githubapp.ReviewThread{
+			threadCarrying(t, claimThreadFinding(), resolved, ""),
+		},
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{
+				claimTextRestatement("Publish error goes unchecked", 4, "third", 9),
+			},
+		}}},
+	})
+}
+
+// A claim an open thread already carries must not come back on another line
+// under another title. The thread anchors on line 2 and quotes one source line;
+// the restatement anchors on line 4 and quotes another, so the anchor and the
+// claim key both pass it and the claimtext hash in the marker is what catches it.
+func TestARestatementOfAnOpenThreadsClaimIsWithheld(t *testing.T) {
+	bodies := publishedBodies(t, claimThreadFixture(t, false))
+
+	if len(bodies) != 0 {
+		t.Fatalf("published comments = %v, want none: this defect is already open under another title", bodies)
+	}
+}
+
+// A resolved thread is a settled question, so the same claim publishes again.
+func TestARestatementOfAResolvedThreadsClaimIsPublished(t *testing.T) {
+	bodies := publishedBodies(t, claimThreadFixture(t, true))
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one: a resolved thread suppresses nothing", bodies)
+	}
+}
+
+// Every comment already on an open pull request was published before the
+// claimtext field existed, so its marker has none. Such a thread must suppress
+// nothing by claim text: the candidate here names a defect, anchors two lines
+// away, and quotes a different source line, so the keyless thread has nothing
+// left to match it on and the finding reaches the page.
+func TestAThreadWithNoClaimTextKeySuppressesNothingByClaimText(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		reconcileThreads: []githubapp.ReviewThread{
+			threadCarrying(t, keylessStandingFinding(), false, ""),
+		},
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{
+				claimTextRestatement("Publish error goes unchecked", 5, "fifth", 9),
+			},
+		}}},
+		collector: fiveLineCollector{},
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one: a marker with no claimtext matches nothing", bodies)
+	}
+}
+
+// fiveLineCollector adds five changed lines to one file, so a finding can
+// anchor clear of a thread that spans the first few.
+type fiveLineCollector struct{}
+
+func (fiveLineCollector) CollectRange(
+	_ context.Context,
+	_ domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	_ domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	patch := strings.Join([]string{
+		"@@ -1,1 +1,6 @@",
+		" package main",
+		"+added",
+		"+second",
+		"+third",
+		"+fourth",
+		"+fifth",
+	}, "\n")
+	changed, hunks, err := diff.ChangedRightLines(patch)
+	if err != nil {
+		return diff.ReviewInput{}, err
+	}
+	return diff.ReviewInput{
+		PullRequest: pullRequest,
+		Files: []diff.FileContext{{
+			Path:              "main.go",
+			Status:            "modified",
+			Patch:             patch,
+			CurrentContent:    "package main\nadded\nsecond\nthird\nfourth\nfifth\n",
+			ChangedRightLines: changed,
+			ChangedRightHunks: hunks,
+			CoverageComplete:  true,
+		}},
+	}, nil
+}
+
 // neighbouringRestatement is a finding anchored over a range that overlaps the
 // standing thread's, resting on a line the thread never quoted.
 func neighbouringRestatement() domain.Finding {

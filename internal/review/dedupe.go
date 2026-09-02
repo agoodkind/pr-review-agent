@@ -12,9 +12,16 @@ package review
 //
 // The comparison is deliberately narrow. Matching an evidence line against an
 // open thread's prose withheld a genuinely separate defect on the same file, so
-// nothing here compares prose. It compares the claim key, which is the path and
-// the evidence line hashed together, and the anchor range, which is the lines
-// the finding objects to. Two findings sharing either are about the same code.
+// nothing here compares prose. It compares three things: the claim key, which is
+// the path and the evidence line hashed together; the claim text key, which is
+// the model's own canonical label for the defect hashed on its own; and the
+// anchor range, which is the lines the finding objects to. Two findings sharing
+// any of the three are about the same defect.
+//
+// The claim sentence is the one of the three that survives a restatement citing
+// a different line of the same function, which is why layer 0 asks the model for
+// it. The two hashes are compared, never the sentences: a hash matches exactly
+// and shows nothing.
 //
 // One live run is why this exists. pr-review-agent 89 at head 98f509a published
 // seven threads in 57 seconds carrying three distinct claims: one claim appeared
@@ -42,6 +49,7 @@ const (
 // The senses in which one finding can repeat another.
 const (
 	senseClaimKey    = "claim key"
+	senseClaimText   = "claim text"
 	senseAnchorRange = "anchor range"
 	senseIdentity    = "finding identity"
 	senseAnchorLine  = "anchor line"
@@ -55,26 +63,35 @@ const claimKeyLogLength = 12
 // duplicateKeys is everything the comparison reads off one finding, whether the
 // finding is a candidate this run produced or a thread an earlier run left open.
 //
-// Both keys are optional and independent. A finding with no evidence derives no
-// claim key, and one whose path or range the marker refuses derives no anchor,
-// so a value here can carry either, both, or neither, and one that carries
-// neither matches nothing.
+// Every key is optional and independent. A finding with no evidence derives no
+// claim key, one from an answer that carried no claim sentence derives no claim
+// text key, and one whose path or range the marker refuses derives no anchor.
+// A value here can carry any of them, all of them, or none, and one that
+// carries none matches nothing.
 type duplicateKeys struct {
-	claimKey   string
-	path       string
-	startLine  int
-	endLine    int
-	rangeValid bool
+	claimKey     string
+	claimTextKey string
+	path         string
+	startLine    int
+	endLine      int
+	rangeValid   bool
 }
 
-// keysFrom builds the comparison keys from a claim key and an anchor.
-func keysFrom(claimKey string, pathValue string, startLine int, endLine int) duplicateKeys {
+// keysFrom builds the comparison keys from the two claim keys and an anchor.
+func keysFrom(
+	claimKey string,
+	claimTextKey string,
+	pathValue string,
+	startLine int,
+	endLine int,
+) duplicateKeys {
 	keys := duplicateKeys{
-		claimKey:   claimKey,
-		path:       "",
-		startLine:  0,
-		endLine:    0,
-		rangeValid: false,
+		claimKey:     claimKey,
+		claimTextKey: claimTextKey,
+		path:         "",
+		startLine:    0,
+		endLine:      0,
+		rangeValid:   false,
 	}
 	normalizedPath, err := marker.NormalizePath(pathValue)
 	if err != nil || startLine < 1 || endLine < startLine {
@@ -93,16 +110,27 @@ func candidateKeys(finding domain.Finding) duplicateKeys {
 	if value, err := marker.ClaimKey(finding.Path, finding.Evidence); err == nil {
 		claimKey = value
 	}
-	return keysFrom(claimKey, finding.Path, finding.StartLine, finding.EndLine)
+	claimTextKey := ""
+	if value, err := marker.ClaimTextKey(finding.Claim); err == nil {
+		claimTextKey = value
+	}
+	return keysFrom(claimKey, claimTextKey, finding.Path, finding.StartLine, finding.EndLine)
 }
 
 // threadKeys reads the comparison keys off one thread an earlier run opened.
 //
-// The claim key comes from the published marker rather than from the decoded
-// finding. A published comment never prints the evidence line, so a finding
-// decoded back out of one carries none and could derive no key at all.
+// Both claim keys come from the published marker rather than from the decoded
+// finding. A published comment prints neither the evidence line nor the claim
+// sentence, only their hashes, so a finding decoded back out of one could derive
+// no key at all.
 func threadKeys(published marker.FindingMarker, comment domain.ReviewComment) duplicateKeys {
-	return keysFrom(published.ClaimKey, comment.Path, comment.StartLine, comment.EndLine)
+	return keysFrom(
+		published.ClaimKey,
+		published.ClaimTextKey,
+		comment.Path,
+		comment.StartLine,
+		comment.EndLine,
+	)
 }
 
 // duplicateMatch names why one finding repeats another and what it repeats.
@@ -131,6 +159,13 @@ func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, 
 		return duplicateMatch{
 			Sense:   senseClaimKey,
 			Detail:  shortClaimKey(carried.claimKey),
+			Matched: "",
+		}, true
+	}
+	if carried.claimTextKey != "" && carried.claimTextKey == candidate.claimTextKey {
+		return duplicateMatch{
+			Sense:   senseClaimText,
+			Detail:  shortClaimKey(carried.claimTextKey),
 			Matched: "",
 		}, true
 	}
