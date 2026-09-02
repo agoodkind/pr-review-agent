@@ -94,6 +94,14 @@ type ReviewThread struct {
 }
 
 // APIError is a sanitized GitHub API failure with an HTTP status code.
+//
+// It reports a request GitHub answered and refused. A request that never
+// reached GitHub has neither a status nor a message field, so it is reported
+// instead by wrapping the transport error, which keeps the cause and keeps
+// [errors.Is] and [errors.As] working through this package: internal/review reads
+// [context.DeadlineExceeded] that way to title a check run. Neither error is fit
+// for a pull request comment, and no caller publishes one; the sanitizing here
+// bounds what reaches the service log.
 type APIError struct {
 	StatusCode int
 	Message    string
@@ -180,7 +188,7 @@ func (client *Client) doREST(
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "github request failed", slog.String("err", err.Error()))
-		return nil, errors.New("github request failed")
+		return nil, fmt.Errorf("github request failed: %w", err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
@@ -224,7 +232,7 @@ func (client *Client) doRESTPaginated(
 		response, err := client.httpClient.Do(request)
 		if err != nil {
 			client.logger.ErrorContext(ctx, "github request failed", slog.String("err", err.Error()))
-			return errors.New("github request failed")
+			return fmt.Errorf("github request failed: %w", err)
 		}
 
 		responseBody, readErr := readLimitedBody(response.Body)
@@ -294,7 +302,7 @@ func (client *Client) doGraphQL(
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "graphql request failed", slog.String("err", err.Error()))
-		return nil, errors.New("graphql request failed")
+		return nil, fmt.Errorf("graphql request failed: %w", err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
