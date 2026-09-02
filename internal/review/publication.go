@@ -125,9 +125,32 @@ const (
 	reviewStateDismissed = "DISMISSED"
 )
 
-// latestBotVerdictReview returns the newest review of the service's own that
-// still carries a verdict for this head; COMMENTED and DISMISSED reviews decide
-// nothing.
+// headVerdict is what this service's verdict at one head amounts to now: the
+// review that spoke for it, and whether a person has since withdrawn it.
+//
+// A dismissal is not the same as never having ruled. It is a person saying they
+// do not want this block, which is a different fact and calls for different
+// handling, so the two travel together rather than collapsing into nothing
+// found.
+type headVerdict struct {
+	// review is the newest review of the service's own that spoke for this head,
+	// whether it still stands or was dismissed. It is what how much of the head
+	// was read is recovered from, and a dismissed body still carries that.
+	review githubapp.Review
+	// withdrawn is whether the newest thing to happen to that verdict was a
+	// person dismissing it.
+	withdrawn bool
+	found     bool
+}
+
+// noHeadVerdict is the answer for a head this service has never ruled on.
+func noHeadVerdict() headVerdict {
+	return headVerdict{review: emptyReview(), withdrawn: false, found: false}
+}
+
+// latestBotVerdictAtHead returns what this service's verdict at this head
+// amounts to now. COMMENTED and PENDING reviews decide nothing and are passed
+// over.
 //
 // The head is part of the test, not context. A pull request force pushed back to
 // a commit it already carried has verdicts from more than one head in one list,
@@ -135,28 +158,37 @@ const (
 // head concluded. The commit a review names is what settles which head it spoke
 // for.
 //
+// A dismissed review counts, and reporting it rather than passing over it is the
+// point. Treating a dismissal as nothing found made the refresh act as though
+// this service had never ruled on the head, so it returned without submitting
+// and never ruled again, not even the approval it would have produced once every
+// thread was resolved. One dismissal disabled the refresh for that head for
+// good, which is the opposite of what dismissing a block is for.
+//
 // The review marker is deliberately not also required. Every verdict body
 // carries one, so it would exclude nothing a matching commit does not already
 // exclude, and a verdict whose marker never reached the review list is exactly
 // the case the durable state path exists to refresh.
-func latestBotVerdictReview(
+func latestBotVerdictAtHead(
 	reviews []githubapp.Review,
 	botLogin string,
 	head domain.HeadSHA,
-) (githubapp.Review, bool) {
-	latest := githubapp.Review{ID: 0, CommitID: "", Author: "", Body: "", State: ""}
-	found := false
+) headVerdict {
+	latest := noHeadVerdict()
 	for _, item := range reviews {
 		if item.Author != botLogin || item.CommitID != head {
+			continue
+		}
+		if item.State == reviewStateDismissed {
+			latest = headVerdict{review: item, withdrawn: true, found: true}
 			continue
 		}
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
 			continue
 		}
-		latest = item
-		found = true
+		latest = headVerdict{review: item, withdrawn: false, found: true}
 	}
-	return latest, found
+	return latest
 }
 
 // latestBotVerdictState is the state GitHub currently shows for this service on

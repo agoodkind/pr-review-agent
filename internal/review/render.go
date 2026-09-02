@@ -178,13 +178,31 @@ func RenderVerdictBody(summary Summary) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// withdrawnBlockNote explains a head whose findings are open while no blocking
+// verdict stands over them.
+//
+// Without it the comment lists what the review is waiting on directly above a
+// pull request that reads as unblocked, and a reader has no way to tell whether
+// the service failed to block or somebody cleared the block by hand. Naming the
+// dismissal is also what tells them how to get a verdict back.
+const withdrawnBlockNote = "The blocking review on this commit was dismissed by hand, so this service " +
+	"is not reinstating it. The findings above are still open, and resolving them lets the next " +
+	"refresh approve."
+
 // renderVerdictRefreshProse is the summary comment prose for a verdict
 // refreshed from thread state alone. It reports no run statistics because no
 // model ran; the verdict and what it still waits on are the whole story.
-func renderVerdictRefreshProse(summary Summary) string {
+//
+// blockWithdrawn says a person dismissed the verdict at this head, which the
+// prose has to carry because the refresh then submits no blocking review and
+// the comment is the only place a reader learns why.
+func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	parts := []string{"## Review", summary.Verdict()}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
+	}
+	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
+		parts = append(parts, withdrawnBlockNote)
 	}
 	parts = append(
 		parts,

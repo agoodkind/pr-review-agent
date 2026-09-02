@@ -3521,11 +3521,23 @@ func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
 	}
 }
 
-// A dismissal withdraws the verdict; it does not restore the one before it. A
-// refresh that read the older state as still standing, found it equal to the
-// decision it recomputed, and submitted nothing would leave the pull request
-// carrying no verdict while a thread is open.
-func TestADismissedVerdictLeavesNoStandingStateToMatch(t *testing.T) {
+// A dismissal withdraws the verdict; it does not restore the one before it, so
+// no standing state is left for a recomputed verdict to match and be suppressed
+// by. That mechanism is what lets the approval in the second half of this test
+// land, and it is unchanged.
+//
+// What a dismissal means for a block is the reverse of what this test used to
+// require. It once demanded the block be restated while a thread was open, so
+// that a dismissal could not leave the pull request carrying no verdict.
+// Dismissing is how a person says they do not want this block, and restating it
+// from thread state alone, seconds later and with nothing new learned, is
+// exactly the stale block this service exists to prevent. A withdrawn block now
+// comes back only from a run that read something, which means a push or the
+// force label.
+//
+// The approval is not withheld with it. That is the verdict the person was
+// reaching for, and the refresh is the only path that reaches it without a push.
+func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages: [][]map[string]any{{
@@ -3551,14 +3563,118 @@ func TestADismissedVerdictLeavesNoStandingStateToMatch(t *testing.T) {
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("Run with the thread open: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("event = %v was submitted, reinstating a block a person withdrew",
+			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
+	if !ok {
+		t.Fatal("summary comment body is not a string")
+	}
+	if !strings.Contains(body, "dismissed by hand") {
+		t.Fatalf("summary comment does not say why the open findings carry no block:\n%s", body)
+	}
+
+	// The person resolves the finding, which is the only delivery that reaches a
+	// verdict here without a push.
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-open")})
+	resolved := fixture.job()
+	resolved.DeliveryID = "delivery-resolved"
+	if err := fixture.run(context.Background(), resolved); err != nil {
+		t.Fatalf("Run with the thread resolved: %v", err)
 	}
 	if fixture.state.lastSubmitReview == nil {
-		t.Fatal("no verdict was submitted, so a dismissed review left the head unguarded with a thread open")
+		t.Fatal("no approval was submitted, so one dismissal left the head with no verdict for good")
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES restated after the dismissal",
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE once every thread is resolved",
 			fixture.state.lastSubmitReview["event"])
+	}
+	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA {
+		t.Fatalf("commit_id = %v, want the head the dismissed verdict named",
+			fixture.state.lastSubmitReview["commit_id"])
+	}
+}
+
+// Dismissing on GitHub rewrites the review's own state rather than adding a
+// second object, so a pull request whose only verdict was dismissed lists one
+// review, dismissed. That is the shape production sees, and it is the shape the
+// old lookup could not read: accepting only approved and changes-requested, it
+// reported nothing found, and the refresh returned without ever ruling on that
+// head again.
+func TestTheOnlyVerdictBeingDismissedStillLetsTheHeadBeApproved(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(51),
+			"commit_id": string(head),
+			"state":     "DISMISSED",
+			"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-done")})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted, so the only dismissal disabled this head's refresh for good")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE once every thread is resolved",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// The control for the dismissal rule: a head whose verdict nobody withdrew keeps
+// refreshing exactly as it did. An open thread leaves the standing block alone
+// rather than restating it, and resolving the thread flips the verdict to an
+// approval, with nothing in the comment about a withdrawal that never happened.
+func TestAVerdictNobodyDismissedRefreshesAsBefore(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(51),
+			"commit_id": string(head),
+			"state":     "CHANGES_REQUESTED",
+			"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run with the thread open: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("event = %v was submitted, want the standing block left alone",
+			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
+	if !ok {
+		t.Fatal("summary comment body is not a string")
+	}
+	if strings.Contains(body, "dismissed by hand") {
+		t.Fatalf("summary comment reports a dismissal that never happened:\n%s", body)
+	}
+
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-open")})
+	resolved := fixture.job()
+	resolved.DeliveryID = "delivery-resolved"
+	if err := fixture.run(context.Background(), resolved); err != nil {
+		t.Fatalf("Run with the thread resolved: %v", err)
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted once every thread was resolved")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
 	}
 }
 

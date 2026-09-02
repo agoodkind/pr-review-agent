@@ -64,18 +64,22 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		standingState:     inputs.standingState,
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
+		blockWithdrawn:    inputs.withdrawn,
 	})
 }
 
 // verdictRefreshInputs is everything a refresh decides from.
 type verdictRefreshInputs struct {
 	// verdict is the review that named this head, which is where how much was
-	// reviewed is recovered from.
+	// reviewed is recovered from. A dismissed review serves that just as well,
+	// because dismissing one does not edit its body.
 	verdict githubapp.Review
 	// standingState is what GitHub shows for this service now, across all heads.
 	standingState string
 	threads       []githubapp.ReviewThread
 	found         bool
+	// withdrawn is whether a person dismissed the verdict this head carried.
+	withdrawn bool
 }
 
 // loadVerdictRefreshInputs reads the standing verdict and the current threads a
@@ -88,7 +92,7 @@ func (service *Service) loadVerdictRefreshInputs(
 ) (verdictRefreshInputs, error) {
 	logger := gklog.L(ctx)
 	missing := verdictRefreshInputs{
-		verdict: emptyReview(), standingState: "", threads: nil, found: false,
+		verdict: emptyReview(), standingState: "", threads: nil, found: false, withdrawn: false,
 	}
 	if reviews == nil {
 		listed, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
@@ -98,8 +102,8 @@ func (service *Service) loadVerdictRefreshInputs(
 		}
 		reviews = listed
 	}
-	verdict, found := latestBotVerdictReview(reviews, service.botLogin, job.Head)
-	if !found {
+	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
+	if !verdict.found {
 		return missing, nil
 	}
 	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
@@ -108,10 +112,11 @@ func (service *Service) loadVerdictRefreshInputs(
 		return missing, fmt.Errorf("list threads for verdict refresh: %w", err)
 	}
 	return verdictRefreshInputs{
-		verdict:       verdict,
+		verdict:       verdict.review,
 		standingState: latestBotVerdictState(reviews, service.botLogin),
 		threads:       threads,
 		found:         true,
+		withdrawn:     verdict.withdrawn,
 	}, nil
 }
 
@@ -121,6 +126,31 @@ type refreshedVerdict struct {
 	standingState     string
 	threads           []githubapp.ReviewThread
 	headFullyReviewed bool
+	// blockWithdrawn is whether a person dismissed the verdict at this head,
+	// which bounds what the refresh may submit rather than what it computes.
+	blockWithdrawn bool
+}
+
+// mayPublish reports whether the refresh may submit the verdict it computed.
+//
+// A refresh never reinstates a block a person withdrew. Dismissing is how
+// somebody says they do not want this verdict holding the pull request, and a
+// service that submitted the same block again from thread state alone would
+// resurrect by machinery, seconds later and with no new information, the stale
+// block this project exists to kill.
+//
+// Approving is still allowed, and is the reason a dismissed head is refreshed at
+// all. Once every thread is resolved the recomputed verdict is an approval,
+// which is what the person was reaching for, and the refresh is the only path
+// that reaches it without a push.
+//
+// Otherwise a verdict matching what GitHub already shows is not submitted,
+// because a second identical verdict is noise.
+func (refreshed refreshedVerdict) mayPublish() bool {
+	if refreshed.blockWithdrawn && refreshed.decision != domain.ReviewDecisionApprove {
+		return false
+	}
+	return reviewStateFor(refreshed.decision) != refreshed.standingState
 }
 
 // applyRefreshedVerdict writes what the refresh computed: a fresh verdict review
@@ -172,13 +202,23 @@ func (service *Service) applyRefreshedVerdict(
 		// is a gate a forced run never reaches.
 		Forced: false,
 	}
-	if reviewStateFor(refreshed.decision) != refreshed.standingState {
+	if refreshed.mayPublish() {
 		if err := service.submitRefreshedVerdict(ctx, job, summary); err != nil {
 			return err
 		}
+	} else if refreshed.blockWithdrawn {
+		logger.InfoContext(
+			ctx,
+			"verdict refresh withheld",
+			slog.String("reason", "block_withdrawn_by_hand"),
+			slog.String("decision", string(refreshed.decision)),
+		)
 	}
 	if err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State) summaryCommentContent {
-		return summaryCommentContent{Prose: renderVerdictRefreshProse(summary), State: state}
+		return summaryCommentContent{
+			Prose: renderVerdictRefreshProse(summary, refreshed.blockWithdrawn),
+			State: state,
+		}
 	}); err != nil {
 		logger.ErrorContext(ctx, "update summary after verdict refresh", slog.String("err", err.Error()))
 		return fmt.Errorf("update summary after verdict refresh: %w", err)
