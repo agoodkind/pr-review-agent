@@ -268,14 +268,50 @@ func truncated(err error) bool {
 	return target.Truncated()
 }
 
+// chunkAnalysis is what one chunk produced: the model's answers, and what this
+// service observed about the calls that produced them.
+//
+// The second half belongs to the service rather than the model. A hunk nobody
+// could get a whole answer about is a hunk nobody read, and only the caller of
+// the model is in a position to know that happened.
+type chunkAnalysis struct {
+	Results []domain.ReviewResult
+	// Unreadable names hunks whose answer never arrived whole, which is a
+	// shortfall a later run reaches the same way.
+	Unreadable []unreadHunk
+}
+
+// merge folds one recursive half's outcome into this one.
+func (analysis *chunkAnalysis) merge(other chunkAnalysis) {
+	analysis.Results = append(analysis.Results, other.Results...)
+	analysis.Unreadable = append(analysis.Unreadable, other.Unreadable...)
+}
+
+// unreadableHunksIn names the hunks of a chunk nobody could get an answer about.
+//
+// A chunk reaches this only when it could not split, so it holds one hunk at
+// most. Naming that hunk by path and coordinates is what lets the run report
+// what went unread instead of a bare count with nothing to point at.
+func unreadableHunksIn(chunk diff.Chunk) []unreadHunk {
+	hunks := make([]unreadHunk, 0, len(chunk.Pieces))
+	for _, piece := range chunk.Pieces {
+		hunks = append(hunks, unreadHunk{
+			Path:   piece.Path,
+			Header: piece.Header,
+			Reason: truncatedAnswerReason,
+		})
+	}
+	return hunks
+}
+
 // reviewChunk reviews one chunk and returns every result it produced.
 //
 // A model that reaches its completion token budget stops mid answer. Reasoning
 // and answer tokens share that budget, so a chunk yielding many findings can
 // exhaust it. When that happens the chunk is split in half and each half is
 // reviewed instead, which asks for fewer findings per request. A chunk holding
-// one hunk cannot split, so it is skipped and the review reports incomplete
-// coverage rather than failing outright.
+// one hunk cannot split, so the run names that hunk as one nobody read and
+// carries on rather than failing outright.
 //
 // Every chunk records how long its model call took, which model answered, and
 // how many findings came back. Without that, a run that leaves chunks unread
@@ -290,8 +326,9 @@ func reviewChunk(
 	models *modelSet,
 	requests *int,
 	now func() time.Time,
-) ([]domain.ReviewResult, error) {
+) (chunkAnalysis, error) {
 	logger := gklog.L(ctx)
+	nothing := chunkAnalysis{Results: nil, Unreadable: nil}
 	*requests++
 	startedAt := now()
 	completion, err := model.Review(ctx, buildPrompt(chunk, minimumImportance, disputes))
@@ -299,7 +336,7 @@ func reviewChunk(
 	if err == nil {
 		if validateErr := completion.Result.Validate(); validateErr != nil {
 			logger.ErrorContext(ctx, "validate review result", slog.String("err", validateErr.Error()))
-			return nil, fmt.Errorf("validate review result: %w", validateErr)
+			return nothing, fmt.Errorf("validate review result: %w", validateErr)
 		}
 		models.add(completion.Model)
 		logger.InfoContext(
@@ -313,7 +350,10 @@ func reviewChunk(
 			slog.Int("paths", len(chunk.Paths)),
 			slog.Int("prompt_bytes", len(chunk.Text)),
 		)
-		return []domain.ReviewResult{completion.Result}, nil
+		return chunkAnalysis{
+			Results:    []domain.ReviewResult{completion.Result},
+			Unreadable: nil,
+		}, nil
 	}
 	// Every request that failed is timed here, before the truncation branch
 	// decides what to do about it. A truncated request still spent its duration
@@ -332,7 +372,7 @@ func reviewChunk(
 		slog.String("err", err.Error()),
 	)
 	if !truncated(err) {
-		return nil, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
+		return nothing, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
 	}
 
 	first, second, canSplit := chunk.Split()
@@ -344,7 +384,7 @@ func reviewChunk(
 			slog.Any("paths", chunk.Paths),
 			slog.String("err", err.Error()),
 		)
-		return []domain.ReviewResult{{CoverageComplete: false, Findings: nil}}, nil
+		return chunkAnalysis{Results: nil, Unreadable: unreadableHunksIn(chunk)}, nil
 	}
 
 	logger.InfoContext(
@@ -353,15 +393,15 @@ func reviewChunk(
 		slog.Int("chunk", chunk.Index),
 		slog.Int("hunks", len(chunk.Pieces)),
 	)
-	results := make([]domain.ReviewResult, 0, 2)
+	analysis := chunkAnalysis{Results: make([]domain.ReviewResult, 0, 2), Unreadable: nil}
 	for _, half := range []diff.Chunk{first, second} {
-		halfResults, halfErr := reviewChunk(ctx, model, half, minimumImportance, disputes, models, requests, now)
+		halfAnalysis, halfErr := reviewChunk(ctx, model, half, minimumImportance, disputes, models, requests, now)
 		if halfErr != nil {
-			return nil, halfErr
+			return nothing, halfErr
 		}
-		results = append(results, halfResults...)
+		analysis.merge(halfAnalysis)
 	}
-	return results, nil
+	return analysis, nil
 }
 
 // requestFailureLevel rates one failed model request. Truncation is recoverable

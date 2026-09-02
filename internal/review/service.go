@@ -813,7 +813,7 @@ func (service *Service) publish(
 	// A head holding something no run can read is settled first. Its shortfall
 	// outlives every later push, so the pending path's promise that the next
 	// push covers it would be false even when chunks are pending too.
-	if shortfall := classifyStructuralShortfall(pass.work); shortfall.present() {
+	if shortfall := pass.structuralShortfall(); shortfall.present() {
 		return service.concludeStructurallyIncomplete(
 			ctx, job, checkRun, state, shortfall, summary, progress,
 		)

@@ -106,11 +106,15 @@ type chunkPass struct {
 	models    modelSet
 	published []domain.Finding
 	failures  []chunkFailure
-	coverage  bool
-	requests  int
-	posted    int
-	failed    int
-	panicked  *chunkPanicError
+	// unreadable names hunks this service could not get a whole answer about,
+	// which no later run reads any better. It is the run's own observation, not
+	// anything the model reported about itself.
+	unreadable []unreadHunk
+	coverage   bool
+	requests   int
+	posted     int
+	failed     int
+	panicked   *chunkPanicError
 }
 
 // chunkPanicError marks a chunk that panicked, so the run reports an internal
@@ -154,6 +158,7 @@ func newChunkPass(
 		models:        modelSet{names: nil, seen: nil},
 		published:     make([]domain.Finding, 0),
 		failures:      make([]chunkFailure, 0),
+		unreadable:    make([]unreadHunk, 0),
 		coverage:      inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
 		requests:      0,
 		posted:        0,
@@ -174,18 +179,48 @@ func chunksCoverageComplete(chunks []diff.Chunk) bool {
 
 // recordCall folds one chunk's own model accounting back into the pass. Each
 // call keeps its own so nothing is written concurrently through one pointer.
-func (pass *chunkPass) recordCall(models modelSet, requests int, results []domain.ReviewResult) {
+//
+// Nothing the model answered decides coverage here. The schema used to require a
+// coverage_complete boolean that the prompt never explained, so the model filled
+// it blind, and one false answer set the whole pass incomplete. That blocked
+// heads with nothing wrong with them and promised a next push that had nothing
+// left to read. Coverage is now only what this process observed: the files and
+// hunks the delta could not carry, the chunks that failed, and the hunks below.
+func (pass *chunkPass) recordCall(models modelSet, requests int) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	for _, name := range models.names {
 		pass.models.add(name)
 	}
 	pass.requests += requests
-	for _, result := range results {
-		if !result.CoverageComplete {
-			pass.coverage = false
-		}
+}
+
+// recordUnreadable records hunks this service could not get a whole answer
+// about. They are a slice of the head nobody covered, so they end the coverage
+// claim exactly as a failed chunk does.
+func (pass *chunkPass) recordUnreadable(hunks []unreadHunk) {
+	if len(hunks) == 0 {
+		return
 	}
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	pass.unreadable = append(pass.unreadable, hunks...)
+	pass.coverage = false
+}
+
+// structuralShortfall is everything about this head that a later run reads no
+// better: the pieces the delta itself cannot carry, and the hunks whose answer
+// never arrived whole.
+//
+// The recorded hunks are sorted before they are appended, because chunks answer
+// concurrently and every surface that names them has to read the same whichever
+// chunk answered first.
+func (pass *chunkPass) structuralShortfall() structuralShortfall {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	shortfall := classifyStructuralShortfall(pass.work)
+	shortfall.Hunks = append(shortfall.Hunks, sortedUnreadHunks(pass.unreadable)...)
+	return shortfall
 }
 
 // recordConsolidationRequest counts the extra model call a chunk spent asking
@@ -319,7 +354,7 @@ func (service *Service) reviewDelta(
 		return tracker.snapshot(), fatal
 	}
 	return concludeState(
-		tracker.snapshot(), job, head, tracker, classifyStructuralShortfall(pass.work).present(),
+		tracker.snapshot(), job, head, tracker, pass.structuralShortfall().present(),
 	), nil
 }
 
@@ -605,7 +640,7 @@ func (service *Service) reviewOneChunk(
 	var models modelSet
 	requests := 0
 	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
-	results, err := reviewChunk(
+	analysis, err := reviewChunk(
 		callCtx,
 		service.model,
 		chunk,
@@ -616,13 +651,14 @@ func (service *Service) reviewOneChunk(
 		service.now,
 	)
 	cancel()
-	pass.recordCall(models, requests, results)
+	pass.recordCall(models, requests)
 	if err != nil {
 		return err
 	}
+	pass.recordUnreadable(analysis.Unreadable)
 
 	findings := make([]domain.Finding, 0)
-	for _, result := range results {
+	for _, result := range analysis.Results {
 		findings = append(findings, result.Findings...)
 	}
 	return service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)

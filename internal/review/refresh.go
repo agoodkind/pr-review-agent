@@ -60,12 +60,8 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// currently shows is a separate question, answered by the newest verdict
 	// whatever head it named. A thread resolution changes neither.
 	//
-	// The durable baseline has the same say. A run that could not read the whole
-	// head submits no verdict at all, so there is no review body to learn this
-	// from, and the checkpoint it left is the only record: a baseline naming some
-	// earlier commit is that record saying no completed run read this head whole.
-	headFullyReviewed := !strings.Contains(inputs.verdict.Body, unreviewedHeadReason) &&
-		service.baselineCoversHead(ctx, job)
+	// The durable checkpoint outranks that body wherever it exists.
+	headFullyReviewed := service.headReadWhole(ctx, job, inputs.verdict.Body)
 	// Only a dismissed block is withheld from. Dismissing a block and dismissing
 	// an approval are opposite requests, and the review's own state no longer
 	// tells them apart, so the body it kept does.
@@ -80,20 +76,29 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	})
 }
 
-// baselineCoversHead reports whether the durable checkpoint names this head as
-// reviewed.
+// headReadWhole reports whether any completed run read this whole head.
 //
-// A pull request with no readable checkpoint decides nothing here and answers
-// true, so a comment this service cannot find or parse never turns a legitimate
-// approval into a block. Only a checkpoint that exists and names some other
-// commit is evidence, and it is conclusive: the baseline advances when and only
-// when a run read the whole head.
-func (service *Service) baselineCoversHead(ctx context.Context, job domain.ReviewJob) bool {
+// The durable checkpoint answers it whenever there is one. The baseline advances
+// when and only when a run read the whole head with nothing left pending, so it
+// is the direct record of the question, while the verdict body is a sentence
+// some earlier run wrote about itself.
+//
+// The two disagree in both directions, and the checkpoint is right both times. A
+// run that could not read the whole head submits no verdict at all, so there is
+// no body to read and only the held baseline says so. And every head blocked by
+// the coverage the model used to be asked to answer blind carries that sentence
+// over a checkpoint recording the head as read whole, so believing the body
+// there would keep a block standing on a fact that was never true.
+//
+// The body is the fallback, for a pull request whose comment this service cannot
+// find or parse. Deciding from no evidence would turn a legitimate approval into
+// a block, so the older signal keeps the answer there.
+func (service *Service) headReadWhole(ctx context.Context, job domain.ReviewJob, verdictBody string) bool {
 	state, hasState := service.loadDurableState(ctx, job)
 	if !hasState {
-		return true
+		return !strings.Contains(verdictBody, unreviewedHeadReason)
 	}
-	return state.LastReviewed == job.Head
+	return state.LastReviewed == job.Head && len(state.Pending) == 0
 }
 
 // verdictRefreshInputs is everything a refresh decides from.

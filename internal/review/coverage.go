@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"goodkind.io/gklog"
@@ -66,7 +67,26 @@ const (
 	binaryFileReason      = "a binary file, which carries no reviewable patch"
 	patchAbsentReason     = "GitHub supplied no patch for this file"
 	patchUnreadableReason = "the patch GitHub supplied could not be read whole"
+	// truncatedAnswerReason names a hunk the model began answering and never
+	// finished. A chunk whose answer runs past the completion budget is normally
+	// halved and each half asked separately, so this is reached only by a chunk
+	// already down to one hunk, which is the smallest unit a chunk is cut into.
+	truncatedAnswerReason = "the model's answer ran past its completion budget, and a hunk cannot be split further"
 )
+
+// sortedUnreadHunks orders unread hunks by path and then by hunk. Chunks answer
+// concurrently, so without this the same run could name the same hunks in a
+// different order on the check run and in the comment.
+func sortedUnreadHunks(hunks []unreadHunk) []unreadHunk {
+	ordered := append([]unreadHunk{}, hunks...)
+	sort.Slice(ordered, func(left, right int) bool {
+		if ordered[left].Path != ordered[right].Path {
+			return ordered[left].Path < ordered[right].Path
+		}
+		return ordered[left].Header < ordered[right].Header
+	})
+	return ordered
+}
 
 // classifyStructuralShortfall names every piece of this delta that will go
 // unread on every later run as surely as it did on this one.
@@ -190,7 +210,7 @@ func structuralShortfallNotice(
 	count := len(shortfall.Hunks)
 	parts := []string{
 		fmt.Sprintf(
-			"`%s` carries %s this service cannot read, and no later run will read %s.",
+			"`%s` carries %s this service cannot read, and a later run reaches the same limit on %s.",
 			shortHead(head),
 			hunkCount(count),
 			hunkPronoun(count),

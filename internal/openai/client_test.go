@@ -103,8 +103,14 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !strings.Contains(systemContent, "Return only JSON") {
 		t.Fatalf("system message missing JSON-only fallback")
 	}
-	if !strings.Contains(systemContent, `"coverage_complete"`) {
+	if !strings.Contains(systemContent, `"findings"`) {
 		t.Fatalf("system message missing review schema fallback")
+	}
+	// Coverage is a fact about what this service handed the model, so the model
+	// is never asked for it. A schema that asks anyway gets a boolean filled in
+	// blind, and one blind false used to block the whole head.
+	if strings.Contains(systemContent, "coverage_complete") {
+		t.Fatalf("system message asks the model for coverage it cannot know")
 	}
 
 	responseFormat, ok := body["response_format"].(map[string]any)
@@ -555,9 +561,6 @@ func TestFallbackAnswersWhenThePrimaryReportsExhaustedUsage(t *testing.T) {
 	completion, err := fixture.client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
-	}
-	if !completion.Result.CoverageComplete {
-		t.Fatalf("result = %+v, want the fallback result", completion.Result)
 	}
 	if completion.Model != testFallbackModel {
 		t.Fatalf("model = %q, want the fallback model %q", completion.Model, testFallbackModel)
