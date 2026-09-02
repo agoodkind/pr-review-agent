@@ -133,6 +133,63 @@ func TestOneChunkPublishesOneCommentForOverlappingAnchors(t *testing.T) {
 	}
 }
 
+// The suppression line exists so that a wrong suppression can be seen, so it
+// has to describe the finding that was withheld rather than the one kept.
+//
+// The case that gets this wrong is a higher rated restatement arriving second
+// and taking the survivor's slot, because the finding withheld is then the one
+// already held rather than the one that just arrived. The overlap detail states
+// two ranges in order, withheld first, so reusing the comparison computed for
+// the arriving candidate prints the pair backwards.
+func TestTheSuppressionLogNamesTheWithheldFindingsRangeFirst(t *testing.T) {
+	logs := &syncBuffer{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		logWriter:         logs,
+		model: &sequenceModel{results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{
+				{
+					Path:       "main.go",
+					StartLine:  2,
+					EndLine:    3,
+					Title:      "Spanning defect",
+					Body:       "The changed lines break core behavior.",
+					Evidence:   "added",
+					Claim:      "The spanning range is wrong",
+					Suggestion: "",
+					Importance: 9,
+				},
+				{
+					Path:       "main.go",
+					StartLine:  3,
+					EndLine:    4,
+					Title:      "Overlapping restatement",
+					Body:       "The same region, stated again over a shifted range.",
+					Evidence:   "third",
+					Claim:      "The shifted range is wrong",
+					Suggestion: "",
+					Importance: 10,
+				},
+			},
+		}}},
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one: the two ranges share line 3", bodies)
+	}
+	const withheldFirst = "main.go:2-3 over main.go:3-4"
+	const keptFirst = "main.go:3-4 over main.go:2-3"
+	if strings.Contains(logs.String(), keptFirst) {
+		t.Fatalf("suppression detail read %q, want the withheld finding's range first, not the kept one's", keptFirst)
+	}
+	if !strings.Contains(logs.String(), withheldFirst) {
+		t.Fatalf("service log = %q, want a suppression detail reading %q", logs.String(), withheldFirst)
+	}
+}
+
 // Collapsing restatements must not collapse a review. Two findings resting on
 // two source lines, anchored apart, are two defects and both belong on the page.
 func TestTwoDistinctDefectsInOneChunkAnswerBothPublish(t *testing.T) {

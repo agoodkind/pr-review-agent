@@ -282,23 +282,48 @@ func collapseChunkCandidates(ctx context.Context, candidates []domain.Finding) [
 	survivorKeys := make([]duplicateKeys, 0, len(candidates))
 	for _, candidate := range candidates {
 		keys := candidateKeys(candidate)
-		slot, found, same := firstMatch(survivorKeys, keys)
+		slot, _, same := firstMatch(survivorKeys, keys)
 		if !same {
 			survivors = append(survivors, candidate)
 			survivorKeys = append(survivorKeys, keys)
 			continue
 		}
+		// A higher rated restatement takes the slot, which makes the finding
+		// already in it the one withheld. The match is therefore rebuilt in that
+		// direction rather than reused: the one firstMatch computed reads from
+		// the arriving candidate to the survivor, which is the opposite pair.
 		if candidate.Importance > survivors[slot].Importance {
-			found.Matched = candidate.Title
-			logSuppressed(ctx, layerWithinChunk, survivors[slot], found)
+			replaced := suppressionMatch(keys, survivorKeys[slot], candidate.Title)
+			logSuppressed(ctx, layerWithinChunk, survivors[slot], replaced)
 			survivors[slot] = candidate
 			survivorKeys[slot] = keys
 			continue
 		}
-		found.Matched = survivors[slot].Title
-		logSuppressed(ctx, layerWithinChunk, candidate, found)
+		withheld := suppressionMatch(survivorKeys[slot], keys, survivors[slot].Title)
+		logSuppressed(ctx, layerWithinChunk, candidate, withheld)
 	}
 	return survivors
+}
+
+// suppressionMatch describes one finding as a repeat of the finding being kept,
+// always in that direction.
+//
+// The log line names the finding that was withheld, so its detail has to read
+// from the withheld finding to the kept one. The anchor range sense is the one
+// where that matters: its detail states two ranges in order, and reusing a match
+// computed for the opposite pair printed the kept finding's range as though it
+// were the withheld one's. A suppression line that describes the wrong direction
+// is worse than none, because the only reason to write it is so that a wrong
+// suppression can be seen.
+//
+// The pair is known to match: every caller builds one only after the comparison
+// has already said so, and the comparison is symmetric, since each of its three
+// senses compares two values that are either equal or not regardless of which
+// side they arrive on.
+func suppressionMatch(kept duplicateKeys, suppressed duplicateKeys, keptLabel string) duplicateMatch {
+	match, _ := sameClaim(kept, suppressed)
+	match.Matched = keptLabel
+	return match
 }
 
 // logSuppressed records one finding a layer withheld: which layer, on what
