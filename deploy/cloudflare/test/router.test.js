@@ -213,11 +213,11 @@ function createRestartEnvironment(events, queued) {
   };
 }
 
-function labeledWebhookRequest(action, labelName, signature) {
+function labeledWebhookRequest(action, labelName, signature, draft) {
   const body = JSON.stringify({
     action,
     label: { name: labelName },
-    pull_request: { head: { sha: "e6949cd" } },
+    pull_request: { draft: draft === true, head: { sha: "e6949cd" } },
   });
   return new Request("https://reviewer.example/api/v1/github_webhooks", {
     body,
@@ -272,6 +272,56 @@ test("a forcing delivery restarts nothing when no signing key is configured", as
 
   assert.equal(response.status, 202);
   assert.deepEqual(events, ["forward"]);
+});
+
+// The Go service refuses a labeled delivery on a draft outright, because a
+// draft is never reviewed and a label does not change that. A worker that
+// restarted anyway would destroy whatever review is in flight and produce no
+// review in its place, and anyone who can add a label could repeat that at will.
+//
+// The forcing label is the same one that restarts a non-draft pull request, so
+// the draft flag is the only thing separating this case from that one.
+test("a forcing label on a draft pull request restarts nothing", async function () {
+  const events = [];
+  const queued = [];
+
+  const response = await routeRequest(
+    labeledWebhookRequest("labeled", "test-review-agent-rerun", undefined, true),
+    createRestartEnvironment(events, queued),
+  );
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(events, ["forward"]);
+  assert.equal(queued.length, 0);
+});
+
+// A draft flag the payload does not carry, or carries as something other than
+// true, must not suppress the restart. Reading any of those as a draft would
+// silently disable the label on ordinary pull requests.
+test("a forcing label restarts when the draft flag is absent or not true", async function () {
+  for (const draft of [undefined, false, "true", 0, null]) {
+    const events = [];
+    const body = JSON.stringify({
+      action: "labeled",
+      label: { name: "test-review-agent-rerun" },
+      pull_request: { draft, head: { sha: "e6949cd" } },
+    });
+    const request = new Request("https://reviewer.example/api/v1/github_webhooks", {
+      body,
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-github-delivery": "delivery-label-1",
+        "x-hub-signature-256": signBody(body),
+      },
+    });
+
+    const response = await routeRequest(request, createRestartEnvironment(events, []));
+
+    assert.equal(response.status, 202, `draft ${JSON.stringify(draft)}`);
+    assert.deepEqual(events, ["restart", "forward"], `draft ${JSON.stringify(draft)}`);
+  }
 });
 
 // The label name comes out of a body nobody has verified, and the forcing check

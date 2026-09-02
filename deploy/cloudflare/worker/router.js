@@ -43,6 +43,19 @@ async function restartOnForcedReview(container, env, request, body, metadata) {
     console.error(JSON.stringify({ message: "container restart refused, invalid signature", ...metadata }));
     return;
   }
+  // A draft is never reviewed, and a label does not change that. The Go service
+  // refuses a labeled delivery on a draft outright, so restarting for one would
+  // destroy whatever review is in flight and produce no review in its place.
+  // Anyone who can add a label could repeat that at will, which makes the two
+  // rules agreeing a requirement rather than a tidiness.
+  //
+  // The check sits after the signature so a forged delivery still reports the
+  // forgery, which is the more important line for a reader, rather than being
+  // filed under the draft it also claimed to be.
+  if (metadata.draft) {
+    console.log(JSON.stringify({ message: "container restart skipped, draft pull request", ...metadata }));
+    return;
+  }
   // A restart that fails is logged and the delivery forwarded anyway. The
   // review is the point and the fresh environment is what the restart adds, so
   // refusing to review would cost more than reviewing on the old instance. The
@@ -133,7 +146,8 @@ async function enqueueForReplay(env, path, request, body, metadata) {
 }
 
 // stringField returns a payload value when it is a string and the empty string
-// otherwise, so every metadata field is one whatever the sender wrote.
+// otherwise, so every metadata field holds its own type whatever the sender
+// wrote.
 //
 // The narrowing is the point rather than a nicety. This metadata is built from a
 // body nobody has verified, it is read before the signature is checked, and one
@@ -153,7 +167,7 @@ async function readWebhookMetadata(request) {
   const deliveryId = request.headers.get("x-github-delivery") ?? "";
   const eventType = request.headers.get("x-github-event") ?? "";
   if (eventType !== "pull_request") {
-    return { deliveryId, eventType, action: "", head: "", label: "" };
+    return { deliveryId, eventType, action: "", head: "", label: "", draft: false };
   }
 
   try {
@@ -167,8 +181,13 @@ async function readWebhookMetadata(request) {
       // Every other action reads as an empty name, which matches no prefix, and
       // so does a name of any type but a string.
       label: stringField(payload.label?.name),
+      // Narrowed the same way the string fields are, and to false rather than
+      // true when the payload says something else: a delivery whose draft flag
+      // cannot be read is treated as a pull request the service would review,
+      // which is what the Go decoder does with a missing or malformed flag.
+      draft: payload.pull_request?.draft === true,
     };
   } catch {
-    return { deliveryId, eventType, action: "invalid_json", head: "", label: "" };
+    return { deliveryId, eventType, action: "invalid_json", head: "", label: "", draft: false };
   }
 }
