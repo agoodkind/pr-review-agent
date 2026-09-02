@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -621,6 +622,116 @@ func TestAChunkHoldingOneCandidateMakesNoConsolidationCall(t *testing.T) {
 	}
 	if model.consolidationCalls() != 0 {
 		t.Fatalf("consolidation calls = %d, want none for a single candidate", model.consolidationCalls())
+	}
+}
+
+// barrierConsolidationModel holds every consolidation call until both chunks
+// have reached one, then releases both at once.
+//
+// That is the window the consolidation call opens. It holds no pass lock, so
+// two chunks can each finish testing their candidates against what the run has
+// carried, both find nothing, and both come out of the call together with the
+// same claim in hand. Nothing here is contrived: chunks answer four at a time
+// in production, and the two calls are the same length.
+type barrierConsolidationModel struct {
+	width   int
+	release chan struct{}
+	mu      sync.Mutex
+	arrived int
+}
+
+func newBarrierConsolidationModel(width int) *barrierConsolidationModel {
+	return &barrierConsolidationModel{
+		width:   width,
+		release: make(chan struct{}),
+		mu:      sync.Mutex{},
+		arrived: 0,
+	}
+}
+
+func (model *barrierConsolidationModel) Review(
+	_ context.Context,
+	prompt string,
+) (review.Completion, error) {
+	return review.Completion{
+		Result: domain.ReviewResult{
+			CoverageComplete: true,
+			Findings:         sharedAndUniqueFindings(promptFilePath(prompt)),
+		},
+		Model: testReviewModel,
+	}, nil
+}
+
+func (model *barrierConsolidationModel) Consolidate(
+	_ context.Context,
+	_ string,
+) (review.Consolidation, error) {
+	model.mu.Lock()
+	model.arrived++
+	last := model.arrived == model.width
+	model.mu.Unlock()
+	if last {
+		close(model.release)
+	}
+	<-model.release
+	return review.Consolidation{Groups: nil}, nil
+}
+
+// sharedAndUniqueFindings is one chunk's answer: the defect both chunks name,
+// and one only this chunk's file has. Two candidates is what asks for a
+// consolidation call at all.
+func sharedAndUniqueFindings(path string) []domain.Finding {
+	return []domain.Finding{
+		{
+			Path:       path,
+			StartLine:  2,
+			EndLine:    2,
+			Title:      "Publish failure in " + path,
+			Body:       "The failure of this call is not handled.",
+			Evidence:   sharedClaimLine,
+			Claim:      sharedClaimSentence,
+			Suggestion: "",
+			Importance: 9,
+		},
+		{
+			Path:       path,
+			StartLine:  3,
+			EndLine:    3,
+			Title:      "Unused helper in " + path,
+			Body:       "Nothing in this file calls the helper it adds.",
+			Evidence:   "other" + strings.TrimSuffix(strings.TrimPrefix(path, "file"), ".go"),
+			Claim:      "The helper added to " + path + " has no caller",
+			Suggestion: "",
+			Importance: 9,
+		},
+	}
+}
+
+// Two chunks released from their consolidation calls at the same instant both
+// hold the same claim, and both have already been told nobody carries it. Only
+// the test the render stage repeats, inside the same lock hold that records
+// what a chunk carried, keeps that down to one comment.
+func TestTwoChunksLeavingConsolidationTogetherPublishOneSharedClaim(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoFileChunkCollector{},
+		minimumImportance: 9,
+		model:             newBarrierConsolidationModel(2),
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 3 {
+		t.Fatalf("published comments = %d, want three: one shared claim and one defect per file:\n%v",
+			len(bodies), bodies)
+	}
+	shared := 0
+	for _, body := range bodies {
+		if strings.Contains(body, "Publish failure in") {
+			shared++
+		}
+	}
+	if shared != 1 {
+		t.Fatalf("comments naming the shared defect = %d, want 1", shared)
 	}
 }
 
