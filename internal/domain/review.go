@@ -5,7 +5,35 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
+
+// ReviewSettings are the review tuning values one delivery carried with it.
+//
+// The container reads its configuration once, at start, so a value corrected
+// after it booted did not reach a running instance: a chunk timeout changed to
+// six seconds and restored five minutes later still governed a real pull request
+// thirteen minutes after the restore, because nothing had replaced the process.
+// Carrying these with the work rather than with the process lifetime is what
+// makes a correction take effect on the next delivery instead of on the next
+// restart.
+//
+// A zero field is a delivery that said nothing about that value, and the process
+// configuration stands. That is what lets a worker and a container at different
+// versions work together: an older worker sends none of this, and every review
+// runs on the values it booted with, exactly as before.
+//
+// Only values that govern one review travel. The model and the worker count size
+// the process rather than the review, and no secret travels at all. These arrive
+// beside a signed body rather than inside it, so they are honored only on a
+// delivery whose signature verified, and nothing here is worth more than the harm
+// it could do if a stranger chose it.
+type ReviewSettings struct {
+	MinimumImportance int
+	MaxFiles          int
+	MaxChunks         int
+	ChunkTimeout      time.Duration
+}
 
 // HeadSHA is a validated pull request head commit identifier.
 type HeadSHA string
@@ -206,6 +234,9 @@ type ReviewJob struct {
 	// completed, resumes from what the earlier attempt recorded instead of
 	// paying for the whole pull request again.
 	Forced bool
+	// Settings are the review tuning values this delivery carried. Every field
+	// it left zero falls back to the process configuration.
+	Settings ReviewSettings
 	PullRequestRef
 }
 

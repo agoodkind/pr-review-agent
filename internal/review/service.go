@@ -162,11 +162,19 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	ctx := gklog.WithLogger(parent, logger)
 	ctx = withRecorder(ctx, recorder)
 	ctx = withShutdown(ctx, parent)
+	// The values this run is bound by are resolved once, here, and every stage
+	// reads the same resolved set. A stage that reached back to the service would
+	// be reading what the process booted with rather than what this delivery
+	// asked for, which is the whole failure this carrying exists to end.
+	settings := service.settingsFor(job)
 	logger.InfoContext(
 		ctx,
 		"review job started",
-		slog.Int("minimum_importance", service.minimumImportance),
-		slog.Duration("chunk_timeout", service.chunkTimeout),
+		slog.Int("minimum_importance", settings.minimumImportance),
+		slog.Duration("chunk_timeout", settings.chunkTimeout),
+		slog.Int("max_files", settings.maxFiles),
+		slog.Int("max_chunks", settings.maxChunks),
+		slog.Bool("settings_from_delivery", job.Settings != emptyReviewSettings()),
 	)
 	if job.CheckRunID == 0 {
 		return errors.New("review check was not admitted")
@@ -185,7 +193,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		// idempotent, which has already happened by the time a run starts.
 		ExternalID: "",
 	}
-	return service.runLocked(ctx, job, checkRun)
+	return service.runLocked(ctx, job, checkRun, settings)
 }
 
 // Admit creates or resumes the visible check before background review work
@@ -234,7 +242,7 @@ func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cau
 		return nil
 	}
 	now := service.now()
-	progress := service.newProgress(job, now).summary(now)
+	progress := service.newProgress(job, service.settingsFor(job), now).summary(now)
 	return service.failCheck(parent, job, job.CheckRunID, progress, checkSummaryFailure, cause)
 }
 
@@ -242,11 +250,12 @@ func (service *Service) runLocked(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRun githubapp.CheckRun,
+	settings reviewSettings,
 ) (runErr error) {
 	logger := gklog.L(ctx)
 	head := job.Head
 	startedAt := service.now()
-	progress := service.newProgress(job, startedAt)
+	progress := service.newProgress(job, settings, startedAt)
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -308,7 +317,7 @@ func (service *Service) runLocked(
 		}
 		return refreshErr
 	}
-	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress)
+	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress, settings)
 }
 
 // reviewOwedWork reviews everything this head still owes: the range since the
@@ -325,6 +334,7 @@ func (service *Service) reviewOwedWork(
 	reviews []githubapp.Review,
 	startedAt time.Time,
 	progress *reviewProgress,
+	settings reviewSettings,
 ) error {
 	head := job.Head
 	state, hasState := service.loadDurableState(ctx, job)
@@ -384,7 +394,7 @@ func (service *Service) reviewOwedWork(
 	// and resolves threads, so running it first would spend both on the exact
 	// delta admission exists to refuse.
 	work, stop, err := service.collectAndAdmit(
-		ctx, job, pullRequest, checkRun, deltaBase(state, hasState, fromScratch), progress,
+		ctx, job, pullRequest, checkRun, deltaBase(state, hasState, fromScratch), progress, settings,
 	)
 	if stop {
 		return err
@@ -400,7 +410,7 @@ func (service *Service) reviewOwedWork(
 	// call.
 	selection := collectPublicationState(reviews, threads, service.botLogin)
 	disputes := collectDisputes(threads, service.botLogin)
-	pass := newChunkPass(work, service.minimumImportance, &selection, disputes)
+	pass := newChunkPass(work, settings, &selection, disputes)
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {
@@ -409,7 +419,7 @@ func (service *Service) reviewOwedWork(
 		}
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
-	return service.publish(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress)
+	return service.publish(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress, settings)
 }
 
 // applyPass records what the chunk loop learned on the progress the failure and
@@ -435,6 +445,54 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 		logger.ErrorContext(ctx, "trace review analysis", slog.String("err", err.Error()))
 	}
 	progress.reached("model analysis")
+}
+
+// emptyReviewSettings is a delivery that carried no tuning values of its own.
+func emptyReviewSettings() domain.ReviewSettings {
+	return domain.ReviewSettings{MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0}
+}
+
+// reviewSettings are the tuning values one run is bound by, after the values the
+// delivery carried are laid over the ones this process was configured with.
+type reviewSettings struct {
+	minimumImportance int
+	maxFiles          int
+	maxChunks         int
+	chunkTimeout      time.Duration
+}
+
+// settingsFor resolves what this run is bound by.
+//
+// A delivery carries a value only when the worker attached one, so every field
+// it left zero falls back to what this process booted with. That fallback is
+// what lets a worker and a container at different versions work together, and it
+// is also what a delivery whose header could not be read gets.
+//
+// A non-positive value is not honored, for the same reason the constructor
+// refuses one: a zero budget refuses every real delta while admitting an empty
+// one, which is the opposite of what a budget is for, and a zero timeout would
+// end every model call before it began. These arrive from a header rather than
+// from configuration, so the same floor has to hold on both.
+func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
+	settings := reviewSettings{
+		minimumImportance: service.minimumImportance,
+		maxFiles:          service.reviewMaxFiles,
+		maxChunks:         service.reviewMaxChunks,
+		chunkTimeout:      service.chunkTimeout,
+	}
+	if job.Settings.MinimumImportance > 0 {
+		settings.minimumImportance = job.Settings.MinimumImportance
+	}
+	if job.Settings.MaxFiles > 0 {
+		settings.maxFiles = job.Settings.MaxFiles
+	}
+	if job.Settings.MaxChunks > 0 {
+		settings.maxChunks = job.Settings.MaxChunks
+	}
+	if job.Settings.ChunkTimeout > 0 {
+		settings.chunkTimeout = job.Settings.ChunkTimeout
+	}
+	return settings
 }
 
 // deltaBase names the commit the delta is measured from: the commit the last
@@ -591,8 +649,12 @@ func (service *Service) reconcileThreads(
 	return threads, nil
 }
 
-func (service *Service) newProgress(job domain.ReviewJob, startedAt time.Time) *reviewProgress {
-	return newReviewProgress(job.Head, startedAt, service.minimumImportance, job.Forced)
+func (service *Service) newProgress(
+	job domain.ReviewJob,
+	settings reviewSettings,
+	startedAt time.Time,
+) *reviewProgress {
+	return newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced)
 }
 
 // checkAlreadySucceeded reports whether this head already carries a completed
@@ -649,6 +711,7 @@ func (service *Service) publish(
 	state marker.State,
 	startedAt time.Time,
 	progress *reviewProgress,
+	settings reviewSettings,
 ) error {
 	ctx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
@@ -692,7 +755,7 @@ func (service *Service) publish(
 		FilesReviewed:     analysis.FilesReviewed,
 		Chunks:            analysis.Chunks,
 		CoverageComplete:  analysis.CoverageComplete,
-		MinimumImportance: service.minimumImportance,
+		MinimumImportance: settings.minimumImportance,
 		Observed:          analysis.Observed,
 		Eligible:          analysis.Anchored,
 		Published:         published,

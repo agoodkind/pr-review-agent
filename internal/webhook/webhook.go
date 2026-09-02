@@ -49,6 +49,12 @@ func (event PullRequestEvent) Job() domain.ReviewJob {
 		CheckRunStatus:     "",
 		CheckRunConclusion: "",
 		Forced:             event.Forced,
+		// The tuning values ride on the request rather than in the payload, and
+		// are read only once the signature has verified, so nothing decoded here
+		// can set them.
+		Settings: domain.ReviewSettings{
+			MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
+		},
 		PullRequestRef: domain.PullRequestRef{
 			Repository:     event.Repository,
 			Number:         event.Number,

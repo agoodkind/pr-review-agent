@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/gklog/correlation"
@@ -17,6 +18,59 @@ import (
 )
 
 var errReviewQueueFull = errors.New("review queue full")
+
+// reviewSettingsHeader carries the review tuning values the worker attached to
+// this delivery, so a corrected value governs the next review rather than
+// waiting for the process to be replaced.
+const reviewSettingsHeader = "X-Pr-Agent-Review-Settings"
+
+// reviewSettingsPayload is the wire form of those values. Every field is
+// optional, and one the worker left out stays zero, which the service reads as
+// the process configuration standing.
+type reviewSettingsPayload struct {
+	MinimumImportance int    `json:"minimum_importance"`
+	MaxFiles          int    `json:"max_files"`
+	MaxChunks         int    `json:"max_chunks"`
+	ChunkTimeout      string `json:"chunk_timeout"`
+}
+
+// readReviewSettings parses the tuning values a delivery carried.
+//
+// It is called only after the signature verifies, and that ordering is the whole
+// security of it. These values arrive beside the signed body rather than inside
+// it, so on a request nobody has verified they are whatever the sender wanted,
+// and configuration is exactly what an attacker would choose to set.
+//
+// A header that will not parse is treated as no header at all. The delivery is
+// still a real review, and refusing it over a value it did not need would turn a
+// worker that sent something odd into an outage.
+func readReviewSettings(request *http.Request, logger *slog.Logger) domain.ReviewSettings {
+	empty := domain.ReviewSettings{MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0}
+	raw := request.Header.Get(reviewSettingsHeader)
+	if raw == "" {
+		return empty
+	}
+	var payload reviewSettingsPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		logger.Warn("decode review settings header", slog.String("err", err.Error()))
+		return empty
+	}
+	timeout := time.Duration(0)
+	if payload.ChunkTimeout != "" {
+		parsed, err := time.ParseDuration(payload.ChunkTimeout)
+		if err != nil {
+			logger.Warn("parse review chunk timeout", slog.String("err", err.Error()))
+		} else {
+			timeout = parsed
+		}
+	}
+	return domain.ReviewSettings{
+		MinimumImportance: payload.MinimumImportance,
+		MaxFiles:          payload.MaxFiles,
+		MaxChunks:         payload.MaxChunks,
+		ChunkTimeout:      timeout,
+	}
+}
 
 type reviewAdmitter interface {
 	Admit(context.Context, domain.ReviewJob) (domain.ReviewJob, bool, error)
@@ -148,7 +202,14 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		return
 	}
 
-	job, admitted, err := handler.admitter.Admit(ctx, event.Job())
+	// The tuning values are read here rather than beside the other headers,
+	// because everything above this point runs on a delivery nobody has verified
+	// and these are the one thing on the request that changes how a review
+	// behaves.
+	job := event.Job()
+	job.Settings = readReviewSettings(request, logger)
+
+	job, admitted, err := handler.admitter.Admit(ctx, job)
 	if err != nil {
 		handler.cache.Release(deliveryID)
 		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", err.Error()))

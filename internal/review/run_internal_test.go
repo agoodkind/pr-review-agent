@@ -242,7 +242,8 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		Chunks: nil,
 	}
 	selection := collectPublicationState(nil, nil, summaryCommentTestBotLogin)
-	pass := newChunkPass(work, 1, &selection, collectDisputes(nil, summaryCommentTestBotLogin))
+	settings := reviewSettings{minimumImportance: 1, maxFiles: 100, maxChunks: 60, chunkTimeout: time.Minute}
+	pass := newChunkPass(work, settings, &selection, collectDisputes(nil, summaryCommentTestBotLogin))
 	service := &Service{
 		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
 		model:              postPlanModel{},

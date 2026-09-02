@@ -81,7 +81,11 @@ func removeChunkID(pending []string, id string) []string {
 // Chunks answer concurrently, so every field here is guarded. The model call
 // and the comment posts happen outside the lock; only the bookkeeping is inside.
 type chunkPass struct {
-	work      deltaWork
+	work deltaWork
+	// settings are the values this run is bound by, carried here so a chunk
+	// reads what the delivery asked for rather than what the process booted
+	// with. They are written once and read concurrently without the lock.
+	settings  reviewSettings
 	selection *publicationState
 	// disputes and disputePrompt are what the pull request has already been
 	// told, as keys for the backstop and as prose for the prompt. Both are built
@@ -126,17 +130,18 @@ func isChunkPanic(err error) bool {
 
 func newChunkPass(
 	work deltaWork,
-	minimumImportance int,
+	settings reviewSettings,
 	selection *publicationState,
 	disputes disputeContext,
 ) *chunkPass {
 	return &chunkPass{
 		work:          work,
+		settings:      settings,
 		selection:     selection,
 		disputes:      disputes,
 		disputePrompt: disputes.promptSection(),
 		mu:            sync.Mutex{},
-		collector:     newFindingCollector(work.Files, minimumImportance),
+		collector:     newFindingCollector(work.Files, settings.minimumImportance),
 		models:        modelSet{names: nil, seen: nil},
 		published:     make([]domain.Finding, 0),
 		failures:      make([]chunkFailure, 0),
@@ -567,12 +572,12 @@ func (service *Service) reviewOneChunk(
 	// through one pointer, and the pass folds them in afterwards.
 	var models modelSet
 	requests := 0
-	callCtx, cancel := context.WithTimeout(ctx, service.chunkTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
 	results, err := reviewChunk(
 		callCtx,
 		service.model,
 		chunk,
-		service.minimumImportance,
+		pass.settings.minimumImportance,
 		pass.disputePrompt,
 		&models,
 		&requests,

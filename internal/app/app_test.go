@@ -429,6 +429,140 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	}
 }
 
+// The container reads its configuration once, at start, so a value corrected
+// after it booted did not reach a running instance and a chunk timeout lowered
+// by mistake governed real pull requests until the process was replaced. The
+// worker attaches the current values to each delivery instead, and the review
+// runs on what arrived with the work rather than on what the process booted
+// with.
+//
+// The second delivery is half the point. It carries nothing, and it has to run
+// on the process values, because that is what lets a worker and a container at
+// different versions work together at all.
+func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent(), approveReviewContent()},
+	})
+	defer fixture.close()
+
+	carried := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-carried",
+		body:       openedPayload(testDefectiveHead),
+		settings:   `{"minimum_importance":3,"max_files":7,"max_chunks":5,"chunk_timeout":"9s"}`,
+	})
+	if carried.StatusCode != http.StatusAccepted {
+		t.Fatalf("carried status = %d, want 202", carried.StatusCode)
+	}
+	_ = carried.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	absent := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-absent",
+		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+	})
+	if absent.StatusCode != http.StatusAccepted {
+		t.Fatalf("absent status = %d, want 202", absent.StatusCode)
+	}
+	_ = absent.Body.Close()
+	fixture.waitForCheckCompletions(t, 2)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 2 {
+		t.Fatalf("review job started lines = %d, want 2", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(9*time.Second) {
+		t.Fatalf("carried chunk_timeout = %v, want the 9s the delivery asked for",
+			started[0]["chunk_timeout"])
+	}
+	if started[0]["minimum_importance"] != float64(3) {
+		t.Fatalf("carried minimum_importance = %v, want 3", started[0]["minimum_importance"])
+	}
+	if started[0]["max_files"] != float64(7) || started[0]["max_chunks"] != float64(5) {
+		t.Fatalf("carried budgets = %v/%v, want 7/5", started[0]["max_files"], started[0]["max_chunks"])
+	}
+
+	if started[1]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("fallback chunk_timeout = %v, want the process value %v",
+			started[1]["chunk_timeout"], time.Minute)
+	}
+	if started[1]["minimum_importance"] != float64(testMinimumImportance) {
+		t.Fatalf("fallback minimum_importance = %v, want the process value %d",
+			started[1]["minimum_importance"], testMinimumImportance)
+	}
+	if started[1]["max_files"] != float64(1000) || started[1]["max_chunks"] != float64(1000) {
+		t.Fatalf("fallback budgets = %v/%v, want the process values 1000/1000",
+			started[1]["max_files"], started[1]["max_chunks"])
+	}
+}
+
+// Configuration is exactly what an attacker would want to set, and these values
+// ride beside the signed body rather than inside it. A request whose signature
+// does not verify is refused before anything it carried is read, so nothing it
+// asked for reaches a review, because no review starts.
+func TestAnUnverifiedDeliveryAppliesNothingItCarried(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-forged",
+		body:       openedPayload(testDefectiveHead),
+		signature:  "sha256=" + strings.Repeat("0", 64),
+		settings:   `{"minimum_importance":1,"max_files":1,"max_chunks":1,"chunk_timeout":"1ms"}`,
+	})
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	if started := fixture.logLinesContaining("review job started"); len(started) != 0 {
+		t.Fatalf("review job started lines = %d, want none: a forged delivery started a review", len(started))
+	}
+}
+
+// A value that would disable a budget or a clock is not honored, whatever sent
+// it. A zero budget refuses every real delta while admitting an empty one, and a
+// zero timeout ends every model call before it begins, so the floor the
+// constructor applies to configuration has to hold on a delivery too.
+func TestANonPositiveCarriedSettingFallsBackToTheProcessValue(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-zero",
+		body:       openedPayload(testDefectiveHead),
+		settings:   `{"minimum_importance":0,"max_files":0,"max_chunks":-1,"chunk_timeout":"0s"}`,
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("chunk_timeout = %v, want the process value %v", started[0]["chunk_timeout"], time.Minute)
+	}
+	if started[0]["max_chunks"] != float64(1000) || started[0]["max_files"] != float64(1000) {
+		t.Fatalf("budgets = %v/%v, want the process values 1000/1000",
+			started[0]["max_files"], started[0]["max_chunks"])
+	}
+	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "success" {
+		t.Fatalf("conclusion = %q, want success: a zero budget must not decline the delta", conclusion)
+	}
+}
+
 // A label decides that a review runs, never how it runs. Anyone with triage
 // access on a repository can add one, so a label that could set a timeout, a
 // budget, or a model would be fault injection reaching production. The text
@@ -1539,6 +1673,9 @@ type webhookRequestOptions struct {
 	deliveryID string
 	body       []byte
 	signature  string
+	// settings is the review tuning header the worker attaches, sent verbatim so
+	// a test can post one the service has to refuse to read.
+	settings string
 }
 
 func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptions) *http.Response {
@@ -1563,6 +1700,9 @@ func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptio
 		signature = signBody(options.body)
 	}
 	request.Header.Set("X-Hub-Signature-256", signature)
+	if options.settings != "" {
+		request.Header.Set("X-Pr-Agent-Review-Settings", options.settings)
+	}
 
 	response, err := fixture.client.Do(request)
 	if err != nil {
