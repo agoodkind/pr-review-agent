@@ -227,7 +227,9 @@ func TestAResolutionTrustsTheCheckpointOverAStaleVerdictSentence(t *testing.T) {
 			"id":        float64(4100),
 			"commit_id": testHeadSHA,
 			"state":     "CHANGES_REQUESTED",
-			"body": "Changes requested.\n\nWaiting on:\n- " + unreviewedHeadSentence + "\n\n" +
+			// The whole sentence, because that is what the refresh used to test
+			// the body for. A fragment would pass whichever signal decided.
+			"body": "Changes requested.\n\nWaiting on:\n- " + testUnreviewedHeadReason + "\n\n" +
 				marker.Review(domain.HeadSHA(testHeadSHA)),
 			"user": map[string]any{"login": testBotLogin},
 		}}},
