@@ -2136,6 +2136,46 @@ func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
 	}
 }
 
+// A replayed delivery carries the body it was created from, headers and all, so
+// the job it produces names the head that body names rather than whatever the
+// pull request has moved to since. The dedup lookup therefore asks about the
+// head the first attempt used, which is where that attempt left its check.
+//
+// The pull request advances here between the two admissions, which is the
+// condition under which a lookup keyed on the current head would miss. It does
+// not miss, because no part of admission reads the current head.
+func TestAForcedReplayAfterTheHeadMovedStillFindsItsCompletedCheck(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+
+	// The pull request moves on. The replay still carries its original body, so
+	// the job is unchanged and still names the head it was created for.
+	fixture.state.headSHA = testStaleHeadSHA
+
+	_, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("replayed Admit: %v", err)
+	}
+	if wasAdmitted {
+		t.Fatal("the replay was admitted again, so the same forced review would run twice")
+	}
+	if model.callCount != 1 {
+		t.Fatalf("model calls = %d, want 1", model.callCount)
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: the replay must not create a second",
+			len(fixture.state.checkRuns))
+	}
+}
+
 // The run identifier names whichever run wrote the marker last, so another
 // delivery reviewing the same head moves it off the forced delivery that
 // cleared the state. Reading the clearing out of that identifier forgets it
