@@ -2136,6 +2136,77 @@ func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
 	}
 }
 
+// admitOnCompletedCheck admits an ordinary job at a head whose check has already
+// concluded the given way, and returns what admission decided.
+func admitOnCompletedCheck(t *testing.T, conclusion string) (domain.ReviewJob, *serviceFixture) {
+	t.Helper()
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":          float64(4242),
+		"name":        config.ReviewCheckName,
+		"head_sha":    testHeadSHA,
+		"status":      "completed",
+		"conclusion":  conclusion,
+		"external_id": "",
+	})
+
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the job was not admitted")
+	}
+	return admitted, fixture
+}
+
+// A check that has concluded is not one a new review may report through. The
+// review that follows writes its progress and its outcome into that check, so
+// leaving it terminal means a reader sees a finished review for the whole time
+// one is actually running, and nothing ever moves it back.
+//
+// The check is restarted rather than replaced, so the head keeps carrying one
+// check of this name and there is no question which of two a branch rule reads.
+func TestAnOrdinaryRunRestartsAConcludedCheckBeforeReviewingThroughIt(t *testing.T) {
+	for _, conclusion := range []string{"failure", "action_required", "cancelled", "neutral"} {
+		admitted, fixture := admitOnCompletedCheck(t, conclusion)
+
+		if admitted.CheckRunStatus != "in_progress" {
+			t.Fatalf("conclusion %s: check status = %q, want in_progress before any review work",
+				conclusion, admitted.CheckRunStatus)
+		}
+		if admitted.CheckRunConclusion != "" {
+			t.Fatalf("conclusion %s: conclusion = %q, want it cleared with the restart",
+				conclusion, admitted.CheckRunConclusion)
+		}
+		if admitted.CheckRunID != 4242 {
+			t.Fatalf("conclusion %s: check run id = %d, want the head's own check restarted rather than a second created",
+				conclusion, admitted.CheckRunID)
+		}
+		if len(fixture.state.checkRuns) != 1 {
+			t.Fatalf("conclusion %s: check runs = %d, want 1", conclusion, len(fixture.state.checkRuns))
+		}
+	}
+}
+
+// A completed successful check is the exception. The run that follows stops on
+// it rather than reviewing, so it has nothing to report through it, and
+// restarting it would pull a satisfied required check off a head that really was
+// reviewed in order to conclude it again unchanged moments later.
+func TestAnOrdinaryRunLeavesACompletedSuccessfulCheckAlone(t *testing.T) {
+	admitted, fixture := admitOnCompletedCheck(t, "success")
+
+	if admitted.CheckRunStatus != "completed" {
+		t.Fatalf("check status = %q, want the successful check left completed", admitted.CheckRunStatus)
+	}
+	if admitted.CheckRunConclusion != "success" {
+		t.Fatalf("conclusion = %q, want success carried through", admitted.CheckRunConclusion)
+	}
+	if fixture.state.checkDetailsURL != "" {
+		t.Fatal("the successful check was restarted, taking a satisfied required check off a reviewed head")
+	}
+}
+
 // A replayed delivery carries the body it was created from, headers and all, so
 // the job it produces names the head that body names rather than whatever the
 // pull request has moved to since. The dedup lookup therefore asks about the

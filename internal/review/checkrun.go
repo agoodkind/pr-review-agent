@@ -34,7 +34,33 @@ const (
 	// terminal state this service writes, and the only one that says a force
 	// request was carried through rather than abandoned part way.
 	checkRunCompleted = "completed"
+	// checkConclusionSuccess is the one conclusion that says this head was
+	// reviewed and passed. It is named here rather than written out at each of
+	// its readers, because a run that reports through a check and a run that
+	// stops on one have to mean the same thing by it.
+	checkConclusionSuccess = "success"
 )
+
+// needsStarting reports whether a check has to be moved to in progress before a
+// review reports through it.
+//
+// A queued check has never been started. A completed one has been started and
+// concluded, and a review reporting through that would leave a terminal
+// conclusion standing on the head for its whole duration, with nothing moving it
+// back: a reader sees a concluded review while one is running, and every stage
+// that reports progress writes into a check that already said it was finished.
+//
+// A completed successful check is the exception, and deliberately so. The run
+// that follows stops on it rather than reviewing, so it has nothing to report
+// through it, and restarting it would pull a satisfied required check off a head
+// that really was reviewed in order to conclude it again unchanged moments
+// later.
+func needsStarting(checkRun githubapp.CheckRun) bool {
+	if checkRun.Status == checkRunQueued {
+		return true
+	}
+	return checkRun.Status == checkRunCompleted && checkRun.Conclusion != checkConclusionSuccess
+}
 
 // forcedAdmission is what an earlier arrival of this same delivery left behind
 // on GitHub.
@@ -176,7 +202,7 @@ func (service *Service) ensureCheckRun(
 			return githubapp.CheckRun{}, false, err
 		}
 	}
-	if checkRun.Status == checkRunQueued {
+	if needsStarting(checkRun) {
 		if err := service.github.StartCheckRun(
 			ctx,
 			job.InstallationID,
@@ -188,6 +214,9 @@ func (service *Service) ensureCheckRun(
 			return githubapp.CheckRun{}, false, fmt.Errorf("start check run: %w", err)
 		}
 		checkRun.Status = checkRunInProgress
+		// The start clears the conclusion on GitHub, so the value carried on is
+		// the one the check now has rather than the one it is leaving behind.
+		checkRun.Conclusion = ""
 	}
 	return checkRun, true, nil
 }

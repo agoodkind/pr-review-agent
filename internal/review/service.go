@@ -606,7 +606,7 @@ func (service *Service) checkAlreadySucceeded(ctx context.Context, checkRun gith
 		slog.String("status", checkRun.Status),
 		slog.String("conclusion", checkRun.Conclusion),
 	)
-	if checkRun.Status != "completed" || checkRun.Conclusion != "success" {
+	if checkRun.Status != checkRunCompleted || checkRun.Conclusion != checkConclusionSuccess {
 		return false
 	}
 	logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "completed_check"))
