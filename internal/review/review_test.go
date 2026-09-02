@@ -3761,6 +3761,52 @@ func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 	}
 }
 
+// isPullRequestRead matches the read of the pull request itself, and not the
+// sub-resources hanging off the same prefix.
+func isPullRequestRead(request *http.Request) bool {
+	return request.Method == http.MethodGet &&
+		strings.HasSuffix(request.URL.Path, fmt.Sprintf("/pulls/%d", testPRNumber))
+}
+
+// A run that ran out of time says so, rather than naming the stage it happened
+// to be in when the clock expired.
+//
+// failureTitle classifies a failure by testing errors.Is(cause,
+// context.DeadlineExceeded) before falling back to the stage. The GitHub client
+// used to answer a timed-out request with a fresh errors.New, which broke that
+// chain, so every timeout inside the client was reported as its stage and a
+// reader could not tell a slow GitHub from a broken one.
+//
+// This is the second half of the same defect the githubapp tests cover from
+// below. There the client is asked whether the deadline survives the wrap; here
+// the check run is asked what it ended up telling the reader.
+//
+// Only the check run is asserted, and that is a property of the harness rather
+// than a gap in the fix. Run takes one context and uses it both as the review
+// deadline and, through withShutdown, as the service lifetime. The failure
+// notice is written through detachFromReviewDeadline, which deliberately
+// refuses to start when the service lifetime is already done, so a test that
+// expires the only context it has cannot also observe the comment. completeCheckRun
+// detaches without that check, which is why the check run still reports.
+func TestAGitHubTimeoutIsTitledADeadlineRatherThanTheStageItDiedIn(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{pullRequestHangs: true})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	if err := fixture.run(ctx, fixture.job()); err == nil {
+		t.Fatal("Run: want the expired deadline reported")
+	}
+
+	output := checkOutput(t, fixture)
+	if output["title"] != "Review stopped: it ran out of time." {
+		t.Fatalf("title = %v, want the deadline named rather than the stage it died in", output["title"])
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
 // A review that fails before it reads anything still says so, rather than
 // reporting an empty table the reader cannot interpret.
 func TestServiceFailureBeforeAnyProgressReportsNothingReached(t *testing.T) {
@@ -4822,16 +4868,21 @@ type serviceFixtureOptions struct {
 	// createCommentHangup drops the connection instead of answering, which is
 	// the failure a caller cannot tell apart from a comment that was created.
 	createCommentHangup bool
-	issueCommentStatus  int
-	listThreadsStatus   int
-	reconcileErr        error
-	reconcileThreads    []githubapp.ReviewThread
-	collector           review.Collector
-	model               review.Model
-	minimumImportance   int
-	reviewMaxFiles      int
-	reviewMaxChunks     int
-	chunkTimeout        time.Duration
+	// pullRequestHangs never answers the pull request read, so the caller's
+	// deadline is what ends the call. It is the only way to reach a real
+	// context.DeadlineExceeded from inside the GitHub client; a status code
+	// produces an APIError instead, which is a different classification.
+	pullRequestHangs   bool
+	issueCommentStatus int
+	listThreadsStatus  int
+	reconcileErr       error
+	reconcileThreads   []githubapp.ReviewThread
+	collector          review.Collector
+	model              review.Model
+	minimumImportance  int
+	reviewMaxFiles     int
+	reviewMaxChunks    int
+	chunkTimeout       time.Duration
 	// unsetReviewBudgets passes zero budgets to NewService, the way a caller
 	// that never set them would.
 	unsetReviewBudgets bool
@@ -5172,6 +5223,13 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// The hang is taken before the lock. Holding it here would stall every
+		// other call the run makes, including the ones that report the failure,
+		// and the test would prove a deadlock rather than a deadline.
+		if options.pullRequestHangs && isPullRequestRead(request) {
+			<-request.Context().Done()
+			return
+		}
 		state.mu.Lock()
 		defer state.mu.Unlock()
 		if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
