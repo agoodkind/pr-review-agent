@@ -60,8 +60,16 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// currently shows is a separate question, answered by the newest verdict
 	// whatever head it named. A thread resolution changes neither.
 	//
-	// The durable checkpoint outranks that body wherever it exists.
-	headFullyReviewed := service.headReadWhole(ctx, job, inputs.verdict.Body)
+	// The durable checkpoint outranks that body wherever it speaks to this head.
+	//
+	// A read that failed decides nothing and stops the refresh here. Answering
+	// true would approve a head whose incompleteness is recorded only in the
+	// comment this call could not read, which is the one way this path opens a
+	// gate over code nobody covered.
+	headFullyReviewed, err := service.headReadWhole(ctx, job, inputs.verdict.Body)
+	if err != nil {
+		return err
+	}
 	// Only a dismissed block is withheld from. Dismissing a block and dismissing
 	// an approval are opposite requests, and the review's own state no longer
 	// tells them apart, so the body it kept does.
@@ -78,27 +86,44 @@ func (service *Service) refreshVerdictAtReviewedHead(
 
 // headReadWhole reports whether any completed run read this whole head.
 //
-// The durable checkpoint answers it whenever there is one. The baseline advances
-// when and only when a run read the whole head with nothing left pending, so it
-// is the direct record of the question, while the verdict body is a sentence
-// some earlier run wrote about itself.
+// A checkpoint naming this head answers it outright, because the baseline
+// advances when and only when a run read the whole head with nothing left
+// pending. That is the direct record, and it is right where the verdict body is
+// wrong: every head blocked by the coverage the model used to be asked to answer
+// blind carries the unreviewed sentence over a checkpoint recording the head as
+// read whole, so believing the body there keeps a block standing on a fact that
+// was never true.
 //
-// The two disagree in both directions, and the checkpoint is right both times. A
-// run that could not read the whole head submits no verdict at all, so there is
-// no body to read and only the held baseline says so. And every head blocked by
-// the coverage the model used to be asked to answer blind carries that sentence
-// over a checkpoint recording the head as read whole, so believing the body
-// there would keep a block standing on a fact that was never true.
+// A checkpoint naming some other commit says nothing about this head, so the
+// body decides. That case is a force push back to a commit already reviewed: the
+// baseline sits on the commit in between, this head still carries the verdict
+// the run that read it submitted, and treating an unrelated checkpoint as the
+// answer would replace a valid approval with a block nobody can clear. The same
+// holds for a pull request carrying no checkpoint at all.
 //
-// The body is the fallback, for a pull request whose comment this service cannot
-// find or parse. Deciding from no evidence would turn a legitimate approval into
-// a block, so the older signal keeps the answer there.
-func (service *Service) headReadWhole(ctx context.Context, job domain.ReviewJob, verdictBody string) bool {
-	state, hasState := service.loadDurableState(ctx, job)
-	if !hasState {
-		return !strings.Contains(verdictBody, unreviewedHeadReason)
+// A read that failed is not an absence and is reported rather than guessed. The
+// caller stops there, because a run that could not read the whole head submits
+// no verdict, so its incompleteness exists only in the comment this call just
+// failed to read.
+func (service *Service) headReadWhole(
+	ctx context.Context,
+	job domain.ReviewJob,
+	verdictBody string,
+) (bool, error) {
+	logger := gklog.L(ctx)
+	state, hasState, err := service.readState(ctx, job)
+	if err != nil {
+		logger.ErrorContext(
+			ctx,
+			"read durable state for the verdict refresh",
+			slog.String("err", err.Error()),
+		)
+		return false, fmt.Errorf("read durable state for the verdict refresh: %w", err)
 	}
-	return state.LastReviewed == job.Head && len(state.Pending) == 0
+	if hasState && state.LastReviewed == job.Head {
+		return len(state.Pending) == 0, nil
+	}
+	return !strings.Contains(verdictBody, unreviewedHeadReason), nil
 }
 
 // verdictRefreshInputs is everything a refresh decides from.

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -422,13 +423,14 @@ func TestAFailedChunkKeepsTheNextPushPromise(t *testing.T) {
 	}
 }
 
-// A thread resolution at a head no run read whole must not approve it.
+// A checkpoint about some other commit decides nothing about this head.
 //
-// The verdict this used to be recovered from is the standing review's body, and
-// a head this service never reviewed whole carries no verdict of its own to
-// read. The durable baseline is the record that survives, so the refresh reads
-// it and keeps requesting changes.
-func TestAResolutionAtAnUnreadHeadSubmitsNoApproval(t *testing.T) {
+// A force push back to a commit already reviewed leaves the baseline sitting on
+// the commit in between, while this head still carries the verdict the run that
+// read it submitted. That verdict is the only witness to how much of this head
+// was read, so it decides, and a valid approval is not replaced by a block
+// nobody can clear.
+func TestACheckpointAboutAnotherCommitLeavesTheVerdictBodyToDecide(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages: [][]map[string]any{{{
 			"id":        float64(4100),
@@ -444,15 +446,36 @@ func TestAResolutionAtAnUnreadHeadSubmitsNoApproval(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	for _, submitted := range fixture.state.submittedReviews {
-		if submitted["state"] == "APPROVED" {
-			t.Fatalf("submitted reviews = %v, want no approval at a head nobody read whole",
-				fixture.state.submittedReviews)
-		}
-	}
-	if fixture.state.lastSubmitReview != nil &&
-		fixture.state.lastSubmitReview["event"] == string(domain.ReviewDecisionApprove) {
-		t.Fatalf("submitted event = %v, want no approval",
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want the approval the verdict at this head supports",
 			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// A durable state read that failed decides nothing and stops the refresh.
+//
+// A run that could not read the whole head submits no verdict, so its
+// incompleteness exists only in the comment this read just failed on. Treating
+// the failure as an absence would fall back to a body that says nothing about
+// it, and approve a head nobody covered.
+func TestAFailedStateReadStopsTheRefreshRatherThanApproving(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		issueCommentStatus: http.StatusInternalServerError,
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(4100),
+			"commit_id": testHeadSHA,
+			"state":     "CHANGES_REQUESTED",
+			"body":      "Changes requested.\n\n" + marker.Review(domain.HeadSHA(testHeadSHA)),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err == nil {
+		t.Fatal("Run: nil, want the failed state read reported rather than swallowed")
+	}
+	if len(fixture.state.submittedReviews) != 0 {
+		t.Fatalf("submitted reviews = %v, want none decided from a read that failed",
+			fixture.state.submittedReviews)
 	}
 }
