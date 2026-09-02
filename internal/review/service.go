@@ -336,13 +336,16 @@ func (service *Service) reviewOwedWork(
 	// every chunk and republishes the verdict to say what the pull request
 	// already says.
 	//
-	// The state naming this delivery is the record that the forcing already
-	// happened, and it is the only record there is: the review queue is in
-	// memory and dies with the container. An attempt that died before writing
-	// anything leaves no such record, so it forces from scratch, which is right,
-	// because none of its forced work landed either.
-	fromScratch := job.Forced && !stateRecordsThisDelivery(state, hasState, job)
+	// The state naming this delivery as the one that cleared it is the record
+	// that the forcing already happened, and it is the only record there is: the
+	// review queue is in memory and dies with the container. An attempt that died
+	// before writing anything leaves no such record, so it forces from scratch,
+	// which is right, because none of its forced work landed either.
+	fromScratch := job.Forced && !stateClearedByThisDelivery(state, hasState, job)
 	if fromScratch {
+		// The clearing is recorded before it is done, so the run that resumes
+		// this one finds the record whatever it interrupted.
+		state.ForcedBy = job.DeliveryID
 		// A label asks for the whole pull request again, so nothing an earlier
 		// run recorded may narrow this one. The marker itself stays where it is:
 		// this run rewrites it the way any run does, so the next ordinary push
@@ -445,17 +448,24 @@ func deltaBase(state marker.State, hasState bool, fromScratch bool) domain.HeadS
 	return state.LastReviewed
 }
 
-// stateRecordsThisDelivery reports whether the durable state was last written by
-// this delivery, which is what says an earlier attempt of it already ran.
+// stateClearedByThisDelivery reports whether this forced delivery already
+// cleared the durable state to review from scratch, which an earlier attempt of
+// it records before it starts reviewing.
 //
-// Every write a run makes stamps the state with its own delivery identifier, so
-// finding this one there means this delivery got at least as far as its first
-// checkpoint. Nothing about the check run says that: a check run is created and
-// started before the review reads anything, and collecting the diff and
-// reconciling the threads both run before the first write, so a delivery can be
-// resumed having recorded nothing at all.
-func stateRecordsThisDelivery(state marker.State, hasState bool, job domain.ReviewJob) bool {
-	return hasState && state.RunID == job.DeliveryID
+// It reads the forcing delivery rather than the run identifier. The run
+// identifier names whichever run wrote the marker last, so any other delivery
+// reviewing this same head overwrites it, and the record that a forced delivery
+// already did its clearing disappears with it. A resume of that delivery then
+// clears the state a second time and pays for every chunk again. The forcing
+// delivery is written only by the run that clears and carried forward untouched
+// by every other writer, so nothing but another forced run can move it.
+//
+// Nothing about the check run answers this. A check run is created and started
+// before the review reads anything, and collecting the diff and reconciling the
+// threads both run before the first write, so a delivery can be resumed having
+// recorded nothing at all.
+func stateClearedByThisDelivery(state marker.State, hasState bool, job domain.ReviewJob) bool {
+	return hasState && state.ForcedBy == job.DeliveryID
 }
 
 // publicationContext gives publication its own budget, freed from whatever the

@@ -2136,6 +2136,60 @@ func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
 	}
 }
 
+// The run identifier names whichever run wrote the marker last, so another
+// delivery reviewing the same head moves it off the forced delivery that
+// cleared the state. Reading the clearing out of that identifier forgets it
+// happened, and the forced delivery's own resume then clears the state a second
+// time and pays for every chunk again.
+//
+// The forcing delivery is recorded separately for exactly that reason, and this
+// drives the sequence that loses it: a forced delivery reviews and stops before
+// settling, another delivery writes the marker at the same head, and the forced
+// delivery is replayed.
+func TestAnotherDeliveryWritingTheMarkerDoesNotForgetTheForcedDelivery(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		listThreadsStatus:          http.StatusInternalServerError,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the run stopped before it settled its check")
+	}
+	cleared := decodedSummaryState(t, fixture)
+	if cleared.ForcedBy != job.DeliveryID {
+		t.Fatalf("forced by = %q, want the delivery that cleared the state", cleared.ForcedBy)
+	}
+	if len(cleared.Completed) != 2 {
+		t.Fatalf("completed = %v, want both chunks recorded as read", cleared.Completed)
+	}
+
+	// Another delivery reviews the same head and writes the marker, which is
+	// what moves the run identifier off the forced delivery.
+	overwritten := cleared
+	overwritten.RunID = "delivery-other"
+	fixture.state.issueComments[0]["body"] = "## Review\n\nanother run\n\n" + marker.EncodeState(overwritten)
+
+	fixture.state.listThreadsStatus = http.StatusOK
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the forced delivery's own record was forgotten",
+				path, times)
+		}
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
 // The check run a redelivery is looking for is exactly the one newer check runs
 // of the same name have replaced, and a pull request labelled more than once
 // accumulates them. GitHub documents this listing as returning only the most
