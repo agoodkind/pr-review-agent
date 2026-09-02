@@ -3799,8 +3799,12 @@ func TestAGitHubTimeoutIsTitledADeadlineRatherThanTheStageItDiedIn(t *testing.T)
 	}
 
 	output := checkOutput(t, fixture)
-	if output["title"] != "Review stopped: it ran out of time." {
-		t.Fatalf("title = %v, want the deadline named rather than the stage it died in", output["title"])
+	title, ok := output["title"].(string)
+	if !ok {
+		t.Fatalf("title = %v, want a string title on the check run", output["title"])
+	}
+	if title != "Review stopped: it ran out of time." {
+		t.Fatalf("title = %q, want the deadline named rather than the stage it died in", title)
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
