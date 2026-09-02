@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -229,6 +230,13 @@ const sharedClaimLine = "if err := publish(ctx); err != nil {"
 
 // twoFileChunkCollector returns two files each large enough to be its own
 // chunk, both carrying sharedClaimLine among their changed lines.
+//
+// The content agrees with the patch: the hunk says line 1 is context and lines
+// 2 through 4 are added, so the content opens with those four lines in that
+// order and the padding follows. It used to open with the padding, which put
+// the quoted lines thirty thousand lines below where the patch said they were.
+// No pull request can produce that, and a grounding or anchoring test passing
+// on it is a test passing on an artifact.
 type twoFileChunkCollector struct{}
 
 func (twoFileChunkCollector) CollectRange(
@@ -241,9 +249,10 @@ func (twoFileChunkCollector) CollectRange(
 	files := make([]diff.FileContext, 0, 2)
 	for index := range 2 {
 		patch := fmt.Sprintf(
-			"@@ -1,1 +1,3 @@\n line%d\n+%s\n+other%d\n",
+			"@@ -1,1 +1,4 @@\n line%d\n+%s\n+other%d\n+third%d\n",
 			index,
 			sharedClaimLine,
+			index,
 			index,
 		)
 		changed, hunks, err := diff.ChangedRightLines(patch)
@@ -251,10 +260,17 @@ func (twoFileChunkCollector) CollectRange(
 			return diff.ReviewInput{}, err
 		}
 		files = append(files, diff.FileContext{
-			Path:              fmt.Sprintf("file%d.go", index),
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    padding + sharedClaimLine + "\n",
+			Path:   fmt.Sprintf("file%d.go", index),
+			Status: "modified",
+			Patch:  patch,
+			CurrentContent: fmt.Sprintf(
+				"line%d\n%s\nother%d\nthird%d\n%s",
+				index,
+				sharedClaimLine,
+				index,
+				index,
+				padding,
+			),
 			ChangedRightLines: changed,
 			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
@@ -345,18 +361,18 @@ func TestOneChunkPublishesOneCommentForOneClaimStatedTwice(t *testing.T) {
 	}
 }
 
-// crossChunkClaimText is one chunk's answer: the shared claim sentence, worded
-// its own way and resting on that chunk's own file.
-func crossChunkClaimText(title string, path string) domain.ReviewResult {
+// crossChunkClaimText is one chunk's answer: the shared claim sentence about
+// the first file, worded its own way and resting on its own quoted line.
+func crossChunkClaimText(title string, line int, evidence string) domain.ReviewResult {
 	return domain.ReviewResult{
 		CoverageComplete: true,
 		Findings: []domain.Finding{{
-			Path:       path,
-			StartLine:  2,
-			EndLine:    2,
+			Path:       "file0.go",
+			StartLine:  line,
+			EndLine:    line,
 			Title:      title,
 			Body:       "The failure of this call is not handled.",
-			Evidence:   sharedClaimLine,
+			Evidence:   evidence,
 			Claim:      sharedClaimSentence,
 			Suggestion: "",
 			Importance: 9,
@@ -364,24 +380,70 @@ func crossChunkClaimText(title string, path string) domain.ReviewResult {
 	}
 }
 
-// No chunk sees another chunk's answer, so two chunks naming one defect on two
-// files is the cross-run failure happening inside a single run. The two quote
-// the same line of two different files, so their claim keys differ on the path
-// and only the claim sentence joins them.
+// No chunk sees another chunk's answer, so two chunks naming one defect in one
+// file is the cross-run failure happening inside a single run. The two quote
+// different lines and anchor two lines apart, so the claim key and the overlap
+// both pass them and only the claim sentence joins them.
 func TestTwoChunksNamingOneDefectPublishItOnce(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         twoFileChunkCollector{},
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{
-			crossChunkClaimText("Publish failure is ignored", "file0.go"),
-			crossChunkClaimText("Publish error goes unchecked", "file1.go"),
+			crossChunkClaimText("Publish failure is ignored", 2, sharedClaimLine),
+			crossChunkClaimText("Publish error goes unchecked", 4, "third0"),
 		}},
 	})
 
 	bodies := publishedBodies(t, fixture)
 
 	if len(bodies) != 1 {
-		t.Fatalf("published comments = %v, want one: both chunks name the same defect", bodies)
+		t.Fatalf("published comments = %v, want one: both chunks name the same defect in one file", bodies)
+	}
+}
+
+// One claim sentence is a short label for a defect, and a label is true of many
+// files at once. Two findings carrying the identical label about two unrelated
+// files are two defects, and suppressing either loses a review.
+func TestOneClaimSentenceInTwoFilesPublishesTwice(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoFileChunkCollector{},
+		minimumImportance: 9,
+		model: &sequenceModel{results: []domain.ReviewResult{
+			{
+				CoverageComplete: true,
+				Findings: []domain.Finding{{
+					Path:       "file0.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Unhandled error in the first file",
+					Body:       "The failure of this call is not handled.",
+					Evidence:   sharedClaimLine,
+					Claim:      sharedClaimSentence,
+					Suggestion: "",
+					Importance: 9,
+				}},
+			},
+			{
+				CoverageComplete: true,
+				Findings: []domain.Finding{{
+					Path:       "file1.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Unhandled error in the second file",
+					Body:       "The failure of this call is not handled.",
+					Evidence:   sharedClaimLine,
+					Claim:      sharedClaimSentence,
+					Suggestion: "",
+					Importance: 9,
+				}},
+			},
+		}},
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 2 {
+		t.Fatalf("published comments = %v, want both: one label about two files is two defects", bodies)
 	}
 }
 
@@ -859,7 +921,16 @@ type barrierConsolidationModel struct {
 	release chan struct{}
 	mu      sync.Mutex
 	arrived int
+	expired bool
 }
+
+// barrierWait bounds how long a call waits for the others. The barrier only
+// closes when as many calls arrive as the test expects, so a change that stops
+// a chunk producing two candidates would otherwise leave every call parked for
+// as long as the suite is allowed to run. A hang reads as an infrastructure
+// problem and gets rerun; a failure naming what it waited for reads as the
+// defect it is.
+const barrierWait = 10 * time.Second
 
 func newBarrierConsolidationModel(width int) *barrierConsolidationModel {
 	return &barrierConsolidationModel{
@@ -867,7 +938,29 @@ func newBarrierConsolidationModel(width int) *barrierConsolidationModel {
 		release: make(chan struct{}),
 		mu:      sync.Mutex{},
 		arrived: 0,
+		expired: false,
 	}
+}
+
+// arrivedCount reports how many calls reached the barrier, so a test that timed
+// out can say how far short it fell.
+func (model *barrierConsolidationModel) arrivedCount() int {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return model.arrived
+}
+
+// timedOut reports whether any call gave up waiting.
+//
+// The bound alone is not enough to make a broken premise visible. A call that
+// gives up returns an error, the run publishes what the deterministic layers
+// left, and the comment count a test asserts can come out right anyway, so the
+// test would pass ten seconds slower and prove nothing. Asking whether the
+// chunks actually met is what keeps it a test of the window.
+func (model *barrierConsolidationModel) timedOut() bool {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return model.expired
 }
 
 func (model *barrierConsolidationModel) Review(
@@ -894,33 +987,58 @@ func (model *barrierConsolidationModel) Consolidate(
 	if last {
 		close(model.release)
 	}
-	<-model.release
-	return review.Consolidation{Groups: nil}, nil
+	select {
+	case <-model.release:
+		return review.Consolidation{Groups: nil}, nil
+	case <-time.After(barrierWait):
+		model.mu.Lock()
+		model.expired = true
+		seen := model.arrived
+		model.mu.Unlock()
+		return review.Consolidation{}, fmt.Errorf(
+			"consolidation barrier waited %s for %d calls and saw %d",
+			barrierWait,
+			model.width,
+			seen,
+		)
+	}
 }
 
-// sharedAndUniqueFindings is one chunk's answer: the defect both chunks name,
-// and one only this chunk's file has. Two candidates is what asks for a
-// consolidation call at all.
+// sharedAndUniqueFindings is one chunk's answer: the defect both chunks name in
+// the first file, and one only this chunk's own file has. Two candidates is what
+// asks for a consolidation call at all.
+//
+// The shared claim names file0.go from both chunks, because the claim sentence
+// only joins two findings about one file. Each chunk quotes its own line of it,
+// so the claim key and the anchor both pass them and the sentence is what is
+// under test.
 func sharedAndUniqueFindings(path string) []domain.Finding {
+	suffix := strings.TrimSuffix(strings.TrimPrefix(path, "file"), ".go")
+	sharedLine := 2
+	sharedEvidence := sharedClaimLine
+	if path != "file0.go" {
+		sharedLine = 3
+		sharedEvidence = "other0"
+	}
 	return []domain.Finding{
 		{
-			Path:       path,
-			StartLine:  2,
-			EndLine:    2,
-			Title:      "Publish failure in " + path,
+			Path:       "file0.go",
+			StartLine:  sharedLine,
+			EndLine:    sharedLine,
+			Title:      "Publish failure seen from " + path,
 			Body:       "The failure of this call is not handled.",
-			Evidence:   sharedClaimLine,
+			Evidence:   sharedEvidence,
 			Claim:      sharedClaimSentence,
 			Suggestion: "",
 			Importance: 9,
 		},
 		{
 			Path:       path,
-			StartLine:  3,
-			EndLine:    3,
+			StartLine:  4,
+			EndLine:    4,
 			Title:      "Unused helper in " + path,
 			Body:       "Nothing in this file calls the helper it adds.",
-			Evidence:   "other" + strings.TrimSuffix(strings.TrimPrefix(path, "file"), ".go"),
+			Evidence:   "third" + suffix,
 			Claim:      "The helper added to " + path + " has no caller",
 			Suggestion: "",
 			Importance: 9,
@@ -933,21 +1051,29 @@ func sharedAndUniqueFindings(path string) []domain.Finding {
 // the test the render stage repeats, inside the same lock hold that records
 // what a chunk carried, keeps that down to one comment.
 func TestTwoChunksLeavingConsolidationTogetherPublishOneSharedClaim(t *testing.T) {
+	model := newBarrierConsolidationModel(2)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         twoFileChunkCollector{},
 		minimumImportance: 9,
-		model:             newBarrierConsolidationModel(2),
+		model:             model,
 	})
 
 	bodies := publishedBodies(t, fixture)
 
+	// The two chunks have to actually meet inside the call, or this proves
+	// nothing about the window: a call that gave up publishes the deterministic
+	// result, which can carry the same comment count for the wrong reason.
+	if model.timedOut() {
+		t.Fatalf("consolidation barrier saw %d of %d calls: the two chunks never met inside it",
+			model.arrivedCount(), 2)
+	}
 	if len(bodies) != 3 {
 		t.Fatalf("published comments = %d, want three: one shared claim and one defect per file:\n%v",
 			len(bodies), bodies)
 	}
 	shared := 0
 	for _, body := range bodies {
-		if strings.Contains(body, "Publish failure in") {
+		if strings.Contains(body, "Publish failure seen from") {
 			shared++
 		}
 	}

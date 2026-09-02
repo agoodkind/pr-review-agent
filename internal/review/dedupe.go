@@ -95,10 +95,15 @@ func keysFrom(
 		rangeValid:   false,
 	}
 	normalizedPath, err := marker.NormalizePath(pathValue)
-	if err != nil || startLine < 1 || endLine < startLine {
+	if err != nil {
 		return keys
 	}
+	// The path is kept even when the anchor is refused, because the claim text
+	// comparison needs it and does not care where in the file the finding sits.
 	keys.path = normalizedPath
+	if startLine < 1 || endLine < startLine {
+		return keys
+	}
 	keys.startLine = startLine
 	keys.endLine = endLine
 	keys.rangeValid = true
@@ -163,10 +168,10 @@ func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, 
 			Matched: "",
 		}, true
 	}
-	if carried.claimTextKey != "" && carried.claimTextKey == candidate.claimTextKey {
+	if sameClaimText(carried, candidate) {
 		return duplicateMatch{
 			Sense:   senseClaimText,
-			Detail:  shortClaimKey(carried.claimTextKey),
+			Detail:  shortClaimKey(carried.claimTextKey) + " on " + carried.path,
 			Matched: "",
 		}, true
 	}
@@ -178,6 +183,29 @@ func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, 
 		}, true
 	}
 	return noMatch(), false
+}
+
+// sameClaimText reports whether two findings carry one claim sentence about one
+// file.
+//
+// The path has to agree, and this is the one sense that had to be told so. A
+// claim sentence is a short label for a defect, and a label such as "the error
+// is not handled" is a true description of a defect in many files at once, so
+// the sentence alone made two findings about two unrelated files into one, and
+// the second was lost. The other two senses already carry the path: the claim
+// key hashes the normalized path together with the evidence line, and the
+// anchor comparison refuses two different files outright.
+//
+// Scoping it to one file gives up nothing the service can see deterministically.
+// A defect that genuinely moved between two paths shares no evidence line and
+// no anchor either, so no exact comparison was ever going to catch it; that is
+// the case the consolidation call reads for, and it weighs candidates against
+// open threads whatever path each names.
+func sameClaimText(carried duplicateKeys, candidate duplicateKeys) bool {
+	if carried.claimTextKey == "" || carried.claimTextKey != candidate.claimTextKey {
+		return false
+	}
+	return carried.path != "" && carried.path == candidate.path
 }
 
 // rangesOverlap reports whether two findings object to overlapping lines of one
