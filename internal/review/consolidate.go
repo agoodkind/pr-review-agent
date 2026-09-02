@@ -34,8 +34,10 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
-// minimumConsolidationCandidates is how many candidates a chunk must still hold
-// for the call to be worth making. One candidate can restate nothing.
+// minimumConsolidationCandidates is how many candidates a chunk must hold to be
+// worth asking about on their own. One candidate can restate nothing in its own
+// chunk; it can still restate a thread already open, which is what the open
+// thread half of the gate is for.
 const minimumConsolidationCandidates = 2
 
 // maximumConsolidationReasonBytes bounds the model's own sentence in a log line.
@@ -163,6 +165,38 @@ func (pass *chunkPass) chunkCandidates(
 	return collapseChunkCandidates(ctx, unansweredCandidates(ctx, eligible, pass))
 }
 
+// worthConsolidating reports whether a chunk's surviving candidates are worth
+// one extra model call.
+//
+// Two things can be asked about, and either one is enough. Two candidates can
+// restate each other. One candidate can restate a thread already open, and
+// only when there is such a thread to show it: the deterministic layers have
+// already compared it against every open thread by claim key, claim text and
+// anchor, so what is left is a restatement that shares none of the three, and
+// nothing but reading the two can see that.
+//
+// A lone candidate was free until a probe published one. An open thread quoted
+// one line, the next run reported the same defect at another line in other
+// words under another title, the chunk held that finding alone, and it reached
+// the page. That is the failure across pushes this file exists to close, and it
+// is not a corner: agoodkind/tack 169 took exactly that shape five times.
+//
+// A chunk with no candidates is always free, which is most chunks of most
+// deltas, and a pull request carrying no open finding of this service's own
+// pays nothing new either.
+func worthConsolidating(candidates []domain.Finding, disputes string) bool {
+	if len(candidates) == 0 {
+		return false
+	}
+	if len(candidates) >= minimumConsolidationCandidates {
+		return true
+	}
+	// The prompt section is the test rather than the thread count, because it is
+	// what the model will actually be shown. A thread the byte budget dropped is
+	// a thread the call could not weigh anything against.
+	return disputes != ""
+}
+
 // consolidateChunk asks the model once whether the candidates this chunk still
 // holds state one defect between them, or state what an open thread states.
 //
@@ -175,7 +209,7 @@ func (service *Service) consolidateChunk(
 	candidates []domain.Finding,
 	pass *chunkPass,
 ) []domain.Finding {
-	if len(candidates) < minimumConsolidationCandidates {
+	if !worthConsolidating(candidates, pass.disputePrompt) {
 		return candidates
 	}
 

@@ -696,9 +696,11 @@ func TestAConsolidationAnswerNamingAnUnknownCandidateIsRefused(t *testing.T) {
 	}
 }
 
-// One candidate can restate nothing, so a chunk holding one pays for no extra
-// call. The call is bounded per chunk, never per candidate.
-func TestAChunkHoldingOneCandidateMakesNoConsolidationCall(t *testing.T) {
+// A lone candidate on a pull request carrying no open finding of the service's
+// own has nothing to restate, so it pays for no extra call. This is the cost
+// bound: the call reaches a single candidate chunk only where there is already
+// an open thread for it to be measured against.
+func TestAChunkHoldingOneCandidateWithNoOpenThreadMakesNoConsolidationCall(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{{
 		CoverageComplete: true,
 		Findings:         unrelatedRestatements()[:1],
@@ -714,7 +716,133 @@ func TestAChunkHoldingOneCandidateMakesNoConsolidationCall(t *testing.T) {
 		t.Fatalf("published comments = %v, want the one finding", bodies)
 	}
 	if model.consolidationCalls() != 0 {
-		t.Fatalf("consolidation calls = %d, want none for a single candidate", model.consolidationCalls())
+		t.Fatalf("consolidation calls = %d, want none: nothing is open for it to restate",
+			model.consolidationCalls())
+	}
+}
+
+// loneRestatementFixture wires the failure the probe found: a thread already
+// open on one line, and a chunk whose single finding is that same defect at
+// another line, in other words, under another title.
+//
+// Every deterministic layer passes it by construction. The wording defeats the
+// claim text, the different quoted line defeats the claim key, the different
+// anchor defeats the overlap, and the different title defeats the identity.
+func loneRestatementFixture(t *testing.T, grouping []review.Consolidation) (*serviceFixture, *sequenceModel) {
+	t.Helper()
+	standing := domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Standing claim",
+		Body:       "The failure of this call is not handled.",
+		Evidence:   "added",
+		Claim:      "The publish error is ignored",
+		Suggestion: "",
+		Importance: 9,
+	}
+	model := &sequenceModel{
+		results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings: []domain.Finding{{
+				Path:       "main.go",
+				StartLine:  5,
+				EndLine:    5,
+				Title:      "Unchecked publish result",
+				Body:       "Nothing reacts when this call fails.",
+				Evidence:   "fifth",
+				Claim:      "Publish failures are swallowed silently",
+				Suggestion: "",
+				Importance: 9,
+			}},
+		}},
+		consolidations: grouping,
+	}
+	return newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		collector:         fiveLineCollector{},
+		reconcileThreads: []githubapp.ReviewThread{
+			threadCarrying(t, standing, false, ""),
+		},
+		model: model,
+	}), model
+}
+
+// A chunk whose only candidate restates an open thread must still be asked
+// about, because a lone candidate is exactly the shape no deterministic layer
+// can catch and the shape agoodkind/tack 169 took five times.
+//
+// A probe published this finding before the gate reached a single candidate.
+func TestALoneRestatementOfAnOpenThreadIsWithheld(t *testing.T) {
+	fixture, model := loneRestatementFixture(t, []review.Consolidation{{
+		Groups: []review.ConsolidationGroup{{
+			Candidates:         []int{1},
+			RestatesOpenThread: true,
+			Reason:             "This is the open thread's claim in other words.",
+		}},
+	}})
+
+	bodies := publishedBodies(t, fixture)
+
+	if model.consolidationCalls() != 1 {
+		t.Fatalf("consolidation calls = %d, want one: a thread is open for this candidate to restate",
+			model.consolidationCalls())
+	}
+	if len(bodies) != 0 {
+		t.Fatalf("published comments = %v, want none: this defect is already open under another title", bodies)
+	}
+}
+
+// The open threads have to reach the call, not just trigger it, or the model is
+// asked to compare a candidate against nothing.
+func TestTheLoneCandidateCallCarriesTheOpenThread(t *testing.T) {
+	fixture, model := loneRestatementFixture(t, nil)
+
+	publishedBodies(t, fixture)
+
+	if len(model.consolidatePrompts) != 1 {
+		t.Fatalf("consolidation prompts = %d, want one", len(model.consolidatePrompts))
+	}
+	for _, want := range []string{"Open finding", "Standing claim", "Unchecked publish result"} {
+		if !strings.Contains(model.consolidatePrompts[0], want) {
+			t.Fatalf("consolidation prompt missing %q: %q", want, model.consolidatePrompts[0])
+		}
+	}
+}
+
+// The floor holds under the wider gate: a chunk that produced nothing publishable
+// pays nothing, open threads or not, and that is most chunks of most deltas.
+func TestAChunkWithNoCandidatesMakesNoConsolidationCall(t *testing.T) {
+	standing := domain.Finding{
+		Path:       "main.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Standing claim",
+		Body:       "The failure of this call is not handled.",
+		Evidence:   "added",
+		Claim:      "The publish error is ignored",
+		Suggestion: "",
+		Importance: 9,
+	}
+	model := &sequenceModel{results: []domain.ReviewResult{{
+		CoverageComplete: true,
+		Findings:         nil,
+	}}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		collector:         fiveLineCollector{},
+		reconcileThreads: []githubapp.ReviewThread{
+			threadCarrying(t, standing, false, ""),
+		},
+		model: model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if model.consolidationCalls() != 0 {
+		t.Fatalf("consolidation calls = %d, want none: the chunk holds nothing to ask about",
+			model.consolidationCalls())
 	}
 }
 
