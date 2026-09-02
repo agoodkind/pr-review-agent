@@ -333,11 +333,12 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			slog.Error("normalize finding path", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("normalize finding path: %w", err)
 		}
-		// The evidence reaches the encoder, and no further. It is hashed into the
-		// marker's claim key, which is what lets a later run recognize a reworded
-		// restatement of this same claim; the rendered body still never prints it,
-		// so the reader sees no quoted source line they already have beside the
-		// comment.
+		// The evidence and the claim sentence reach the encoder, and no further.
+		// Each is hashed into one of the marker's keys, which is what lets a
+		// later run recognize a reworded restatement of this same claim; the
+		// rendered body still prints neither, so the reader sees no quoted
+		// source line they already have beside the comment, and no label the
+		// model wrote for the service rather than for them.
 		body, err := marker.EncodeFindingBody(head, domain.Finding{
 			Path:       normalizedPath,
 			StartLine:  finding.StartLine,
@@ -345,6 +346,7 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			Title:      sanitizeProse(finding.Title),
 			Body:       sanitizeProse(finding.Body),
 			Evidence:   finding.Evidence,
+			Claim:      finding.Claim,
 			Suggestion: finding.Suggestion,
 			Importance: finding.Importance,
 		})

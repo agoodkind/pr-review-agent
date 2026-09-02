@@ -410,6 +410,8 @@ func buildPrompt(chunk diff.Chunk, minimumImportance int, disputes string) strin
 	builder.WriteString("Rate bounded crashes, incorrect responses, maintainability problems, performance costs, and localized failures 8 or lower unless the diff proves severe impact. ")
 	builder.WriteString("Put every code reference in backticks. Return suggestion as the exact replacement for the anchored changed line range only when it is complete and safe; otherwise return an empty string. ")
 	builder.WriteString("Copy into evidence one line from the supplied source, verbatim and unmodified, that the finding relies on. A finding whose evidence does not appear in the supplied source is discarded. ")
+	builder.WriteString("Report each distinct defect exactly once, anchored at the single best line range. Never restate one defect under a second title or at a second location. ")
+	builder.WriteString("Return in claim one short sentence stating the defect independent of wording, a canonical label for it. Two reports of the same defect must carry the same claim. ")
 	builder.WriteString("The service publishes only findings with importance ")
 	fmt.Fprintf(&builder, "%d", minimumImportance)
 	builder.WriteString(" or higher. Do not omit a real defect because it is below that publication threshold. Review chunk ")

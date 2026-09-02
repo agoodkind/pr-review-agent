@@ -227,9 +227,10 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 		EndLine:   comment.EndLine,
 		Title:     title,
 		Body:      body,
-		// The published comment never carries evidence, so a decoded finding
-		// has none to recover.
+		// The published comment never carries evidence or the claim sentence,
+		// only their hashes, so a decoded finding has neither to recover.
 		Evidence:   "",
+		Claim:      "",
 		Suggestion: suggestion,
 		Importance: marker.Importance,
 	}
