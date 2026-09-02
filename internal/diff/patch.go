@@ -354,6 +354,15 @@ func (parser *hunkParser) applyAdditionLine() {
 	parser.newRemaining--
 }
 
+// hunkCoordinates is the "@@ -a,b +c,d @@" prefix of a hunk header.
+//
+// The trailing text git appends to that prefix is a line of the file itself, so
+// it is dropped here: this value is published on a pull request to name a hunk
+// nobody could read, and it must carry no source the reader did not ask for.
+func hunkCoordinates(header string) string {
+	return hunkHeaderPattern.FindString(header)
+}
+
 func formatHunkChunk(path string, status string, content string, hunk parsedHunk) string {
 	var builder strings.Builder
 	builder.WriteString("File: ")

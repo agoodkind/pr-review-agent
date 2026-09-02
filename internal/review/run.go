@@ -318,7 +318,9 @@ func (service *Service) reviewDelta(
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
-	return concludeState(tracker.snapshot(), job, head, tracker), nil
+	return concludeState(
+		tracker.snapshot(), job, head, tracker, classifyStructuralShortfall(pass.work).present(),
+	), nil
 }
 
 // deltaOwed is the work one pass has to do: the chunks to review, the ids they
@@ -554,17 +556,29 @@ func (service *Service) checkpoint(
 // run from re-reading chunks under the same baseline; once the baseline moves,
 // the next delta starts after them and every id in it names a chunk that can
 // never appear again.
+//
+// unreadable says the delta holds something no run can read, such as a hunk
+// larger than one model request. Nothing is pending in that case, because every
+// chunk answered, so the baseline would otherwise advance over code nobody read
+// and the next delta would start after it. Holding it keeps that code in every
+// later delta, exactly as a declined delta stays in one. The completed set is
+// kept for the same reason it is kept while chunks are pending: the chunks that
+// did answer must not be paid for twice.
 func concludeState(
 	state marker.State,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
 	tracker *pendingTracker,
+	unreadable bool,
 ) marker.State {
 	unfinished := tracker.remaining()
 	state.Pending = unfinished
 	state.Completed = tracker.finished()
 	state.RunID = job.DeliveryID
 	state.Status = marker.StateReviewing
+	if unreadable {
+		return state
+	}
 	if len(unfinished) == 0 {
 		state.LastReviewed = head
 		state.Status = marker.StateDone

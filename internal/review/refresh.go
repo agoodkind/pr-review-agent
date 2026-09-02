@@ -59,7 +59,13 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// this head, because that is the run that knew. What the pull request
 	// currently shows is a separate question, answered by the newest verdict
 	// whatever head it named. A thread resolution changes neither.
-	headFullyReviewed := !strings.Contains(inputs.verdict.Body, unreviewedHeadReason)
+	//
+	// The durable baseline has the same say. A run that could not read the whole
+	// head submits no verdict at all, so there is no review body to learn this
+	// from, and the checkpoint it left is the only record: a baseline naming some
+	// earlier commit is that record saying no completed run read this head whole.
+	headFullyReviewed := !strings.Contains(inputs.verdict.Body, unreviewedHeadReason) &&
+		service.baselineCoversHead(ctx, job)
 	// Only a dismissed block is withheld from. Dismissing a block and dismissing
 	// an approval are opposite requests, and the review's own state no longer
 	// tells them apart, so the body it kept does.
@@ -72,6 +78,22 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		blockWithdrawn:    blockWithdrawn,
 		settings:          settings,
 	})
+}
+
+// baselineCoversHead reports whether the durable checkpoint names this head as
+// reviewed.
+//
+// A pull request with no readable checkpoint decides nothing here and answers
+// true, so a comment this service cannot find or parse never turns a legitimate
+// approval into a block. Only a checkpoint that exists and names some other
+// commit is evidence, and it is conclusive: the baseline advances when and only
+// when a run read the whole head.
+func (service *Service) baselineCoversHead(ctx context.Context, job domain.ReviewJob) bool {
+	state, hasState := service.loadDurableState(ctx, job)
+	if !hasState {
+		return true
+	}
+	return state.LastReviewed == job.Head
 }
 
 // verdictRefreshInputs is everything a refresh decides from.

@@ -39,12 +39,14 @@ const (
 	// checkTitleAlreadyReviewed names a run that found nothing owed, whether
 	// the durable state says so or an existing review marker does.
 	checkTitleAlreadyReviewed = "Already reviewed"
-	// checkConclusionDeclined is how a delta the admission gate refused ends.
+	// checkConclusionDeclined is how every run that reviewed less than the whole
+	// head ends: a delta the admission gate refused, a pass that left chunks
+	// pending, and a head holding changes no run can read.
 	//
 	// It is deliberately not "skipped". GitHub counts a required check concluded
 	// skipped as passing, and an unreviewed delta must not merge on the strength
 	// of having been declined. This conclusion holds the gate while the title
-	// and the summary still report a skip rather than a failure.
+	// and the summary still say what happened rather than reporting a failure.
 	checkConclusionDeclined = "action_required"
 	// completionBudget bounds the calls that finish the visible check.
 	completionBudget = 30 * time.Second
@@ -807,6 +809,14 @@ func (service *Service) publish(
 		Reached:           "",
 		Failed:            false,
 		Forced:            job.Forced,
+	}
+	// A head holding something no run can read is settled first. Its shortfall
+	// outlives every later push, so the pending path's promise that the next
+	// push covers it would be false even when chunks are pending too.
+	if shortfall := classifyStructuralShortfall(pass.work); shortfall.present() {
+		return service.concludeStructurallyIncomplete(
+			ctx, job, checkRun, state, shortfall, summary, progress,
+		)
 	}
 	if len(state.Pending) > 0 {
 		return service.concludeIncomplete(ctx, job, checkRun, state, pass, summary, progress)

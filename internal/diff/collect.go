@@ -13,6 +13,38 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
 
+// CoverageGap names why one file could not be collected whole.
+//
+// The distinction it carries is whether a later run would fare any better. A
+// binary file, a file GitHub supplies no patch for, and a patch that cannot be
+// read whole all come back the same way on every later run, so a caller that
+// treats them as temporary promises a next push that cannot deliver. Content
+// that failed to load is the opposite: the call went wrong once, and the next
+// run very likely succeeds.
+type CoverageGap string
+
+// The gaps one file can carry. CoverageGapNone means the file was collected
+// whole, which is the only value that leaves CoverageComplete true.
+const (
+	CoverageGapNone               CoverageGap = ""
+	CoverageGapBinary             CoverageGap = "binary"
+	CoverageGapPatchAbsent        CoverageGap = "patch_absent"
+	CoverageGapPatchUnreadable    CoverageGap = "patch_unreadable"
+	CoverageGapContentUnavailable CoverageGap = "content_unavailable"
+)
+
+// Recurs reports whether this gap would come back identically on a later run.
+func (gap CoverageGap) Recurs() bool {
+	switch gap {
+	case CoverageGapBinary, CoverageGapPatchAbsent, CoverageGapPatchUnreadable:
+		return true
+	case CoverageGapNone, CoverageGapContentUnavailable:
+		return false
+	default:
+		return false
+	}
+}
+
 // FileContext is one changed file with patch metadata and current content.
 type FileContext struct {
 	Path              string
@@ -22,6 +54,25 @@ type FileContext struct {
 	ChangedRightLines map[int]struct{}
 	ChangedRightHunks map[int]int
 	CoverageComplete  bool
+	// Gap names why CoverageComplete is false, and is CoverageGapNone whenever
+	// it is true. Collection sets the two together, so a caller reading one
+	// never disagrees with the other.
+	Gap CoverageGap
+}
+
+// markGap records why this file could not be collected whole. It is the only
+// place the two coverage fields are written, so they cannot drift apart.
+//
+// A gap that recurs is never replaced by one that does not. A file whose patch
+// cannot be read whole also tends to fail the content load that follows, and
+// letting the second overwrite the first would report a permanent gap as a
+// temporary one.
+func (file *FileContext) markGap(gap CoverageGap) {
+	file.CoverageComplete = false
+	if file.Gap.Recurs() {
+		return
+	}
+	file.Gap = gap
 }
 
 // ReviewInput is the collected pull request context for one review pass.
@@ -38,9 +89,17 @@ type ReviewInput struct {
 
 // Piece is one rendered diff hunk, the smallest unit a chunk can carry.
 type Piece struct {
-	Path             string
-	Text             string
+	Path string
+	Text string
+	// Header is the hunk's "@@ -a,b +c,d @@" coordinates, without the trailing
+	// source line git appends to them. It is what names this piece to a reader
+	// when nobody could read it.
+	Header           string
 	CoverageComplete bool
+	// Oversized marks a hunk whose own text is larger than one whole chunk, so
+	// Text holds a placeholder rather than the diff. Nothing splits a hunk, so
+	// this piece is unreadable on every later run as well.
+	Oversized bool
 }
 
 // Chunk is one model input slice with complete hunks from one or more files.
@@ -248,20 +307,21 @@ func (collector *Collector) collectFile(
 		ChangedRightLines: map[int]struct{}{},
 		ChangedRightHunks: map[int]int{},
 		CoverageComplete:  true,
+		Gap:               CoverageGapNone,
 	}
 
 	if isBinaryFile(changedFile) {
-		fileContext.CoverageComplete = false
+		fileContext.markGap(CoverageGapBinary)
 		return fileContext
 	}
 	if !changedFile.PatchPresent {
-		fileContext.CoverageComplete = false
+		fileContext.markGap(CoverageGapPatchAbsent)
 		return fileContext
 	}
 
 	changedLines, changedHunks, err := ChangedRightLines(changedFile.Patch)
 	if err != nil {
-		fileContext.CoverageComplete = false
+		fileContext.markGap(CoverageGapPatchUnreadable)
 		return fileContext
 	}
 	fileContext.ChangedRightLines = changedLines
@@ -269,7 +329,7 @@ func (collector *Collector) collectFile(
 
 	parsed, err := parsePatch(changedFile.Patch)
 	if err != nil || !parsed.complete {
-		fileContext.CoverageComplete = false
+		fileContext.markGap(CoverageGapPatchUnreadable)
 	}
 
 	if changedFile.Status == "removed" {
@@ -284,7 +344,7 @@ func (collector *Collector) collectFile(
 		pullRequest.Head,
 	)
 	if err != nil {
-		fileContext.CoverageComplete = false
+		fileContext.markGap(CoverageGapContentUnavailable)
 		return fileContext
 	}
 	fileContext.CurrentContent = string(content)
@@ -327,14 +387,17 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 		for _, hunk := range parsed.hunks {
 			text := formatHunkChunk(file.Path, file.Status, file.CurrentContent, hunk)
 			coverageComplete := file.CoverageComplete
-			if len(text) > maxSize {
+			oversized := len(text) > maxSize
+			if oversized {
 				text = formatOversizedHunkChunk(file.Path, maxSize)
 				coverageComplete = false
 			}
 			pieces = append(pieces, Piece{
 				Path:             file.Path,
 				Text:             text,
+				Header:           hunkCoordinates(hunk.header),
 				CoverageComplete: coverageComplete,
+				Oversized:        oversized,
 			})
 		}
 	}
