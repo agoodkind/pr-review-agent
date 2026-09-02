@@ -171,6 +171,11 @@ func (service *Service) declineReview(
 				// request has already paid for.
 				Pending:   existing.Pending,
 				Completed: existing.Completed,
+				// The forcing delivery carries forward for the same reason. A
+				// decline is not that delivery finishing, so dropping its record
+				// here would send its own resume over the whole pull request
+				// again.
+				ForcedBy: existing.ForcedBy,
 			},
 		}
 	}); err != nil {

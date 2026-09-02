@@ -77,7 +77,7 @@ func (service *Service) upsertSummaryCommentFrom(
 		logger.InfoContext(ctx, "summary comment updated", slog.Int64("comment_id", existing.ID))
 		return nil
 	}
-	firstContent := build(marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil})
+	firstContent := build(marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: ""})
 	created, err := service.github.CreateIssueComment(
 		ctx,
 		job.InstallationID,
@@ -123,14 +123,14 @@ func (service *Service) readState(
 	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.ErrorContext(ctx, "list issue comments", slog.String("err", err.Error()))
-		return marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil}, false, fmt.Errorf("list issue comments: %w", err)
+		return marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: ""}, false, fmt.Errorf("list issue comments: %w", err)
 	}
 	if comment, found := findSummaryComment(comments, service.botLogin); found {
 		if state, ok := marker.DecodeState(comment.Body); ok {
 			return state, true, nil
 		}
 	}
-	return marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil}, false, nil
+	return marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: ""}, false, nil
 }
 
 // loadDurableState reads the run's durable state for the dedup log line and
@@ -142,7 +142,7 @@ func (service *Service) loadDurableState(ctx context.Context, job domain.ReviewJ
 	state, hasState, err := service.readState(ctx, job)
 	if err != nil {
 		logger.WarnContext(ctx, "read durable review state", slog.String("err", err.Error()))
-		return marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil}, false
+		return marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: ""}, false
 	}
 	if hasState {
 		logger.InfoContext(
