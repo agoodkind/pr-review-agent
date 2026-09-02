@@ -216,7 +216,7 @@ func TestReviewRejectsInvalidFindings(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
 
-	state.completionContent = `{"coverage_complete":true,"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
+	state.completionContent = `{"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review with invalid importance: want error")
@@ -741,7 +741,7 @@ func brokenStreamPayload() string {
 func writeBrokenStream(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
-	encoded, _ := json.Marshal(completionStreamChunk(`{"coverage_complete":`, ""))
+	encoded, _ := json.Marshal(completionStreamChunk(`{"findings":`, ""))
 	_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	_, _ = writer.Write([]byte("data: " + brokenStreamPayload() + "\n\n"))
 }
@@ -1018,7 +1018,7 @@ func gatewayUsageExceededPayload() map[string]any {
 }
 
 func validReviewContent() string {
-	return `{"coverage_complete":true,"findings":[]}`
+	return `{"findings":[]}`
 }
 
 func writeJSON(writer http.ResponseWriter, status int, payload any) {
