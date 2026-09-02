@@ -45,11 +45,27 @@ type Summary struct {
 }
 
 // Verdict states the outcome in one plain sentence.
+//
+// A block is not the same claim as a finding. The sentence used to be chosen
+// from the decision alone, so every blocking verdict promised inline comments
+// whether or not this run posted any. A head the run could not finish reading
+// blocks with nothing inline, and one live review opened with "Severe findings
+// are listed inline." above its own detail table reading "Findings published
+// inline `0`", which sent the reader hunting for comments that were never
+// written.
+//
+// The sentence therefore follows what reached the pull request. What holds a
+// block with nothing inline is in the Waiting on list directly below, which
+// renderBlocking writes and which a blocking verdict always carries at least one
+// entry of, so the empty case points there rather than at nothing.
 func (summary Summary) Verdict() string {
-	if summary.Decision == domain.ReviewDecisionRequestChanges {
+	if summary.Decision != domain.ReviewDecisionRequestChanges {
+		return "No severe findings."
+	}
+	if len(summary.Published) > 0 {
 		return "Severe findings are listed inline."
 	}
-	return "No severe findings."
+	return "Changes are requested for the reasons listed below."
 }
 
 // Title names the outcome for the check run.
