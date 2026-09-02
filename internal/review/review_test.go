@@ -2070,6 +2070,72 @@ func TestAForcedDeliveryResumedBeforeRecordingAnythingStillReviewsFromScratch(t 
 	}
 }
 
+// A checkpoint records which chunks were read and never that the head was
+// reviewed. Only the write that follows a submitted verdict advances the
+// baseline, so a run that read every chunk and then stopped before submitting
+// leaves a marker that still owes the verdict.
+//
+// That ordering is load bearing rather than incidental, and this pins it. The
+// already reviewed exit asks whether the baseline names this head, and it takes
+// the answer as proof that a verdict was published there. Advancing the baseline
+// at checkpoint time would make that inference false: the next delivery would
+// find the head recorded as reviewed, clear the check, and leave the pull
+// request green with findings raised and no verdict ruling on them. Nothing else
+// in the service checks for that, so if the baseline write ever moves earlier,
+// this test is what catches it.
+func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		listThreadsStatus:          http.StatusInternalServerError,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the run stopped before it submitted a verdict")
+	}
+	owed := decodedSummaryState(t, fixture)
+	if owed.LastReviewed == domain.HeadSHA(testHeadSHA) {
+		t.Fatal("the checkpoint advanced the baseline to the head before any verdict was submitted")
+	}
+	if len(owed.Completed) != 2 {
+		t.Fatalf("completed = %v, want both chunks recorded as read", owed.Completed)
+	}
+	if len(fixture.state.submittedReviews) != 0 {
+		t.Fatalf("submitted reviews = %d, want none: the run stopped before submitting",
+			len(fixture.state.submittedReviews))
+	}
+	if fixture.state.checkRuns[0]["status"] != "in_progress" {
+		t.Fatalf("check status = %v, want in_progress", fixture.state.checkRuns[0]["status"])
+	}
+
+	fixture.state.listThreadsStatus = http.StatusOK
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("redelivered Run: %v", err)
+	}
+
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want the verdict the dead run owed",
+			len(fixture.state.submittedReviews))
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want the open findings to block",
+			fixture.state.lastSubmitReview["event"])
+	}
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the redelivery owes the verdict, not the analysis",
+				path, times)
+		}
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
 // The check run a redelivery is looking for is exactly the one newer check runs
 // of the same name have replaced, and a pull request labelled more than once
 // accumulates them. GitHub documents this listing as returning only the most
