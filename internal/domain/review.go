@@ -200,6 +200,11 @@ type ReviewJob struct {
 	// that would otherwise report this head as already reviewed. It still
 	// respects the admission budgets, because an oversized delta is oversized
 	// however it was triggered.
+	//
+	// The delivery does that once rather than on every attempt of itself. A
+	// later attempt of the same delivery, admitted because its check run never
+	// completed, resumes from what the earlier attempt recorded instead of
+	// paying for the whole pull request again.
 	Forced bool
 	PullRequestRef
 }

@@ -1888,6 +1888,188 @@ func TestAForcedDeliveryWhoseProcessDiedMidReviewIsResumed(t *testing.T) {
 	}
 }
 
+// A run publishes everything it found and records its position before it
+// completes its check, so a failure in that window leaves the check in progress
+// over work that is already on the pull request. The redelivery is admitted,
+// and has to be, because nothing short of a completed check says the request was
+// carried through.
+//
+// What it must not do is force the review a second time. The analysis was paid
+// for, the comments are posted, and repeating both spends the budget again to
+// say what the pull request already says.
+func TestAForcedDeliveryResumedAfterPublishingReviewsNothingAgain(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the refused check completion surfaced")
+	}
+	published := decodedSummaryState(t, fixture)
+	if published.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head: the forced run published before it settled",
+			published.LastReviewed)
+	}
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("comments after the first delivery = %d, want one per finding",
+			len(fixture.state.streamedComments))
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want the one this delivery created", len(fixture.state.checkRuns))
+	}
+	if fixture.state.checkRuns[0]["status"] != "in_progress" {
+		t.Fatalf("check status = %v, want in_progress: the completion never landed",
+			fixture.state.checkRuns[0]["status"])
+	}
+
+	// GitHub recovers and the same delivery arrives again.
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("redelivered Run: %v", err)
+	}
+
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the resumed delivery paid for the analysis again",
+				path, times)
+		}
+	}
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("comments = %d, want one per finding: the resumed delivery reposted what was already there",
+			len(fixture.state.streamedComments))
+	}
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want 1: the resumed delivery published the same verdict again",
+			len(fixture.state.submittedReviews))
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: a redelivery is the same force request",
+			len(fixture.state.checkRuns))
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed: the resumed delivery must clear the check it inherited",
+			fixture.state.checkRuns[0]["status"])
+	}
+}
+
+// A forced attempt that read some of its chunks and died records exactly that,
+// and the check it left in progress is what brings the delivery back. The
+// resumed attempt owes the chunks that went unread and nothing else: the ones
+// already read are on the pull request, paid for, and recorded as done.
+func TestAForcedDeliveryResumedMidReviewSkipsTheChunksItAlreadyRead(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the refused check completion surfaced")
+	}
+	partial := decodedSummaryState(t, fixture)
+	if len(partial.Pending) != 1 {
+		t.Fatalf("pending after the first delivery = %v, want the refused chunk", partial.Pending)
+	}
+	if len(partial.Completed) != 1 {
+		t.Fatalf("completed after the first delivery = %v, want the chunk that answered", partial.Completed)
+	}
+	if fixture.state.checkRuns[0]["status"] != "in_progress" {
+		t.Fatalf("check status = %v, want in_progress: the completion never landed",
+			fixture.state.checkRuns[0]["status"])
+	}
+
+	// The model recovers and the same delivery arrives again.
+	model.heal()
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+
+	if times := timesReviewed(model, "file0.go"); times != 1 {
+		t.Fatalf("file0.go was analyzed %d times, want once: it answered on the first attempt", times)
+	}
+	if times := timesReviewed(model, "file1.go"); times != 2 {
+		t.Fatalf("file1.go was analyzed %d times, want twice: the resumed attempt owes the chunk it could not read",
+			times)
+	}
+	finished := decodedSummaryState(t, fixture)
+	if len(finished.Pending) != 0 {
+		t.Fatalf("pending = %v, want none once every chunk was read", finished.Pending)
+	}
+	if finished.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head", finished.LastReviewed)
+	}
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("comments = %d, want one per finding across both attempts",
+			len(fixture.state.streamedComments))
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
+// A check run is created and started before the review reads anything, and
+// collecting the whole pull request and reconciling its threads both run before
+// the first checkpoint. A process that died in that window left its check in
+// progress and the durable state untouched, still naming the head an earlier
+// ordinary run reviewed.
+//
+// Resuming is therefore not on its own evidence that this delivery did any of
+// its forced work. A resume that read it that way would keep the earlier run's
+// baseline, find an empty range against the head, and clear the check as already
+// reviewed, so the label would have restarted the container and reviewed
+// nothing.
+func TestAForcedDeliveryResumedBeforeRecordingAnythingStillReviewsFromScratch(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         selfRangeEmptyCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+	job := fixture.forcedJob()
+	// An earlier ordinary run recorded this head as reviewed, and this delivery
+	// died between starting its check run and writing anything of its own.
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+			Completed:    nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":          float64(4242),
+		"name":        config.ReviewCheckName,
+		"head_sha":    testHeadSHA,
+		"status":      "in_progress",
+		"conclusion":  "",
+		"external_id": job.DeliveryID,
+	})
+
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the force request was dropped on the resume",
+				path, times)
+		}
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
 // The check run a redelivery is looking for is exactly the one newer check runs
 // of the same name have replaced, and a pull request labelled more than once
 // accumulates them. GitHub documents this listing as returning only the most
@@ -5376,6 +5558,7 @@ type serviceFixtureOptions struct {
 	pullRequestStatusAfterFirstRead int
 	reviewListStatus                int
 	startCheckRunStatus             int
+	firstCheckCompletionStatus      int
 	submitReviewStatus              int
 	updateReviewStatus              int
 	createCommentStatus             int
@@ -5433,7 +5616,13 @@ type serviceServerState struct {
 	// startCheckRunStatus fails the PATCH that starts a check run, leaving it
 	// created and queued.
 	startCheckRunStatus int
-	lastSubmitReview    map[string]any
+	// firstCheckCompletionStatus fails the first PATCH that completes a check
+	// run and then clears itself, leaving the check in progress over a review
+	// that already published. It is the window between publication and
+	// settlement, and it heals so the delivery that lands in it can still be
+	// followed to its conclusion.
+	firstCheckCompletionStatus int
+	lastSubmitReview           map[string]any
 	// submittedReviews are the reviews this pull request now carries, which
 	// ListReviews serves from the next call onward.
 	submittedReviews    []map[string]any
@@ -5760,6 +5949,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		pullRequestStatusAfterFirstRead: options.pullRequestStatusAfterFirstRead,
 		reviewListStatus:                options.reviewListStatus,
 		startCheckRunStatus:             options.startCheckRunStatus,
+		firstCheckCompletionStatus:      options.firstCheckCompletionStatus,
 		submitReviewStatus:              options.submitReviewStatus,
 		updateReviewStatus:              options.updateReviewStatus,
 		createCommentStatus:             options.createCommentStatus,
@@ -6215,6 +6405,15 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		// which is the window the resume path exists for.
 		if body["status"] == "in_progress" && state.startCheckRunStatus != 0 {
 			http.Error(writer, "start check run failed", state.startCheckRunStatus)
+			return
+		}
+		// A completion GitHub refuses leaves the check in progress over a review
+		// that already reached the pull request, which is the window a redelivery
+		// lands in.
+		if body["status"] == "completed" && state.firstCheckCompletionStatus != 0 {
+			status := state.firstCheckCompletionStatus
+			state.firstCheckCompletionStatus = 0
+			http.Error(writer, "complete check run failed", status)
 			return
 		}
 		state.lastUpdateCheckRun = body

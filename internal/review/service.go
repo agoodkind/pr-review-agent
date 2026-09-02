@@ -328,7 +328,21 @@ func (service *Service) reviewOwedWork(
 ) error {
 	head := job.Head
 	state, hasState := service.loadDurableState(ctx, job)
-	if job.Forced {
+	// Forcing is something a delivery does once, not on every attempt of itself.
+	// A delivery is admitted again whenever its check run is short of completed,
+	// and the check run is created before the review publishes anything, so the
+	// same force request can reach here after an earlier attempt already reviewed
+	// the pull request and posted what it found. Forcing again there re-reads
+	// every chunk and republishes the verdict to say what the pull request
+	// already says.
+	//
+	// The state naming this delivery is the record that the forcing already
+	// happened, and it is the only record there is: the review queue is in
+	// memory and dies with the container. An attempt that died before writing
+	// anything leaves no such record, so it forces from scratch, which is right,
+	// because none of its forced work landed either.
+	fromScratch := job.Forced && !stateRecordsThisDelivery(state, hasState, job)
+	if fromScratch {
 		// A label asks for the whole pull request again, so nothing an earlier
 		// run recorded may narrow this one. The marker itself stays where it is:
 		// this run rewrites it the way any run does, so the next ordinary push
@@ -349,7 +363,7 @@ func (service *Service) reviewOwedWork(
 	// pending. Deciding that here, rather than letting the collector compare a
 	// commit against itself, spends no API call proving what the state already
 	// says.
-	if !job.Forced && hasState && state.LastReviewed == head && len(state.Pending) == 0 {
+	if !fromScratch && hasState && state.LastReviewed == head && len(state.Pending) == 0 {
 		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
 		if err := service.succeed(
 			ctx,
@@ -367,7 +381,7 @@ func (service *Service) reviewOwedWork(
 	// and resolves threads, so running it first would spend both on the exact
 	// delta admission exists to refuse.
 	work, stop, err := service.collectAndAdmit(
-		ctx, job, pullRequest, checkRun, deltaBase(state, hasState, job.Forced), progress,
+		ctx, job, pullRequest, checkRun, deltaBase(state, hasState, fromScratch), progress,
 	)
 	if stop {
 		return err
@@ -421,13 +435,27 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 }
 
 // deltaBase names the commit the delta is measured from: the commit the last
-// completed run reviewed, or nothing at all on first contact and on a forced
-// run, which is asked for the whole pull request rather than a range.
-func deltaBase(state marker.State, hasState bool, forced bool) domain.HeadSHA {
-	if forced || !hasState {
+// completed run reviewed, or nothing at all on first contact and on a run
+// starting from scratch, which is asked for the whole pull request rather than
+// a range.
+func deltaBase(state marker.State, hasState bool, fromScratch bool) domain.HeadSHA {
+	if fromScratch || !hasState {
 		return domain.HeadSHA("")
 	}
 	return state.LastReviewed
+}
+
+// stateRecordsThisDelivery reports whether the durable state was last written by
+// this delivery, which is what says an earlier attempt of it already ran.
+//
+// Every write a run makes stamps the state with its own delivery identifier, so
+// finding this one there means this delivery got at least as far as its first
+// checkpoint. Nothing about the check run says that: a check run is created and
+// started before the review reads anything, and collecting the diff and
+// reconciling the threads both run before the first write, so a delivery can be
+// resumed having recorded nothing at all.
+func stateRecordsThisDelivery(state marker.State, hasState bool, job domain.ReviewJob) bool {
+	return hasState && state.RunID == job.DeliveryID
 }
 
 // publicationContext gives publication its own budget, freed from whatever the
