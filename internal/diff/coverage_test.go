@@ -53,15 +53,16 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 			wantGap: diff.CoverageGapPatchUnreadable, wantRecurs: true,
 		},
 		{
-			// A patch whose counts do not add up is a truncated patch. The content
-			// load that follows succeeds here, and must not overwrite the reason.
-			name: "a truncated patch keeps its reason through a successful content load",
+			// A patch whose counts do not add up is a truncated patch, and a file
+			// GitHub truncates the patch for is one whose content load tends to
+			// fail too. The permanent reason has to survive the temporary one, or
+			// the run reports a file it can never read as one it will retry.
+			name: "a truncated patch keeps its reason through a failed content load",
 			file: githubapp.ChangedFile{
 				Path: "pkg/a.go", Status: "modified", Patch: "@@ -1,1 +1,5 @@\n line\n+added\n", PatchPresent: true,
 			},
-			getErr:   nil,
-			contents: map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
-			wantGap:  diff.CoverageGapPatchUnreadable, wantRecurs: true,
+			getErr: errors.New("read failed"), contents: nil,
+			wantGap: diff.CoverageGapPatchUnreadable, wantRecurs: true,
 		},
 		{
 			name: "a failed content read is one call that went wrong",
