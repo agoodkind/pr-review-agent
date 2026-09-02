@@ -56,16 +56,19 @@ async function restartOnForcedReview(container, env, request, body, metadata) {
     console.log(JSON.stringify({ message: "container restart skipped, draft pull request", ...metadata }));
     return;
   }
-  // A restart that fails is logged and the delivery forwarded anyway. The
-  // review is the point and the fresh environment is what the restart adds, so
-  // refusing to review would cost more than reviewing on the old instance. The
-  // log line is what tells an operator which one they got.
-  try {
-    await container.restartForForcedReview();
-    console.log(JSON.stringify({ message: "container restarted for forced review", ...metadata }));
-  } catch (error) {
-    console.error(JSON.stringify({ message: "container restart failed", ...metadata, error: String(error) }));
-  }
+  // A restart that fails takes the delivery down with it, and the caller queues
+  // it for replay the way it queues any delivery the container could not take.
+  //
+  // This reverses the earlier rule, which logged the failure and forwarded
+  // anyway on the reasoning that a review on the old instance beats no review.
+  // The fresh container is not a bonus on top of the review, it is the thing the
+  // label asks for: the container reads its environment once at start, so a
+  // review on the instance the restart failed to replace answers for the
+  // configuration somebody was trying to get rid of, and answers with the
+  // authority of a completed check. Failing here sends the delivery down the
+  // signed replay path instead, where it is retried rather than lost.
+  await container.restartForForcedReview();
+  console.log(JSON.stringify({ message: "container restarted for forced review", ...metadata }));
 }
 
 export async function routeRequest(request, env) {

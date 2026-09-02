@@ -261,6 +261,41 @@ test("a forged forcing delivery restarts nothing", async function () {
   }
 });
 
+// A restart that fails must not let the forced review proceed. The container
+// reads its environment once at start, so reviewing on the instance the restart
+// could not replace answers for the configuration the label was added to get rid
+// of, and answers with the authority of a completed check.
+//
+// The failure travels out to the forwarding handler, which queues the delivery
+// the way it queues any the container could not take, so the request is retried
+// rather than lost. Only a signed delivery reaches the restart, so it is also
+// one the replay path accepts.
+test("a forced review whose restart fails is queued rather than run on the old container", async function () {
+  const events = [];
+  const queued = [];
+  const environment = createRestartEnvironment(events, queued);
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async restartForForcedReview() {
+          throw new Error("destroy failed");
+        },
+        async fetch() {
+          events.push("forward");
+          return new Response("proxied", { status: 202 });
+        },
+      };
+    },
+  };
+
+  const response = await routeRequest(labeledWebhookRequest("labeled", "test-review-agent-rerun"), environment);
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(events, [], "the review ran on the container the restart failed to replace");
+  assert.equal(queued.length, 1, "the forced delivery was dropped rather than queued for replay");
+  assert.equal(queued[0].id, "delivery-label-1");
+});
+
 // A worker with no signing key configured can verify nothing, so it must
 // restart nothing rather than treat an unverifiable delivery as trusted.
 test("a forcing delivery restarts nothing when no signing key is configured", async function () {
