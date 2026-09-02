@@ -804,6 +804,35 @@ func TestTheChunkPromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 	}
 }
 
+// One live pull request received the same ask five times under five titles
+// across two paths. Nothing in the prompt said not to, so the model restated
+// one defect as many findings and every deterministic key downstream saw them
+// as different. The prompt now asks for one report per defect, at one anchor,
+// carrying one claim sentence the service can compare across wordings.
+func TestTheChunkPromptAsksForOneClaimPerDefect(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{{CoverageComplete: true}}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{minimumImportance: 9, model: model})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("prompt count = %d, want 1", len(model.prompts))
+	}
+	prompt := model.prompts[0]
+	for _, want := range []string{
+		"Report each distinct defect exactly once",
+		"single best line range",
+		"Never restate one defect under a second title or at a second location",
+		"Return in claim one short sentence stating the defect independent of wording",
+		"Two reports of the same defect must carry the same claim",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %q", want, prompt)
+		}
+	}
+}
+
 // A model answer the schema rejects is a failed chunk like any other: it stays
 // pending, and the run blocks the head rather than approving what it never read.
 func TestAnInvalidModelResultLeavesItsChunkPending(t *testing.T) {
