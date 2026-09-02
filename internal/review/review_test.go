@@ -495,6 +495,7 @@ func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 // truncatedModel truncates the first calls, then answers. It reproduces a model
 // that reaches its completion budget on a chunk carrying too many hunks.
 type truncatedModel struct {
+	noConsolidation
 	truncateCalls int
 	prompts       []string
 	calls         int
@@ -868,6 +869,36 @@ type sequenceModel struct {
 	prompts   []string
 	callCount int
 	err       error
+	// consolidations are the groupings this double answers consolidation calls
+	// with, in arrival order. A call past the end of the list is answered with
+	// no groups, which is a model saying the findings it was shown are several
+	// findings rather than one.
+	consolidations     []review.Consolidation
+	consolidatePrompts []string
+	consolidateErr     error
+}
+
+// Consolidate answers one grouping call from the script.
+func (model *sequenceModel) Consolidate(_ context.Context, prompt string) (review.Consolidation, error) {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	model.consolidatePrompts = append(model.consolidatePrompts, prompt)
+	if model.consolidateErr != nil {
+		return review.Consolidation{}, model.consolidateErr
+	}
+	index := len(model.consolidatePrompts) - 1
+	if index >= len(model.consolidations) {
+		return review.Consolidation{Groups: nil}, nil
+	}
+	return model.consolidations[index], nil
+}
+
+// consolidationCalls reports how many groupings this double was asked for, so a
+// test can prove a chunk holding one candidate paid for no extra call.
+func (model *sequenceModel) consolidationCalls() int {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return len(model.consolidatePrompts)
 }
 
 func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Completion, error) {
@@ -889,14 +920,14 @@ func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Com
 	return review.Completion{Result: result, Model: name}, nil
 }
 
-type contextBlockingModel struct{}
+type contextBlockingModel struct{ noConsolidation }
 
 func (contextBlockingModel) Review(ctx context.Context, _ string) (review.Completion, error) {
 	<-ctx.Done()
 	return review.Completion{}, ctx.Err()
 }
 
-type panicModel struct{}
+type panicModel struct{ noConsolidation }
 
 func (panicModel) Review(context.Context, string) (review.Completion, error) {
 	panic("model panic")
@@ -1306,6 +1337,7 @@ func chunkIDShaped(id string) bool {
 // records which paths it was asked about, so a test can prove a chunk reached
 // the model rather than only that a run finished.
 type chunkScriptedModel struct {
+	noConsolidation
 	mu       sync.Mutex
 	failPath string
 	healthy  bool
@@ -1647,6 +1679,7 @@ func (manyChunkCollector) CollectRange(
 // deadlineProbeModel measures each call's budget from that call's own start,
 // and burns real time in the first wave so a later wave starts visibly later.
 type deadlineProbeModel struct {
+	noConsolidation
 	mu        sync.Mutex
 	firstWait time.Duration
 	waves     int
@@ -1736,6 +1769,7 @@ func TestNoModelCallInheritsAnEarlierChunksClock(t *testing.T) {
 // concurrencyProbeModel records how many calls overlap, so a test can prove
 // chunks run together rather than one after another.
 type concurrencyProbeModel struct {
+	noConsolidation
 	mu       sync.Mutex
 	inFlight int
 	highest  int
@@ -4176,6 +4210,7 @@ func (failingCollector) CollectRange(
 
 // failThenSucceedModel fails the first review pass and succeeds afterwards.
 type failThenSucceedModel struct {
+	noConsolidation
 	err   error
 	calls int
 }
@@ -5147,6 +5182,7 @@ func (twoChunkCollector) CollectRange(
 }
 
 type serialGateModel struct {
+	noConsolidation
 	mu      sync.Mutex
 	active  int
 	maxSeen int

@@ -40,10 +40,11 @@ import (
 // The layer a suppression log line names, so a reader can tell which layer
 // withheld a finding and go straight to it.
 const (
-	layerWithinChunk  = "within one chunk"
-	layerAcrossChunks = "across chunks in this run"
-	layerOpenThreads  = "against open threads"
-	layerPriorReviews = "against earlier reviews"
+	layerWithinChunk   = "within one chunk"
+	layerAcrossChunks  = "across chunks in this run"
+	layerOpenThreads   = "against open threads"
+	layerPriorReviews  = "against earlier reviews"
+	layerConsolidation = "consolidation call"
 )
 
 // The senses in which one finding can repeat another.

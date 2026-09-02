@@ -10,6 +10,7 @@ package review_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -17,7 +18,20 @@ import (
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/review"
 )
+
+// noConsolidation answers every consolidation call with no groups.
+//
+// That is the honest neutral answer: a model that groups nothing is saying
+// these findings are several findings. A double that grouped everything would
+// make every publication count in this package pass for the wrong reason, and
+// one that returned an error would put a fallback in every log line.
+type noConsolidation struct{}
+
+func (noConsolidation) Consolidate(context.Context, string) (review.Consolidation, error) {
+	return review.Consolidation{Groups: nil}, nil
+}
 
 // oneChunkFixture wires a run whose single chunk answers with findings against
 // the three changed lines stubCollector adds.
@@ -430,6 +444,184 @@ func (fiveLineCollector) CollectRange(
 			CoverageComplete:  true,
 		}},
 	}, nil
+}
+
+// unrelatedRestatements are two findings the deterministic layers cannot join:
+// different titles, different quoted lines, different claim sentences, and
+// anchors two lines apart. Only reading them says they are one defect.
+func unrelatedRestatements() []domain.Finding {
+	return []domain.Finding{
+		{
+			Path:       "main.go",
+			StartLine:  2,
+			EndLine:    2,
+			Title:      "Publish failure is ignored",
+			Body:       "The failure of this call is not handled.",
+			Evidence:   "added",
+			Claim:      "The publish error is ignored",
+			Suggestion: "",
+			Importance: 9,
+		},
+		{
+			Path:       "main.go",
+			StartLine:  4,
+			EndLine:    4,
+			Title:      "Return value goes unchecked",
+			Body:       "Nothing reads what this call returns.",
+			Evidence:   "third",
+			Claim:      "The publish return value is discarded",
+			Suggestion: "",
+			Importance: 10,
+		},
+	}
+}
+
+// consolidationFixture wires a run whose one chunk holds the two restatements,
+// with a scripted grouping and a scripted failure.
+func consolidationFixture(
+	t *testing.T,
+	grouping []review.Consolidation,
+	callErr error,
+) (*serviceFixture, *sequenceModel) {
+	t.Helper()
+	model := &sequenceModel{
+		results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         unrelatedRestatements(),
+		}},
+		consolidations: grouping,
+		consolidateErr: callErr,
+	}
+	return newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model:             model,
+	}), model
+}
+
+// Two restatements that share no key are the gap every exact comparison leaves,
+// and reading them is the only thing that closes it. The group merges to its
+// strongest member, so the reader gets the more important of the two.
+func TestAConsolidationGroupPublishesItsStrongestMember(t *testing.T) {
+	fixture, model := consolidationFixture(t, []review.Consolidation{{
+		Groups: []review.ConsolidationGroup{{
+			Candidates:         []int{1, 2},
+			RestatesOpenThread: false,
+			Reason:             "Both are the unchecked publish call.",
+		}},
+	}}, nil)
+
+	bodies := publishedBodies(t, fixture)
+
+	if model.consolidationCalls() != 1 {
+		t.Fatalf("consolidation calls = %d, want exactly one for this chunk", model.consolidationCalls())
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one: the model grouped them", bodies)
+	}
+	if !strings.Contains(bodies[0], "Return value goes unchecked") {
+		t.Fatalf("published comment = %q, want the higher rated member of the group", bodies[0])
+	}
+}
+
+// A group marked as restating an open thread loses every member, because the
+// thread is where that conversation already is.
+func TestAConsolidationGroupThatRestatesAnOpenThreadPublishesNothing(t *testing.T) {
+	fixture, _ := consolidationFixture(t, []review.Consolidation{{
+		Groups: []review.ConsolidationGroup{{
+			Candidates:         []int{1, 2},
+			RestatesOpenThread: true,
+			Reason:             "This is the thread already open on the publish call.",
+		}},
+	}}, nil)
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 0 {
+		t.Fatalf("published comments = %v, want none: both restate an open thread", bodies)
+	}
+}
+
+// A reviewer that loses findings to its own tidying is worse than one that
+// repeats itself, so a failed call publishes what the deterministic layers left
+// and says so in the log.
+func TestAFailedConsolidationCallPublishesTheDeterministicResult(t *testing.T) {
+	logs := &syncBuffer{}
+	model := &sequenceModel{
+		results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         unrelatedRestatements(),
+		}},
+		consolidateErr: errors.New("the provider refused the grouping"),
+	}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model:             model,
+		logWriter:         logs,
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 2 {
+		t.Fatalf("published comments = %v, want both: a failed grouping withholds nothing", bodies)
+	}
+	if !strings.Contains(logs.String(), "consolidation call failed") {
+		t.Fatalf("service log = %q, want the fallback named", logs.String())
+	}
+}
+
+// An answer naming a candidate that was never shown is not about the findings
+// it was asked about, so none of it is applied.
+func TestAConsolidationAnswerNamingAnUnknownCandidateIsRefused(t *testing.T) {
+	logs := &syncBuffer{}
+	model := &sequenceModel{
+		results: []domain.ReviewResult{{
+			CoverageComplete: true,
+			Findings:         unrelatedRestatements(),
+		}},
+		consolidations: []review.Consolidation{{
+			Groups: []review.ConsolidationGroup{{
+				Candidates:         []int{1, 7},
+				RestatesOpenThread: false,
+				Reason:             "A number nobody was shown.",
+			}},
+		}},
+	}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model:             model,
+		logWriter:         logs,
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 2 {
+		t.Fatalf("published comments = %v, want both: an unapplicable grouping withholds nothing", bodies)
+	}
+	if !strings.Contains(logs.String(), "consolidation call failed") {
+		t.Fatalf("service log = %q, want the refusal named", logs.String())
+	}
+}
+
+// One candidate can restate nothing, so a chunk holding one pays for no extra
+// call. The call is bounded per chunk, never per candidate.
+func TestAChunkHoldingOneCandidateMakesNoConsolidationCall(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{{
+		CoverageComplete: true,
+		Findings:         unrelatedRestatements()[:1],
+	}}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want the one finding", bodies)
+	}
+	if model.consolidationCalls() != 0 {
+		t.Fatalf("consolidation calls = %d, want none for a single candidate", model.consolidationCalls())
+	}
 }
 
 // neighbouringRestatement is a finding anchored over a range that overlaps the

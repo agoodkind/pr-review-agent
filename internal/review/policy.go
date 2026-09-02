@@ -171,9 +171,12 @@ type Completion struct {
 	Model  string
 }
 
-// Model performs one structured review completion for a chunk prompt.
+// Model performs the structured completions one review needs: the chunk review
+// itself, and the consolidation pass that reads a chunk's own findings back and
+// says which of them state one defect.
 type Model interface {
 	Review(context.Context, string) (Completion, error)
+	Consolidate(context.Context, string) (Consolidation, error)
 }
 
 // Analysis is the aggregated result of every review chunk.
