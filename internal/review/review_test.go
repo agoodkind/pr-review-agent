@@ -3545,7 +3545,7 @@ func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testi
 				"id":        float64(51),
 				"commit_id": string(head),
 				"state":     "CHANGES_REQUESTED",
-				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"body":      blockingVerdictBody(head),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 			// Somebody dismissed it, so nothing stands.
@@ -3553,7 +3553,7 @@ func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testi
 				"id":        float64(52),
 				"commit_id": string(head),
 				"state":     "DISMISSED",
-				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"body":      blockingVerdictBody(head),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 		}},
@@ -3611,7 +3611,7 @@ func TestTheOnlyVerdictBeingDismissedStillLetsTheHeadBeApproved(t *testing.T) {
 			"id":        float64(51),
 			"commit_id": string(head),
 			"state":     "DISMISSED",
-			"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+			"body":      blockingVerdictBody(head),
 			"user":      map[string]any{"login": testBotLogin},
 		}}},
 	})
@@ -3630,6 +3630,62 @@ func TestTheOnlyVerdictBeingDismissedStillLetsTheHeadBeApproved(t *testing.T) {
 	}
 }
 
+// blockingVerdictBody is what this service writes as the body of a blocking
+// verdict: the blocking lead, what the block waits on, and the review marker.
+// Dismissing a review does not edit its body, so this is also what a dismissed
+// block still carries, and it is the only surviving record that the verdict was
+// a block.
+func blockingVerdictBody(head domain.HeadSHA) string {
+	return "Changes requested.\n\nWaiting on:\n- file0.go:2\n\n" + marker.Review(head)
+}
+
+// approvingVerdictBody is what this service writes as the body of an approving
+// verdict: the review marker and nothing else, because the approval event is
+// itself the message.
+func approvingVerdictBody(head domain.HeadSHA) string {
+	return marker.Review(head)
+}
+
+// Dismissing an approval is the opposite request to dismissing a block. The
+// person is saying they do not accept this approval and want more scrutiny, so
+// withholding a later block would hand them less of it. Only a dismissed block
+// is withheld from, and that is read from the body, because dismissing rewrites
+// the review's state and leaves nothing else saying what it used to be.
+func TestDismissingAnApprovalStillLetsALaterBlockBeSubmitted(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(51),
+			"commit_id": string(head),
+			"state":     "DISMISSED",
+			"body":      approvingVerdictBody(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted, so dismissing an approval bought less scrutiny rather than more")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES: the open thread still blocks",
+			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
+	if !ok {
+		t.Fatal("summary comment body is not a string")
+	}
+	if strings.Contains(body, "dismissed by hand") {
+		t.Fatalf("summary comment reports a withheld block where one was submitted:\n%s", body)
+	}
+}
+
 // The control for the dismissal rule: a head whose verdict nobody withdrew keeps
 // refreshing exactly as it did. An open thread leaves the standing block alone
 // rather than restating it, and resolving the thread flips the verdict to an
@@ -3641,7 +3697,7 @@ func TestAVerdictNobodyDismissedRefreshesAsBefore(t *testing.T) {
 			"id":        float64(51),
 			"commit_id": string(head),
 			"state":     "CHANGES_REQUESTED",
-			"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+			"body":      blockingVerdictBody(head),
 			"user":      map[string]any{"login": testBotLogin},
 		}}},
 	})

@@ -191,6 +191,24 @@ func latestBotVerdictAtHead(
 	return latest
 }
 
+// dismissedVerdictBlocked reports whether the verdict a person dismissed was a
+// blocking one, which is what decides whether withholding applies at all.
+//
+// Dismissing rewrites the review's own state to DISMISSED, so what it used to
+// say is gone from the listing and the body it kept is the only record left. A
+// blocking body opens with the blocking lead. An approving body is the review
+// marker and nothing else, because an approval's message is the approval event
+// itself.
+//
+// A body written before the current shape carries no lead and reads here as an
+// approval, so a block dismissed in that era is restated rather than withheld.
+// That is the older behavior and the safe direction to be wrong in: a misread
+// errs toward scrutiny, and only a dismissal correctly recognized as a block
+// relaxes anything.
+func dismissedVerdictBlocked(body string) bool {
+	return strings.Contains(body, blockingVerdictLead)
+}
+
 // latestBotVerdictState is the state GitHub currently shows for this service on
 // the pull request: its newest review carrying a verdict, whatever head that
 // review named. It is the empty string when the service has submitted none.

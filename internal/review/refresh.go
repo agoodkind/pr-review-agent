@@ -59,12 +59,16 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// currently shows is a separate question, answered by the newest verdict
 	// whatever head it named. A thread resolution changes neither.
 	headFullyReviewed := !strings.Contains(inputs.verdict.Body, unreviewedHeadReason)
+	// Only a dismissed block is withheld from. Dismissing a block and dismissing
+	// an approval are opposite requests, and the review's own state no longer
+	// tells them apart, so the body it kept does.
+	blockWithdrawn := inputs.withdrawn && dismissedVerdictBlocked(inputs.verdict.Body)
 	return service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
 		decision:          reviewerDecision(inputs.threads, service.botLogin, headFullyReviewed),
 		standingState:     inputs.standingState,
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
-		blockWithdrawn:    inputs.withdrawn,
+		blockWithdrawn:    blockWithdrawn,
 	})
 }
 
@@ -133,16 +137,36 @@ type refreshedVerdict struct {
 
 // mayPublish reports whether the refresh may submit the verdict it computed.
 //
-// A refresh never reinstates a block a person withdrew. Dismissing is how
-// somebody says they do not want this verdict holding the pull request, and a
-// service that submitted the same block again from thread state alone would
-// resurrect by machinery, seconds later and with no new information, the stale
-// block this project exists to kill.
+// A refresh never reinstates a block a person withdrew. Dismissing the block is
+// the operator's routine escape from it, and a service that restated the same
+// block from thread state alone, seconds later and with nothing new learned,
+// would make that escape useless and the block permanent, which is the failure
+// this project exists to remove.
 //
-// Approving is still allowed, and is the reason a dismissed head is refreshed at
-// all. Once every thread is resolved the recomputed verdict is an approval,
-// which is what the person was reaching for, and the refresh is the only path
-// that reaches it without a push.
+// This overrides the earlier rule, which required the block be restated so that
+// a dismissal could not leave the pull request carrying no verdict. That reason
+// is true as far as it goes and is outweighed. A dismissal does not discard the
+// finding: the check run is the enforcement point, the open threads stay visible
+// on the pull request, and a branch rule requiring threads to be resolved still
+// holds. What it discards is one review object saying so.
+//
+// TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve is the test
+// this reversed. It asserted that an open thread at a dismissed head restates
+// the block, and now asserts that nothing is submitted there.
+//
+// Only a dismissed block is withheld from. Dismissing an approval is the
+// opposite request, a person saying they do not accept it and want more
+// scrutiny, so withholding a later block would give them less; that head behaves
+// normally and blocks when the recomputed decision blocks.
+//
+// The gate keys on the head, so it relaxes nothing beyond the commit somebody
+// actually ruled on. A new head carries no dismissed verdict of its own and gets
+// a fresh one from the run that reviews it.
+//
+// Approving is still allowed at a withheld head, and is the reason such a head
+// is refreshed at all. Once every thread is resolved the recomputed verdict is
+// an approval, which is what the person was reaching for, and the refresh is the
+// only path that reaches it without a push.
 //
 // Otherwise a verdict matching what GitHub already shows is not submitted,
 // because a second identical verdict is noise.
