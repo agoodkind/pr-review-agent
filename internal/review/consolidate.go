@@ -214,8 +214,12 @@ func (service *Service) consolidateChunk(
 	}
 
 	// The call gets its own clock built from the caller's, exactly as a chunk
-	// call does, so it inherits no budget another call has already spent.
-	callCtx, cancel := context.WithTimeout(ctx, service.chunkTimeout)
+	// call does, so it inherits no budget another call has already spent. It
+	// reads that clock off the pass for the same reason a chunk call does: the
+	// value this delivery carried binds the whole run, and a call reaching back
+	// to the service would be timed by whatever the process booted with, which
+	// is the staleness the carrying exists to end.
+	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
 	answer, err := service.model.Consolidate(
 		callCtx,
 		buildConsolidationPrompt(candidates, pass.disputePrompt),

@@ -174,7 +174,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		slog.Duration("chunk_timeout", settings.chunkTimeout),
 		slog.Int("max_files", settings.maxFiles),
 		slog.Int("max_chunks", settings.maxChunks),
-		slog.Bool("settings_from_delivery", job.Settings != emptyReviewSettings()),
+		slog.Any("settings_carried", carriedSettingFields(job.Settings)),
 	)
 	if job.CheckRunID == 0 {
 		return errors.New("review check was not admitted")
@@ -281,7 +281,7 @@ func (service *Service) runLocked(
 	if !job.Forced && service.checkAlreadySucceeded(ctx, checkRun) {
 		// The check is already completed and successful, so there is nothing to
 		// conclude here and the refresh failure is the whole outcome.
-		return service.refreshVerdictAtReviewedHead(ctx, job, nil)
+		return service.refreshVerdictAtReviewedHead(ctx, job, nil, settings)
 	}
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
@@ -305,7 +305,7 @@ func (service *Service) runLocked(
 		// The check is concluded first and the refresh failure reported after.
 		// This head is reviewed either way, so the check must keep saying so
 		// whatever the refresh did.
-		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
+		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews, settings)
 		if err := service.succeed(
 			ctx,
 			job,
@@ -377,7 +377,7 @@ func (service *Service) reviewOwedWork(
 	// commit against itself, spends no API call proving what the state already
 	// says.
 	if !fromScratch && hasState && state.LastReviewed == head && len(state.Pending) == 0 {
-		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
+		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews, settings)
 		if err := service.succeed(
 			ctx,
 			job,
@@ -447,9 +447,31 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	progress.reached("model analysis")
 }
 
-// emptyReviewSettings is a delivery that carried no tuning values of its own.
-func emptyReviewSettings() domain.ReviewSettings {
-	return domain.ReviewSettings{MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0}
+// carriedSettingFields names the tuning values this delivery supplied and the
+// run actually took, so the start line says which of the values beside it came
+// with the work and which the process booted with. Anything absent from this
+// list fell back.
+//
+// Naming what was taken rather than what was sent is deliberate. A value the
+// resolution refuses, because it is not above zero, falls back like a value that
+// never arrived, and a log that named it as carried would describe a run nobody
+// is having. Making a change visible when it takes effect is the whole reason
+// these travel with the delivery at all.
+func carriedSettingFields(settings domain.ReviewSettings) []string {
+	carried := make([]string, 0, 4)
+	if settings.MinimumImportance > 0 {
+		carried = append(carried, "minimum_importance")
+	}
+	if settings.MaxFiles > 0 {
+		carried = append(carried, "max_files")
+	}
+	if settings.MaxChunks > 0 {
+		carried = append(carried, "max_chunks")
+	}
+	if settings.ChunkTimeout > 0 {
+		carried = append(carried, "chunk_timeout")
+	}
+	return carried
 }
 
 // reviewSettings are the tuning values one run is bound by, after the values the

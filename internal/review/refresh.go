@@ -46,6 +46,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	ctx context.Context,
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
+	settings reviewSettings,
 ) error {
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
@@ -69,6 +70,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
 		blockWithdrawn:    blockWithdrawn,
+		settings:          settings,
 	})
 }
 
@@ -133,6 +135,11 @@ type refreshedVerdict struct {
 	// blockWithdrawn is whether a person dismissed the verdict at this head,
 	// which bounds what the refresh may submit rather than what it computes.
 	blockWithdrawn bool
+	// settings are the values this delivery is bound by. The refresh runs no
+	// model call, so only the reported threshold comes from here, and it comes
+	// from here rather than from the service so the summary a refresh writes and
+	// the summary a review writes cannot disagree about it.
+	settings reviewSettings
 }
 
 // mayPublish reports whether the refresh may submit the verdict it computed.
@@ -214,7 +221,7 @@ func (service *Service) applyRefreshedVerdict(
 		FilesReviewed:     0,
 		Chunks:            0,
 		CoverageComplete:  refreshed.headFullyReviewed,
-		MinimumImportance: service.minimumImportance,
+		MinimumImportance: refreshed.settings.minimumImportance,
 		Observed:          nil,
 		Eligible:          nil,
 		Published:         nil,

@@ -498,6 +498,71 @@ func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 	}
 }
 
+// The point of carrying the values is that a change is visible when it takes
+// effect, so the run has to say which came with the delivery and which it booted
+// with. A start line reporting only the resolved numbers leaves a reader unable
+// to tell a correction that landed from one that never arrived.
+//
+// It names what the run took rather than what the delivery sent: a value the
+// resolution refuses falls back like one that never arrived, so naming it as
+// carried would describe a run nobody is having.
+func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent(), approveReviewContent()},
+	})
+	defer fixture.close()
+
+	partial := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-partial",
+		body:       openedPayload(testDefectiveHead),
+		// A timeout and a refused budget: one is taken, the other falls back. The
+		// refused one is negative rather than zero, so a resolution that honored
+		// anything the delivery merely mentioned would take it and be caught.
+		settings: `{"chunk_timeout":"11s","max_chunks":-5}`,
+	})
+	if partial.StatusCode != http.StatusAccepted {
+		t.Fatalf("partial status = %d, want 202", partial.StatusCode)
+	}
+	_ = partial.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	none := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-none",
+		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+	})
+	if none.StatusCode != http.StatusAccepted {
+		t.Fatalf("none status = %d, want 202", none.StatusCode)
+	}
+	_ = none.Body.Close()
+	fixture.waitForCheckCompletions(t, 2)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 2 {
+		t.Fatalf("review job started lines = %d, want 2", len(started))
+	}
+	carried, ok := started[0]["settings_carried"].([]any)
+	if !ok {
+		t.Fatalf("settings_carried = %v, want a list", started[0]["settings_carried"])
+	}
+	if len(carried) != 1 || carried[0] != "chunk_timeout" {
+		t.Fatalf("settings_carried = %v, want only the timeout the run took", carried)
+	}
+	if started[0]["max_chunks"] != float64(1000) {
+		t.Fatalf("max_chunks = %v, want the process value the refused budget fell back to",
+			started[0]["max_chunks"])
+	}
+	empty, ok := started[1]["settings_carried"].([]any)
+	if !ok {
+		t.Fatalf("settings_carried = %v, want a list", started[1]["settings_carried"])
+	}
+	if len(empty) != 0 {
+		t.Fatalf("settings_carried = %v, want none: the delivery carried nothing", empty)
+	}
+}
+
 // Configuration is exactly what an attacker would want to set, and these values
 // ride beside the signed body rather than inside it. A request whose signature
 // does not verify is refused before anything it carried is read, so nothing it
