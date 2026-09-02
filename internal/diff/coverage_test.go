@@ -7,6 +7,7 @@ package diff_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -65,7 +66,31 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 			wantGap: diff.CoverageGapPatchUnreadable, wantRecurs: true,
 		},
 		{
-			name: "a failed content read is one call that went wrong",
+			name: "a content read that got no answer is one call that went wrong",
+			file: githubapp.ChangedFile{
+				Path: "pkg/a.go", Status: "modified", Patch: goodPatch, PatchPresent: true,
+			},
+			getErr:   githubapp.APIError{StatusCode: http.StatusBadGateway, Message: "bad gateway"},
+			contents: nil,
+			wantGap:  diff.CoverageGapContentUnavailable, wantRecurs: false,
+		},
+		{
+			// GitHub answered, and it answers the same way on every later run.
+			// Calling this temporary leaves the head incomplete forever while
+			// naming nothing a person could act on.
+			name: "a file github will not serve is answered the same way every time",
+			file: githubapp.ChangedFile{
+				Path: "pkg/a.go", Status: "modified", Patch: goodPatch, PatchPresent: true,
+			},
+			getErr:   githubapp.APIError{StatusCode: http.StatusNotFound, Message: "Not Found"},
+			contents: nil,
+			wantGap:  diff.CoverageGapContentMissing, wantRecurs: true,
+		},
+		{
+			// An error carrying no status this service recognizes could be
+			// either. Calling it permanent would tell a person to split a pull
+			// request over something that may pass on the next run.
+			name: "an unclassifiable content failure is treated as one that may pass",
 			file: githubapp.ChangedFile{
 				Path: "pkg/a.go", Status: "modified", Patch: goodPatch, PatchPresent: true,
 			},

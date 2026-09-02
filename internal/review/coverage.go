@@ -68,6 +68,7 @@ const (
 	binaryFileReason      = "a binary file, which carries no reviewable patch"
 	patchAbsentReason     = "GitHub supplied no patch for this file"
 	patchUnreadableReason = "the patch GitHub supplied could not be read whole"
+	contentMissingReason  = "GitHub will not serve this file's content at this commit"
 	// truncatedAnswerReason names a hunk the model began answering and never
 	// finished. A chunk whose answer runs past the completion budget is normally
 	// halved and each half asked separately, so this is reached only by a chunk
@@ -132,6 +133,8 @@ func fileGapReason(gap diff.CoverageGap) string {
 		return patchAbsentReason
 	case diff.CoverageGapPatchUnreadable:
 		return patchUnreadableReason
+	case diff.CoverageGapContentMissing:
+		return contentMissingReason
 	case diff.CoverageGapNone, diff.CoverageGapContentUnavailable:
 		return ""
 	default:

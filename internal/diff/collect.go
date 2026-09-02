@@ -26,22 +26,52 @@ type CoverageGap string
 // The gaps one file can carry. CoverageGapNone means the file was collected
 // whole, which is the only value that leaves CoverageComplete true.
 const (
-	CoverageGapNone               CoverageGap = ""
-	CoverageGapBinary             CoverageGap = "binary"
-	CoverageGapPatchAbsent        CoverageGap = "patch_absent"
-	CoverageGapPatchUnreadable    CoverageGap = "patch_unreadable"
+	CoverageGapNone            CoverageGap = ""
+	CoverageGapBinary          CoverageGap = "binary"
+	CoverageGapPatchAbsent     CoverageGap = "patch_absent"
+	CoverageGapPatchUnreadable CoverageGap = "patch_unreadable"
+	// CoverageGapContentMissing is a file GitHub answered about and refused: it
+	// is not there at this commit, or it may not be served. Every later run asks
+	// the same question and gets the same answer.
+	CoverageGapContentMissing CoverageGap = "content_missing"
+	// CoverageGapContentUnavailable is a content load that did not get an
+	// answer. A rate limit, an outage, or a timeout produces it, and the next run
+	// very likely succeeds. An error this service cannot classify lands here
+	// too, because calling an unknown cause permanent would tell a person to
+	// split a pull request over something that may fix itself in a minute.
 	CoverageGapContentUnavailable CoverageGap = "content_unavailable"
 )
 
 // Recurs reports whether this gap would come back identically on a later run.
 func (gap CoverageGap) Recurs() bool {
 	switch gap {
-	case CoverageGapBinary, CoverageGapPatchAbsent, CoverageGapPatchUnreadable:
+	case CoverageGapBinary, CoverageGapPatchAbsent, CoverageGapPatchUnreadable, CoverageGapContentMissing:
 		return true
 	case CoverageGapNone, CoverageGapContentUnavailable:
 		return false
 	default:
 		return false
+	}
+}
+
+// contentGapFor classifies why one file's content did not load.
+//
+// GitHub answering that the file is not there, is gone, or may not be served is
+// a permanent answer: the same request returns the same thing on every later
+// run, so a run that keeps calling it temporary reports incomplete coverage
+// forever while never naming anything a person could act on. Everything else,
+// including an error with no status this service recognizes, is treated as a
+// call that did not get through.
+func contentGapFor(err error) CoverageGap {
+	var apiErr githubapp.APIError
+	if !errors.As(err, &apiErr) {
+		return CoverageGapContentUnavailable
+	}
+	switch apiErr.StatusCode {
+	case http.StatusNotFound, http.StatusGone, http.StatusUnavailableForLegalReasons:
+		return CoverageGapContentMissing
+	default:
+		return CoverageGapContentUnavailable
 	}
 }
 
@@ -344,7 +374,7 @@ func (collector *Collector) collectFile(
 		pullRequest.Head,
 	)
 	if err != nil {
-		fileContext.markGap(CoverageGapContentUnavailable)
+		fileContext.markGap(contentGapFor(err))
 		return fileContext
 	}
 	fileContext.CurrentContent = string(content)
