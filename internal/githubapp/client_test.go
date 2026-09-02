@@ -278,6 +278,96 @@ func TestClientErrorsExposeStatusWithoutCredentials(t *testing.T) {
 	}
 }
 
+// A request that never reached GitHub has no status and no message field to
+// report, so APIError cannot carry it and the only thing that explains the
+// failure is the transport error itself.
+//
+// The client used to answer that case with errors.New("github request failed"),
+// which threw the cause away. One live run declined an oversized delta, failed
+// twice writing the skip notice, and logged exactly that sentence and nothing
+// else, so nobody could tell a refused connection from a timeout from a DNS
+// failure.
+func TestATransportFailureKeepsItsCause(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+
+	// The token is fetched and cached first, so the failure under test is the
+	// pull request request rather than the token exchange in front of it.
+	if _, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1); err != nil {
+		t.Fatalf("priming GetPullRequest: %v", err)
+	}
+	server.Close()
+
+	_, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1)
+	if err == nil {
+		t.Fatal("GetPullRequest: want the transport failure reported")
+	}
+	var transportErr *url.Error
+	if !errors.As(err, &transportErr) {
+		t.Fatalf("error = %v (%T), want the transport cause reachable through the client boundary", err, err)
+	}
+	if !strings.Contains(err.Error(), "github request failed") {
+		t.Fatalf("error = %q, want the client's own wording kept", err.Error())
+	}
+	// The cause has to add something. A wrapped error whose text is only the
+	// service's own sentence is the same dead end as the string it replaced.
+	if err.Error() == "github request failed" {
+		t.Fatalf("error = %q, want the cause carried beside the wording", err.Error())
+	}
+}
+
+// The deadline is the case that makes the flattening cost more than clarity.
+//
+// internal/review classifies a failed run by testing errors.Is(cause,
+// context.DeadlineExceeded) to title the check run. A client that returns a
+// fresh error rather than wrapping breaks that chain, so a publication that ran
+// out of time is reported as whichever stage it died in rather than as a
+// deadline.
+func TestARequestDeadlineIsStillADeadlineAfterTheClientWrapsIt(t *testing.T) {
+	privateKey := testPrivateKey(t)
+	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
+	defer server.Close()
+
+	var blocking atomic.Bool
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
+			writeJSON(writer, http.StatusCreated, map[string]any{
+				"token":      "ghs_installation",
+				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+			})
+			return
+		}
+		if blocking.Load() {
+			<-request.Context().Done()
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"number": float64(1),
+			"draft":  false,
+			"title":  "title",
+			"body":   "body",
+			"head":   map[string]any{"sha": testHeadSHA},
+			"base":   map[string]any{"sha": testBaseSHA},
+		})
+	})
+
+	if _, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1); err != nil {
+		t.Fatalf("priming GetPullRequest: %v", err)
+	}
+	blocking.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := client.GetPullRequest(ctx, 99, testRepo(), 1)
+	if err == nil {
+		t.Fatal("GetPullRequest: want the deadline reported")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v (%T), want a deadline still recognizable to the review service", err, err)
+	}
+}
+
 func TestRESTPaginationLoadsEveryPage(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))

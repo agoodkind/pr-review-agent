@@ -106,28 +106,149 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 	})
 }
 
+// testUnreviewedHeadReason is the blocking reason a run leaves when it could
+// not read the whole head. It is the service's own wording, repeated here
+// because these tests read the rendered surface from outside the package.
+const testUnreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet. " +
+	"The next push reviews what this run could not."
+
+// testPublishedFinding is one finding that reached the pull request inline.
+func testPublishedFinding() domain.Finding {
+	return domain.Finding{
+		Path:       "main.go",
+		StartLine:  1,
+		EndLine:    1,
+		Title:      "Blocker",
+		Body:       "Must fix before merge.",
+		Importance: 9,
+	}
+}
+
 func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	tests := []struct {
-		name     string
-		decision domain.ReviewDecision
-		message  string
+		name      string
+		decision  domain.ReviewDecision
+		published []domain.Finding
+		blocking  []string
+		message   string
 	}{
-		{name: "approve", decision: domain.ReviewDecisionApprove, message: "No severe findings."},
-		{name: "request changes", decision: domain.ReviewDecisionRequestChanges, message: "Severe findings are listed inline."},
+		{
+			name:      "approve",
+			decision:  domain.ReviewDecisionApprove,
+			published: nil,
+			blocking:  nil,
+			message:   "No severe findings.",
+		},
+		{
+			name:      "request changes over a published finding",
+			decision:  domain.ReviewDecisionRequestChanges,
+			published: []domain.Finding{testPublishedFinding()},
+			blocking:  []string{"[main.go:1](https://github.com/owner/repo/pull/7#discussion_r1)"},
+			message:   "Severe findings are listed inline.",
+		},
+		{
+			name:      "request changes with nothing inline",
+			decision:  domain.ReviewDecisionRequestChanges,
+			published: nil,
+			blocking:  []string{testUnreviewedHeadReason},
+			message:   "Changes are requested for the reasons listed below.",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			summary := testSummary()
 			summary.Decision = test.decision
+			summary.Published = test.published
+			summary.Blocking = test.blocking
+
 			body := review.RenderBody(summary)
-			want := "## Review\n\n" + test.message + "\n\n" +
-				review.RenderDetails(summary) + "\n\n" +
+
+			want := "## Review\n\n" + test.message + "\n\n"
+			if len(test.blocking) > 0 {
+				want += "Waiting on:\n- " + strings.Join(test.blocking, "\n- ") + "\n\n"
+			}
+			want += review.RenderDetails(summary) + "\n\n" +
 				marker.Summary() + "\n" + marker.Review(head)
 			if body != want {
 				t.Fatalf("body = %q, want %q", body, want)
 			}
 		})
+	}
+}
+
+// A block the reader cannot act on is the defect this proves gone. On
+// mlx-swift-lm 9 at head 24e6e0e, run f465b240-a4d9-11f1-805b-98a2bfccbda0, the
+// summary comment opened with "Severe findings are listed inline." while its own
+// detail table read "Findings published inline `0`". The only thing holding that
+// block was an unread head, so the sentence sent the reader hunting for inline
+// comments that were never posted.
+//
+// The sentence is chosen from what this run actually published, not from the
+// decision alone, and the empty case points at the Waiting on list that names
+// the real cause.
+func TestABlockingSummaryWithNothingInlineDoesNotClaimInlineFindings(t *testing.T) {
+	summary := testSummary()
+	summary.Decision = domain.ReviewDecisionRequestChanges
+	summary.Published = nil
+	summary.Blocking = []string{testUnreviewedHeadReason}
+
+	body := review.RenderBody(summary)
+
+	if strings.Contains(body, "listed inline") {
+		t.Fatalf("summary claims findings are inline while it published none:\n%s", body)
+	}
+	if !strings.Contains(body, "Changes are requested for the reasons listed below.") {
+		t.Fatalf("summary does not point at the reasons holding the block:\n%s", body)
+	}
+	// The reasons the sentence points at have to be under it, or it names nothing.
+	if !strings.Contains(body, "Waiting on:\n- "+testUnreviewedHeadReason) {
+		t.Fatalf("summary points below at a list it does not carry:\n%s", body)
+	}
+	if !strings.Contains(body, "| Findings published inline | `0` |") {
+		t.Fatalf("summary prose and detail table disagree about what was published:\n%s", body)
+	}
+}
+
+// The same case reached end to end through a real run, which is how it reached
+// production. A hunk that cannot split leaves the head partly unread, so the run
+// blocks with coverage incomplete and posts no inline comment at all. That is
+// the shape of run f465b240-a4d9-11f1-805b-98a2bfccbda0.
+//
+// TestAHunkThatCannotSplitLeavesTheHeadUnapproved covers the decision and the
+// coverage row on this same path. This covers the sentence over them.
+func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         multiHunkCollector{},
+		minimumImportance: 9,
+		model:             &truncatedModel{truncateCalls: 1000},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The premise: this run blocks and published nothing inline.
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES over a head that was not fully read",
+			fixture.state.lastSubmitReview["event"])
+	}
+	if len(fixture.state.streamedComments) != 0 {
+		t.Fatalf("streamed comments = %d, want none", len(fixture.state.streamedComments))
+	}
+
+	body := failureSummaryComment(t, fixture)
+	if strings.Contains(body, "listed inline") {
+		t.Fatalf("summary sends the reader to inline comments this run never posted:\n%s", body)
+	}
+	if !strings.Contains(body, "| Findings published inline | `0` |") {
+		t.Fatalf("summary detail table does not report an empty publication:\n%s", body)
+	}
+	if !strings.Contains(body, "Changes are requested for the reasons listed below.") {
+		t.Fatalf("summary does not point at what is holding the block:\n%s", body)
+	}
+	if !strings.Contains(body, "This head was not fully reviewed") {
+		t.Fatalf("summary does not name the unread head as the reason:\n%s", body)
 	}
 }
 

@@ -143,7 +143,7 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "request installation token", slog.String("err", err.Error()))
-		return "", errors.New("request installation token")
+		return "", fmt.Errorf("request installation token: %w", err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
