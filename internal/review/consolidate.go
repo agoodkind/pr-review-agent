@@ -221,11 +221,29 @@ func consolidationMatch(group ConsolidationGroup, survivor domain.Finding) dupli
 }
 
 // strongestCandidate returns the number of the group member to keep: the
-// highest importance, and the earliest number among equals.
+// highest importance, and the lowest number among equals.
+//
+// The tie is broken on the number rather than on where the number sits in the
+// group, so the same group returns the same survivor whichever order the model
+// listed it in. Seeding from the first number and replacing only on strictly
+// higher importance read as though it did that, and did not: a group returned
+// as [2, 1] with two equal candidates kept 2, which made the survivor a
+// property of the answer's phrasing rather than of the findings. Deciding by
+// the phrasing is the whole failure this file exists to remove.
+//
+// The number counts from one and indexes the candidate list in the order the
+// chunk produced it, so the lowest number is the earliest finding, which is the
+// tie the deterministic collapse breaks on too.
 func strongestCandidate(numbers []int, candidates []domain.Finding) int {
 	strongest := numbers[0]
 	for _, number := range numbers {
-		if candidates[number-1].Importance > candidates[strongest-1].Importance {
+		importance := candidates[number-1].Importance
+		strongestImportance := candidates[strongest-1].Importance
+		if importance > strongestImportance {
+			strongest = number
+			continue
+		}
+		if importance == strongestImportance && number < strongest {
 			strongest = number
 		}
 	}

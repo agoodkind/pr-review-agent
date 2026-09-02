@@ -477,10 +477,19 @@ func unrelatedRestatements() []domain.Finding {
 	}
 }
 
-// consolidationFixture wires a run whose one chunk holds the two restatements,
-// with a scripted grouping and a scripted failure.
+// equallyRatedRestatements are the same two findings rated the same, so
+// importance decides nothing between them and the tie-break decides alone.
+func equallyRatedRestatements() []domain.Finding {
+	findings := unrelatedRestatements()
+	findings[1].Importance = findings[0].Importance
+	return findings
+}
+
+// consolidationFixture wires a run whose one chunk holds two restatements, with
+// a scripted grouping and a scripted failure.
 func consolidationFixture(
 	t *testing.T,
+	findings []domain.Finding,
 	grouping []review.Consolidation,
 	callErr error,
 ) (*serviceFixture, *sequenceModel) {
@@ -488,7 +497,7 @@ func consolidationFixture(
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{
 			CoverageComplete: true,
-			Findings:         unrelatedRestatements(),
+			Findings:         findings,
 		}},
 		consolidations: grouping,
 		consolidateErr: callErr,
@@ -503,7 +512,7 @@ func consolidationFixture(
 // and reading them is the only thing that closes it. The group merges to its
 // strongest member, so the reader gets the more important of the two.
 func TestAConsolidationGroupPublishesItsStrongestMember(t *testing.T) {
-	fixture, model := consolidationFixture(t, []review.Consolidation{{
+	fixture, model := consolidationFixture(t, unrelatedRestatements(), []review.Consolidation{{
 		Groups: []review.ConsolidationGroup{{
 			Candidates:         []int{1, 2},
 			RestatesOpenThread: false,
@@ -524,10 +533,37 @@ func TestAConsolidationGroupPublishesItsStrongestMember(t *testing.T) {
 	}
 }
 
+// A group whose members are rated the same keeps the earlier finding, and which
+// one that is must not depend on the order the model happened to list them in.
+//
+// The group here arrives as [2, 1], which is the order that exposes it: seeding
+// the survivor from the first number listed and replacing only on strictly
+// higher importance keeps 2, so the answer's phrasing decides which finding a
+// reader sees. Every group in every other test arrives ascending, where the two
+// rules agree, so none of them can catch this.
+func TestAConsolidationGroupOfEqualsKeepsTheEarlierFindingWhateverTheOrder(t *testing.T) {
+	fixture, _ := consolidationFixture(t, equallyRatedRestatements(), []review.Consolidation{{
+		Groups: []review.ConsolidationGroup{{
+			Candidates:         []int{2, 1},
+			RestatesOpenThread: false,
+			Reason:             "Both are the unchecked publish call.",
+		}},
+	}}, nil)
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one: the model grouped them", bodies)
+	}
+	if !strings.Contains(bodies[0], "Publish failure is ignored") {
+		t.Fatalf("published comment = %q, want the earlier finding: the two are rated the same", bodies[0])
+	}
+}
+
 // A group marked as restating an open thread loses every member, because the
 // thread is where that conversation already is.
 func TestAConsolidationGroupThatRestatesAnOpenThreadPublishesNothing(t *testing.T) {
-	fixture, _ := consolidationFixture(t, []review.Consolidation{{
+	fixture, _ := consolidationFixture(t, unrelatedRestatements(), []review.Consolidation{{
 		Groups: []review.ConsolidationGroup{{
 			Candidates:         []int{1, 2},
 			RestatesOpenThread: true,
