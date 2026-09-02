@@ -4206,6 +4206,11 @@ func (quotaExhaustedError) UsageExceeded() bool {
 // A finding an earlier review already carried stays suppressed even when this
 // run rewords it, because its thread is already on the page. Every other
 // finding is published: nothing else withholds one.
+//
+// The three findings quote three different source lines, because that is what
+// three distinct defects look like. Quoting one line three times would make
+// them one claim under the claim key, and the answer would prove nothing about
+// the historical thread.
 func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 	historical := domain.Finding{
 		Path:       "main.go",
@@ -4242,7 +4247,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 					EndLine:    4,
 					Title:      "Reworded historical defect",
 					Body:       "New wording must not republish this finding.",
-					Evidence:   "added",
+					Evidence:   "third",
 					Importance: 10,
 				},
 				{
@@ -4260,7 +4265,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 					EndLine:    3,
 					Title:      "Third defect",
 					Body:       "A third defect on a third line.",
-					Evidence:   "added",
+					Evidence:   "second",
 					Importance: 10,
 				},
 			},

@@ -723,6 +723,14 @@ func (pass *chunkPass) recordUndelivered() {
 //
 // It runs under the pass lock, because the suppression state it reads and
 // writes is what makes two chunks reporting one defect post it once.
+//
+// What somebody else already carried is dropped before the chunk's own answer
+// is collapsed, and the order is load bearing. Collapsing first lets a
+// candidate that is never going to be published take a live sibling into its
+// group and down with it: one restatement of a settled thread, anchored across
+// a range, swallowed a genuinely separate defect anchored inside that range and
+// both went unpublished. Dropping the doomed candidates first leaves the
+// collapse to decide only among candidates that could reach the page.
 func (service *Service) renderChunkFindings(
 	ctx context.Context,
 	head domain.HeadSHA,
@@ -737,21 +745,10 @@ func (service *Service) renderChunkFindings(
 	pass.collector.collect(findings)
 	grounded := groundedFindings(ctx, findings, pass.collector.fileIndex, chunkText)
 	eligible := eligibleFindings(grounded, pass.collector.fileIndex, pass.collector.minimumImportance)
-	posts := make([]postCandidate, 0, len(eligible))
-	withheld := make([]withheldFinding, 0)
-	for _, finding := range eligible {
-		if thread, answered := pass.disputes.answered(finding); answered {
-			withheld = append(withheld, withheldFinding{
-				Path:   finding.Path,
-				Title:  finding.Title,
-				Thread: thread,
-			})
-			continue
-		}
-		keys := keysFor(finding)
-		if pass.selection.suppressed(keys) {
-			continue
-		}
+	candidates := collapseChunkCandidates(ctx, unansweredCandidates(ctx, eligible, pass))
+
+	posts := make([]postCandidate, 0, len(candidates))
+	for _, finding := range candidates {
 		rendered, err := RenderInline(head, []domain.Finding{finding})
 		if err != nil {
 			// One finding that cannot be rendered says nothing about the others
@@ -766,11 +763,36 @@ func (service *Service) renderChunkFindings(
 			pass.failed++
 			continue
 		}
-		pass.selection.remember(keys)
+		pass.selection.remember(keysFor(finding), finding.Title)
 		posts = append(posts, postCandidate{finding: finding, comment: rendered[0]})
 	}
-	logWithheldFindings(ctx, withheld)
 	return posts
+}
+
+// unansweredCandidates drops every candidate something already on the pull
+// request carries: a thread still open on it, an earlier review, or an earlier
+// chunk of this same run.
+//
+// It runs under the pass lock, because the memory it reads is what makes two
+// chunks reporting one defect post it once.
+func unansweredCandidates(
+	ctx context.Context,
+	eligible []domain.Finding,
+	pass *chunkPass,
+) []domain.Finding {
+	unanswered := make([]domain.Finding, 0, len(eligible))
+	for _, finding := range eligible {
+		if match, answered := pass.disputes.answered(finding); answered {
+			logSuppressed(ctx, layerOpenThreads, finding, match)
+			continue
+		}
+		if layer, match, carried := pass.selection.suppressed(keysFor(finding)); carried {
+			logSuppressed(ctx, layer, finding, match)
+			continue
+		}
+		unanswered = append(unanswered, finding)
+	}
+	return unanswered
 }
 
 // confirmHead reports whether the pull request still points at the commit these
