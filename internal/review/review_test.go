@@ -815,7 +815,7 @@ func TestTheChunkPromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 // as different. The prompt now asks for one report per defect, at one anchor,
 // carrying one claim sentence the service can compare across wordings.
 func TestTheChunkPromptAsksForOneClaimPerDefect(t *testing.T) {
-	model := &sequenceModel{results: []domain.ReviewResult{{CoverageComplete: true}}}
+	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{minimumImportance: 9, model: model})
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {

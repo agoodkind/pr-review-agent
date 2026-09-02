@@ -42,8 +42,7 @@ func oneChunkFixture(t *testing.T, findings ...domain.Finding) *serviceFixture {
 	return newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         findings,
+			Findings: findings,
 		}}},
 	})
 }
@@ -148,7 +147,6 @@ func TestTheSuppressionLogNamesTheWithheldFindingsRangeFirst(t *testing.T) {
 		minimumImportance: 9,
 		logWriter:         logs,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{
 				{
 					Path:       "main.go",
@@ -283,7 +281,6 @@ func (twoFileChunkCollector) CollectRange(
 // way and anchored on its own line of the first file.
 func crossChunkRestatement(title string, line int) domain.ReviewResult {
 	return domain.ReviewResult{
-		CoverageComplete: true,
 		Findings: []domain.Finding{{
 			Path:       "file0.go",
 			StartLine:  line,
@@ -365,7 +362,6 @@ func TestOneChunkPublishesOneCommentForOneClaimStatedTwice(t *testing.T) {
 // the first file, worded its own way and resting on its own quoted line.
 func crossChunkClaimText(title string, line int, evidence string) domain.ReviewResult {
 	return domain.ReviewResult{
-		CoverageComplete: true,
 		Findings: []domain.Finding{{
 			Path:       "file0.go",
 			StartLine:  line,
@@ -410,7 +406,6 @@ func TestOneClaimSentenceInTwoFilesPublishesTwice(t *testing.T) {
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{
 			{
-				CoverageComplete: true,
 				Findings: []domain.Finding{{
 					Path:       "file0.go",
 					StartLine:  2,
@@ -424,7 +419,6 @@ func TestOneClaimSentenceInTwoFilesPublishesTwice(t *testing.T) {
 				}},
 			},
 			{
-				CoverageComplete: true,
 				Findings: []domain.Finding{{
 					Path:       "file1.go",
 					StartLine:  2,
@@ -473,7 +467,6 @@ func claimThreadFixture(t *testing.T, resolved bool) *serviceFixture {
 			threadCarrying(t, claimThreadFinding(), resolved, ""),
 		},
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{
 				claimTextRestatement("Publish error goes unchecked", 4, "third", 9),
 			},
@@ -514,7 +507,6 @@ func TestAThreadWithNoClaimTextKeySuppressesNothingByClaimText(t *testing.T) {
 			threadCarrying(t, keylessStandingFinding(), false, ""),
 		},
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{
 				claimTextRestatement("Publish error goes unchecked", 5, "fifth", 9),
 			},
@@ -615,8 +607,7 @@ func consolidationFixture(
 	t.Helper()
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         findings,
+			Findings: findings,
 		}},
 		consolidations: grouping,
 		consolidateErr: callErr,
@@ -704,8 +695,7 @@ func TestAFailedConsolidationCallPublishesTheDeterministicResult(t *testing.T) {
 	logs := &syncBuffer{}
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         unrelatedRestatements(),
+			Findings: unrelatedRestatements(),
 		}},
 		consolidateErr: errors.New("the provider refused the grouping"),
 	}
@@ -731,8 +721,7 @@ func TestAConsolidationAnswerNamingAnUnknownCandidateIsRefused(t *testing.T) {
 	logs := &syncBuffer{}
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         unrelatedRestatements(),
+			Findings: unrelatedRestatements(),
 		}},
 		consolidations: []review.Consolidation{{
 			Groups: []review.ConsolidationGroup{{
@@ -764,8 +753,7 @@ func TestAConsolidationAnswerNamingAnUnknownCandidateIsRefused(t *testing.T) {
 // an open thread for it to be measured against.
 func TestAChunkHoldingOneCandidateWithNoOpenThreadMakesNoConsolidationCall(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{{
-		CoverageComplete: true,
-		Findings:         unrelatedRestatements()[:1],
+		Findings: unrelatedRestatements()[:1],
 	}}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
@@ -805,7 +793,6 @@ func loneRestatementFixture(t *testing.T, grouping []review.Consolidation) (*ser
 	}
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
 				StartLine:  5,
@@ -887,8 +874,7 @@ func TestAChunkWithNoCandidatesMakesNoConsolidationCall(t *testing.T) {
 		Importance: 9,
 	}
 	model := &sequenceModel{results: []domain.ReviewResult{{
-		CoverageComplete: true,
-		Findings:         nil,
+		Findings: nil,
 	}}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
@@ -969,8 +955,7 @@ func (model *barrierConsolidationModel) Review(
 ) (review.Completion, error) {
 	return review.Completion{
 		Result: domain.ReviewResult{
-			CoverageComplete: true,
-			Findings:         sharedAndUniqueFindings(promptFilePath(prompt)),
+			Findings: sharedAndUniqueFindings(promptFilePath(prompt)),
 		},
 		Model: testReviewModel,
 	}, nil
@@ -1123,8 +1108,7 @@ func standingThreadFixture(t *testing.T, resolved bool) *serviceFixture {
 			threadCarrying(t, keylessStandingFinding(), resolved, ""),
 		},
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{neighbouringRestatement()},
+			Findings: []domain.Finding{neighbouringRestatement()},
 		}}},
 	})
 }
