@@ -8,6 +8,12 @@ import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "
 const FORCE_REVIEW_LABEL_PREFIX = "test-review-agent-";
 
 // forcesReview reports whether a delivery is one of those labels being added.
+//
+// It reads metadata taken from a body nobody has verified, and it runs before
+// the signature is checked, so it must not throw whatever that body contains.
+// What makes the prefix test safe is that readWebhookMetadata narrows every
+// field to a string, so a label of any other type arrives as no label and the
+// delivery is forwarded for the Go service to judge.
 function forcesReview(metadata) {
   return (
     metadata.eventType === "pull_request" &&
@@ -126,6 +132,23 @@ async function enqueueForReplay(env, path, request, body, metadata) {
   return entry.id;
 }
 
+// stringField returns a payload value when it is a string and the empty string
+// otherwise, so every metadata field is one whatever the sender wrote.
+//
+// The narrowing is the point rather than a nicety. This metadata is built from a
+// body nobody has verified, it is read before the signature is checked, and one
+// reader calls a string method on it. Leaving the raw types in place let a
+// labeled payload carrying a number for its name throw there, and the throw was
+// indistinguishable from a container that could not take the delivery: the
+// forward was abandoned, and a signed delivery went to the replay queue to fail
+// the same way on every attempt.
+function stringField(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  return "";
+}
+
 async function readWebhookMetadata(request) {
   const deliveryId = request.headers.get("x-github-delivery") ?? "";
   const eventType = request.headers.get("x-github-event") ?? "";
@@ -138,11 +161,12 @@ async function readWebhookMetadata(request) {
     return {
       deliveryId,
       eventType,
-      action: payload.action ?? "",
-      head: payload.pull_request?.head?.sha ?? "",
+      action: stringField(payload.action),
+      head: stringField(payload.pull_request?.head?.sha),
       // The label object is present only on a labeled or unlabeled delivery.
-      // Every other action reads as an empty name, which matches no prefix.
-      label: payload.label?.name ?? "",
+      // Every other action reads as an empty name, which matches no prefix, and
+      // so does a name of any type but a string.
+      label: stringField(payload.label?.name),
     };
   } catch {
     return { deliveryId, eventType, action: "invalid_json", head: "", label: "" };

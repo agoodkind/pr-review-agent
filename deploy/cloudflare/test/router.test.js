@@ -179,7 +179,7 @@ test("a service answer that is not 500 passes through untouched and queues nothi
 // 13 minutes after the restore, because nothing had restarted the container.
 // A forced review therefore has to reach a fresh container, and the worker is
 // the only part that owns one.
-function createRestartEnvironment(events) {
+function createRestartEnvironment(events, queued) {
   return {
     GITHUB_WEBHOOK_SECRET: testWebhookSecret, // gitleaks:allow
     PR_AGENT: {
@@ -192,6 +192,20 @@ function createRestartEnvironment(events) {
           async fetch() {
             events.push("forward");
             return new Response("proxied", { status: 202 });
+          },
+        };
+      },
+    },
+    // A queue is bound so a test can prove a delivery did not reach it. Without
+    // one, a delivery that was queued would fail on the missing binding and read
+    // as some other fault.
+    REPLAY_QUEUE: {
+      getByName(name) {
+        assert.equal(name, "webhook-replays");
+        return {
+          async fetch(request) {
+            (queued ?? []).push(await request.json());
+            return Response.json({ queued: true });
           },
         };
       },
@@ -258,6 +272,35 @@ test("a forcing delivery restarts nothing when no signing key is configured", as
 
   assert.equal(response.status, 202);
   assert.deepEqual(events, ["forward"]);
+});
+
+// The label name comes out of a body nobody has verified, and the forcing check
+// reads it before the signature is checked, so it has to survive whatever the
+// sender wrote. A name of any type but a string is no label: the delivery is
+// forwarded for the Go service to judge, exactly as every other delivery is.
+//
+// Before this the prefix test called a string method on it and threw, in the one
+// place this worker cannot afford to. The delivery then never reached the
+// container at all: an unsigned one was answered 401 and a signed one was
+// diverted into the replay queue, where every attempt would throw the same way.
+test("a label name that is not a string is no label rather than an error", async function () {
+  const forgedSignature = "sha256=" + "0".repeat(64);
+  for (const labelName of [12345, 3.14, true, { nested: "object" }, ["array"]]) {
+    for (const signed of [true, false]) {
+      const events = [];
+      const queued = [];
+      const request = signed
+        ? labeledWebhookRequest("labeled", labelName)
+        : labeledWebhookRequest("labeled", labelName, forgedSignature);
+      const where = `label ${JSON.stringify(labelName)} signed=${signed}`;
+
+      const response = await routeRequest(request, createRestartEnvironment(events, queued));
+
+      assert.equal(response.status, 202, where);
+      assert.deepEqual(events, ["forward"], where);
+      assert.equal(queued.length, 0, where);
+    }
+  }
 });
 
 test("no other delivery stops the container", async function () {
