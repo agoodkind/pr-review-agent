@@ -495,6 +495,7 @@ func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 // truncatedModel truncates the first calls, then answers. It reproduces a model
 // that reaches its completion budget on a chunk carrying too many hunks.
 type truncatedModel struct {
+	noConsolidation
 	truncateCalls int
 	prompts       []string
 	calls         int
@@ -804,6 +805,35 @@ func TestTheChunkPromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 	}
 }
 
+// One live pull request received the same ask five times under five titles
+// across two paths. Nothing in the prompt said not to, so the model restated
+// one defect as many findings and every deterministic key downstream saw them
+// as different. The prompt now asks for one report per defect, at one anchor,
+// carrying one claim sentence the service can compare across wordings.
+func TestTheChunkPromptAsksForOneClaimPerDefect(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{{CoverageComplete: true}}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{minimumImportance: 9, model: model})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(model.prompts) != 1 {
+		t.Fatalf("prompt count = %d, want 1", len(model.prompts))
+	}
+	prompt := model.prompts[0]
+	for _, want := range []string{
+		"Report each distinct defect exactly once",
+		"single best line range",
+		"Never restate one defect under a second title or at a second location",
+		"Return in claim one short sentence stating the defect independent of wording",
+		"Two reports of the same defect must carry the same claim",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %q", want, prompt)
+		}
+	}
+}
+
 // A model answer the schema rejects is a failed chunk like any other: it stays
 // pending, and the run blocks the head rather than approving what it never read.
 func TestAnInvalidModelResultLeavesItsChunkPending(t *testing.T) {
@@ -839,6 +869,36 @@ type sequenceModel struct {
 	prompts   []string
 	callCount int
 	err       error
+	// consolidations are the groupings this double answers consolidation calls
+	// with, in arrival order. A call past the end of the list is answered with
+	// no groups, which is a model saying the findings it was shown are several
+	// findings rather than one.
+	consolidations     []review.Consolidation
+	consolidatePrompts []string
+	consolidateErr     error
+}
+
+// Consolidate answers one grouping call from the script.
+func (model *sequenceModel) Consolidate(_ context.Context, prompt string) (review.Consolidation, error) {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	model.consolidatePrompts = append(model.consolidatePrompts, prompt)
+	if model.consolidateErr != nil {
+		return review.Consolidation{}, model.consolidateErr
+	}
+	index := len(model.consolidatePrompts) - 1
+	if index >= len(model.consolidations) {
+		return review.Consolidation{Groups: nil}, nil
+	}
+	return model.consolidations[index], nil
+}
+
+// consolidationCalls reports how many groupings this double was asked for, so a
+// test can prove a chunk holding one candidate paid for no extra call.
+func (model *sequenceModel) consolidationCalls() int {
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	return len(model.consolidatePrompts)
 }
 
 func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Completion, error) {
@@ -860,14 +920,14 @@ func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Com
 	return review.Completion{Result: result, Model: name}, nil
 }
 
-type contextBlockingModel struct{}
+type contextBlockingModel struct{ noConsolidation }
 
 func (contextBlockingModel) Review(ctx context.Context, _ string) (review.Completion, error) {
 	<-ctx.Done()
 	return review.Completion{}, ctx.Err()
 }
 
-type panicModel struct{}
+type panicModel struct{ noConsolidation }
 
 func (panicModel) Review(context.Context, string) (review.Completion, error) {
 	panic("model panic")
@@ -1277,6 +1337,7 @@ func chunkIDShaped(id string) bool {
 // records which paths it was asked about, so a test can prove a chunk reached
 // the model rather than only that a run finished.
 type chunkScriptedModel struct {
+	noConsolidation
 	mu       sync.Mutex
 	failPath string
 	healthy  bool
@@ -1618,6 +1679,7 @@ func (manyChunkCollector) CollectRange(
 // deadlineProbeModel measures each call's budget from that call's own start,
 // and burns real time in the first wave so a later wave starts visibly later.
 type deadlineProbeModel struct {
+	noConsolidation
 	mu        sync.Mutex
 	firstWait time.Duration
 	waves     int
@@ -1707,6 +1769,7 @@ func TestNoModelCallInheritsAnEarlierChunksClock(t *testing.T) {
 // concurrencyProbeModel records how many calls overlap, so a test can prove
 // chunks run together rather than one after another.
 type concurrencyProbeModel struct {
+	noConsolidation
 	mu       sync.Mutex
 	inFlight int
 	highest  int
@@ -4147,6 +4210,7 @@ func (failingCollector) CollectRange(
 
 // failThenSucceedModel fails the first review pass and succeeds afterwards.
 type failThenSucceedModel struct {
+	noConsolidation
 	err   error
 	calls int
 }
@@ -4177,6 +4241,11 @@ func (quotaExhaustedError) UsageExceeded() bool {
 // A finding an earlier review already carried stays suppressed even when this
 // run rewords it, because its thread is already on the page. Every other
 // finding is published: nothing else withholds one.
+//
+// The three findings quote three different source lines, because that is what
+// three distinct defects look like. Quoting one line three times would make
+// them one claim under the claim key, and the answer would prove nothing about
+// the historical thread.
 func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 	historical := domain.Finding{
 		Path:       "main.go",
@@ -4213,7 +4282,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 					EndLine:    4,
 					Title:      "Reworded historical defect",
 					Body:       "New wording must not republish this finding.",
-					Evidence:   "added",
+					Evidence:   "third",
 					Importance: 10,
 				},
 				{
@@ -4231,7 +4300,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 					EndLine:    3,
 					Title:      "Third defect",
 					Body:       "A third defect on a third line.",
-					Evidence:   "added",
+					Evidence:   "second",
 					Importance: 10,
 				},
 			},
@@ -5113,6 +5182,7 @@ func (twoChunkCollector) CollectRange(
 }
 
 type serialGateModel struct {
+	noConsolidation
 	mu      sync.Mutex
 	active  int
 	maxSeen int

@@ -148,6 +148,7 @@ func requireMultipleWaves(t *testing.T) {
 // context dies, which is the moment a kill lands: several chunks have posted
 // and checkpointed, and one is still in flight.
 type killableModel struct {
+	noConsolidation
 	mu       sync.Mutex
 	holdPath string
 	released bool
@@ -339,6 +340,7 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 // It burns real time in the first wave so a later wave starts visibly later,
 // which is where a clock shared across calls would show up.
 type budgetProbeModel struct {
+	noConsolidation
 	mu        sync.Mutex
 	firstWait time.Duration
 	calls     int

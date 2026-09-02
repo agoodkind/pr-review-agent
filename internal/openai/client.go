@@ -160,6 +160,35 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 	return response.Resolutions, nil
 }
 
+// Consolidate requests one structured grouping of a chunk's own findings.
+func (client *Client) Consolidate(ctx context.Context, prompt string) (review.Consolidation, error) {
+	content, _, err := client.complete(
+		ctx,
+		prompt,
+		review.ConsolidationPolicy(),
+		consolidateSchemaName,
+		consolidateSchemaJSON,
+	)
+	if err != nil {
+		return review.Consolidation{}, err
+	}
+	var consolidation review.Consolidation
+	decoder := json.NewDecoder(strings.NewReader(content))
+	if err := decoder.Decode(&consolidation); err != nil {
+		return review.Consolidation{}, errors.New("decode structured output: " + err.Error())
+	}
+	// Only the shape is checkable here, and it is checked for the same reason a
+	// review result and a set of thread resolutions are: a malformed answer is
+	// refused while the provider that produced it is still in view. Whether a
+	// candidate number is inside the range depends on how many candidates the
+	// caller showed, which lives in the prompt rather than in anything this
+	// client holds, so the caller tests that before it merges anything.
+	if err := consolidation.ValidateShape(); err != nil {
+		return review.Consolidation{}, errors.New("validate consolidation: " + err.Error())
+	}
+	return consolidation, nil
+}
+
 // complete sends one request to the primary provider and repeats it against the
 // fallback when the primary refusal matches the declared fallback condition.
 // It returns the content and the model that produced it. It keeps no memory of

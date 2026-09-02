@@ -174,6 +174,15 @@ func (pass *chunkPass) recordCall(models modelSet, requests int, results []domai
 	}
 }
 
+// recordConsolidationRequest counts the extra model call a chunk spent asking
+// whether its own findings restate each other, so the request count a run
+// reports covers every call it made rather than only the chunk calls.
+func (pass *chunkPass) recordConsolidationRequest() {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	pass.requests++
+}
+
 // recordFailure records one chunk nobody could read. A chunk that went unread
 // is a slice of the head nobody covered, so it also ends the coverage claim.
 func (pass *chunkPass) recordFailure(chunk int, err error) {
@@ -607,7 +616,7 @@ func (service *Service) postChunkFindings(
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
-	posts := service.renderChunkFindings(ctx, head, chunkText, findings, pass)
+	posts := service.chunkPosts(ctx, head, chunkText, findings, pass)
 	if len(posts) == 0 {
 		return nil
 	}
@@ -717,41 +726,26 @@ func (pass *chunkPass) recordUndelivered() {
 	pass.failed++
 }
 
-// renderChunkFindings turns one chunk's findings into the comments to post,
-// dropping the ones an earlier review or an earlier chunk already carried and
-// the ones this pull request has already answered.
+// renderChunkFindings turns the candidates a chunk still stands behind into the
+// comments to post.
 //
-// It runs under the pass lock, because the suppression state it reads and
-// writes is what makes two chunks reporting one defect post it once.
+// It runs under the pass lock, and it tests suppression once more before
+// rendering. The consolidation call between the two tests holds no lock, so
+// another chunk can publish a claim in that window; testing again inside the
+// same lock hold that records what this chunk carries is what keeps two chunks
+// reporting one defect down to one comment.
 func (service *Service) renderChunkFindings(
 	ctx context.Context,
 	head domain.HeadSHA,
-	chunkText string,
-	findings []domain.Finding,
+	candidates []domain.Finding,
 	pass *chunkPass,
 ) []postCandidate {
 	logger := gklog.L(ctx)
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 
-	pass.collector.collect(findings)
-	grounded := groundedFindings(ctx, findings, pass.collector.fileIndex, chunkText)
-	eligible := eligibleFindings(grounded, pass.collector.fileIndex, pass.collector.minimumImportance)
-	posts := make([]postCandidate, 0, len(eligible))
-	withheld := make([]withheldFinding, 0)
-	for _, finding := range eligible {
-		if thread, answered := pass.disputes.answered(finding); answered {
-			withheld = append(withheld, withheldFinding{
-				Path:   finding.Path,
-				Title:  finding.Title,
-				Thread: thread,
-			})
-			continue
-		}
-		keys := keysFor(finding)
-		if pass.selection.suppressed(keys) {
-			continue
-		}
+	posts := make([]postCandidate, 0, len(candidates))
+	for _, finding := range unansweredCandidates(ctx, candidates, pass) {
 		rendered, err := RenderInline(head, []domain.Finding{finding})
 		if err != nil {
 			// One finding that cannot be rendered says nothing about the others
@@ -766,11 +760,44 @@ func (service *Service) renderChunkFindings(
 			pass.failed++
 			continue
 		}
-		pass.selection.remember(keys)
+		pass.selection.remember(keysFor(finding), finding.Title)
 		posts = append(posts, postCandidate{finding: finding, comment: rendered[0]})
 	}
-	logWithheldFindings(ctx, withheld)
 	return posts
+}
+
+// unansweredCandidates drops every candidate something already on the pull
+// request carries: a thread still open on it, an earlier review, or an earlier
+// chunk of this same run.
+//
+// The caller holds the pass lock, because the memory this reads is what makes
+// two chunks reporting one defect post it once.
+//
+// It runs before the chunk's own answer is collapsed, and that order is load
+// bearing. Collapsing first lets a candidate that is never going to be
+// published take a live sibling into its group and down with it: one
+// restatement of a settled thread, anchored across a range, swallowed a
+// genuinely separate defect anchored inside that range and neither reached the
+// page. Dropping the doomed candidates first leaves the collapse to decide only
+// among candidates that could still be published.
+func unansweredCandidates(
+	ctx context.Context,
+	eligible []domain.Finding,
+	pass *chunkPass,
+) []domain.Finding {
+	unanswered := make([]domain.Finding, 0, len(eligible))
+	for _, finding := range eligible {
+		if match, answered := pass.disputes.answered(finding); answered {
+			logSuppressed(ctx, layerOpenThreads, finding, match)
+			continue
+		}
+		if layer, match, carried := pass.selection.suppressed(keysFor(finding)); carried {
+			logSuppressed(ctx, layer, finding, match)
+			continue
+		}
+		unanswered = append(unanswered, finding)
+	}
+	return unanswered
 }
 
 // confirmHead reports whether the pull request still points at the commit these

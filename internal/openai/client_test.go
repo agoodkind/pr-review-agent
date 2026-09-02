@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -140,23 +141,68 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("finding properties = %v, want object", items["properties"])
 	}
-	suggestion, ok := findingProperties["suggestion"].(map[string]any)
-	if !ok || suggestion["type"] != "string" {
-		t.Fatalf("suggestion schema = %v, want string", findingProperties["suggestion"])
-	}
 	required, ok := items["required"].([]any)
 	if !ok {
 		t.Fatalf("finding required = %v, want array", items["required"])
 	}
-	suggestionRequired := false
-	for _, field := range required {
-		if field == "suggestion" {
-			suggestionRequired = true
-			break
+	// The schema is strict and refuses any property it does not name, so a
+	// field absent from properties is a field the model cannot return at all,
+	// and one absent from required is a field a strict schema rejects outright.
+	for _, field := range []string{"suggestion", "claim"} {
+		property, ok := findingProperties[field].(map[string]any)
+		if !ok || property["type"] != "string" {
+			t.Fatalf("%s schema = %v, want string", field, findingProperties[field])
+		}
+		if !slices.Contains(required, any(field)) {
+			t.Fatalf("finding required = %v, want %s", required, field)
 		}
 	}
-	if !suggestionRequired {
-		t.Fatalf("finding required = %v, want suggestion", required)
+}
+
+// The claim is the canonical label two restatements of one defect share, so it
+// has to survive the decode that turns the model answer into findings. An
+// answer from before the field existed carries none, and decoding it as the
+// empty string is what keeps such an answer usable instead of failing the run.
+func TestReviewDecodesTheClaimAndAcceptsAnAnswerWithoutOne(t *testing.T) {
+	const claim = "the changed line writes to a nil map"
+	cases := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "answer carrying a claim",
+			content: `{"coverage_complete":true,"findings":[{"path":"main.go","start_line":2,` +
+				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
+				`"evidence":"cache[key] = value","claim":"` + claim + `","suggestion":"","importance":8}]}`,
+			want: claim,
+		},
+		{
+			name: "answer from the older schema",
+			content: `{"coverage_complete":true,"findings":[{"path":"main.go","start_line":2,` +
+				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
+				`"evidence":"cache[key] = value","suggestion":"","importance":8}]}`,
+			want: "",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client, server, state := newTestClient(t)
+			defer server.Close()
+
+			state.completionContent = testCase.content
+
+			completion, err := client.Review(context.Background(), "prompt")
+			if err != nil {
+				t.Fatalf("Review: %v", err)
+			}
+			if len(completion.Result.Findings) != 1 {
+				t.Fatalf("findings = %d, want 1", len(completion.Result.Findings))
+			}
+			if got := completion.Result.Findings[0].Claim; got != testCase.want {
+				t.Fatalf("claim = %q, want %q", got, testCase.want)
+			}
+		})
 	}
 }
 
@@ -422,6 +468,61 @@ func TestReconcileRejectsDuplicateThreadIDs(t *testing.T) {
 	_, err := client.Reconcile(context.Background(), "reconcile input")
 	if err == nil {
 		t.Fatal("Reconcile duplicate thread ids: want error")
+	}
+	if state.requestCount != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
+	}
+}
+
+// A grouping decides which findings a chunk publishes, so a malformed one is
+// refused where the provider that wrote it is still in view, the way a review
+// result and a set of thread resolutions are.
+func TestConsolidateAcceptsAWellFormedGrouping(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.completionContent = `{"groups":[{"candidates":[1,3],"restates_open_thread":false,"reason":"one defect"}]}`
+
+	consolidation, err := client.Consolidate(context.Background(), "consolidate input")
+	if err != nil {
+		t.Fatalf("Consolidate: %v", err)
+	}
+	if len(consolidation.Groups) != 1 {
+		t.Fatalf("group count = %d, want 1", len(consolidation.Groups))
+	}
+	if len(consolidation.Groups[0].Candidates) != 2 {
+		t.Fatalf("candidates = %v, want two", consolidation.Groups[0].Candidates)
+	}
+}
+
+func TestConsolidateRejectsACandidateInTwoGroups(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.completionContent = `{"groups":[{"candidates":[1,2],"restates_open_thread":false,"reason":"one"},` +
+		`{"candidates":[2],"restates_open_thread":true,"reason":"two"}]}`
+
+	_, err := client.Consolidate(context.Background(), "consolidate input")
+	if err == nil {
+		t.Fatal("Consolidate a candidate in two groups: want error")
+	}
+	if state.requestCount != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
+	}
+}
+
+// A number below the first candidate indexes nothing, so it is refused here.
+// The upper bound is not: it is the count of candidates the caller showed, and
+// the client holds a prompt string rather than that count.
+func TestConsolidateRejectsACandidateNumberBelowTheFirst(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.completionContent = `{"groups":[{"candidates":[0,1],"restates_open_thread":false,"reason":"one"}]}`
+
+	_, err := client.Consolidate(context.Background(), "consolidate input")
+	if err == nil {
+		t.Fatal("Consolidate a candidate number below the first: want error")
 	}
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)

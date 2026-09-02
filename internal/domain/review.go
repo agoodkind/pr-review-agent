@@ -100,7 +100,14 @@ type Finding struct {
 	// evidence does not appear in that source, so a claim about code the model
 	// never saw cannot reach the pull request. An answer without it decodes,
 	// and the missing evidence makes the finding ungrounded.
-	Evidence   string `json:"evidence"`
+	Evidence string `json:"evidence"`
+	// Claim is one short sentence naming the defect independent of the wording
+	// the finding is written in, a canonical label for what is wrong. Two
+	// reports of one defect carry the same claim even when their titles,
+	// bodies, and anchored lines differ, which is what lets a restatement be
+	// recognized as one. It is never published: only its hash reaches the
+	// marker. An answer from an older schema carries none, and decodes empty.
+	Claim      string `json:"claim"`
 	Suggestion string `json:"suggestion"`
 	Importance int    `json:"importance"`
 }

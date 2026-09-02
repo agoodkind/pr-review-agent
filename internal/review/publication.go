@@ -241,22 +241,39 @@ func logPublishedFindings(
 //
 // It starts from what earlier reviews and threads already carried, and it grows
 // as this run carries findings of its own, so a defect two chunks both report
-// is posted once. Chunks are reviewed one at a time, so no locking is needed.
+// is posted once. Every read and write of it happens under the pass lock,
+// because chunks answer several at a time.
 type publicationState struct {
 	historyIDs     map[string]struct{}
 	historyAnchors map[string]struct{}
+	// carried is what this run has already published, compared through the one
+	// shared comparison rather than on identity alone.
+	//
+	// Identity is a hash of the path and the normalized title, so a second chunk
+	// rewording the same defect produced a different identity and posted a
+	// second comment. The claim key and the anchor range survive that rewording,
+	// so what a chunk carried is recognized when a later chunk restates it.
+	carried *claimMemory
 }
 
-// findingKeys are the two identities a finding is suppressed by. Both cost a
-// hash and a path normalization, so they are computed once per finding.
+// findingKeys are the identities a finding is suppressed by. Each costs a hash
+// and a path normalization, so they are computed once per finding.
 type findingKeys struct {
 	id          string
 	anchor      string
 	anchorValid bool
+	// duplicate is the claim key and anchor range this run compares a candidate
+	// against what it has already carried.
+	duplicate duplicateKeys
 }
 
 func keysFor(finding domain.Finding) findingKeys {
-	keys := findingKeys{id: "", anchor: "", anchorValid: false}
+	keys := findingKeys{
+		id:          "",
+		anchor:      "",
+		anchorValid: false,
+		duplicate:   candidateKeys(finding),
+	}
 	if findingID, err := marker.FindingID(finding); err == nil {
 		keys.id = findingID
 	}
@@ -265,31 +282,44 @@ func keysFor(finding domain.Finding) findingKeys {
 }
 
 // suppressed reports whether an earlier review or an earlier chunk already
-// carried this finding.
-func (state *publicationState) suppressed(keys findingKeys) bool {
+// carried this finding, and names the layer and the evidence that decided it.
+func (state *publicationState) suppressed(keys findingKeys) (string, duplicateMatch, bool) {
 	if keys.id != "" {
 		if _, seen := state.historyIDs[keys.id]; seen {
-			return true
+			return layerPriorReviews, duplicateMatch{
+				Sense:   senseIdentity,
+				Detail:  shortClaimKey(keys.id),
+				Matched: "a finding an earlier review already carried",
+			}, true
 		}
 	}
-	if !keys.anchorValid {
-		return false
+	if keys.anchorValid {
+		if _, seen := state.historyAnchors[keys.anchor]; seen {
+			return layerPriorReviews, duplicateMatch{
+				Sense:   senseAnchorLine,
+				Detail:  keys.anchor,
+				Matched: "a thread anchored on that line",
+			}, true
+		}
 	}
-	_, seen := state.historyAnchors[keys.anchor]
-	return seen
+	if match, seen := state.carried.match(keys.duplicate); seen {
+		return layerAcrossChunks, match, true
+	}
+	return "", noMatch(), false
 }
 
 // remember records a finding as carried by this run, so no later chunk repeats
 // it. It is called before the comment is attempted, because two chunks
 // reporting the same defect must produce one comment whether or not the first
 // attempt succeeded.
-func (state *publicationState) remember(keys findingKeys) {
+func (state *publicationState) remember(keys findingKeys, label string) {
 	if keys.id != "" {
 		state.historyIDs[keys.id] = struct{}{}
 	}
 	if keys.anchorValid {
 		state.historyAnchors[keys.anchor] = struct{}{}
 	}
+	state.carried.remember(keys.duplicate, label)
 }
 
 // collectPublicationState reads what the pull request already carries, which is
@@ -330,6 +360,7 @@ func collectPublicationState(
 	return publicationState{
 		historyIDs:     historyIDs,
 		historyAnchors: historyAnchors,
+		carried:        newClaimMemory(),
 	}
 }
 

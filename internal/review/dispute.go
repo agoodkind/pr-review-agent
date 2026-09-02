@@ -22,56 +22,29 @@ package review
 // Beside it runs a deterministic backstop, because a model told not to repeat
 // itself is not a guarantee that it will not.
 //
-// The backstop compares claim keys. A claim key is the finding's path and its
-// evidence line hashed together, carried in the published marker, so it survives
-// every rewording and answers the question the title cannot: is this the same
-// claim about the same code. Two earlier attempts are why it is this and not
-// something looser. Matching an evidence line against an open thread's prose
+// The backstop compares claim keys and anchor ranges, through the one comparison
+// every layer of duplicate suppression shares. A claim key is the finding's path
+// and its evidence line hashed together, carried in the published marker, so it
+// survives every rewording and answers the question the title cannot: is this
+// the same claim about the same code. An anchor range catches the restatement
+// that rests on a neighbouring line, and it is all a comment published before the
+// claim key existed has. Two earlier attempts are why the comparison is these and
+// not something looser. Matching an evidence line against an open thread's prose
 // withheld a genuinely separate defect on the same file. Matching the finding
 // identity instead was measured to be a subset of the suppression
 // collectPublicationState already applies, so it decided nothing at all.
 //
 // Only open threads suppress. A resolved thread is a settled question, and a
-// defect reintroduced after a fix has to be raised again. A marker written
-// before the claim key existed carries none, and suppresses nothing.
+// defect reintroduced after a fix has to be raised again.
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 
-	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
-
-// withheldFinding is one claim the run did not raise again, with the thread that
-// already carries it.
-type withheldFinding struct {
-	Path   string `json:"path"`
-	Title  string `json:"title"`
-	Thread string `json:"thread"`
-}
-
-// logWithheldFindings names every claim this chunk raised again and the run
-// withheld, and the thread each one matched.
-//
-// Withholding is otherwise invisible. The finding never reaches the page, so
-// without this line a suppression that is working and a model that found nothing
-// look exactly alike, and a suppression that is too broad looks like both.
-func logWithheldFindings(ctx context.Context, withheld []withheldFinding) {
-	if len(withheld) == 0 {
-		return
-	}
-	gklog.L(ctx).InfoContext(
-		ctx,
-		"findings withheld, already open on this pull request",
-		slog.Int("withheld", len(withheld)),
-		slog.Any("findings", withheld),
-	)
-}
 
 // maximumDisputeBytes bounds the open thread context added to one chunk prompt.
 // The chunk itself is already the larger half of the budget, and a pull request
@@ -88,32 +61,31 @@ const maximumDisputeBytes = 16000
 type disputeContext struct {
 	// sections is one block per open thread, already truncated to the budget.
 	sections []string
-	// openClaims maps the claim key of each open thread to the thread that
-	// carries it, so a withheld finding can name what answered it. A thread
-	// whose marker has no claim key is not in here and suppresses nothing.
-	openClaims map[string]string
+	// open is what every open thread of the service's own already claims, keyed
+	// by claim key and by anchor range and labelled with the thread that carries
+	// it, so a withheld finding can name what answered it.
+	//
+	// A thread whose marker has no claim key still contributes its anchor range,
+	// which is what every comment published before the key existed has. Both are
+	// compared through the same function the within-run layers use.
+	open *claimMemory
 }
 
 // answered reports the open thread already carrying this finding's claim.
 //
-// The claim key covers the path, so a match is always a claim about the same
-// file. A finding with no evidence derives no key and is never withheld, which
-// is moot in practice because the grounding gate refuses it first.
-func (disputes disputeContext) answered(finding domain.Finding) (string, bool) {
-	claim, err := marker.ClaimKey(finding.Path, finding.Evidence)
-	if err != nil {
-		return "", false
-	}
-	thread, open := disputes.openClaims[claim]
-	return thread, open
+// Both comparisons cover the path, so a match is always a claim about the same
+// file. A finding that derives neither key is never withheld, which is moot in
+// practice because the grounding and anchoring gates refuse it first.
+func (disputes disputeContext) answered(finding domain.Finding) (duplicateMatch, bool) {
+	return disputes.open.match(candidateKeys(finding))
 }
 
 // collectDisputes reads the open findings of the service's own from the threads
 // the run already loaded for reconciliation.
 func collectDisputes(threads []githubapp.ReviewThread, botLogin string) disputeContext {
 	disputes := disputeContext{
-		sections:   make([]string, 0),
-		openClaims: make(map[string]string),
+		sections: make([]string, 0),
+		open:     newClaimMemory(),
 	}
 	budget := maximumDisputeBytes
 	for _, thread := range threads {
@@ -128,11 +100,8 @@ func collectDisputes(threads []githubapp.ReviewThread, botLogin string) disputeC
 		if err != nil {
 			continue
 		}
-		// The empty check is belt and braces: ClaimKey refuses to derive a key
-		// from a finding with no evidence, so an empty key can never be looked
-		// up either. Indexing one anyway would make this depend on that.
-		if published, ok := marker.FindFinding(thread.RootComment.Body); ok && published.ClaimKey != "" {
-			disputes.openClaims[published.ClaimKey] = thread.NodeID
+		if published, ok := marker.FindFinding(thread.RootComment.Body); ok {
+			disputes.open.remember(threadKeys(published, thread.RootComment), thread.NodeID)
 		}
 
 		section := formatDisputeSection(normalizedPath, finding, thread.Replies, botLogin)

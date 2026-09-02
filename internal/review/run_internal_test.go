@@ -212,6 +212,20 @@ func (github *postPlanGitHub) CreateReviewComment(
 	return answer
 }
 
+// postPlanModel answers the consolidation call two candidates ask for, grouping
+// nothing, so both findings reach the post loop these tests are about. It
+// reviews nothing: this fixture posts findings it was handed rather than
+// producing any.
+type postPlanModel struct{}
+
+func (postPlanModel) Review(context.Context, string) (Completion, error) {
+	return Completion{}, errors.New("this fixture makes no chunk call")
+}
+
+func (postPlanModel) Consolidate(context.Context, string) (Consolidation, error) {
+	return Consolidation{Groups: nil}, nil
+}
+
 func postFindingsWithPlan(t *testing.T, plan []error) error {
 	t.Helper()
 	postHead := domain.HeadSHA(internalTestHeadSHA)
@@ -231,6 +245,8 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 	pass := newChunkPass(work, 1, &selection, collectDisputes(nil, summaryCommentTestBotLogin))
 	service := &Service{
 		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
+		model:              postPlanModel{},
+		chunkTimeout:       time.Second,
 		publicationTimeout: time.Second,
 		now:                time.Now,
 	}
