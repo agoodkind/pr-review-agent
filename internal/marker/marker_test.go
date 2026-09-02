@@ -105,6 +105,132 @@ func TestFindingMarkerRejectsUnsafePaths(t *testing.T) {
 	}
 }
 
+// The claim sentence is how a reworded restatement is recognized, so the marker
+// has to carry it across runs. It carries the hash and never the sentence: the
+// comment is a public surface, and the claim is a label the model wrote for this
+// service rather than for the reader.
+func TestFindingMarkerCarriesTheClaimTextHashAndNotTheSentence(t *testing.T) {
+	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
+	const claim = "the produce authorization check is skipped for cached tokens"
+	finding := domain.Finding{
+		Path:       "internal/app/handler.go",
+		StartLine:  10,
+		EndLine:    10,
+		Title:      "Authorize before serving a cached token",
+		Body:       "The cached branch serves a token without the authorization check.",
+		Evidence:   "return cached.Token, nil",
+		Claim:      claim,
+		Suggestion: "",
+		Importance: 8,
+	}
+
+	body, err := EncodeFindingBody(head, finding)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+	if strings.Contains(body, claim) {
+		t.Fatalf("published body carries the claim sentence itself:\n%s", body)
+	}
+
+	wantKey, err := ClaimTextKey(claim)
+	if err != nil {
+		t.Fatalf("ClaimTextKey: %v", err)
+	}
+	if !strings.Contains(body, "claimtext="+wantKey) {
+		t.Fatalf("published body missing claimtext=%s:\n%s", wantKey, body)
+	}
+
+	parsed, ok := FindFinding(body)
+	if !ok {
+		t.Fatalf("FindFinding: marker not found in\n%s", body)
+	}
+	if parsed.ClaimTextKey != wantKey {
+		t.Fatalf("ClaimTextKey = %q, want %q", parsed.ClaimTextKey, wantKey)
+	}
+	if parsed.ClaimKey == "" {
+		t.Fatal("ClaimKey is empty: the evidence key must survive beside the claim text key")
+	}
+}
+
+// Rewording is the failure the claim exists to survive, and the smallest
+// rewordings are the ones a person cannot see. Two reports of one defect that
+// differ only in case, spacing, and a closing period are one claim.
+func TestClaimTextKeyIgnoresCaseSpacingAndTrailingPunctuation(t *testing.T) {
+	first, err := ClaimTextKey("The produce authorization check is skipped for cached tokens")
+	if err != nil {
+		t.Fatalf("ClaimTextKey first: %v", err)
+	}
+	second, err := ClaimTextKey("  the produce   authorization check\tis skipped for CACHED tokens.  ")
+	if err != nil {
+		t.Fatalf("ClaimTextKey second: %v", err)
+	}
+	if first != second {
+		t.Fatalf("keys differ for one claim: %q vs %q", first, second)
+	}
+
+	other, err := ClaimTextKey("the produce authorization check runs twice for cached tokens")
+	if err != nil {
+		t.Fatalf("ClaimTextKey other: %v", err)
+	}
+	if other == first {
+		t.Fatal("a different claim shares the key: the key states nothing")
+	}
+
+	if _, err := ClaimTextKey("   "); err == nil {
+		t.Fatal("empty claim: want an error rather than a key every claimless finding shares")
+	}
+}
+
+// Every finding already on an open pull request was published before this key
+// existed. A marker without it has to keep decoding, and has to suppress
+// nothing, because an empty key that matched would silence unrelated findings.
+func TestAMarkerWithoutAClaimTextKeyDecodesWithAnEmptyKey(t *testing.T) {
+	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
+	historical := domain.Finding{
+		Path:       "internal/app/handler.go",
+		StartLine:  10,
+		EndLine:    10,
+		Title:      "Authorize before serving a cached token",
+		Body:       "The cached branch serves a token without the authorization check.",
+		Evidence:   "return cached.Token, nil",
+		Claim:      "",
+		Suggestion: "",
+		Importance: 8,
+	}
+
+	body, err := EncodeFindingBody(head, historical)
+	if err != nil {
+		t.Fatalf("EncodeFindingBody: %v", err)
+	}
+	if strings.Contains(body, "claimtext=") {
+		t.Fatalf("marker carries a claim text key for a finding with no claim:\n%s", body)
+	}
+
+	parsed, ok := FindFinding(body)
+	if !ok {
+		t.Fatalf("FindFinding: marker not found in\n%s", body)
+	}
+	if parsed.ClaimTextKey != "" {
+		t.Fatalf("ClaimTextKey = %q, want empty", parsed.ClaimTextKey)
+	}
+
+	decodedHead, decoded, err := DecodeFindingBody(domain.ReviewComment{
+		Path:      historical.Path,
+		StartLine: historical.StartLine,
+		EndLine:   historical.EndLine,
+		Body:      body,
+	})
+	if err != nil {
+		t.Fatalf("DecodeFindingBody: %v", err)
+	}
+	if decodedHead != head {
+		t.Fatalf("head = %q, want %q", decodedHead, head)
+	}
+	if decoded.Claim != "" {
+		t.Fatalf("decoded claim = %q, want empty: the comment never carries the sentence", decoded.Claim)
+	}
+}
+
 func TestMarkerParserRejectsMalformedValues(t *testing.T) {
 	if _, ok := FindReview("<!-- pr-review-agent:review:v1 head=ZZZZ -->"); ok {
 		t.Fatal("malformed review marker accepted")

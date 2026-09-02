@@ -25,12 +25,12 @@ const (
 
 var (
 	reviewPattern = regexp.MustCompile(`<!-- pr-review-agent:review:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) -->`)
-	// findingPattern accepts a marker with or without a claim key. Every comment
-	// published before the key existed has none, and those comments outlive this
-	// change on every open pull request, so a pattern requiring one would stop
-	// recognizing the service's own findings.
+	// findingPattern accepts a marker with either claim key, both, or neither.
+	// Every comment published before a key existed has none, and those comments
+	// outlive this change on every open pull request, so a pattern requiring one
+	// would stop recognizing the service's own findings.
 	findingPattern = regexp.MustCompile(
-		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) importance=([1-9]|10) id=([0-9a-f]{64})(?: claim=([0-9a-f]{64}))? -->`,
+		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) importance=([1-9]|10) id=([0-9a-f]{64})(?: claim=([0-9a-f]{64}))?(?: claimtext=([0-9a-f]{64}))? -->`,
 	)
 )
 
@@ -43,6 +43,11 @@ type FindingMarker struct {
 	// worded. It is empty on a marker written before the key existed, and an
 	// empty key matches nothing.
 	ClaimKey string
+	// ClaimTextKey identifies the defect the finding named, independent of the
+	// line it anchored to. It is empty on a marker written before the key
+	// existed or by an answer that carried no claim, and an empty key matches
+	// nothing.
+	ClaimTextKey string
 }
 
 // Review returns the review marker for one head SHA.
@@ -75,11 +80,12 @@ func HasSummary(body string) bool {
 
 // Finding returns the finding marker for one head and finding pair.
 //
-// The claim key is included when the finding carries an evidence line to derive
-// it from, and left out otherwise. A finding with no evidence cannot be
-// published anyway, so in practice every new marker carries one; leaving it out
-// rather than writing an empty value keeps a keyless marker exactly the shape
-// the ones already on open pull requests have.
+// Each claim key is included when the finding carries the field to derive it
+// from, and left out otherwise. A finding with no evidence cannot be published
+// anyway, so in practice every new marker carries the evidence key; an answer
+// from an older schema carries no claim sentence, so it carries no claim text
+// key. Leaving a key out rather than writing an empty value keeps a keyless
+// marker exactly the shape the ones already on open pull requests have.
 func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
 	id, err := FindingID(finding)
 	if err != nil {
@@ -95,18 +101,21 @@ func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
 	if claim, claimErr := ClaimKey(finding.Path, finding.Evidence); claimErr == nil {
 		body += " claim=" + claim
 	}
+	if claimText, claimTextErr := ClaimTextKey(finding.Claim); claimTextErr == nil {
+		body += " claimtext=" + claimText
+	}
 	return body + markerSuffix, nil
 }
 
 // FindFinding extracts a finding marker from a comment body.
 func FindFinding(body string) (FindingMarker, bool) {
 	matches := findingPattern.FindStringSubmatch(body)
-	if len(matches) != 5 {
-		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: ""}, false
+	if len(matches) != 6 {
+		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: "", ClaimTextKey: ""}, false
 	}
 	head, err := domain.ParseHeadSHA(matches[1])
 	if err != nil {
-		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: ""}, false
+		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: "", ClaimTextKey: ""}, false
 	}
 	var importance int
 	if matches[2] == "10" {
@@ -114,12 +123,14 @@ func FindFinding(body string) (FindingMarker, bool) {
 	} else {
 		importance = int(matches[2][0] - '0')
 	}
-	// matches[4] is empty for a marker written before the claim key existed.
+	// matches[4] and matches[5] are empty for a marker written before their key
+	// existed, which is every marker already on an open pull request.
 	return FindingMarker{
-		Head:       head,
-		Importance: importance,
-		ID:         matches[3],
-		ClaimKey:   matches[4],
+		Head:         head,
+		Importance:   importance,
+		ID:           matches[3],
+		ClaimKey:     matches[4],
+		ClaimTextKey: matches[5],
 	}, true
 }
 
@@ -171,6 +182,46 @@ func normalizeEvidenceLine(evidence string) string {
 		line = strings.TrimSpace(line[1:])
 	}
 	return strings.Join(strings.Fields(line), " ")
+}
+
+// ClaimTextKey identifies the defect a finding names, independent of the line
+// it was anchored to.
+//
+// The evidence key covers two findings resting on the same source line. It does
+// not cover the rest of the same failure: one live pull request received the
+// same ask five times under five titles across two paths, and restatements that
+// cite different lines of one function share no evidence key at all. The claim
+// sentence is the model's own canonical label for the defect, so two findings
+// carrying the same claim are making the same claim wherever each anchored it.
+//
+// The key is a hash rather than the sentence. The marker sits in a published
+// comment, and the claim is a label the model wrote for this service rather than
+// for the reader, so printing it would put text in front of a person that was
+// never addressed to them. A hash compares exactly and shows nothing.
+func ClaimTextKey(claim string) (string, error) {
+	normalized := normalizeClaim(claim)
+	if normalized == "" {
+		return "", errors.New("finding carries no claim sentence")
+	}
+
+	var buffer bytes.Buffer
+	writeLengthHex(&buffer, len(normalized))
+	buffer.WriteString(normalized)
+
+	sum := sha256.Sum256(buffer.Bytes())
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// normalizeClaim reduces one claim sentence to the form two findings about the
+// same defect agree on.
+//
+// The model writes the sentence again every time it reports the defect, so one
+// label arrives capitalized differently, spaced differently, and with or without
+// a closing period. None of those is a different claim.
+func normalizeClaim(claim string) string {
+	normalized := strings.ToLower(strings.Join(strings.Fields(claim), " "))
+	normalized = strings.TrimRight(normalized, ".,;:!?")
+	return strings.TrimSpace(normalized)
 }
 
 // EncodeFindingBody renders the inline finding body with its marker.
