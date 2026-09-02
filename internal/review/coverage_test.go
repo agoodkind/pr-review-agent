@@ -246,6 +246,51 @@ func TestAResolutionTrustsTheCheckpointOverAStaleVerdictSentence(t *testing.T) {
 	}
 }
 
+// A hunk nobody got an answer about survives the run that found it.
+//
+// The shortfall the truncation path records lives in the pass, which dies with
+// the process. If the chunk that produced it were recorded as read, the next run
+// would subtract it from the delta, find nothing left to review, see no
+// shortfall, and advance the baseline over code nobody has ever read. One run
+// cannot show that. The second one can.
+func TestAnUnreadChunkIsNotRecordedAsReadSoALaterRunStillHoldsTheBaseline(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         multiHunkCollector{},
+		minimumImportance: 9,
+		model:             &truncatedModel{truncateCalls: 1000},
+	})
+	seedReviewedBaseline(fixture)
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first := decodedSummaryState(t, fixture)
+	if len(first.Completed) != 0 {
+		t.Fatalf("completed after the first run = %v, want no chunk recorded as read",
+			first.Completed)
+	}
+	if first.LastReviewed != domain.HeadSHA(coveragePriorHead) {
+		t.Fatalf("last reviewed after the first run = %q, want the held baseline",
+			first.LastReviewed)
+	}
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	second := decodedSummaryState(t, fixture)
+	if second.LastReviewed != domain.HeadSHA(coveragePriorHead) {
+		t.Fatalf("last reviewed after the second run = %q, want the baseline still held over hunks nobody read",
+			second.LastReviewed)
+	}
+	if len(fixture.state.submittedReviews) != 0 {
+		t.Fatalf("submitted reviews = %v, want none from either run",
+			fixture.state.submittedReviews)
+	}
+	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "action_required" {
+		t.Fatalf("check conclusion after the second run = %v, want action_required", conclusion)
+	}
+}
+
 // A hunk larger than one model request is not a temporary shortfall. The run
 // reports every defect it found in the hunks it could read, submits no verdict
 // for anyone to dismiss, holds the merge gate, names the hunk nobody read, and

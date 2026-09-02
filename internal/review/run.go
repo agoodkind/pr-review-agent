@@ -486,9 +486,10 @@ func (service *Service) reviewChunksConcurrently(
 				}
 			}()
 			slots <- struct{}{}
-			err := service.reviewOneChunk(ctx, job, head, chunk, pass)
+			unread, err := service.reviewOneChunk(ctx, job, head, chunk, pass)
 			<-slots
-			if endsRun := service.settleChunk(ctx, job, head, chunk, err, pass, tracker); endsRun != nil {
+			settled := chunkSettlement{chunk: chunk, err: err, unread: unread}
+			if endsRun := service.settleChunk(ctx, job, head, settled, pass, tracker); endsRun != nil {
 				fatal <- endsRun
 			}
 		})
@@ -499,20 +500,46 @@ func (service *Service) reviewChunksConcurrently(
 	return <-fatal
 }
 
+// chunkSettlement is one chunk's outcome: what it was, what went wrong, and
+// whether this service ever got a whole answer about it.
+type chunkSettlement struct {
+	chunk diff.Chunk
+	err   error
+	// unread marks a chunk whose answer never arrived whole, which the model
+	// reaching its completion budget on a chunk too small to split produces.
+	// Nothing failed, and nothing was read either.
+	unread bool
+}
+
 // settleChunk records one chunk's outcome and reports the failures that end the
 // whole run instead of leaving the chunk pending.
 func (service *Service) settleChunk(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
-	chunk diff.Chunk,
-	err error,
+	settled chunkSettlement,
 	pass *chunkPass,
 	tracker *pendingTracker,
 ) error {
 	logger := gklog.L(ctx)
+	chunk := settled.chunk
+	err := settled.err
 	id := chunkID(chunk)
 	switch {
+	case err == nil && settled.unread:
+		// The call came back and covered none of this chunk. Recording it as
+		// finished would put a chunk nobody read into the completed list, and the
+		// next run subtracts that list from the delta: the chunk would never be
+		// re-derived, the shortfall would live only in this process's memory, and
+		// the run after this one would advance the baseline over code nobody has
+		// ever read. It is owed instead, so a later run re-derives it.
+		logger.WarnContext(
+			ctx,
+			"chunk left owed because no whole answer arrived",
+			slog.String("chunk", id),
+			slog.Int("index", chunk.Index),
+		)
+		return nil
 	case err == nil:
 	case errors.Is(err, errHeadMoved):
 		return err
@@ -628,13 +655,16 @@ func concludeState(
 // The timeout is built from the caller's context on every call, so no chunk
 // inherits a clock another chunk already spent. The truncation split runs
 // inside the call, which is why the split halves stay inside the same budget.
+// It reports whether the chunk went unread, which is not a failure: the call
+// answered, and the answer covered none of the chunk. The caller leaves such a
+// chunk owed rather than finished.
 func (service *Service) reviewOneChunk(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
 	chunk diff.Chunk,
 	pass *chunkPass,
-) error {
+) (bool, error) {
 	// Each call keeps its own accounting, so concurrent chunks never write
 	// through one pointer, and the pass folds them in afterwards.
 	var models modelSet
@@ -653,7 +683,7 @@ func (service *Service) reviewOneChunk(
 	cancel()
 	pass.recordCall(models, requests)
 	if err != nil {
-		return err
+		return false, err
 	}
 	pass.recordUnreadable(analysis.Unreadable)
 
@@ -661,7 +691,8 @@ func (service *Service) reviewOneChunk(
 	for _, result := range analysis.Results {
 		findings = append(findings, result.Findings...)
 	}
-	return service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
+	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
+	return unread, service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
 }
 
 // postCandidate pairs one finding with its rendered comment, so ordering
