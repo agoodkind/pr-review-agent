@@ -177,6 +177,15 @@ func (client *Client) Consolidate(ctx context.Context, prompt string) (review.Co
 	if err := decoder.Decode(&consolidation); err != nil {
 		return review.Consolidation{}, errors.New("decode structured output: " + err.Error())
 	}
+	// Only the shape is checkable here, and it is checked for the same reason a
+	// review result and a set of thread resolutions are: a malformed answer is
+	// refused while the provider that produced it is still in view. Whether a
+	// candidate number is inside the range depends on how many candidates the
+	// caller showed, which lives in the prompt rather than in anything this
+	// client holds, so the caller tests that before it merges anything.
+	if err := consolidation.ValidateShape(); err != nil {
+		return review.Consolidation{}, errors.New("validate consolidation: " + err.Error())
+	}
 	return consolidation, nil
 }
 

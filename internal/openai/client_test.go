@@ -474,6 +474,61 @@ func TestReconcileRejectsDuplicateThreadIDs(t *testing.T) {
 	}
 }
 
+// A grouping decides which findings a chunk publishes, so a malformed one is
+// refused where the provider that wrote it is still in view, the way a review
+// result and a set of thread resolutions are.
+func TestConsolidateAcceptsAWellFormedGrouping(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.completionContent = `{"groups":[{"candidates":[1,3],"restates_open_thread":false,"reason":"one defect"}]}`
+
+	consolidation, err := client.Consolidate(context.Background(), "consolidate input")
+	if err != nil {
+		t.Fatalf("Consolidate: %v", err)
+	}
+	if len(consolidation.Groups) != 1 {
+		t.Fatalf("group count = %d, want 1", len(consolidation.Groups))
+	}
+	if len(consolidation.Groups[0].Candidates) != 2 {
+		t.Fatalf("candidates = %v, want two", consolidation.Groups[0].Candidates)
+	}
+}
+
+func TestConsolidateRejectsACandidateInTwoGroups(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.completionContent = `{"groups":[{"candidates":[1,2],"restates_open_thread":false,"reason":"one"},` +
+		`{"candidates":[2],"restates_open_thread":true,"reason":"two"}]}`
+
+	_, err := client.Consolidate(context.Background(), "consolidate input")
+	if err == nil {
+		t.Fatal("Consolidate a candidate in two groups: want error")
+	}
+	if state.requestCount != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
+	}
+}
+
+// A number below the first candidate indexes nothing, so it is refused here.
+// The upper bound is not: it is the count of candidates the caller showed, and
+// the client holds a prompt string rather than that count.
+func TestConsolidateRejectsACandidateNumberBelowTheFirst(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.completionContent = `{"groups":[{"candidates":[0,1],"restates_open_thread":false,"reason":"one"}]}`
+
+	_, err := client.Consolidate(context.Background(), "consolidate input")
+	if err == nil {
+		t.Fatal("Consolidate a candidate number below the first: want error")
+	}
+	if state.requestCount != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
+	}
+}
+
 func TestFallbackStaysUnusedWhenThePrimaryAnswers(t *testing.T) {
 	fixture := newFallbackTestClient(t, false)
 

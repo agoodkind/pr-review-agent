@@ -65,6 +65,36 @@ type Consolidation struct {
 	Groups []ConsolidationGroup `json:"groups"`
 }
 
+// ValidateShape rejects a grouping that is malformed however many candidates it
+// was asked about: a group naming nothing, a number below one, or a candidate
+// placed in two groups.
+//
+// The model client applies this where it decodes the answer, the way it
+// validates a review result and a set of thread resolutions, so a malformed
+// answer is refused while the provider that produced it is still in view.
+//
+// It cannot be the whole check. The upper bound on a candidate number is the
+// number of candidates the caller showed, and the client holds only a prompt
+// string, so it does not know that number. Validate adds it.
+func (consolidation Consolidation) ValidateShape() error {
+	claimed := make(map[int]struct{})
+	for _, group := range consolidation.Groups {
+		if len(group.Candidates) == 0 {
+			return errors.New("consolidation group names no candidate")
+		}
+		for _, number := range group.Candidates {
+			if number < 1 {
+				return fmt.Errorf("consolidation names candidate %d, below the first", number)
+			}
+			if _, repeated := claimed[number]; repeated {
+				return fmt.Errorf("consolidation places candidate %d in two groups", number)
+			}
+			claimed[number] = struct{}{}
+		}
+	}
+	return nil
+}
+
 // Validate rejects a grouping that could not be applied to the candidates it
 // was asked about.
 //
@@ -72,20 +102,20 @@ type Consolidation struct {
 // not about the findings that were shown. Applying it anyway would drop
 // findings on the strength of a grouping nobody can check, so the whole answer
 // is refused and the deterministic result publishes instead.
+//
+// This runs on every answer, whichever client produced it, and it is what stands
+// between a malformed grouping and the merge. The boundary check in the client
+// is the same test applied earlier and against less: it cannot know how many
+// candidates were shown.
 func (consolidation Consolidation) Validate(candidateCount int) error {
-	claimed := make(map[int]struct{}, candidateCount)
+	if err := consolidation.ValidateShape(); err != nil {
+		return err
+	}
 	for _, group := range consolidation.Groups {
-		if len(group.Candidates) == 0 {
-			return errors.New("consolidation group names no candidate")
-		}
 		for _, number := range group.Candidates {
-			if number < 1 || number > candidateCount {
+			if number > candidateCount {
 				return fmt.Errorf("consolidation names candidate %d of %d", number, candidateCount)
 			}
-			if _, repeated := claimed[number]; repeated {
-				return fmt.Errorf("consolidation places candidate %d in two groups", number)
-			}
-			claimed[number] = struct{}{}
 		}
 	}
 	return nil
