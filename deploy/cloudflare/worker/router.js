@@ -36,6 +36,15 @@ async function restartOnForcedReview(container, env, request, body, metadata) {
   if (!forcesReview(metadata)) {
     return;
   }
+  // A worker with no signing key can verify nothing, so it restarts nothing, but
+  // that is a misconfiguration rather than a forged delivery and it reads
+  // nothing like one from the outside: every forced label is quietly ignored
+  // while the signature on it was perfectly good. Saying so is what stops an
+  // operator hunting a forgery that never happened.
+  if (!env.GITHUB_WEBHOOK_SECRET) {
+    console.error(JSON.stringify({ message: "container restart refused, no signing key configured", ...metadata }));
+    return;
+  }
   const signature = request.headers.get("x-hub-signature-256") ?? "";
   if (!(await verifyServiceLogSignature(env.GITHUB_WEBHOOK_SECRET, body, signature))) {
     // The delivery still goes to the Go service, which refuses it the way it

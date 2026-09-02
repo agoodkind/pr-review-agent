@@ -298,12 +298,35 @@ test("a forced review whose restart fails is queued rather than run on the old c
 
 // A worker with no signing key configured can verify nothing, so it must
 // restart nothing rather than treat an unverifiable delivery as trusted.
+//
+// It must also say which of the two it is. A missing key and a forged signature
+// both stop the restart, and reporting the misconfiguration as a bad signature
+// sends whoever is asking why forced restarts never happen looking for a forgery
+// that never happened, while the signature on every one of those deliveries was
+// good.
 test("a forcing delivery restarts nothing when no signing key is configured", async function () {
   const events = [];
   const environment = createRestartEnvironment(events);
   delete environment.GITHUB_WEBHOOK_SECRET;
+  const logged = [];
+  const realError = console.error;
+  console.error = function (line) {
+    logged.push(line);
+  };
 
-  const response = await routeRequest(labeledWebhookRequest("labeled", "test-review-agent-rerun"), environment);
+  let response;
+  try {
+    response = await routeRequest(labeledWebhookRequest("labeled", "test-review-agent-rerun"), environment);
+  } finally {
+    console.error = realError;
+  }
+
+  const refusals = logged.filter(function (line) {
+    return line.includes("container restart refused");
+  });
+  assert.equal(refusals.length, 1, `refusal lines = ${JSON.stringify(logged)}`);
+  assert.match(refusals[0], /no signing key configured/);
+  assert.doesNotMatch(refusals[0], /invalid signature/);
 
   assert.equal(response.status, 202);
   assert.deepEqual(events, ["forward"]);
