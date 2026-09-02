@@ -253,6 +253,91 @@ test("a forcing label is forwarded like any other delivery", async function () {
   }
 });
 
+// The container reads its configuration once, at start, so a value corrected
+// after it booted did not reach a running review. The worker attaches the
+// current values to every delivery instead, and the service applies them once
+// the signature on the body has verified.
+//
+// Only values that govern one review travel. A secret on every forwarded request
+// would be a far worse trade than the staleness it fixed.
+test("every forwarded delivery carries the review tuning values and no secret", async function () {
+  const events = [];
+  let forwarded = null;
+  const environment = createForwardingEnvironment(events, []);
+  environment.REVIEW_MIN_IMPORTANCE = "6";
+  environment.REVIEW_MAX_FILES = "120";
+  environment.REVIEW_MAX_CHUNKS = "70";
+  environment.REVIEW_CHUNK_TIMEOUT = "4m";
+  environment.GITHUB_PRIVATE_KEY = "a private key nobody may forward";
+  environment.OPENAI_KEY = "a model key nobody may forward";
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async fetch(request) {
+          forwarded = request;
+          events.push("forward");
+          return new Response("proxied", { status: 202 });
+        },
+      };
+    },
+  };
+
+  const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(events, ["forward"]);
+  const settings = JSON.parse(forwarded.headers.get("X-Pr-Agent-Review-Settings"));
+  assert.deepEqual(settings, {
+    minimum_importance: 6,
+    max_files: 120,
+    max_chunks: 70,
+    chunk_timeout: "4m",
+  });
+
+  const headerText = JSON.stringify([...forwarded.headers]);
+  assert.doesNotMatch(headerText, /private key nobody may forward/);
+  assert.doesNotMatch(headerText, /model key nobody may forward/);
+});
+
+// A worker with nothing configured must send nothing, because the service reads
+// an absent header as its own configuration standing. That is what lets a worker
+// and a container at different versions work together.
+//
+// A binding that is not a whole number above zero counts as nothing configured.
+// A zero or a negative would disable a budget, and leaving it out says so before
+// the service has to refuse it.
+test("a worker with no usable tuning values attaches no header", async function () {
+  for (const bindings of [
+    {},
+    { REVIEW_MAX_CHUNKS: "0" },
+    { REVIEW_MIN_IMPORTANCE: "-1" },
+    { REVIEW_MAX_FILES: "not a number" },
+    { REVIEW_CHUNK_TIMEOUT: "" },
+  ]) {
+    const events = [];
+    let forwarded = null;
+    const environment = createForwardingEnvironment(events, []);
+    Object.assign(environment, bindings);
+    environment.PR_AGENT = {
+      getByName() {
+        return {
+          async fetch(request) {
+            forwarded = request;
+            events.push("forward");
+            return new Response("proxied", { status: 202 });
+          },
+        };
+      },
+    };
+
+    const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
+
+    const where = JSON.stringify(bindings);
+    assert.equal(response.status, 202, where);
+    assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings"), null, where);
+  }
+});
+
 // The metadata is built from a body nobody has verified and goes straight into
 // a log line, so what a stranger puts in the payload must not be able to throw
 // there. It once did, when a reader called a string method on the label.

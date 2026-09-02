@@ -1,3 +1,4 @@
+import { REVIEW_SETTINGS_HEADER, createReviewSettingsHeader } from "./configuration.js";
 import { entryFromDelivery, forwardFailed } from "./replaylogic.js";
 import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
 
@@ -32,10 +33,20 @@ export async function routeRequest(request, env) {
   const metadata = await readWebhookMetadata(request);
   console.log(JSON.stringify({ message: "webhook forwarding", ...metadata }));
 
+  // The tuning values ride on the forwarded request rather than on the container
+  // environment, because a running container keeps whatever it booted with: a
+  // chunk timeout changed and restored still governed reviews long afterwards,
+  // because nothing had replaced the process. Attaching them per delivery is what
+  // makes a correction take effect on the next review.
+  //
+  // The header is set on a copy rather than on the caller's request, so the body
+  // GitHub signed and the entry queued for replay stay exactly as they arrived.
+  const forwarded = withReviewSettings(request, env);
+
   let response = null;
   try {
     const container = env.PR_AGENT.getByName("github-app");
-    response = await container.fetch(request);
+    response = await container.fetch(forwarded);
   } catch (error) {
     console.error(JSON.stringify({ message: "webhook forward threw", ...metadata, error: String(error) }));
   }
@@ -87,6 +98,23 @@ async function enqueueForReplay(env, path, request, body, metadata) {
     }),
   );
   return entry.id;
+}
+
+// withReviewSettings returns the request to forward, carrying this worker's
+// review tuning values.
+//
+// A worker with none configured forwards the request untouched, and the service
+// then runs on what it booted with. Any header the caller sent under this name
+// is replaced rather than added to, so a value can only come from this worker's
+// own bindings.
+function withReviewSettings(request, env) {
+  const settings = createReviewSettingsHeader(env);
+  if (settings === "") {
+    return request;
+  }
+  const forwarded = new Request(request);
+  forwarded.headers.set(REVIEW_SETTINGS_HEADER, settings);
+  return forwarded;
 }
 
 // stringField returns a payload value when it is a string and the empty string
