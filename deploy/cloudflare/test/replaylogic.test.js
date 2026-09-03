@@ -18,10 +18,18 @@ test("a thrown forward and a 500 both count as the container never seeing it", f
   assert.equal(forwardFailed(new Response("", { status: 500 })), true);
 });
 
-test("every status the Go service can return counts as delivered", function () {
-  for (const status of [202, 200, 400, 401, 404, 413, 502, 503]) {
+test("an answer about the delivery counts as delivered", function () {
+  for (const status of [202, 200, 400, 401, 404, 413, 502]) {
     assert.equal(forwardFailed(new Response("", { status })), false, `status ${status}`);
   }
+});
+
+// A full review queue is the one status the service returns that must be
+// replayed rather than passed through. The delivery was admitted on GitHub and
+// then dropped, so a check exists that nothing will finish, and GitHub does not
+// redeliver on its own.
+test("a full review queue is replayed rather than lost", function () {
+  assert.equal(forwardFailed(new Response("", { status: 503 })), true);
 });
 
 test("the backoff doubles from its floor and stops at its cap", function () {
