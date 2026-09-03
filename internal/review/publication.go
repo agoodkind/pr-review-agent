@@ -209,11 +209,13 @@ func latestBotVerdictAtHead(
 // open pull requests right now. Reading one as an approval would restate a block
 // a person had already dismissed, which is the failure this rule exists to end.
 func dismissedVerdictBlocked(body string) bool {
-	return marker.ReviewBlocked(body) || strings.Contains(body, legacyBlockingVerdictLead)
+	return marker.ReviewBlocked(body) || strings.HasPrefix(body, legacyBlockingVerdictLead)
 }
 
 // legacyBlockingVerdictLead opened every blocking verdict body this service
-// wrote before that body became the review marker alone.
+// wrote before that body became the review marker alone. It is matched at the
+// start rather than anywhere, because the sentence quoted inside some other
+// prose says nothing about what that review decided.
 const legacyBlockingVerdictLead = "Changes requested."
 
 // latestBotVerdictState is the state GitHub currently shows for this service on
