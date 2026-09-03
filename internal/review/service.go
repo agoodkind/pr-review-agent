@@ -296,6 +296,7 @@ func (service *Service) runLocked(
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
 	progress.reached("the pull request")
+	service.announceStart(ctx, job, head)
 
 	reviews, reviewed, err := service.loadReviewHistory(ctx, job, head, progress)
 	if err != nil {
@@ -462,11 +463,11 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 // went on naming a refused value as carried.
 func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
 	carried := make([]string, 0, 4)
-	empty := service.settingsFor(domain.ReviewJob{
-		Settings: domain.ReviewSettings{
-			MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
-		},
-	})
+	unsettled := job
+	unsettled.Settings = domain.ReviewSettings{
+		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
+	}
+	empty := service.settingsFor(unsettled)
 	resolved := service.settingsFor(job)
 	if resolved.minimumImportance != empty.minimumImportance {
 		carried = append(carried, "minimum_importance")

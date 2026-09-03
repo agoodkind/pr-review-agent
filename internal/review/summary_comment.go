@@ -38,6 +38,27 @@ func (service *Service) upsertSummaryComment(
 	})
 }
 
+// announceStart says the review has begun, in the one comment every later stage
+// rewrites.
+//
+// Until this existed the pull request said nothing until the first chunk came
+// back, which on a large delta is minutes of a pending check with no way to tell
+// a slow review from one that never began. The durable state is carried forward
+// untouched: nothing has been reviewed yet, so nothing about the checkpoint may
+// change here.
+//
+// A failure to post is logged and swallowed. Not being able to say a review
+// started is no reason to refuse to run it, and every later stage writes the
+// same comment again.
+func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob, head domain.HeadSHA) {
+	err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State) summaryCommentContent {
+		return summaryCommentContent{Prose: RenderStartedBody(head), State: state}
+	})
+	if err != nil {
+		gklog.L(ctx).WarnContext(ctx, "announce review start", slog.String("err", err.Error()))
+	}
+}
+
 // upsertSummaryCommentFrom writes content built from the state the comment
 // already carries, in the same read the write uses.
 //

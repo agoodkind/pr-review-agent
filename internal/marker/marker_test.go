@@ -9,8 +9,8 @@ import (
 
 func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
-	firstBody := "Summary\n\n" + Review(head)
-	secondBody := "Updated summary\n\n" + Review(head)
+	firstBody := "Summary\n\n" + Review(head, domain.ReviewDecisionRequestChanges)
+	secondBody := "Updated summary\n\n" + Review(head, domain.ReviewDecisionRequestChanges)
 
 	if _, ok := FindReview(firstBody); !ok {
 		t.Fatal("first review marker missing")
@@ -25,13 +25,37 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 
 func TestReviewMarkerRoundTrip(t *testing.T) {
 	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
-	body := "Summary text\n\n" + Review(head)
+	body := "Summary text\n\n" + Review(head, domain.ReviewDecisionApprove)
 	parsed, ok := FindReview(body)
 	if !ok {
 		t.Fatal("FindReview: not found")
 	}
 	if parsed != head {
 		t.Fatalf("head = %q, want %q", parsed, head)
+	}
+}
+
+// A verdict body carries no prose, so the marker is the only surviving record
+// of what the review decided. Dismissing a review erases its state from GitHub,
+// and the withheld-block rule reads that decision back from here.
+func TestReviewMarkerRecordsTheDecision(t *testing.T) {
+	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
+
+	if !ReviewBlocked(Review(head, domain.ReviewDecisionRequestChanges)) {
+		t.Fatal("a blocking marker did not read back as blocking")
+	}
+	if ReviewBlocked(Review(head, domain.ReviewDecisionApprove)) {
+		t.Fatal("an approving marker read back as blocking")
+	}
+	// A marker written before the decision was recorded reads as not blocking,
+	// so a block dismissed in that era is restated rather than withheld. That is
+	// the older behavior and the safe direction to be wrong in.
+	legacy := "<!-- pr-review-agent:review:v1 head=" + string(head) + " -->"
+	if _, ok := FindReview(legacy); !ok {
+		t.Fatal("a marker without a decision stopped being recognized")
+	}
+	if ReviewBlocked(legacy) {
+		t.Fatal("a marker without a decision claimed to be blocking")
 	}
 }
 

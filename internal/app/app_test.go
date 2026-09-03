@@ -996,9 +996,14 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	assertVerdictBody(t, review["body"], testDefectiveHead, false)
 }
 
-// A blocking verdict keeps a body, because a block that names nothing to fix
-// leaves no edit that could satisfy it. It still must not read as a copy of the
-// summary comment.
+// A block names what to fix in the one top level comment, and the verdict
+// review carries no prose at all.
+//
+// A block naming nothing to fix leaves no edit that could satisfy it, so the
+// reasons have to be somewhere. They belong in the comment, because that is the
+// only place this service writes above the diff; printing them again in the
+// verdict body puts a second Review box on the page saying what the first one
+// said, which is what a reader reported twice.
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -1028,16 +1033,12 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
 	}
-	body := reviewBody(t, review)
-
-	if !strings.Contains(body, "Waiting on:") {
-		t.Fatalf("blocking verdict body names nothing to fix: %q", body)
+	comment := fixture.githubState.summaryCommentBody()
+	if !strings.Contains(comment, "Waiting on:") {
+		t.Fatalf("the comment names nothing to fix, so no edit can satisfy the block: %q", comment)
 	}
-	if !strings.Contains(body, testFindingPath+":3") {
-		t.Fatalf("blocking verdict body does not name the thread holding it: %q", body)
-	}
-	if strings.Contains(body, "<summary>Review details</summary>") {
-		t.Fatalf("blocking verdict body repeats the comment's detail table: %q", body)
+	if !strings.Contains(comment, testFindingPath+":3") {
+		t.Fatalf("the comment does not name the thread holding the block: %q", comment)
 	}
 	assertVerdictBody(t, review["body"], testDefectiveHead, true)
 }
@@ -3150,40 +3151,36 @@ var summaryProse = []string{
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks one verdict review body against the rule that it
-// never restates the summary comment, and keeps the review marker the service
-// reads back to recognize a head it already reviewed.
+// assertVerdictBody checks one verdict review body against the rule that a pull
+// request carries exactly one top level comment from this service and nothing
+// else above the diff.
 //
-// An approving verdict is the marker alone, because the approval event is the
-// message and everything else is in the comment. A blocking one adds its
-// decision and what it waits on, because a block naming nothing to fix leaves
-// no edit that could satisfy it.
+// The body is the review marker and nothing visible, whatever the decision is.
+// GitHub renders the decision itself as an event, and the one comment already
+// says what the review is waiting on, so prose here is a second Review box
+// repeating the comment a few pixels above it. The marker stays because the
+// service reads it back to recognize a head it already reviewed.
 func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	t.Helper()
 	body, ok := value.(string)
 	if !ok {
 		t.Fatalf("body = %v, want string", value)
 	}
-	for _, prose := range summaryProse {
-		if strings.Contains(body, prose) {
-			t.Fatalf("verdict body repeats the summary comment's %q, so the reader sees two Review boxes: %q",
-				prose, body)
-		}
-	}
 	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
 		t.Fatalf("body = %q, want the review marker for %s", body, head)
 	}
-	if !blocking {
-		if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head)) {
-			t.Fatalf("approving verdict body carries visible prose beside the marker: %q", body)
-		}
-		return
+	decision := domain.ReviewDecisionApprove
+	if blocking {
+		decision = domain.ReviewDecisionRequestChanges
 	}
-	if !strings.Contains(body, "Changes requested.") {
-		t.Fatalf("blocking verdict body does not state its decision: %q", body)
+	if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head), decision) {
+		t.Fatalf("verdict body carries visible prose beside the marker, so the reader sees a second Review box: %q",
+			body)
 	}
-	if !strings.Contains(body, "Waiting on:") {
-		t.Fatalf("blocking verdict body names nothing to fix, so no edit can satisfy it: %q", body)
+	// The marker records the decision because a dismissal erases GitHub's own
+	// record of it, and the withheld-block rule reads it back from here.
+	if marker.ReviewBlocked(body) != blocking {
+		t.Fatalf("verdict body records blocked=%v, want %v: %q", marker.ReviewBlocked(body), blocking, body)
 	}
 }
 

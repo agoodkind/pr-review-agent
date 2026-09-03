@@ -493,7 +493,7 @@ func (service *Service) settleChunk(
 		)
 		return nil
 	}
-	return service.checkpoint(ctx, job, head, id, tracker)
+	return service.checkpoint(ctx, job, head, id, tracker, pass)
 }
 
 // checkpoint records that one chunk is finished, after its findings are on the
@@ -505,8 +505,14 @@ func (service *Service) checkpoint(
 	head domain.HeadSHA,
 	id string,
 	tracker *pendingTracker,
+	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
+	// The findings are read before the tracker lock is taken, because the pass
+	// has a lock of its own and holding both in one order here while a chunk
+	// takes them in the other is how a deadlock is built.
+	published := pass.publishedFindings()
+
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
@@ -517,7 +523,7 @@ func (service *Service) checkpoint(
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderProgressBody(head, len(tracker.unfinished)),
+		Prose: RenderProgressBody(head, len(tracker.unfinished), published),
 		State: tracker.state,
 	})
 	if err != nil {

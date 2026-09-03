@@ -170,7 +170,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 				want += "Waiting on:\n- " + strings.Join(test.blocking, "\n- ") + "\n\n"
 			}
 			want += review.RenderDetails(summary) + "\n\n" +
-				marker.Summary() + "\n" + marker.Review(head)
+				marker.Summary() + "\n" + marker.Review(head, test.decision)
 			if body != want {
 				t.Fatalf("body = %q, want %q", body, want)
 			}
@@ -2757,7 +2757,7 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	// approval event carries the meaning and the one top level comment carries
 	// the prose and the table, so any prose here renders a second Review box
 	// saying what the comment above it already said.
-	if body != marker.Review(domain.HeadSHA(testHeadSHA)) {
+	if body != marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionApprove) {
 		t.Fatalf("approving verdict body = %q, want the review marker alone", body)
 	}
 	commentBody, ok := fixture.state.issueComments[0]["body"].(string)
@@ -2814,20 +2814,24 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The finding posts as its chunk answers, the checkpoint follows it, and
-	// only then come the head refresh, the thread read the verdict is computed
-	// from, and the review that carries it.
+	// The comment saying the review began comes first, as soon as the head is
+	// confirmed, so the pull request is never silent while a long delta is read.
+	// Then the finding posts as its chunk answers, the checkpoint follows it,
+	// and only then come the head refresh, the thread read the verdict is
+	// computed from, and the review that carries it.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -2920,7 +2924,7 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 				"id":        float64(11),
 				"commit_id": string(head),
 				"state":     "COMMENTED",
-				"body":      marker.Review(head) + "\nExisting review.",
+				"body":      marker.Review(head, domain.ReviewDecisionRequestChanges) + "\nExisting review.",
 				"user":      map[string]any{"login": testBotLogin},
 			},
 		}},
@@ -2934,14 +2938,17 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 0", fixture.reconciler.callCount)
 	}
 
-	// The durable state is never read here. A head an existing review marker
-	// already covers owes no delta, so the run pays for no issue comment read
-	// on its way out.
+	// The run says it began before it knows whether anything is owed, because a
+	// reader watching a pending check cannot tell a slow start from no start.
+	// Past that, a head an existing review marker already covers owes no delta,
+	// so the run reads no durable state on its way out.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
@@ -3391,10 +3398,12 @@ func TestASeparateDefectOnAnAnsweredFileStillPublishes(t *testing.T) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES while the answered thread is open",
 			fixture.state.lastSubmitReview["event"])
 	}
-	body, ok := fixture.state.lastSubmitReview["body"].(string)
-	if !ok || !strings.Contains(body, "main.go:1") {
-		t.Fatalf("verdict body = %v, want the surviving open thread named",
-			fixture.state.lastSubmitReview["body"])
+	// What the block waits on is named in the one top level comment, which is
+	// the only place this service writes prose above the diff.
+	comment, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || !strings.Contains(comment, "main.go:1") {
+		t.Fatalf("comment = %v, want the surviving open thread named",
+			fixture.state.issueComments[0]["body"])
 	}
 }
 
@@ -3468,7 +3477,7 @@ func TestTheChunkPromptDoesNotPresentEveryReplyAsTheAuthors(t *testing.T) {
 func blockingVerdictReviewPage(head domain.HeadSHA, withMarker bool) [][]map[string]any {
 	body := "## Review\n\nSevere findings are listed inline."
 	if withMarker {
-		body += "\n\n" + marker.Review(head)
+		body += "\n\n" + marker.Review(head, domain.ReviewDecisionRequestChanges)
 	}
 	return [][]map[string]any{{
 		{
@@ -3590,7 +3599,7 @@ func TestThreadResolutionCannotApproveAPartiallyReviewedHead(t *testing.T) {
 	pages[0][0]["body"] = "## Review\n\nSevere findings are listed inline.\n\nWaiting on:\n- " +
 		"This head was not fully reviewed, so nothing here can approve it yet. " +
 		"The next push reviews what this run could not." +
-		"\n\n" + marker.Review(head)
+		"\n\n" + marker.Review(head, domain.ReviewDecisionRequestChanges)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages:      pages,
 		reconcileThreads: []githubapp.ReviewThread{resolvedBotThread("thread-resolved")},
@@ -3681,7 +3690,7 @@ func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
 				"id":        float64(41),
 				"commit_id": string(head),
 				"state":     "CHANGES_REQUESTED",
-				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head, domain.ReviewDecisionRequestChanges),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 			// Then another head was approved, and the branch was forced back here.
@@ -3690,7 +3699,7 @@ func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
 				"id":        float64(42),
 				"commit_id": string(stale),
 				"state":     "APPROVED",
-				"body":      "## Review\n\nNo severe findings.\n\n" + marker.Review(stale),
+				"body":      "## Review\n\nNo severe findings.\n\n" + marker.Review(stale, domain.ReviewDecisionRequestChanges),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 		}},
@@ -3830,14 +3839,15 @@ func TestTheOnlyVerdictBeingDismissedStillLetsTheHeadBeApproved(t *testing.T) {
 // block still carries, and it is the only surviving record that the verdict was
 // a block.
 func blockingVerdictBody(head domain.HeadSHA) string {
-	return "Changes requested.\n\nWaiting on:\n- file0.go:2\n\n" + marker.Review(head)
+	return marker.Review(head, domain.ReviewDecisionRequestChanges)
 }
 
 // approvingVerdictBody is what this service writes as the body of an approving
-// verdict: the review marker and nothing else, because the approval event is
-// itself the message.
+// verdict. Both bodies are the review marker and nothing visible: the one top
+// level comment says everything a reader needs, and the decision itself is a
+// GitHub event.
 func approvingVerdictBody(head domain.HeadSHA) string {
-	return marker.Review(head)
+	return marker.Review(head, domain.ReviewDecisionApprove)
 }
 
 // Dismissing an approval is the opposite request to dismissing a block. The
@@ -4124,7 +4134,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 				"id":        float64(12),
 				"commit_id": string(head),
 				"state":     "COMMENTED",
-				"body":      marker.Review(head) + "\nForeign review.",
+				"body":      marker.Review(head, domain.ReviewDecisionRequestChanges) + "\nForeign review.",
 				"user":      map[string]any{"login": "other-user"},
 			},
 		}},
@@ -4140,12 +4150,14 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -4175,13 +4187,17 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The head check that guards the first chunk's comments catches the move,
-	// so the run ends there rather than posting to a commit nobody is reading.
+	// The comment saying the review began comes first, as soon as the head is
+	// confirmed. Then the head check that guards the first chunk's comments
+	// catches the move, so the run ends there rather than posting to a commit
+	// nobody is reading.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
@@ -4215,17 +4231,21 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		t.Fatal("Run: want error")
 	}
 
+	// One comment is created at the start and edited from then on, including by
+	// the failure notice, so nothing here posts a second one.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -4794,6 +4814,10 @@ func TestAnIncompleteRunOmitsTheReviewMarkerSoTheHeadIsReviewedAgain(t *testing.
 // The failure notice edits the one comment the service already owns rather
 // than leaving a second one behind, so a pull request that fails repeatedly
 // still shows one summary.
+//
+// A run edits that comment more than once, first to say the review started and
+// again to say how it ended, which is the point: one comment, rewritten in
+// place, never a second one.
 func TestServiceFailureNoticeEditsTheExistingSummaryComment(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reconcileErr: errors.New("reconcile failed"),
@@ -4812,8 +4836,12 @@ func TestServiceFailureNoticeEditsTheExistingSummaryComment(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run: want error")
 	}
-	if fixture.state.issueCommentUpdates != 1 {
-		t.Fatalf("issue comment updates = %d, want the existing comment edited once", fixture.state.issueCommentUpdates)
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("top level comments = %d, want the existing one edited rather than a second posted",
+			len(fixture.state.issueComments))
+	}
+	if fixture.state.issueCommentUpdates == 0 {
+		t.Fatal("the existing comment was never edited, so it still shows a review that is over")
 	}
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, "Review failed while reconciling existing findings.") {
@@ -6076,6 +6104,10 @@ type serviceServerState struct {
 	threadNodes         []map[string]any
 	issueComments       []map[string]any
 	issueCommentUpdates int
+	// issueCommentBodies is every body the one top level comment has carried, in
+	// the order it carried them. The order is the point: a reader watching a
+	// pending check has to be told the review began before anything else.
+	issueCommentBodies []string
 }
 
 // recordingReconciler answers with the configured threads plus one thread per
@@ -6256,6 +6288,86 @@ const testGitHubAppID = 12345
 // is a normal answer, so a deliberately small one is what shows whether a
 // caller follows the links.
 const serviceCheckRunPageSize = 2
+
+// A pull request carries exactly one top level comment from this service, and
+// it says the review started before the review reads anything.
+//
+// Until this held, the pull request said nothing until the first chunk came
+// back. On a long delta that is minutes of a pending check with no way to tell a
+// slow review from one that never began, and the operator reported it three
+// times in one evening.
+func TestTheReviewSaysItStartedBeforeItReadsAnything(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(fixture.state.issueCommentBodies) == 0 {
+		t.Fatal("the pull request was never told anything")
+	}
+	// The start body is the only one that promises a rewrite and counts no
+	// chunks, because it is written before any chunk has been read.
+	first := fixture.state.issueCommentBodies[0]
+	if !strings.Contains(first, "This comment is rewritten when the review finishes.") {
+		t.Fatalf("the first thing written to the pull request was %q, want the review saying it started", first)
+	}
+	// Nothing is reviewed yet, so the first write must not claim this head was.
+	if _, found := marker.FindReview(first); found {
+		t.Fatalf("the start comment carries a review marker, so the next run reads this head as done: %q", first)
+	}
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("top level comments = %d, want exactly one for the whole run", len(fixture.state.issueComments))
+	}
+	// The same comment ends holding the verdict, rewritten in place.
+	last, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || !strings.Contains(last, "<summary>Review details</summary>") {
+		t.Fatalf("the comment did not end holding the finished summary: %v", fixture.state.issueComments[0]["body"])
+	}
+}
+
+// The comment names what the review is already waiting on while it is still
+// reading, so a reader can start on the first finding rather than waiting for
+// the whole run. The two facts arrive in either order and appear together.
+func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The first chunk answered with a finding and the second failed, so the run
+	// wrote a progress body while a chunk was still owed.
+	progress := ""
+	for _, body := range fixture.state.issueCommentBodies {
+		if strings.Contains(body, "still to read") {
+			progress = body
+		}
+	}
+	if progress == "" {
+		t.Fatalf("no progress body was written: %v", fixture.state.issueCommentBodies)
+	}
+	if !strings.Contains(progress, "Waiting on:") {
+		t.Fatalf("the progress comment names nothing to act on yet: %q", progress)
+	}
+	if !strings.Contains(progress, "file0.go:2") {
+		t.Fatalf("the progress comment does not name the finding already posted: %q", progress)
+	}
+}
+
+// recordCommentBody keeps every body the one top level comment has carried.
+func (state *serviceServerState) recordCommentBody(body any) {
+	text, ok := body.(string)
+	if !ok {
+		return
+	}
+	state.issueCommentBodies = append(state.issueCommentBodies, text)
+}
 
 // writeServiceCheckRunPage serves one page of a check run listing and links the
 // next, the way GitHub's paginated endpoint does.
@@ -6623,6 +6735,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"user": map[string]any{"login": testBotLogin},
 		}
 		state.issueComments = append(state.issueComments, created)
+		state.recordCommentBody(body["body"])
 		serviceWriteJSON(writer, http.StatusCreated, created)
 		return
 	}
@@ -6648,6 +6761,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			updated = item
 		}
 		state.issueCommentUpdates++
+		state.recordCommentBody(body["body"])
 		serviceWriteJSON(writer, http.StatusOK, updated)
 		return
 	}
