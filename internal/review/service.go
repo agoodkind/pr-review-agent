@@ -495,6 +495,11 @@ type reviewSettings struct {
 // one, which is the opposite of what a budget is for, and a zero timeout would
 // end every model call before it began. These arrive from a header rather than
 // from configuration, so the same floor has to hold on both.
+//
+// An importance floor also has a ceiling, because findings are rated one
+// through ten. A floor above ten publishes nothing while the run still reports
+// a successful verdict, which reads to a person as a pull request with no
+// defects rather than as a threshold nothing could clear.
 func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
 	settings := reviewSettings{
 		minimumImportance: service.minimumImportance,
@@ -502,7 +507,7 @@ func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
 		maxChunks:         service.reviewMaxChunks,
 		chunkTimeout:      service.chunkTimeout,
 	}
-	if job.Settings.MinimumImportance > 0 {
+	if job.Settings.MinimumImportance > 0 && job.Settings.MinimumImportance <= domain.MaximumFindingImportance {
 		settings.minimumImportance = job.Settings.MinimumImportance
 	}
 	if job.Settings.MaxFiles > 0 {

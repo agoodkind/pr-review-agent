@@ -1718,6 +1718,35 @@ func TestAnOrdinaryRunReusesTheCheckRunItsHeadCarries(t *testing.T) {
 	}
 }
 
+// A check run name is not reserved to one app, so another app can publish one
+// with this name on this head. Reading that as this service's own result would
+// let a stranger's conclusion decide whether a review runs at all.
+func TestACheckRunOwnedByAnotherAppIsNotThisServiceResult(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":         float64(9001),
+		"name":       config.ReviewCheckName,
+		"head_sha":   testHeadSHA,
+		"status":     "completed",
+		"conclusion": "success",
+		"app":        map[string]any{"id": float64(testGitHubAppID + 1)},
+	})
+
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("another app's passing check stopped this service reviewing the head")
+	}
+	if admitted.CheckRunID == 9001 {
+		t.Fatal("this service adopted a check run owned by another app")
+	}
+	if fixture.state.lastCreateCheckRun == nil {
+		t.Fatal("no check run was created, so this service published no result of its own")
+	}
+}
+
 // GitHub reuses a delivery identifier when it redelivers, and the replay queue
 // replays the delivery a container could not take, so the same force request
 // arrives more than once. Admitting it twice would create a second check run
@@ -6217,6 +6246,11 @@ func (twoChunkCollector) CollectRange(
 	return diff.ReviewInput{PullRequest: pullRequest, Files: files}, nil
 }
 
+// testGitHubAppID is the app the fixture speaks as. Check run listings carry
+// the owning app, and the lookup filters on it, so the fixture has to answer
+// with the same identity its client is configured with.
+const testGitHubAppID = 12345
+
 // serviceCheckRunPageSize is how many check runs the fixture serves per page.
 // GitHub paginates this listing, and a page smaller than the caller asked for
 // is a normal answer, so a deliberately small one is what shows whether a
@@ -6415,7 +6449,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 
 	cfg := config.Config{
 		Port:             "3000",
-		GitHubAppID:      12345,
+		GitHubAppID:      testGitHubAppID,
 		GitHubPrivateKey: privateKey, // gitleaks:allow
 		GitHubBotLogin:   testBotLogin,
 		GitHubAPIBaseURL: apiURL,
@@ -6792,6 +6826,11 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"status":      body["status"],
 			"conclusion":  "",
 			"external_id": body["external_id"],
+			// GitHub names the app that owns every check run it returns. The
+			// lookup filters on it, because a check run name is not reserved and
+			// another app publishing the same name on this head must not be read
+			// as this service's own result.
+			"app": map[string]any{"id": float64(testGitHubAppID)},
 		}
 		state.checkRuns = append(state.checkRuns, created)
 		serviceWriteJSON(writer, http.StatusCreated, created)

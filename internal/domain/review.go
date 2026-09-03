@@ -156,6 +156,15 @@ type Finding struct {
 	Importance int    `json:"importance"`
 }
 
+// The importance a finding may carry. The floor a run publishes at is bound by
+// the same range: a threshold above the ceiling publishes nothing while the run
+// still reports a successful verdict, which reads as a pull request with no
+// defects rather than as a threshold nothing could clear.
+const (
+	MinimumFindingImportance = 1
+	MaximumFindingImportance = 10
+)
+
 // Validate rejects empty fields, invalid line ranges, and out-of-range importance.
 func (finding Finding) Validate() error {
 	if strings.TrimSpace(finding.Path) == "" {
@@ -176,7 +185,7 @@ func (finding Finding) Validate() error {
 	if finding.EndLine < finding.StartLine {
 		return errors.New("finding end_line must be greater than or equal to start_line")
 	}
-	if finding.Importance < 1 || finding.Importance > 10 {
+	if finding.Importance < MinimumFindingImportance || finding.Importance > MaximumFindingImportance {
 		return errors.New("finding importance must be between 1 and 10")
 	}
 	return nil

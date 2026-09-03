@@ -720,6 +720,39 @@ func TestANonPositiveCarriedSettingFallsBackToTheProcessValue(t *testing.T) {
 	}
 }
 
+// An importance floor has a ceiling as well as a floor, because findings are
+// rated one through ten. A floor above ten clears no finding at all while the
+// run still reports a successful verdict, which reads to a person as a pull
+// request with no defects rather than as a threshold nothing could meet.
+func TestAnImportanceFloorAboveTheScaleFallsBackToTheProcessValue(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-above-scale",
+		body:       openedPayload(testDefectiveHead),
+		settings:   `{"minimum_importance":11}`,
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["minimum_importance"] != float64(7) {
+		t.Fatalf("minimum_importance = %v, want the process value 7: a floor above ten clears nothing",
+			started[0]["minimum_importance"])
+	}
+}
+
 // A label decides that a review runs, never how it runs. Anyone with triage
 // access on a repository can add one, so a label that could set a timeout, a
 // budget, or a model would be fault injection reaching production. The text

@@ -40,6 +40,14 @@ type checkRunResponse struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	ExternalID string `json:"external_id"`
+	// App names the GitHub App that owns the check run. A check run name is not
+	// reserved, so another app publishing one of the same name on the same head
+	// would otherwise be read as this service's own result.
+	App checkRunAppResponse `json:"app"`
+}
+
+type checkRunAppResponse struct {
+	ID int64 `json:"id"`
 }
 
 type checkRunsListResponse struct {
@@ -131,6 +139,16 @@ func (client *Client) listCheckRuns(
 		}
 		for _, item := range response.CheckRuns {
 			if item.Name != name {
+				continue
+			}
+			// A check run name belongs to nobody, so another app can publish one
+			// with this name on this head, and reading that as this service's own
+			// result would let a stranger's conclusion decide whether a review
+			// runs. Another app's run always names that app, so an owner that is
+			// present and different is the whole test. An absent owner is not
+			// evidence of anything and is left alone, because filtering on what a
+			// response did not say would drop this service's own work.
+			if item.App.ID != 0 && item.App.ID != client.cfg.GitHubAppID {
 				continue
 			}
 			headSHA, err := parseHeadSHA(item.HeadSHA)
