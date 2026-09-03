@@ -241,10 +241,11 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	}
 
 	// The tuning values are read here rather than beside the other headers,
-	// because everything above this point runs on a delivery nobody has verified
-	// and these are the one thing on the request that changes how a review
-	// behaves. They carry their own signature, so this ordering is convenience
-	// rather than the thing keeping them safe.
+	// which is convenience rather than the thing keeping them safe: the body's
+	// signature was already checked above, and it would say nothing about these
+	// anyway, because it covers the body alone. They carry their own signature,
+	// over themselves and the body together, and that is what makes them safe to
+	// honor at any point in this function.
 	job := event.Job()
 	job.Settings = readReviewSettings(request, body, handler.webhookHMACKey, logger)
 

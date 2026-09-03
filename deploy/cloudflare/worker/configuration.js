@@ -61,8 +61,9 @@ export function createReviewSettingsHeader(bindings) {
   if (maxChunks !== null) {
     settings.max_chunks = maxChunks;
   }
-  if (typeof bindings.REVIEW_CHUNK_TIMEOUT === "string" && bindings.REVIEW_CHUNK_TIMEOUT !== "") {
-    settings.chunk_timeout = bindings.REVIEW_CHUNK_TIMEOUT;
+  const chunkTimeout = readPositiveDuration(bindings.REVIEW_CHUNK_TIMEOUT);
+  if (chunkTimeout !== null) {
+    settings.chunk_timeout = chunkTimeout;
   }
   if (Object.keys(settings).length === 0) {
     return "";
@@ -86,6 +87,27 @@ function readPositiveInteger(value) {
     return null;
   }
   return parsed;
+}
+
+// durationPattern matches the Go duration syntax the service parses: one or more
+// number and unit pairs, with an optional leading sign.
+const durationPattern = /^[+-]?(\d+(\.\d+)?(ns|us|ms|s|m|h))+$/;
+
+// readPositiveDuration returns a binding as a Go duration above zero, or null
+// when it is anything else.
+//
+// A malformed or non-positive value would be forwarded on every delivery and
+// would make the service reject or instantly time out every review it governs.
+// Refusing it here leaves the service on the value it booted with, which is the
+// same answer an absent field gets.
+function readPositiveDuration(value) {
+  if (typeof value !== "string" || !durationPattern.test(value)) {
+    return null;
+  }
+  if (value.startsWith("-") || /^\+?0+(\.0+)?(ns|us|ms|s|m|h)$/.test(value)) {
+    return null;
+  }
+  return value;
 }
 
 // The container receives only the bindings named here. A binding that is not

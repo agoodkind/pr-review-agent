@@ -57,11 +57,14 @@ func ParseHeadSHA(value string) (HeadSHA, error) {
 //
 // It is the only re-trigger a person has. A run that died leaves a red check
 // nothing clears, because only a pull request webhook starts a run and the
-// check names no run identifier anyone can use. A configuration change is the
-// same shape of problem from the other side: a running container keeps the
-// environment it booted with, so a value corrected minutes ago is still not the
-// value the next review runs under. Adding a label with this prefix answers
-// both, by restarting the container and reviewing the whole pull request again.
+// check names no run identifier anyone can use. Adding a label with this prefix
+// reviews the whole pull request again.
+//
+// It restarts nothing. An earlier version destroyed the container so the review
+// that followed read its configuration fresh, and that took down every other
+// review in flight, since one container holds them all. Configuration reaches a
+// run by travelling with its delivery instead, so a corrected value is in force
+// on the next delivery without anything being replaced.
 const ForceReviewLabelPrefix = "test-review-agent-"
 
 // ForcesReview reports whether a label name asks for a fresh full review.

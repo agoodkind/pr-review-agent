@@ -310,6 +310,39 @@ test("every forwarded delivery carries the review tuning values and no secret", 
   assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), expected);
 });
 
+// A binding this worker cannot use is left out rather than forwarded. It would
+// otherwise ride every delivery and make the service reject or instantly time
+// out every review it governs, and the service reads an absent field as its own
+// configuration standing, which is the answer a misconfigured binding deserves.
+test("a chunk timeout binding that is not a positive duration is not forwarded", async function () {
+  for (const value of ["", "soon", "0s", "-5m", "5", "5 m"]) {
+    const environment = createForwardingEnvironment([], []);
+    environment.REVIEW_CHUNK_TIMEOUT = value;
+    let forwarded = null;
+    environment.PR_AGENT = {
+      getByName() {
+        return {
+          async fetch(request) {
+            forwarded = request;
+            return new Response("proxied", { status: 202 });
+          },
+        };
+      },
+    };
+
+    const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
+    assert.equal(response.status, 202);
+
+    const header = forwarded.headers.get("X-Pr-Agent-Review-Settings");
+    const settings = header === null ? {} : JSON.parse(header);
+    assert.equal(
+      "chunk_timeout" in settings,
+      false,
+      `${JSON.stringify(value)} was forwarded as a chunk timeout`,
+    );
+  }
+});
+
 // A sender must not be able to name its own tuning values by finding a worker
 // that has none of its own. Both headers are stripped on every path, including
 // the one where this worker sends nothing, so the only way in is the one that
