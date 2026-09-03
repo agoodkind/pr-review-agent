@@ -162,11 +162,19 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 	ctx := gklog.WithLogger(parent, logger)
 	ctx = withRecorder(ctx, recorder)
 	ctx = withShutdown(ctx, parent)
+	// The values this run is bound by are resolved once, here, and every stage
+	// reads the same resolved set. A stage that reached back to the service would
+	// be reading what the process booted with rather than what this delivery
+	// asked for, which is the whole failure this carrying exists to end.
+	settings := service.settingsFor(job)
 	logger.InfoContext(
 		ctx,
 		"review job started",
-		slog.Int("minimum_importance", service.minimumImportance),
-		slog.Duration("chunk_timeout", service.chunkTimeout),
+		slog.Int("minimum_importance", settings.minimumImportance),
+		slog.Duration("chunk_timeout", settings.chunkTimeout),
+		slog.Int("max_files", settings.maxFiles),
+		slog.Int("max_chunks", settings.maxChunks),
+		slog.Any("settings_carried", service.carriedSettingFields(job)),
 	)
 	if job.CheckRunID == 0 {
 		return errors.New("review check was not admitted")
@@ -180,12 +188,24 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		Head:       job.Head,
 		Status:     job.CheckRunStatus,
 		Conclusion: job.CheckRunConclusion,
+		// The delivery that created this check run is not carried on the job,
+		// and nothing after admission reads it: it exists to make admission
+		// idempotent, which has already happened by the time a run starts.
+		ExternalID: "",
 	}
-	return service.runLocked(ctx, job, checkRun)
+	return service.runLocked(ctx, job, checkRun, settings)
 }
 
-// Admit creates or resumes the visible check before background review work starts.
-func (service *Service) Admit(parent context.Context, job domain.ReviewJob) (domain.ReviewJob, error) {
+// Admit creates or resumes the visible check before background review work
+// starts, and reports whether this delivery was admitted at all.
+//
+// A delivery this service has already admitted is not admitted again. The
+// caller enqueues nothing for it, because everything it asked for is already
+// running or already done.
+func (service *Service) Admit(
+	parent context.Context,
+	job domain.ReviewJob,
+) (domain.ReviewJob, bool, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), service.checkCompletionTimeout)
 	defer cancel()
 	logger := service.logger.With(
@@ -196,9 +216,12 @@ func (service *Service) Admit(parent context.Context, job domain.ReviewJob) (dom
 	)
 	ctx = gklog.WithLogger(ctx, logger)
 
-	checkRun, err := service.ensureCheckRun(ctx, job, job.Head)
+	checkRun, admitted, err := service.ensureCheckRun(ctx, job, job.Head)
 	if err != nil {
-		return job, err
+		return job, false, err
+	}
+	if !admitted {
+		return job, false, nil
 	}
 	job.CheckRunID = checkRun.ID
 	job.CheckRunStatus = checkRun.Status
@@ -210,7 +233,7 @@ func (service *Service) Admit(parent context.Context, job domain.ReviewJob) (dom
 		slog.String("status", checkRun.Status),
 		slog.String("conclusion", checkRun.Conclusion),
 	)
-	return job, nil
+	return job, true, nil
 }
 
 // Reject completes an admitted check when background work cannot accept it.
@@ -219,7 +242,7 @@ func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cau
 		return nil
 	}
 	now := service.now()
-	progress := service.newProgress(job.Head, now).summary(now)
+	progress := service.newProgress(job, service.settingsFor(job), now).summary(now)
 	return service.failCheck(parent, job, job.CheckRunID, progress, checkSummaryFailure, cause)
 }
 
@@ -227,11 +250,12 @@ func (service *Service) runLocked(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRun githubapp.CheckRun,
+	settings reviewSettings,
 ) (runErr error) {
 	logger := gklog.L(ctx)
 	head := job.Head
 	startedAt := service.now()
-	progress := service.newProgress(head, startedAt)
+	progress := service.newProgress(job, settings, startedAt)
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -250,10 +274,14 @@ func (service *Service) runLocked(
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
 
-	if service.checkAlreadySucceeded(ctx, checkRun) {
+	// A forced run must never stop on a conclusion an earlier run reached, since
+	// redoing that run is the whole point. Admission gives it its own check run,
+	// so this is normally not a completed check at all; the guard keeps that
+	// true if a forced job ever reaches here carrying one.
+	if !job.Forced && service.checkAlreadySucceeded(ctx, checkRun) {
 		// The check is already completed and successful, so there is nothing to
 		// conclude here and the refresh failure is the whole outcome.
-		return service.refreshVerdictAtReviewedHead(ctx, job, nil)
+		return service.refreshVerdictAtReviewedHead(ctx, job, nil, settings)
 	}
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
@@ -277,7 +305,7 @@ func (service *Service) runLocked(
 		// The check is concluded first and the refresh failure reported after.
 		// This head is reviewed either way, so the check must keep saying so
 		// whatever the refresh did.
-		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
+		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews, settings)
 		if err := service.succeed(
 			ctx,
 			job,
@@ -289,7 +317,7 @@ func (service *Service) runLocked(
 		}
 		return refreshErr
 	}
-	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress)
+	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress, settings)
 }
 
 // reviewOwedWork reviews everything this head still owes: the range since the
@@ -306,15 +334,50 @@ func (service *Service) reviewOwedWork(
 	reviews []githubapp.Review,
 	startedAt time.Time,
 	progress *reviewProgress,
+	settings reviewSettings,
 ) error {
 	head := job.Head
 	state, hasState := service.loadDurableState(ctx, job)
+	// Forcing is something a delivery does once, not on every attempt of itself.
+	// A delivery is admitted again whenever its check run is short of completed,
+	// and the check run is created before the review publishes anything, so the
+	// same force request can reach here after an earlier attempt already reviewed
+	// the pull request and posted what it found. Forcing again there re-reads
+	// every chunk and republishes the verdict to say what the pull request
+	// already says.
+	//
+	// The state naming this delivery as the one that cleared it is the record
+	// that the forcing already happened, and it is the only record there is: the
+	// review queue is in memory and dies with the container. An attempt that died
+	// before writing anything leaves no such record, so it forces from scratch,
+	// which is right, because none of its forced work landed either.
+	fromScratch := job.Forced && !stateClearedByThisDelivery(state, hasState, job)
+	if fromScratch {
+		// The clearing is recorded before it is done, so the run that resumes
+		// this one finds the record whatever it interrupted.
+		state.ForcedBy = job.DeliveryID
+		// A label asks for the whole pull request again, so nothing an earlier
+		// run recorded may narrow this one. The marker itself stays where it is:
+		// this run rewrites it the way any run does, so the next ordinary push
+		// resumes from what this run actually reviewed.
+		//
+		// The baseline goes with the chunk lists, and it has to. This pass
+		// derives its chunks from the whole pull request, so the ids it leaves
+		// pending name whole pull request chunks. Writing those beside the old
+		// baseline would leave a marker that contradicts itself: the next run
+		// would compare that commit against the head, derive an empty range,
+		// find none of the pending ids in it, and advance the baseline over
+		// chunks nobody ever read.
+		state.LastReviewed = ""
+		state.Pending = nil
+		state.Completed = nil
+	}
 	// Nothing is owed when the checkpoint already names this head with no chunk
 	// pending. Deciding that here, rather than letting the collector compare a
 	// commit against itself, spends no API call proving what the state already
 	// says.
-	if hasState && state.LastReviewed == head && len(state.Pending) == 0 {
-		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews)
+	if !fromScratch && hasState && state.LastReviewed == head && len(state.Pending) == 0 {
+		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews, settings)
 		if err := service.succeed(
 			ctx,
 			job,
@@ -331,11 +394,18 @@ func (service *Service) reviewOwedWork(
 	// and resolves threads, so running it first would spend both on the exact
 	// delta admission exists to refuse.
 	work, stop, err := service.collectAndAdmit(
-		ctx, job, pullRequest, checkRun, deltaBase(state, hasState), progress,
+		ctx, job, pullRequest, checkRun, deltaBase(state, hasState, fromScratch), progress, settings,
 	)
 	if stop {
 		return err
 	}
+
+	// The pull request is told the review began here, and no earlier. Every exit
+	// above this line is a run that reviews nothing, admission included, and it
+	// writes its own account of why. One of them announcing a start first would
+	// leave the comment saying a review is under way that nobody is having, and
+	// a declined delta would say it twice and contradict itself.
+	service.announceStart(ctx, job, head)
 
 	threads, err := service.reconcileThreads(ctx, job, checkRun.ID, progress)
 	if err != nil {
@@ -347,7 +417,7 @@ func (service *Service) reviewOwedWork(
 	// call.
 	selection := collectPublicationState(reviews, threads, service.botLogin)
 	disputes := collectDisputes(threads, service.botLogin)
-	pass := newChunkPass(work, service.minimumImportance, &selection, disputes)
+	pass := newChunkPass(work, settings, &selection, disputes, openThreadLocations(threads, service.botLogin))
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {
@@ -356,7 +426,7 @@ func (service *Service) reviewOwedWork(
 		}
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
-	return service.publish(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress)
+	return service.publish(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress, settings)
 }
 
 // applyPass records what the chunk loop learned on the progress the failure and
@@ -384,13 +454,119 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	progress.reached("model analysis")
 }
 
+// carriedSettingFields names the tuning values this delivery supplied and the
+// run actually took, so the start line says which of the values beside it came
+// with the work and which the process booted with. Anything absent from this
+// list fell back.
+//
+// Naming what was taken rather than what was sent is deliberate. A value the
+// resolution refuses, because it is not above zero, falls back like a value that
+// never arrived, and a log that named it as carried would describe a run nobody
+// is having. Making a change visible when it takes effect is the whole reason
+// these travel with the delivery at all.
+// It asks the resolution rather than repeating its rules, because a second copy
+// of them drifts: the importance ceiling was added in one place and this list
+// went on naming a refused value as carried.
+func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
+	carried := make([]string, 0, 4)
+	unsettled := job
+	unsettled.Settings = domain.ReviewSettings{
+		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
+	}
+	empty := service.settingsFor(unsettled)
+	resolved := service.settingsFor(job)
+	if resolved.minimumImportance != empty.minimumImportance {
+		carried = append(carried, "minimum_importance")
+	}
+	if resolved.maxFiles != empty.maxFiles {
+		carried = append(carried, "max_files")
+	}
+	if resolved.maxChunks != empty.maxChunks {
+		carried = append(carried, "max_chunks")
+	}
+	if resolved.chunkTimeout != empty.chunkTimeout {
+		carried = append(carried, "chunk_timeout")
+	}
+	return carried
+}
+
+// reviewSettings are the tuning values one run is bound by, after the values the
+// delivery carried are laid over the ones this process was configured with.
+type reviewSettings struct {
+	minimumImportance int
+	maxFiles          int
+	maxChunks         int
+	chunkTimeout      time.Duration
+}
+
+// settingsFor resolves what this run is bound by.
+//
+// A delivery carries a value only when the worker attached one, so every field
+// it left zero falls back to what this process booted with. That fallback is
+// what lets a worker and a container at different versions work together, and it
+// is also what a delivery whose header could not be read gets.
+//
+// A non-positive value is not honored, for the same reason the constructor
+// refuses one: a zero budget refuses every real delta while admitting an empty
+// one, which is the opposite of what a budget is for, and a zero timeout would
+// end every model call before it began. These arrive from a header rather than
+// from configuration, so the same floor has to hold on both.
+//
+// An importance floor also has a ceiling, because findings are rated one
+// through ten. A floor above ten publishes nothing while the run still reports
+// a successful verdict, which reads to a person as a pull request with no
+// defects rather than as a threshold nothing could clear.
+func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
+	settings := reviewSettings{
+		minimumImportance: service.minimumImportance,
+		maxFiles:          service.reviewMaxFiles,
+		maxChunks:         service.reviewMaxChunks,
+		chunkTimeout:      service.chunkTimeout,
+	}
+	if job.Settings.MinimumImportance > 0 && job.Settings.MinimumImportance <= domain.MaximumFindingImportance {
+		settings.minimumImportance = job.Settings.MinimumImportance
+	}
+	if job.Settings.MaxFiles > 0 {
+		settings.maxFiles = job.Settings.MaxFiles
+	}
+	if job.Settings.MaxChunks > 0 {
+		settings.maxChunks = job.Settings.MaxChunks
+	}
+	if job.Settings.ChunkTimeout > 0 {
+		settings.chunkTimeout = job.Settings.ChunkTimeout
+	}
+	return settings
+}
+
 // deltaBase names the commit the delta is measured from: the commit the last
-// completed run reviewed, or nothing at all on first contact.
-func deltaBase(state marker.State, hasState bool) domain.HeadSHA {
-	if !hasState {
+// completed run reviewed, or nothing at all on first contact and on a run
+// starting from scratch, which is asked for the whole pull request rather than
+// a range.
+func deltaBase(state marker.State, hasState bool, fromScratch bool) domain.HeadSHA {
+	if fromScratch || !hasState {
 		return domain.HeadSHA("")
 	}
 	return state.LastReviewed
+}
+
+// stateClearedByThisDelivery reports whether this forced delivery already
+// cleared the durable state to review from scratch, which an earlier attempt of
+// it records before it starts reviewing.
+//
+// It reads the forcing delivery rather than the run identifier. The run
+// identifier names whichever run wrote the marker last, so any other delivery
+// reviewing this same head overwrites it, and the record that a forced delivery
+// already did its clearing disappears with it. A resume of that delivery then
+// clears the state a second time and pays for every chunk again. The forcing
+// delivery is written only by the run that clears and carried forward untouched
+// by every other writer, so nothing but another forced run can move it.
+//
+// Nothing about the check run answers this. A check run is created and started
+// before the review reads anything, and collecting the diff and reconciling the
+// threads both run before the first write, so a delivery can be resumed having
+// recorded nothing at all.
+func stateClearedByThisDelivery(state marker.State, hasState bool, job domain.ReviewJob) bool {
+	return hasState && state.ForcedBy == job.DeliveryID
 }
 
 // publicationContext gives publication its own budget, freed from whatever the
@@ -487,7 +663,9 @@ func (service *Service) loadReviewHistory(
 		"review history loaded",
 		slog.Any("bot_reviews", progress.priorReviews),
 	)
-	if hasBotReviewMarker(reviews, service.botLogin, head) {
+	// A forced run reviews this head again on purpose, so the marker an earlier
+	// run left is exactly what it is asked to look past.
+	if !job.Forced && hasBotReviewMarker(reviews, service.botLogin, head) {
 		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
 		return reviews, true, nil
 	}
@@ -514,8 +692,12 @@ func (service *Service) reconcileThreads(
 	return threads, nil
 }
 
-func (service *Service) newProgress(head domain.HeadSHA, startedAt time.Time) *reviewProgress {
-	return newReviewProgress(head, startedAt, service.minimumImportance)
+func (service *Service) newProgress(
+	job domain.ReviewJob,
+	settings reviewSettings,
+	startedAt time.Time,
+) *reviewProgress {
+	return newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced)
 }
 
 // checkAlreadySucceeded reports whether this head already carries a completed
@@ -529,7 +711,7 @@ func (service *Service) checkAlreadySucceeded(ctx context.Context, checkRun gith
 		slog.String("status", checkRun.Status),
 		slog.String("conclusion", checkRun.Conclusion),
 	)
-	if checkRun.Status != "completed" || checkRun.Conclusion != "success" {
+	if checkRun.Status != checkRunCompleted || checkRun.Conclusion != checkConclusionSuccess {
 		return false
 	}
 	logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "completed_check"))
@@ -572,6 +754,7 @@ func (service *Service) publish(
 	state marker.State,
 	startedAt time.Time,
 	progress *reviewProgress,
+	settings reviewSettings,
 ) error {
 	ctx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
@@ -615,7 +798,7 @@ func (service *Service) publish(
 		FilesReviewed:     analysis.FilesReviewed,
 		Chunks:            analysis.Chunks,
 		CoverageComplete:  analysis.CoverageComplete,
-		MinimumImportance: service.minimumImportance,
+		MinimumImportance: settings.minimumImportance,
 		Observed:          analysis.Observed,
 		Eligible:          analysis.Anchored,
 		Published:         published,
@@ -623,6 +806,7 @@ func (service *Service) publish(
 		Threads:           traceThreads(threads, service.botLogin),
 		Reached:           "",
 		Failed:            false,
+		Forced:            job.Forced,
 	}
 	if len(state.Pending) > 0 {
 		return service.concludeIncomplete(ctx, job, checkRun, state, pass, summary, progress)
@@ -704,52 +888,6 @@ func (service *Service) publishVerdict(
 	}
 	logger.InfoContext(ctx, "review job completed", slog.Int64("check_run_id", checkRun.ID))
 	return nil
-}
-
-func (service *Service) ensureCheckRun(
-	ctx context.Context,
-	job domain.ReviewJob,
-	head domain.HeadSHA,
-) (githubapp.CheckRun, error) {
-	logger := gklog.L(ctx)
-	checkRun, found, err := service.github.FindCheckRun(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		head,
-		service.checkName,
-	)
-	if err != nil {
-		logger.ErrorContext(ctx, "find check run", slog.String("err", err.Error()))
-		return githubapp.CheckRun{}, fmt.Errorf("find check run: %w", err)
-	}
-	if !found {
-		checkRun, err = service.github.CreateCheckRun(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			head,
-			service.checkName,
-		)
-		if err != nil {
-			logger.ErrorContext(ctx, "create check run", slog.String("err", err.Error()))
-			return githubapp.CheckRun{}, fmt.Errorf("create check run: %w", err)
-		}
-	}
-	if checkRun.Status == "queued" {
-		if err := service.github.StartCheckRun(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			checkRun.ID,
-			repositoryURL(job.Repository),
-		); err != nil {
-			logger.ErrorContext(ctx, "start check run", slog.String("err", err.Error()))
-			return githubapp.CheckRun{}, fmt.Errorf("start check run: %w", err)
-		}
-		checkRun.Status = "in_progress"
-	}
-	return checkRun, nil
 }
 
 func (service *Service) succeed(

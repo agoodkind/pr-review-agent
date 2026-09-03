@@ -242,7 +242,8 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		Chunks: nil,
 	}
 	selection := collectPublicationState(nil, nil, summaryCommentTestBotLogin)
-	pass := newChunkPass(work, 1, &selection, collectDisputes(nil, summaryCommentTestBotLogin))
+	settings := reviewSettings{minimumImportance: 1, maxFiles: 100, maxChunks: 60, chunkTimeout: time.Minute}
+	pass := newChunkPass(work, settings, &selection, collectDisputes(nil, summaryCommentTestBotLogin), nil)
 	service := &Service{
 		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
 		model:              postPlanModel{},
@@ -334,5 +335,59 @@ func TestAPermissionForbiddenBatchTakesTheRefusedPath(t *testing.T) {
 
 	if !errors.Is(err, errCommentRefused) {
 		t.Fatalf("err = %v, want errCommentRefused for an answered permissions refusal", err)
+	}
+}
+
+// deadlineRecordingModel records the deadline each call was given, so a test can
+// prove which clock a call was timed by rather than only that it happened.
+type deadlineRecordingModel struct {
+	consolidateDeadline time.Time
+	sawConsolidate      bool
+}
+
+func (model *deadlineRecordingModel) Review(context.Context, string) (Completion, error) {
+	return Completion{}, errors.New("not used")
+}
+
+func (model *deadlineRecordingModel) Consolidate(ctx context.Context, _ string) (Consolidation, error) {
+	model.consolidateDeadline, model.sawConsolidate = ctx.Deadline()
+	return Consolidation{Groups: nil}, nil
+}
+
+// The consolidation call is a model call like any other, so it is bound by the
+// clock this delivery carried rather than by the one the process booted with.
+// Reaching back to the service for it put a second model call on the stale
+// value, which is the defect the carrying exists to end reappearing one function
+// away from where it was fixed.
+func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
+	const carried = 12 * time.Second
+	const booted = 30 * time.Minute
+	model := &deadlineRecordingModel{consolidateDeadline: time.Time{}, sawConsolidate: false}
+	service := &Service{model: model, chunkTimeout: booted}
+	pass := newChunkPass(
+		deltaWork{Files: nil, Chunks: nil},
+		reviewSettings{minimumImportance: 1, maxFiles: 10, maxChunks: 10, chunkTimeout: carried},
+		&publicationState{},
+		disputeContext{},
+		nil,
+	)
+	candidates := []domain.Finding{
+		{Path: "a.go", StartLine: 1, EndLine: 1, Title: "one", Body: "b", Evidence: "e", Importance: 8},
+		{Path: "b.go", StartLine: 1, EndLine: 1, Title: "two", Body: "b", Evidence: "e", Importance: 8},
+	}
+
+	before := time.Now()
+	service.consolidateChunk(context.Background(), candidates, pass)
+
+	if !model.sawConsolidate {
+		t.Fatal("the consolidation call was never made, so this proves nothing about its clock")
+	}
+	// The deadline is computed a moment after the timestamp above, so the budget
+	// reads a hair over what was asked for. The tolerance is wide enough to
+	// absorb that and far narrower than the difference this is here to catch.
+	budget := model.consolidateDeadline.Sub(before)
+	if budget > carried+time.Second {
+		t.Fatalf("consolidation budget = %v, want the %v the delivery carried rather than the %v it booted with",
+			budget, carried, booted)
 	}
 }

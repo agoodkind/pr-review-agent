@@ -5,7 +5,35 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
+
+// ReviewSettings are the review tuning values one delivery carried with it.
+//
+// The container reads its configuration once, at start, so a value corrected
+// after it booted did not reach a running instance: a chunk timeout changed to
+// six seconds and restored five minutes later still governed a real pull request
+// thirteen minutes after the restore, because nothing had replaced the process.
+// Carrying these with the work rather than with the process lifetime is what
+// makes a correction take effect on the next delivery instead of on the next
+// restart.
+//
+// A zero field is a delivery that said nothing about that value, and the process
+// configuration stands. That is what lets a worker and a container at different
+// versions work together: an older worker sends none of this, and every review
+// runs on the values it booted with, exactly as before.
+//
+// Only values that govern one review travel. The model and the worker count size
+// the process rather than the review, and no secret travels at all. These arrive
+// beside a signed body rather than inside it, so they are honored only on a
+// delivery whose signature verified, and nothing here is worth more than the harm
+// it could do if a stranger chose it.
+type ReviewSettings struct {
+	MinimumImportance int
+	MaxFiles          int
+	MaxChunks         int
+	ChunkTimeout      time.Duration
+}
 
 // HeadSHA is a validated pull request head commit identifier.
 type HeadSHA string
@@ -23,6 +51,25 @@ func ParseHeadSHA(value string) (HeadSHA, error) {
 		}
 	}
 	return HeadSHA(value), nil
+}
+
+// ForceReviewLabelPrefix names the labels that ask for a fresh full review.
+//
+// It is the only re-trigger a person has. A run that died leaves a red check
+// nothing clears, because only a pull request webhook starts a run and the
+// check names no run identifier anyone can use. Adding a label with this prefix
+// reviews the whole pull request again.
+//
+// It restarts nothing. An earlier version destroyed the container so the review
+// that followed read its configuration fresh, and that took down every other
+// review in flight, since one container holds them all. Configuration reaches a
+// run by travelling with its delivery instead, so a corrected value is in force
+// on the next delivery without anything being replaced.
+const ForceReviewLabelPrefix = "test-review-agent-"
+
+// ForcesReview reports whether a label name asks for a fresh full review.
+func ForcesReview(labelName string) bool {
+	return strings.HasPrefix(labelName, ForceReviewLabelPrefix)
 }
 
 // Repository identifies a GitHub repository owner and name pair.
@@ -112,6 +159,15 @@ type Finding struct {
 	Importance int    `json:"importance"`
 }
 
+// The importance a finding may carry. The floor a run publishes at is bound by
+// the same range: a threshold above the ceiling publishes nothing while the run
+// still reports a successful verdict, which reads as a pull request with no
+// defects rather than as a threshold nothing could clear.
+const (
+	MinimumFindingImportance = 1
+	MaximumFindingImportance = 10
+)
+
 // Validate rejects empty fields, invalid line ranges, and out-of-range importance.
 func (finding Finding) Validate() error {
 	if strings.TrimSpace(finding.Path) == "" {
@@ -132,7 +188,7 @@ func (finding Finding) Validate() error {
 	if finding.EndLine < finding.StartLine {
 		return errors.New("finding end_line must be greater than or equal to start_line")
 	}
-	if finding.Importance < 1 || finding.Importance > 10 {
+	if finding.Importance < MinimumFindingImportance || finding.Importance > MaximumFindingImportance {
 		return errors.New("finding importance must be between 1 and 10")
 	}
 	return nil
@@ -178,6 +234,21 @@ type ReviewJob struct {
 	CheckRunID         int64
 	CheckRunStatus     string
 	CheckRunConclusion string
+	// Forced marks a run a ForceReviewLabelPrefix label asked for. Such a run
+	// reviews the whole pull request from scratch: it ignores the commit the
+	// last completed run reviewed, the chunks earlier runs read, and every gate
+	// that would otherwise report this head as already reviewed. It still
+	// respects the admission budgets, because an oversized delta is oversized
+	// however it was triggered.
+	//
+	// The delivery does that once rather than on every attempt of itself. A
+	// later attempt of the same delivery, admitted because its check run never
+	// completed, resumes from what the earlier attempt recorded instead of
+	// paying for the whole pull request again.
+	Forced bool
+	// Settings are the review tuning values this delivery carried. Every field
+	// it left zero falls back to the process configuration.
+	Settings ReviewSettings
 	PullRequestRef
 }
 

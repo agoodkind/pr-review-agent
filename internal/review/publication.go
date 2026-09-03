@@ -92,9 +92,13 @@ const unreviewedHeadReason = "This head was not fully reviewed, so nothing here 
 // describeOpenThread names one open thread the way a reader can act on it: the
 // place in the code it objects to, linked to the comment itself.
 func describeOpenThread(thread githubapp.ReviewThread, ref domain.PullRequestRef) string {
-	label := strings.TrimSpace(thread.RootComment.Path)
-	if label == "" {
-		label = thread.NodeID
+	// The path is whatever the pull request named a file, so it is rendered as a
+	// code span for the same reason it is in the progress prose: a bracket, a
+	// backtick or a line break in it would otherwise end the link text and let
+	// the rest render as the service's own words.
+	label := codeSpan(strings.TrimSpace(thread.RootComment.Path))
+	if strings.TrimSpace(thread.RootComment.Path) == "" {
+		label = codeSpan(thread.NodeID)
 	} else if thread.RootComment.EndLine > 0 {
 		label = fmt.Sprintf("%s:%d", label, thread.RootComment.EndLine)
 	}
@@ -125,9 +129,32 @@ const (
 	reviewStateDismissed = "DISMISSED"
 )
 
-// latestBotVerdictReview returns the newest review of the service's own that
-// still carries a verdict for this head; COMMENTED and DISMISSED reviews decide
-// nothing.
+// headVerdict is what this service's verdict at one head amounts to now: the
+// review that spoke for it, and whether a person has since withdrawn it.
+//
+// A dismissal is not the same as never having ruled. It is a person saying they
+// do not want this block, which is a different fact and calls for different
+// handling, so the two travel together rather than collapsing into nothing
+// found.
+type headVerdict struct {
+	// review is the newest review of the service's own that spoke for this head,
+	// whether it still stands or was dismissed. It is what how much of the head
+	// was read is recovered from, and a dismissed body still carries that.
+	review githubapp.Review
+	// withdrawn is whether the newest thing to happen to that verdict was a
+	// person dismissing it.
+	withdrawn bool
+	found     bool
+}
+
+// noHeadVerdict is the answer for a head this service has never ruled on.
+func noHeadVerdict() headVerdict {
+	return headVerdict{review: emptyReview(), withdrawn: false, found: false}
+}
+
+// latestBotVerdictAtHead returns what this service's verdict at this head
+// amounts to now. COMMENTED and PENDING reviews decide nothing and are passed
+// over.
 //
 // The head is part of the test, not context. A pull request force pushed back to
 // a commit it already carried has verdicts from more than one head in one list,
@@ -135,29 +162,61 @@ const (
 // head concluded. The commit a review names is what settles which head it spoke
 // for.
 //
+// A dismissed review counts, and reporting it rather than passing over it is the
+// point. Treating a dismissal as nothing found made the refresh act as though
+// this service had never ruled on the head, so it returned without submitting
+// and never ruled again, not even the approval it would have produced once every
+// thread was resolved. One dismissal disabled the refresh for that head for
+// good, which is the opposite of what dismissing a block is for.
+//
 // The review marker is deliberately not also required. Every verdict body
 // carries one, so it would exclude nothing a matching commit does not already
 // exclude, and a verdict whose marker never reached the review list is exactly
 // the case the durable state path exists to refresh.
-func latestBotVerdictReview(
+func latestBotVerdictAtHead(
 	reviews []githubapp.Review,
 	botLogin string,
 	head domain.HeadSHA,
-) (githubapp.Review, bool) {
-	latest := githubapp.Review{ID: 0, CommitID: "", Author: "", Body: "", State: ""}
-	found := false
+) headVerdict {
+	latest := noHeadVerdict()
 	for _, item := range reviews {
 		if item.Author != botLogin || item.CommitID != head {
+			continue
+		}
+		if item.State == reviewStateDismissed {
+			latest = headVerdict{review: item, withdrawn: true, found: true}
 			continue
 		}
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
 			continue
 		}
-		latest = item
-		found = true
+		latest = headVerdict{review: item, withdrawn: false, found: true}
 	}
-	return latest, found
+	return latest
 }
+
+// dismissedVerdictBlocked reports whether the verdict a person dismissed was a
+// blocking one, which is what decides whether withholding applies at all.
+//
+// Dismissing rewrites the review's own state to DISMISSED, so what it used to
+// say is gone from the listing and its body is the only record left. That body
+// carries no prose any more, because a pull request gets one top level comment
+// and this is not it, so the decision is read from the review marker.
+//
+// The legacy lead is still recognized, and dropping it would be the wrong kind
+// of tidy. Every blocking review this service published before the marker
+// carried a decision opens with that sentence, and those reviews are standing on
+// open pull requests right now. Reading one as an approval would restate a block
+// a person had already dismissed, which is the failure this rule exists to end.
+func dismissedVerdictBlocked(body string) bool {
+	return marker.ReviewBlocked(body) || strings.HasPrefix(body, legacyBlockingVerdictLead)
+}
+
+// legacyBlockingVerdictLead opened every blocking verdict body this service
+// wrote before that body became the review marker alone. It is matched at the
+// start rather than anywhere, because the sentence quoted inside some other
+// prose says nothing about what that review decided.
+const legacyBlockingVerdictLead = "Changes requested."
 
 // latestBotVerdictState is the state GitHub currently shows for this service on
 // the pull request: its newest review carrying a verdict, whatever head that

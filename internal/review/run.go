@@ -81,7 +81,11 @@ func removeChunkID(pending []string, id string) []string {
 // Chunks answer concurrently, so every field here is guarded. The model call
 // and the comment posts happen outside the lock; only the bookkeeping is inside.
 type chunkPass struct {
-	work      deltaWork
+	work deltaWork
+	// settings are the values this run is bound by, carried here so a chunk
+	// reads what the delivery asked for rather than what the process booted
+	// with. They are written once and read concurrently without the lock.
+	settings  reviewSettings
 	selection *publicationState
 	// disputes and disputePrompt are what the pull request has already been
 	// told, as keys for the backstop and as prose for the prompt. Both are built
@@ -89,6 +93,13 @@ type chunkPass struct {
 	// the lock.
 	disputes      disputeContext
 	disputePrompt string
+	// carried names what the pull request was already waiting on when this pass
+	// started, taken from the service's own open threads. A resumed pass posts
+	// only the findings it reads itself, so without this the progress comment
+	// would drop everything an earlier pass had already put on the page. It is
+	// built once and never written again, so the chunks read it without the
+	// lock.
+	carried []string
 
 	mu        sync.Mutex
 	collector *findingCollector
@@ -126,17 +137,20 @@ func isChunkPanic(err error) bool {
 
 func newChunkPass(
 	work deltaWork,
-	minimumImportance int,
+	settings reviewSettings,
 	selection *publicationState,
 	disputes disputeContext,
+	carried []string,
 ) *chunkPass {
 	return &chunkPass{
 		work:          work,
+		settings:      settings,
 		selection:     selection,
 		disputes:      disputes,
 		disputePrompt: disputes.promptSection(),
+		carried:       carried,
 		mu:            sync.Mutex{},
-		collector:     newFindingCollector(work.Files, minimumImportance),
+		collector:     newFindingCollector(work.Files, settings.minimumImportance),
 		models:        modelSet{names: nil, seen: nil},
 		published:     make([]domain.Finding, 0),
 		failures:      make([]chunkFailure, 0),
@@ -488,7 +502,7 @@ func (service *Service) settleChunk(
 		)
 		return nil
 	}
-	return service.checkpoint(ctx, job, head, id, tracker)
+	return service.checkpoint(ctx, job, head, id, tracker, pass)
 }
 
 // checkpoint records that one chunk is finished, after its findings are on the
@@ -500,10 +514,19 @@ func (service *Service) checkpoint(
 	head domain.HeadSHA,
 	id string,
 	tracker *pendingTracker,
+	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+
+	// The findings are read inside the tracker lock, so the order checkpoints
+	// take that lock is also the order their snapshots were taken. Reading first
+	// let a chunk that acquired the lock late overwrite the comment with a list
+	// that predated a newer finding. Nothing holds the pass lock while waiting
+	// on this one, so taking it here cannot deadlock.
+	published := pass.publishedFindings()
+	waiting := mergeLocations(pass.carried, findingLocations(published))
 
 	tracker.unfinished = removeChunkID(tracker.unfinished, id)
 	tracker.completed = append(tracker.completed, id)
@@ -512,7 +535,7 @@ func (service *Service) checkpoint(
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderProgressBody(head, len(tracker.unfinished)),
+		Prose: RenderProgressBody(head, len(tracker.unfinished), waiting),
 		State: tracker.state,
 	})
 	if err != nil {
@@ -567,12 +590,12 @@ func (service *Service) reviewOneChunk(
 	// through one pointer, and the pass folds them in afterwards.
 	var models modelSet
 	requests := 0
-	callCtx, cancel := context.WithTimeout(ctx, service.chunkTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
 	results, err := reviewChunk(
 		callCtx,
 		service.model,
 		chunk,
-		service.minimumImportance,
+		pass.settings.minimumImportance,
 		pass.disputePrompt,
 		&models,
 		&requests,

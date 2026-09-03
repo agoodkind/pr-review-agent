@@ -42,7 +42,19 @@ type Summary struct {
 	// Failed marks a review that stopped early, so the detail table reports
 	// progress rather than a result.
 	Failed bool
+	// Forced marks a run a label asked for. Such a run measures from no baseline
+	// at all, so its statistics describe the whole pull request while an
+	// ordinary run's describe the range since the last reviewed commit. A reader
+	// comparing two summaries cannot tell those apart unless the run says so.
+	Forced bool
 }
+
+// forcedRunNote is how a forced run explains itself in the summary comment. It
+// names the label prefix because that is what a reader searches for to find
+// what triggered the run.
+const forcedRunNote = "Triggered by a `" + domain.ForceReviewLabelPrefix +
+	"` label, so this run reviewed the whole pull request rather than only the delta " +
+	"since the last reviewed commit."
 
 // Verdict states the outcome in one plain sentence.
 //
@@ -114,67 +126,71 @@ func RenderDetails(summary Summary) string {
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(summary Summary) string {
 	parts := []string{"## Review", summary.Verdict()}
+	if summary.Forced {
+		parts = append(parts, forcedRunNote)
+	}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
 	parts = append(
 		parts,
 		RenderDetails(summary),
-		marker.Summary()+"\n"+marker.Review(summary.Head),
+		marker.Summary()+"\n"+marker.Review(summary.Head, summary.Decision),
 	)
 	return strings.Join(parts, "\n\n")
 }
 
-// blockingVerdictLead opens a blocking verdict body. It names the decision in
-// this service's own words rather than reusing the summary's verdict sentence,
-// because a body that repeats the comment is the thing this rendering exists to
-// stop.
-const blockingVerdictLead = "Changes requested."
-
 // RenderVerdictBody renders the body of the review that carries the verdict.
 //
-// A verdict body must never restate the summary comment. Both used to open with
-// the same "## Review" heading and the same verdict sentence, so one approving
-// run published the identical text twice two seconds apart, and a reader saw two
-// matching Review boxes stacked around the approval event. Dropping the detail
-// table from this body halved the duplication and left the heading and the
-// sentence, which is still a second box saying what the first one said.
+// It carries no prose, whatever the verdict is. A pull request gets exactly one
+// top level comment from this service and nothing else above the diff: the
+// comment says the review started, then what it is waiting on, then the verdict,
+// rewritten in place each time. Everything else this service has to say is an
+// inline comment on the line it is about.
 //
-// An approving verdict therefore carries no prose at all. The approval event is
-// itself the message, and the comment above it already holds the summary and the
-// detail. The review marker stays, and is the whole body: hasBotReviewMarker
-// reads it to recognize a head this service has already reviewed, so a fully
-// empty body would blind that gate for every approval. As an HTML comment it
-// renders as nothing, which is the point.
+// A verdict review is not a second place to say any of that. GitHub already
+// renders the decision itself as an event, so prose here only repeats the
+// comment a few pixels above it, which is exactly what a reader reported twice:
+// first as two identical Review boxes around an approval, then as the same
+// waiting-on list printed under both.
 //
-// A blocking verdict keeps a body. One live blocking review carried only the
-// marker, so it named nothing to fix and no edit could satisfy it. This body
-// states the decision and what the block waits on, and nothing else, because
-// everything else is already in the comment.
+// The review marker is the whole body. hasBotReviewMarker reads it to recognize
+// a head this service already reviewed, so an empty body would blind that gate.
+// As an HTML comment it renders as nothing, which is the point.
 func RenderVerdictBody(summary Summary) string {
-	if summary.Decision != domain.ReviewDecisionRequestChanges {
-		return marker.Review(summary.Head)
-	}
-	parts := []string{blockingVerdictLead}
-	if blocking := renderBlocking(summary.Blocking); blocking != "" {
-		parts = append(parts, blocking)
-	}
-	parts = append(parts, marker.Review(summary.Head))
-	return strings.Join(parts, "\n\n")
+	return marker.Review(summary.Head, summary.Decision)
 }
+
+// withdrawnBlockNote explains a head whose findings are open while no blocking
+// verdict stands over them.
+//
+// Without it the comment lists what the review is waiting on directly above a
+// pull request that reads as unblocked, and a reader has no way to tell whether
+// the service failed to block or somebody cleared the block by hand. Naming the
+// dismissal is also what tells them how to get a verdict back.
+const withdrawnBlockNote = "The blocking review on this commit was dismissed by hand, so this service " +
+	"is not reinstating it. The findings above are still open, and resolving them lets the next " +
+	"refresh approve."
 
 // renderVerdictRefreshProse is the summary comment prose for a verdict
 // refreshed from thread state alone. It reports no run statistics because no
 // model ran; the verdict and what it still waits on are the whole story.
-func renderVerdictRefreshProse(summary Summary) string {
+//
+// blockWithdrawn says a person dismissed the verdict at this head, which the
+// prose has to carry because the refresh then submits no blocking review and
+// the comment is the only place a reader learns why.
+func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	parts := []string{"## Review", summary.Verdict()}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
+	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
+		parts = append(parts, withdrawnBlockNote)
+	}
 	parts = append(
 		parts,
 		"Verdict refreshed from review thread state on `"+shortHead(summary.Head)+"` with no new push.",
-		marker.Summary()+"\n"+marker.Review(summary.Head),
+		marker.Summary()+"\n"+marker.Review(summary.Head, summary.Decision),
 	)
 	return strings.Join(parts, "\n\n")
 }
@@ -243,6 +259,23 @@ func formatCountAndImportances(findings []domain.Finding) string {
 	return fmt.Sprintf("`%d` at importance %s", len(findings), formatFindingImportances(findings))
 }
 
+// RenderStartedBody renders the comment a run posts before it reads anything.
+//
+// It exists because the pull request said nothing at all until the first chunk
+// came back, which on a large delta is minutes of silence with a pending check
+// and no way to tell a slow review from one that never began. The comment is
+// posted as soon as the run knows it is reviewing this head, and every later
+// stage rewrites the same comment rather than adding another.
+//
+// It carries no review marker. Nothing has been reviewed yet, and a marker here
+// would tell the next run this head was done.
+func RenderStartedBody(head domain.HeadSHA) string {
+	return strings.Join([]string{
+		"## Review",
+		"Reviewing `" + shortHead(head) + "`. This comment is rewritten when the review finishes.",
+	}, "\n\n")
+}
+
 // RenderFailureBody renders the visible summary for a review that could not
 // finish. It carries the same detail table as a successful review, reporting
 // how far the review got, and it omits the review marker so the next attempt on
@@ -274,20 +307,91 @@ func RenderSkipBody(reason string) string {
 // RenderProgressBody renders the visible comment between chunks, while the
 // review is still running.
 //
+// It names what the review is already waiting on beside how much is left to
+// read. A finding is posted as its chunk answers, so on a long delta the reader
+// can start fixing the first one while the rest is still being read, instead of
+// waiting for the whole run to say anything. The two facts arrive in either
+// order and are shown together whenever both exist.
+//
 // It shares no renderer with the finished summary on purpose. The summary
 // carries the review marker, which means this head was reviewed, and a comment
 // describing an unfinished review must never say that.
-func RenderProgressBody(head domain.HeadSHA, remaining int) string {
+func RenderProgressBody(head domain.HeadSHA, remaining int, waitingOn []string) string {
+	progress := fmt.Sprintf("Reviewing `%s`. %s still to read.", shortHead(head), chunkCount(remaining))
 	if remaining == 0 {
-		return strings.Join([]string{
-			"## Review",
-			"Reviewing `" + shortHead(head) + "`. Every chunk has been read.",
-		}, "\n\n")
+		progress = "Reviewing `" + shortHead(head) + "`. Every chunk has been read."
 	}
-	return strings.Join([]string{
-		"## Review",
-		fmt.Sprintf("Reviewing `%s`. %s still to read.", shortHead(head), chunkCount(remaining)),
-	}, "\n\n")
+	parts := []string{"## Review", progress}
+	if waiting := renderBlocking(waitingOn); waiting != "" {
+		parts = append(parts, waiting)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// findingLocations names each published finding by the place a reader goes to
+// act on it.
+func findingLocations(published []domain.Finding) []string {
+	locations := make([]string, 0, len(published))
+	for _, finding := range published {
+		normalizedPath, err := marker.NormalizePath(finding.Path)
+		if err != nil {
+			continue
+		}
+		locations = append(locations, fmt.Sprintf("%s:%d", codeSpan(normalizedPath), finding.EndLine))
+	}
+	return locations
+}
+
+// openThreadLocations names each finding of this service's own that the pull
+// request is still waiting on, in the same shape a freshly published one takes.
+func openThreadLocations(threads []githubapp.ReviewThread, botLogin string) []string {
+	locations := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		if thread.RootComment.Author != botLogin || thread.Resolved {
+			continue
+		}
+		normalizedPath, err := marker.NormalizePath(thread.RootComment.Path)
+		if err != nil {
+			continue
+		}
+		locations = append(locations, fmt.Sprintf("%s:%d", codeSpan(normalizedPath), thread.RootComment.EndLine))
+	}
+	return locations
+}
+
+// mergeLocations joins two lists of places without naming one twice, keeping
+// the order they were given in.
+func mergeLocations(first []string, second []string) []string {
+	merged := make([]string, 0, len(first)+len(second))
+	seen := make(map[string]struct{}, len(first)+len(second))
+	for _, list := range [][]string{first, second} {
+		for _, location := range list {
+			if _, found := seen[location]; found {
+				continue
+			}
+			seen[location] = struct{}{}
+			merged = append(merged, location)
+		}
+	}
+	return merged
+}
+
+// codeSpan renders repository-controlled text as an inline code span that the
+// text cannot break out of.
+//
+// A path is whatever the pull request named a file, so it reaches this comment
+// under the service's own identity. A backtick would close the span and let the
+// rest render as Markdown, and a line break would end the list item and let the
+// remainder pose as the service's own prose, which is how a crafted filename
+// puts a mention or a false verdict in a comment nobody would doubt.
+func codeSpan(text string) string {
+	// Every shape of line break becomes one, and that one becomes a space, so
+	// the span stays on the line the service put it on. The reply formatter
+	// already enumerates those shapes, and a second list of them would drift.
+	flattened := strings.ReplaceAll(replyLineBreaks.Replace(text), "\n", " ")
+	// A backtick inside a span closes it. The modifier letter at U+02CB renders
+	// like one and closes nothing.
+	return "`" + strings.ReplaceAll(flattened, "`", string(rune(0x2CB))) + "`"
 }
 
 // RenderIncompleteBody renders the visible comment for a pass that could not

@@ -78,6 +78,10 @@ type CheckRun struct {
 	Head       domain.HeadSHA
 	Status     string
 	Conclusion string
+	// ExternalID is the webhook delivery that created this check run. It is the
+	// only record of that association which survives the container, so it is
+	// what tells a redelivered request from a new one.
+	ExternalID string
 }
 
 // ReviewThread is one pull request review thread with its root comment.

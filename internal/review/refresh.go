@@ -46,6 +46,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	ctx context.Context,
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
+	settings reviewSettings,
 ) error {
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
@@ -59,23 +60,32 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// currently shows is a separate question, answered by the newest verdict
 	// whatever head it named. A thread resolution changes neither.
 	headFullyReviewed := !strings.Contains(inputs.verdict.Body, unreviewedHeadReason)
+	// Only a dismissed block is withheld from. Dismissing a block and dismissing
+	// an approval are opposite requests, and the review's own state no longer
+	// tells them apart, so the body it kept does.
+	blockWithdrawn := inputs.withdrawn && dismissedVerdictBlocked(inputs.verdict.Body)
 	return service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
 		decision:          reviewerDecision(inputs.threads, service.botLogin, headFullyReviewed),
 		standingState:     inputs.standingState,
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
+		blockWithdrawn:    blockWithdrawn,
+		settings:          settings,
 	})
 }
 
 // verdictRefreshInputs is everything a refresh decides from.
 type verdictRefreshInputs struct {
 	// verdict is the review that named this head, which is where how much was
-	// reviewed is recovered from.
+	// reviewed is recovered from. A dismissed review serves that just as well,
+	// because dismissing one does not edit its body.
 	verdict githubapp.Review
 	// standingState is what GitHub shows for this service now, across all heads.
 	standingState string
 	threads       []githubapp.ReviewThread
 	found         bool
+	// withdrawn is whether a person dismissed the verdict this head carried.
+	withdrawn bool
 }
 
 // loadVerdictRefreshInputs reads the standing verdict and the current threads a
@@ -88,7 +98,7 @@ func (service *Service) loadVerdictRefreshInputs(
 ) (verdictRefreshInputs, error) {
 	logger := gklog.L(ctx)
 	missing := verdictRefreshInputs{
-		verdict: emptyReview(), standingState: "", threads: nil, found: false,
+		verdict: emptyReview(), standingState: "", threads: nil, found: false, withdrawn: false,
 	}
 	if reviews == nil {
 		listed, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
@@ -98,8 +108,8 @@ func (service *Service) loadVerdictRefreshInputs(
 		}
 		reviews = listed
 	}
-	verdict, found := latestBotVerdictReview(reviews, service.botLogin, job.Head)
-	if !found {
+	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
+	if !verdict.found {
 		return missing, nil
 	}
 	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
@@ -108,10 +118,11 @@ func (service *Service) loadVerdictRefreshInputs(
 		return missing, fmt.Errorf("list threads for verdict refresh: %w", err)
 	}
 	return verdictRefreshInputs{
-		verdict:       verdict,
+		verdict:       verdict.review,
 		standingState: latestBotVerdictState(reviews, service.botLogin),
 		threads:       threads,
 		found:         true,
+		withdrawn:     verdict.withdrawn,
 	}, nil
 }
 
@@ -121,6 +132,56 @@ type refreshedVerdict struct {
 	standingState     string
 	threads           []githubapp.ReviewThread
 	headFullyReviewed bool
+	// blockWithdrawn is whether a person dismissed the verdict at this head,
+	// which bounds what the refresh may submit rather than what it computes.
+	blockWithdrawn bool
+	// settings are the values this delivery is bound by. The refresh runs no
+	// model call, so only the reported threshold comes from here, and it comes
+	// from here rather than from the service so the summary a refresh writes and
+	// the summary a review writes cannot disagree about it.
+	settings reviewSettings
+}
+
+// mayPublish reports whether the refresh may submit the verdict it computed.
+//
+// A refresh never reinstates a block a person withdrew. Dismissing the block is
+// the operator's routine escape from it, and a service that restated the same
+// block from thread state alone, seconds later and with nothing new learned,
+// would make that escape useless and the block permanent, which is the failure
+// this project exists to remove.
+//
+// This overrides the earlier rule, which required the block be restated so that
+// a dismissal could not leave the pull request carrying no verdict. That reason
+// is true as far as it goes and is outweighed. A dismissal does not discard the
+// finding: the check run is the enforcement point, the open threads stay visible
+// on the pull request, and a branch rule requiring threads to be resolved still
+// holds. What it discards is one review object saying so.
+//
+// TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve is the test
+// this reversed. It asserted that an open thread at a dismissed head restates
+// the block, and now asserts that nothing is submitted there.
+//
+// Only a dismissed block is withheld from. Dismissing an approval is the
+// opposite request, a person saying they do not accept it and want more
+// scrutiny, so withholding a later block would give them less; that head behaves
+// normally and blocks when the recomputed decision blocks.
+//
+// The gate keys on the head, so it relaxes nothing beyond the commit somebody
+// actually ruled on. A new head carries no dismissed verdict of its own and gets
+// a fresh one from the run that reviews it.
+//
+// Approving is still allowed at a withheld head, and is the reason such a head
+// is refreshed at all. Once every thread is resolved the recomputed verdict is
+// an approval, which is what the person was reaching for, and the refresh is the
+// only path that reaches it without a push.
+//
+// Otherwise a verdict matching what GitHub already shows is not submitted,
+// because a second identical verdict is noise.
+func (refreshed refreshedVerdict) mayPublish() bool {
+	if refreshed.blockWithdrawn && refreshed.decision != domain.ReviewDecisionApprove {
+		return false
+	}
+	return reviewStateFor(refreshed.decision) != refreshed.standingState
 }
 
 // applyRefreshedVerdict writes what the refresh computed: a fresh verdict review
@@ -160,7 +221,7 @@ func (service *Service) applyRefreshedVerdict(
 		FilesReviewed:     0,
 		Chunks:            0,
 		CoverageComplete:  refreshed.headFullyReviewed,
-		MinimumImportance: service.minimumImportance,
+		MinimumImportance: refreshed.settings.minimumImportance,
 		Observed:          nil,
 		Eligible:          nil,
 		Published:         nil,
@@ -168,14 +229,27 @@ func (service *Service) applyRefreshedVerdict(
 		Threads:           traceThreads(refreshed.threads, service.botLogin),
 		Reached:           "",
 		Failed:            false,
+		// A refresh runs only at a head some earlier run already reviewed, which
+		// is a gate a forced run never reaches.
+		Forced: false,
 	}
-	if reviewStateFor(refreshed.decision) != refreshed.standingState {
+	if refreshed.mayPublish() {
 		if err := service.submitRefreshedVerdict(ctx, job, summary); err != nil {
 			return err
 		}
+	} else if refreshed.blockWithdrawn {
+		logger.InfoContext(
+			ctx,
+			"verdict refresh withheld",
+			slog.String("reason", "block_withdrawn_by_hand"),
+			slog.String("decision", string(refreshed.decision)),
+		)
 	}
 	if err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State) summaryCommentContent {
-		return summaryCommentContent{Prose: renderVerdictRefreshProse(summary), State: state}
+		return summaryCommentContent{
+			Prose: renderVerdictRefreshProse(summary, refreshed.blockWithdrawn),
+			State: state,
+		}
 	}); err != nil {
 		logger.ErrorContext(ctx, "update summary after verdict refresh", slog.String("err", err.Error()))
 		return fmt.Errorf("update summary after verdict refresh: %w", err)

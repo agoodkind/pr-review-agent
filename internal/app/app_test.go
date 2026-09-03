@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -325,6 +326,518 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 	}
 }
 
+// A person has no other way to re-trigger a review. A run that died leaves a
+// red check nothing clears, because only a pull request webhook starts a run,
+// and a configuration change reaches the container only when it restarts. A
+// label answers both, so it has to review a head every other delivery would be
+// suppressed at, and review the whole pull request rather than a delta.
+func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-label-opened",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	_ = opened.Body.Close()
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckCompletions(t, 1)
+	// This head now carries both gates a redelivery is stopped by: the review
+	// marker on the submitted review, and a durable state naming it reviewed.
+	fixture.waitForSummaryHead(t, testDefectiveHead)
+
+	labeled := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-label-forced",
+		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+	})
+	if labeled.StatusCode != http.StatusAccepted {
+		t.Fatalf("labeled status = %d, want 202", labeled.StatusCode)
+	}
+	_ = labeled.Body.Close()
+
+	fixture.waitForClydeCalls(t, 2)
+	fixture.waitForCheckCompletions(t, 2)
+	if fixture.githubState.submitReviewCount() != 2 {
+		t.Fatalf("submit review count = %d, want 2: the label must publish a second review",
+			fixture.githubState.submitReviewCount())
+	}
+	// A run measuring from the baseline the first run wrote would compare that
+	// commit against itself. The forced run measures from nothing, so it lists
+	// the whole pull request the way first contact does.
+	if ranges := fixture.githubState.comparedRanges(); ranges != 0 {
+		t.Fatalf("compare range fetches = %d, want 0: a forced run reviews the whole pull request", ranges)
+	}
+	summary := fixture.githubState.summaryCommentBody()
+	if !strings.Contains(summary, "Triggered by a `"+domain.ForceReviewLabelPrefix+"` label") {
+		t.Fatalf("summary comment does not say the label triggered the run: %q", summary)
+	}
+	if !strings.Contains(summary, "reviewed the whole pull request") {
+		t.Fatalf("summary comment does not say the run covered the whole pull request: %q", summary)
+	}
+}
+
+// Only this service's own labels re-trigger a review. Any other label a person
+// adds is answered and ignored, exactly like an unsupported action, because a
+// label is otherwise an ordinary thing to put on a pull request.
+func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	opened := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-other-label-opened",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if opened.StatusCode != http.StatusAccepted {
+		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
+	}
+	_ = opened.Body.Close()
+	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckCompletions(t, 1)
+	before := fixture.githubState.summaryCommentBody()
+
+	labeled := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-other-label",
+		body:       labeledPayload(testDefectiveHead, "needs-review"),
+	})
+	if labeled.StatusCode != http.StatusAccepted {
+		t.Fatalf("labeled status = %d, want 202", labeled.StatusCode)
+	}
+	_ = labeled.Body.Close()
+
+	time.Sleep(300 * time.Millisecond)
+	if calls := fixture.clydeState.requestCount(); calls != 1 {
+		t.Fatalf("clyde requests = %d, want 1: a label this service does not own reviews nothing", calls)
+	}
+	if count := fixture.githubState.submitReviewCount(); count != 1 {
+		t.Fatalf("submit review count = %d, want 1", count)
+	}
+	if after := fixture.githubState.summaryCommentBody(); after != before {
+		t.Fatalf("summary comment changed:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// The container reads its configuration once, at start, so a value corrected
+// after it booted did not reach a running instance and a chunk timeout lowered
+// by mistake governed real pull requests until the process was replaced. The
+// worker attaches the current values to each delivery instead, and the review
+// runs on what arrived with the work rather than on what the process booted
+// with.
+//
+// The second delivery is half the point. It carries nothing, and it has to run
+// on the process values, because that is what lets a worker and a container at
+// different versions work together at all.
+func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent(), approveReviewContent()},
+	})
+	defer fixture.close()
+
+	carried := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-carried",
+		body:       openedPayload(testDefectiveHead),
+		settings:   `{"minimum_importance":3,"max_files":7,"max_chunks":5,"chunk_timeout":"9s"}`,
+	})
+	if carried.StatusCode != http.StatusAccepted {
+		t.Fatalf("carried status = %d, want 202", carried.StatusCode)
+	}
+	_ = carried.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	absent := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-absent",
+		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+	})
+	if absent.StatusCode != http.StatusAccepted {
+		t.Fatalf("absent status = %d, want 202", absent.StatusCode)
+	}
+	_ = absent.Body.Close()
+	fixture.waitForCheckCompletions(t, 2)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 2 {
+		t.Fatalf("review job started lines = %d, want 2", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(9*time.Second) {
+		t.Fatalf("carried chunk_timeout = %v, want the 9s the delivery asked for",
+			started[0]["chunk_timeout"])
+	}
+	if started[0]["minimum_importance"] != float64(3) {
+		t.Fatalf("carried minimum_importance = %v, want 3", started[0]["minimum_importance"])
+	}
+	if started[0]["max_files"] != float64(7) || started[0]["max_chunks"] != float64(5) {
+		t.Fatalf("carried budgets = %v/%v, want 7/5", started[0]["max_files"], started[0]["max_chunks"])
+	}
+
+	if started[1]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("fallback chunk_timeout = %v, want the process value %v",
+			started[1]["chunk_timeout"], time.Minute)
+	}
+	if started[1]["minimum_importance"] != float64(testMinimumImportance) {
+		t.Fatalf("fallback minimum_importance = %v, want the process value %d",
+			started[1]["minimum_importance"], testMinimumImportance)
+	}
+	if started[1]["max_files"] != float64(1000) || started[1]["max_chunks"] != float64(1000) {
+		t.Fatalf("fallback budgets = %v/%v, want the process values 1000/1000",
+			started[1]["max_files"], started[1]["max_chunks"])
+	}
+}
+
+// The webhook signature covers the request body and nothing else, so a verified
+// body is no authority over a header travelling beside it. Reading the tuning
+// values on that basis let anyone able to put a request in front of this service
+// choose them: a chunk timeout that fails every review, or an importance floor
+// that suppresses every finding while the verdict still reports success.
+//
+// The values carry their own signature, over themselves and the body together.
+// Altering them here leaves the body verifying exactly as before, which is the
+// whole point: the delivery is still real, and only what it claimed about
+// configuration is refused.
+func TestSettingsAlteredBesideAVerifiedBodyAreRefused(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	body := openedPayload(testDefectiveHead)
+	honest := `{"chunk_timeout":"9s","minimum_importance":3}`
+	altered := `{"chunk_timeout":"1ms","minimum_importance":11}`
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-altered",
+		body:       body,
+		settings:   altered,
+		// A signature that verifies, over the values somebody else sent.
+		settingsSignature: signReviewSettings(honest, body),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: the body verified, so the review is not in doubt",
+			response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("chunk_timeout = %v, want the process value: the altered one must be refused",
+			started[0]["chunk_timeout"])
+	}
+	if started[0]["minimum_importance"] != float64(testMinimumImportance) {
+		t.Fatalf("minimum_importance = %v, want the process value %d",
+			started[0]["minimum_importance"], testMinimumImportance)
+	}
+	carried, ok := started[0]["settings_carried"].([]any)
+	if !ok || len(carried) != 0 {
+		t.Fatalf("settings_carried = %v, want none: nothing it carried was applied",
+			started[0]["settings_carried"])
+	}
+}
+
+// A signature is worth nothing on any other delivery, because the body is part
+// of what it covers. Lifting a valid pair off one request and replaying it in
+// front of another is the same attack one step along, and it fails the same way.
+func TestSettingsLiftedFromAnotherDeliveryAreRefused(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	settings := `{"chunk_timeout":"9s"}`
+	otherBody := labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"other")
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-lifted",
+		body:       openedPayload(testDefectiveHead),
+		settings:   settings,
+		// Valid, for the same values, against a different delivery's body.
+		settingsSignature: signReviewSettings(settings, otherBody),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("chunk_timeout = %v, want the process value: a signature from another delivery is not one",
+			started[0]["chunk_timeout"])
+	}
+}
+
+// The point of carrying the values is that a change is visible when it takes
+// effect, so the run has to say which came with the delivery and which it booted
+// with. A start line reporting only the resolved numbers leaves a reader unable
+// to tell a correction that landed from one that never arrived.
+//
+// It names what the run took rather than what the delivery sent: a value the
+// resolution refuses falls back like one that never arrived, so naming it as
+// carried would describe a run nobody is having.
+func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent(), approveReviewContent()},
+	})
+	defer fixture.close()
+
+	partial := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-partial",
+		body:       openedPayload(testDefectiveHead),
+		// A timeout and a refused budget: one is taken, the other falls back. The
+		// refused one is negative rather than zero, so a resolution that honored
+		// anything the delivery merely mentioned would take it and be caught.
+		settings: `{"chunk_timeout":"11s","max_chunks":-5}`,
+	})
+	if partial.StatusCode != http.StatusAccepted {
+		t.Fatalf("partial status = %d, want 202", partial.StatusCode)
+	}
+	_ = partial.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	none := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-none",
+		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+	})
+	if none.StatusCode != http.StatusAccepted {
+		t.Fatalf("none status = %d, want 202", none.StatusCode)
+	}
+	_ = none.Body.Close()
+	fixture.waitForCheckCompletions(t, 2)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 2 {
+		t.Fatalf("review job started lines = %d, want 2", len(started))
+	}
+	carried, ok := started[0]["settings_carried"].([]any)
+	if !ok {
+		t.Fatalf("settings_carried = %v, want a list", started[0]["settings_carried"])
+	}
+	if len(carried) != 1 || carried[0] != "chunk_timeout" {
+		t.Fatalf("settings_carried = %v, want only the timeout the run took", carried)
+	}
+	if started[0]["max_chunks"] != float64(1000) {
+		t.Fatalf("max_chunks = %v, want the process value the refused budget fell back to",
+			started[0]["max_chunks"])
+	}
+	empty, ok := started[1]["settings_carried"].([]any)
+	if !ok {
+		t.Fatalf("settings_carried = %v, want a list", started[1]["settings_carried"])
+	}
+	if len(empty) != 0 {
+		t.Fatalf("settings_carried = %v, want none: the delivery carried nothing", empty)
+	}
+}
+
+// Configuration is exactly what an attacker would want to set, and these values
+// ride beside the signed body rather than inside it. A request whose signature
+// does not verify is refused before anything it carried is read, so nothing it
+// asked for reaches a review, because no review starts.
+func TestAnUnverifiedDeliveryAppliesNothingItCarried(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-forged",
+		body:       openedPayload(testDefectiveHead),
+		signature:  "sha256=" + strings.Repeat("0", 64),
+		settings:   `{"minimum_importance":1,"max_files":1,"max_chunks":1,"chunk_timeout":"1ms"}`,
+	})
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	if started := fixture.logLinesContaining("review job started"); len(started) != 0 {
+		t.Fatalf("review job started lines = %d, want none: a forged delivery started a review", len(started))
+	}
+}
+
+// A value that would disable a budget or a clock is not honored, whatever sent
+// it. A zero budget refuses every real delta while admitting an empty one, and a
+// zero timeout ends every model call before it begins, so the floor the
+// constructor applies to configuration has to hold on a delivery too.
+func TestANonPositiveCarriedSettingFallsBackToTheProcessValue(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-zero",
+		body:       openedPayload(testDefectiveHead),
+		settings:   `{"minimum_importance":0,"max_files":0,"max_chunks":-1,"chunk_timeout":"0s"}`,
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("chunk_timeout = %v, want the process value %v", started[0]["chunk_timeout"], time.Minute)
+	}
+	if started[0]["max_chunks"] != float64(1000) || started[0]["max_files"] != float64(1000) {
+		t.Fatalf("budgets = %v/%v, want the process values 1000/1000",
+			started[0]["max_files"], started[0]["max_chunks"])
+	}
+	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "success" {
+		t.Fatalf("conclusion = %q, want success: a zero budget must not decline the delta", conclusion)
+	}
+}
+
+// An importance floor has a ceiling as well as a floor, because findings are
+// rated one through ten. A floor above ten clears no finding at all while the
+// run still reports a successful verdict, which reads to a person as a pull
+// request with no defects rather than as a threshold nothing could meet.
+func TestAnImportanceFloorAboveTheScaleFallsBackToTheProcessValue(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-above-scale",
+		body:       openedPayload(testDefectiveHead),
+		settings:   `{"minimum_importance":11}`,
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["minimum_importance"] != float64(7) {
+		t.Fatalf("minimum_importance = %v, want the process value 7: a floor above ten clears nothing",
+			started[0]["minimum_importance"])
+	}
+	// The start line names what the run took, not what the delivery sent. A
+	// refused value falls back exactly like one that never arrived, and naming it
+	// as carried would describe a run nobody is having.
+	carried, ok := started[0]["settings_carried"].([]any)
+	if !ok {
+		t.Fatalf("settings_carried = %v, want a list", started[0]["settings_carried"])
+	}
+	for _, field := range carried {
+		if field == "minimum_importance" {
+			t.Fatal("the start line named a refused importance floor as carried")
+		}
+	}
+}
+
+// A label decides that a review runs, never how it runs. Anyone with triage
+// access on a repository can add one, so a label that could set a timeout, a
+// budget, or a model would be fault injection reaching production. The text
+// after the prefix is an opaque identifier: it is recorded on one log line so
+// an operator can tie the run back to the label they added, and read nowhere
+// else.
+func TestAConfigurationShapedLabelChangesNoTimeoutAndNoBudget(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	labels := []string{
+		domain.ForceReviewLabelPrefix + "REVIEW_CHUNK_TIMEOUT=1s",
+		domain.ForceReviewLabelPrefix + "REVIEW_MAX_CHUNKS=0",
+		domain.ForceReviewLabelPrefix + "REVIEW_MIN_IMPORTANCE=1",
+		domain.ForceReviewLabelPrefix + "REVIEW_MODEL=other-model",
+	}
+	for index, label := range labels {
+		response := fixture.postWebhook(t, webhookRequestOptions{
+			eventType:  "pull_request",
+			deliveryID: fmt.Sprintf("delivery-config-label-%d", index),
+			body:       labeledPayload(testDefectiveHead, label),
+		})
+		if response.StatusCode != http.StatusAccepted {
+			t.Fatalf("%s status = %d, want 202", label, response.StatusCode)
+		}
+		_ = response.Body.Close()
+		fixture.waitForCheckCompletions(t, int32(index+1))
+
+		// A budget the label had lowered would decline this delta instead of
+		// reviewing it, and the check would stop short of success.
+		if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "success" {
+			t.Fatalf("%s conclusion = %q, want success: the review budgets are unchanged",
+				label, conclusion)
+		}
+	}
+
+	// The run start line reports the values each run actually used.
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != len(labels) {
+		t.Fatalf("review job started lines = %d, want %d", len(started), len(labels))
+	}
+	for _, record := range started {
+		if record["chunk_timeout"] != float64(time.Minute) {
+			t.Fatalf("chunk_timeout = %v, want the configured %v", record["chunk_timeout"], time.Minute)
+		}
+		if record["minimum_importance"] != float64(testMinimumImportance) {
+			t.Fatalf("minimum_importance = %v, want the configured %d",
+				record["minimum_importance"], testMinimumImportance)
+		}
+	}
+	for _, model := range fixture.clydeState.models() {
+		if model != testReviewModel {
+			t.Fatalf("model = %q, want the configured %q", model, testReviewModel)
+		}
+	}
+
+	// The whole label reaches telemetry, unparsed, which is its only use.
+	accepted := fixture.logLinesContaining("webhook delivery accepted")
+	logged := make([]string, 0, len(accepted))
+	for _, record := range accepted {
+		name, _ := record["label"].(string)
+		logged = append(logged, name)
+	}
+	for _, label := range labels {
+		if !slices.Contains(logged, label) {
+			t.Fatalf("label %q was not logged for correlation, logged: %v", label, logged)
+		}
+	}
+}
+
 func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -483,9 +996,14 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	assertVerdictBody(t, review["body"], testDefectiveHead, false)
 }
 
-// A blocking verdict keeps a body, because a block that names nothing to fix
-// leaves no edit that could satisfy it. It still must not read as a copy of the
-// summary comment.
+// A block names what to fix in the one top level comment, and the verdict
+// review carries no prose at all.
+//
+// A block naming nothing to fix leaves no edit that could satisfy it, so the
+// reasons have to be somewhere. They belong in the comment, because that is the
+// only place this service writes above the diff; printing them again in the
+// verdict body puts a second Review box on the page saying what the first one
+// said, which is what a reader reported twice.
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -515,16 +1033,14 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
 	}
-	body := reviewBody(t, review)
-
-	if !strings.Contains(body, "Waiting on:") {
-		t.Fatalf("blocking verdict body names nothing to fix: %q", body)
+	comment := fixture.githubState.summaryCommentBody()
+	if !strings.Contains(comment, "Waiting on:") {
+		t.Fatalf("the comment names nothing to fix, so no edit can satisfy the block: %q", comment)
 	}
-	if !strings.Contains(body, testFindingPath+":3") {
-		t.Fatalf("blocking verdict body does not name the thread holding it: %q", body)
-	}
-	if strings.Contains(body, "<summary>Review details</summary>") {
-		t.Fatalf("blocking verdict body repeats the comment's detail table: %q", body)
+	// The path is a code span wherever it is rendered, because it is
+	// repository-controlled text in a comment carrying this service's identity.
+	if !strings.Contains(comment, "`"+testFindingPath+"`:3") {
+		t.Fatalf("the comment does not name the thread holding the block: %q", comment)
 	}
 	assertVerdictBody(t, review["body"], testDefectiveHead, true)
 }
@@ -1362,6 +1878,12 @@ type webhookRequestOptions struct {
 	deliveryID string
 	body       []byte
 	signature  string
+	// settings is the review tuning header the worker attaches, sent verbatim so
+	// a test can post one the service has to refuse to read.
+	settings string
+	// settingsSignature overrides the signature sent beside those values, so a
+	// test can send a valid signature over something other than what it sent.
+	settingsSignature string
 }
 
 func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptions) *http.Response {
@@ -1386,6 +1908,14 @@ func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptio
 		signature = signBody(options.body)
 	}
 	request.Header.Set("X-Hub-Signature-256", signature)
+	if options.settings != "" {
+		request.Header.Set("X-Pr-Agent-Review-Settings", options.settings)
+		settingsSignature := options.settingsSignature
+		if settingsSignature == "" {
+			settingsSignature = signReviewSettings(options.settings, options.body)
+		}
+		request.Header.Set("X-Pr-Agent-Review-Settings-Signature", settingsSignature)
+	}
 
 	response, err := fixture.client.Do(request)
 	if err != nil {
@@ -1400,9 +1930,52 @@ func signBody(body []byte) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
+// signReviewSettings signs the tuning values the way the worker does: over the
+// values and the body together, so a signature is worth nothing on any other
+// delivery.
+func signReviewSettings(settings string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(testWebhookSecret)) // gitleaks:allow
+	_, _ = mac.Write([]byte(settings + "\n"))
+	_, _ = mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
 func openedPayload(head string) []byte {
 	payload := map[string]any{
 		"action": "opened",
+		"installation": map[string]any{
+			"id": float64(testInstallation),
+		},
+		"repository": map[string]any{
+			"name": testRepoName,
+			"owner": map[string]any{
+				"login": testRepoOwner,
+			},
+		},
+		"pull_request": map[string]any{
+			"number": float64(testPRNumber),
+			"draft":  false,
+			"head": map[string]any{
+				"sha": head,
+			},
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+// labeledPayload is a labeled delivery adding one label to the pull request.
+// GitHub carries the label alongside the usual installation, repository, and
+// pull request objects.
+func labeledPayload(head string, labelName string) []byte {
+	payload := map[string]any{
+		"action": "labeled",
+		"label": map[string]any{
+			"name": labelName,
+		},
 		"installation": map[string]any{
 			"id": float64(testInstallation),
 		},
@@ -2112,12 +2685,20 @@ func (state *githubServerState) handleCreateCheckRun(writer http.ResponseWriter,
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	// Every created check run gets its own id, the way GitHub assigns one. Two
+	// check runs sharing an id let a single update write to both, which both
+	// hides that they are separate and counts one completion twice.
+	createdID := state.nextCheckRunID
+	state.nextCheckRunID++
 	created := map[string]any{
-		"id":         float64(state.nextCheckRunID),
+		"id":         float64(createdID),
 		"name":       body["name"],
 		"head_sha":   body["head_sha"],
 		"status":     body["status"],
 		"conclusion": "",
+		// The delivery that created this check run, which is how a redelivery
+		// of that same delivery recognizes its own earlier admission.
+		"external_id": body["external_id"],
 	}
 	state.checkRuns = append(state.checkRuns, created)
 	writeJSON(writer, http.StatusCreated, created)
@@ -2132,10 +2713,12 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	checkID := strings.TrimPrefix(request.URL.Path, fmt.Sprintf("/repos/%s/%s/check-runs/", testRepoOwner, testRepoName))
+	updatedID := float64(0)
 	for index, item := range state.checkRuns {
 		if fmt.Sprintf("%.0f", item["id"]) != checkID {
 			continue
 		}
+		updatedID, _ = item["id"].(float64)
 		if status, ok := body["status"].(string); ok && status != "" {
 			item["status"] = status
 		}
@@ -2148,7 +2731,7 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 		state.checkRuns[index] = item
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"id":         float64(state.nextCheckRunID),
+		"id":         updatedID,
 		"name":       config.ReviewCheckName,
 		"status":     body["status"],
 		"conclusion": body["conclusion"],
@@ -2421,7 +3004,10 @@ func paginateMapPages(items []map[string]any, pageSize int) [][]map[string]any {
 }
 
 type clydeServerState struct {
-	mu                 sync.Mutex
+	mu sync.Mutex
+	// requestedModels is the model named on each request, which is the only
+	// place a changed model name would show up.
+	requestedModels    []string
 	responses          []string
 	reconcileResponses []string
 	index              int
@@ -2439,6 +3025,13 @@ func (state *clydeServerState) requestCount() int32 {
 
 func (state *clydeServerState) reconcileRequestCount() int32 {
 	return atomic.LoadInt32(&state.reconcileRequests)
+}
+
+// models returns the model named on every request this server has answered.
+func (state *clydeServerState) models() []string {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return append([]string{}, state.requestedModels...)
 }
 
 func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.Request) {
@@ -2465,6 +3058,9 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	}
 
 	state.mu.Lock()
+	if model, ok := body["model"].(string); ok {
+		state.requestedModels = append(state.requestedModels, model)
+	}
 	status := state.status
 	if isReconcile && state.reconcileStatus != 0 {
 		status = state.reconcileStatus
@@ -2557,40 +3153,36 @@ var summaryProse = []string{
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks one verdict review body against the rule that it
-// never restates the summary comment, and keeps the review marker the service
-// reads back to recognize a head it already reviewed.
+// assertVerdictBody checks one verdict review body against the rule that a pull
+// request carries exactly one top level comment from this service and nothing
+// else above the diff.
 //
-// An approving verdict is the marker alone, because the approval event is the
-// message and everything else is in the comment. A blocking one adds its
-// decision and what it waits on, because a block naming nothing to fix leaves
-// no edit that could satisfy it.
+// The body is the review marker and nothing visible, whatever the decision is.
+// GitHub renders the decision itself as an event, and the one comment already
+// says what the review is waiting on, so prose here is a second Review box
+// repeating the comment a few pixels above it. The marker stays because the
+// service reads it back to recognize a head it already reviewed.
 func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	t.Helper()
 	body, ok := value.(string)
 	if !ok {
 		t.Fatalf("body = %v, want string", value)
 	}
-	for _, prose := range summaryProse {
-		if strings.Contains(body, prose) {
-			t.Fatalf("verdict body repeats the summary comment's %q, so the reader sees two Review boxes: %q",
-				prose, body)
-		}
-	}
 	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
 		t.Fatalf("body = %q, want the review marker for %s", body, head)
 	}
-	if !blocking {
-		if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head)) {
-			t.Fatalf("approving verdict body carries visible prose beside the marker: %q", body)
-		}
-		return
+	decision := domain.ReviewDecisionApprove
+	if blocking {
+		decision = domain.ReviewDecisionRequestChanges
 	}
-	if !strings.Contains(body, "Changes requested.") {
-		t.Fatalf("blocking verdict body does not state its decision: %q", body)
+	if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head), decision) {
+		t.Fatalf("verdict body carries visible prose beside the marker, so the reader sees a second Review box: %q",
+			body)
 	}
-	if !strings.Contains(body, "Waiting on:") {
-		t.Fatalf("blocking verdict body names nothing to fix, so no edit can satisfy it: %q", body)
+	// The marker records the decision because a dismissal erases GitHub's own
+	// record of it, and the withheld-block rule reads it back from here.
+	if marker.ReviewBlocked(body) != blocking {
+		t.Fatalf("verdict body records blocked=%v, want %v: %q", marker.ReviewBlocked(body), blocking, body)
 	}
 }
 

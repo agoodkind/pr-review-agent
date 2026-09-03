@@ -21,7 +21,10 @@ type GitHub interface {
 type checkRunGitHub interface {
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
 	FindCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, bool, error)
-	CreateCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, error)
+	FindCheckRunByExternalID(
+		context.Context, int64, domain.Repository, domain.HeadSHA, string, string,
+	) (githubapp.CheckRun, bool, error)
+	CreateCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string, string) (githubapp.CheckRun, error)
 	StartCheckRun(context.Context, int64, domain.Repository, int64, string) error
 	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string, string) error
 }

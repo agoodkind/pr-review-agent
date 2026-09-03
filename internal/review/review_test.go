@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -169,7 +170,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 				want += "Waiting on:\n- " + strings.Join(test.blocking, "\n- ") + "\n\n"
 			}
 			want += review.RenderDetails(summary) + "\n\n" +
-				marker.Summary() + "\n" + marker.Review(head)
+				marker.Summary() + "\n" + marker.Review(head, test.decision)
 			if body != want {
 				t.Fatalf("body = %q, want %q", body, want)
 			}
@@ -1615,6 +1616,887 @@ func TestAnAlreadyReadChunkIsNotAnalyzedTwice(t *testing.T) {
 	}
 }
 
+// A forced run pays for every chunk again on purpose. The completed list an
+// earlier run left names chunks it already read, and honoring it would make the
+// forced run a partial one, which is the opposite of what the label asks for.
+func TestAForcedRunReadsEveryChunkAgainIncludingTheOnesAlreadyRead(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first := decodedSummaryState(t, fixture)
+	if len(first.Completed) != 1 {
+		t.Fatalf("completed after the first run = %v, want the chunk that answered", first.Completed)
+	}
+
+	model.heal()
+	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
+		t.Fatalf("forced Run: %v", err)
+	}
+
+	if times := timesReviewed(model, "file0.go"); times != 2 {
+		t.Fatalf("file0.go was analyzed %d times, want twice: a forced run re-reads the chunks recorded as done",
+			times)
+	}
+	if times := timesReviewed(model, "file1.go"); times != 2 {
+		t.Fatalf("file1.go was analyzed %d times, want twice", times)
+	}
+}
+
+// A completed successful check satisfies branch protection. A forced run that
+// inherited the check run this head already carries would leave the pull
+// request mergeable for its whole duration, so the change the label was added
+// to re-examine could merge on the strength of the verdict being replaced.
+func TestAForcedRunHoldsTheRequiredCheckPendingFromAdmission(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":         float64(4242),
+		"name":       config.ReviewCheckName,
+		"head_sha":   string(head),
+		"status":     "completed",
+		"conclusion": "success",
+	})
+
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.forcedJob())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the forced job was not admitted")
+	}
+
+	if admitted.CheckRunID == 4242 {
+		t.Fatal("the forced run inherited the completed check run, so the head stays mergeable while it runs")
+	}
+	if admitted.CheckRunStatus != "in_progress" {
+		t.Fatalf("check status = %q, want in_progress before any review work", admitted.CheckRunStatus)
+	}
+	if admitted.CheckRunConclusion == "success" {
+		t.Fatalf("check conclusion = %q, want no passing conclusion standing over a forced run",
+			admitted.CheckRunConclusion)
+	}
+	if fixture.state.lastCreateCheckRun == nil {
+		t.Fatal("no check run was created for the forced job")
+	}
+	if fixture.state.lastCreateCheckRun["head_sha"] != string(head) {
+		t.Fatalf("created check head = %v, want %q", fixture.state.lastCreateCheckRun["head_sha"], head)
+	}
+}
+
+// An ordinary run keeps using the check run its head already carries, so a
+// redelivery does not litter the checks list with duplicates.
+func TestAnOrdinaryRunReusesTheCheckRunItsHeadCarries(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":         float64(4242),
+		"name":       config.ReviewCheckName,
+		"head_sha":   testHeadSHA,
+		"status":     "in_progress",
+		"conclusion": "",
+	})
+
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the ordinary job was not admitted")
+	}
+
+	if admitted.CheckRunID != 4242 {
+		t.Fatalf("check run id = %d, want the existing 4242 reused", admitted.CheckRunID)
+	}
+	if fixture.state.lastCreateCheckRun != nil {
+		t.Fatal("an ordinary run created a second check run for a head that already had one")
+	}
+}
+
+// A check run name is not reserved to one app, so another app can publish one
+// with this name on this head. Reading that as this service's own result would
+// let a stranger's conclusion decide whether a review runs at all.
+func TestACheckRunOwnedByAnotherAppIsNotThisServiceResult(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":         float64(9001),
+		"name":       config.ReviewCheckName,
+		"head_sha":   testHeadSHA,
+		"status":     "completed",
+		"conclusion": "success",
+		"app":        map[string]any{"id": float64(testGitHubAppID + 1)},
+	})
+
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("another app's passing check stopped this service reviewing the head")
+	}
+	if admitted.CheckRunID == 9001 {
+		t.Fatal("this service adopted a check run owned by another app")
+	}
+	if fixture.state.lastCreateCheckRun == nil {
+		t.Fatal("no check run was created, so this service published no result of its own")
+	}
+}
+
+// GitHub reuses a delivery identifier when it redelivers, and the replay queue
+// replays the delivery a container could not take, so the same force request
+// arrives more than once. Admitting it twice would create a second check run
+// and pay for the whole analysis again, publishing a duplicate review over the
+// first.
+//
+// Nothing in process can catch this, which is why the check run carries the
+// delivery: the forced path destroys the container, so the delivery cache that
+// would otherwise recognize the repeat is a fresh empty one by the time the
+// repeat arrives. This test admits the same delivery twice against the same
+// GitHub state, which is exactly what the redelivery sees.
+func TestTheSameForcedDeliveryAdmittedTwiceReviewsOnce(t *testing.T) {
+	// Two answers are scripted although one run is expected, so a second
+	// analysis is counted rather than failing on an unscripted call and leaving
+	// the count at one.
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs after the first delivery = %d, want 1", len(fixture.state.checkRuns))
+	}
+
+	// The redelivery carries the same identifier and meets the same GitHub
+	// state. It is reviewed only if admission admits it, exactly as the handler
+	// enqueues it only then.
+	redelivered, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("redelivered Admit: %v", err)
+	}
+	if wasAdmitted {
+		if err := fixture.service.Run(context.Background(), redelivered); err != nil {
+			t.Fatalf("redelivered Run: %v", err)
+		}
+	}
+
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: a redelivery is the same force request",
+			len(fixture.state.checkRuns))
+	}
+	if model.callCount != 1 {
+		t.Fatalf("model calls = %d, want 1: a redelivery must not pay for the analysis again",
+			model.callCount)
+	}
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want 1: a redelivery must not publish a duplicate review",
+			len(fixture.state.submittedReviews))
+	}
+	if wasAdmitted {
+		t.Fatal("the redelivered force request was admitted a second time")
+	}
+}
+
+// A check run is created before it is started, so a create that lands and a
+// start that fails leaves a check run this delivery owns, queued, with nothing
+// running. Refusing the redelivery on the strength of that check run existing
+// would leave the pull request carrying a check nobody will ever clear and no
+// way to ask for the review again, which is the stale block this whole service
+// exists to prevent.
+func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:               model,
+		startCheckRunStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if _, wasAdmitted, err := fixture.service.Admit(context.Background(), job); err == nil {
+		t.Fatal("first Admit: want the start failure surfaced")
+	} else if wasAdmitted {
+		t.Fatal("first Admit: a job whose check never started must not be admitted")
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want the one this delivery created", len(fixture.state.checkRuns))
+	}
+	stranded := fixture.state.checkRuns[0]
+	if stranded["status"] != "queued" {
+		t.Fatalf("check status = %v, want queued: the start never landed", stranded["status"])
+	}
+
+	// GitHub recovers and the delivery arrives again.
+	fixture.state.startCheckRunStatus = 0
+	resumed, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("redelivered Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the redelivery refused itself, leaving a check nobody can clear and no way back in")
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: the resumed delivery reuses the check it already created",
+			len(fixture.state.checkRuns))
+	}
+	if resumed.CheckRunID != int64(stranded["id"].(float64)) {
+		t.Fatalf("check run id = %d, want the stranded check run resumed", resumed.CheckRunID)
+	}
+	if resumed.CheckRunStatus != "in_progress" {
+		t.Fatalf("check status = %q, want in_progress: the resumed check must be started",
+			resumed.CheckRunStatus)
+	}
+
+	// The resumed job is real work, so it reviews and concludes its check.
+	if err := fixture.service.Run(context.Background(), resumed); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if model.callCount != 1 {
+		t.Fatalf("model calls = %d, want 1", model.callCount)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want the resumed check concluded",
+			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+// A process that died mid review leaves a check run in progress with nothing
+// driving it. Reading that as work in flight would drop the delivery's only
+// retry and leave a check that can never conclude, so the redelivery resumes it.
+//
+// A review that is genuinely running is never reached here: the handler claims
+// each delivery identifier before admission, so a redelivery arriving at the
+// process running that review is answered from the claim.
+func TestAForcedDeliveryWhoseProcessDiedMidReviewIsResumed(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+	job := fixture.forcedJob()
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":          float64(4242),
+		"name":        config.ReviewCheckName,
+		"head_sha":    testHeadSHA,
+		"status":      "in_progress",
+		"conclusion":  "",
+		"external_id": job.DeliveryID,
+	})
+
+	resumed, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("a check nothing is driving was read as work in flight, dropping the delivery's only retry")
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want the abandoned one resumed rather than a second created",
+			len(fixture.state.checkRuns))
+	}
+	if resumed.CheckRunID != 4242 {
+		t.Fatalf("check run id = %d, want the abandoned check run 4242", resumed.CheckRunID)
+	}
+
+	if err := fixture.service.Run(context.Background(), resumed); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want the resumed check concluded",
+			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+// A run publishes everything it found and records its position before it
+// completes its check, so a failure in that window leaves the check in progress
+// over work that is already on the pull request. The redelivery is admitted,
+// and has to be, because nothing short of a completed check says the request was
+// carried through.
+//
+// What it must not do is force the review a second time. The analysis was paid
+// for, the comments are posted, and repeating both spends the budget again to
+// say what the pull request already says.
+func TestAForcedDeliveryResumedAfterPublishingReviewsNothingAgain(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the refused check completion surfaced")
+	}
+	published := decodedSummaryState(t, fixture)
+	if published.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head: the forced run published before it settled",
+			published.LastReviewed)
+	}
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("comments after the first delivery = %d, want one per finding",
+			len(fixture.state.streamedComments))
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want the one this delivery created", len(fixture.state.checkRuns))
+	}
+	if fixture.state.checkRuns[0]["status"] != "in_progress" {
+		t.Fatalf("check status = %v, want in_progress: the completion never landed",
+			fixture.state.checkRuns[0]["status"])
+	}
+
+	// GitHub recovers and the same delivery arrives again.
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("redelivered Run: %v", err)
+	}
+
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the resumed delivery paid for the analysis again",
+				path, times)
+		}
+	}
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("comments = %d, want one per finding: the resumed delivery reposted what was already there",
+			len(fixture.state.streamedComments))
+	}
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want 1: the resumed delivery published the same verdict again",
+			len(fixture.state.submittedReviews))
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: a redelivery is the same force request",
+			len(fixture.state.checkRuns))
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed: the resumed delivery must clear the check it inherited",
+			fixture.state.checkRuns[0]["status"])
+	}
+}
+
+// A forced attempt that read some of its chunks and died records exactly that,
+// and the check it left in progress is what brings the delivery back. The
+// resumed attempt owes the chunks that went unread and nothing else: the ones
+// already read are on the pull request, paid for, and recorded as done.
+func TestAForcedDeliveryResumedMidReviewSkipsTheChunksItAlreadyRead(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the refused check completion surfaced")
+	}
+	partial := decodedSummaryState(t, fixture)
+	if len(partial.Pending) != 1 {
+		t.Fatalf("pending after the first delivery = %v, want the refused chunk", partial.Pending)
+	}
+	if len(partial.Completed) != 1 {
+		t.Fatalf("completed after the first delivery = %v, want the chunk that answered", partial.Completed)
+	}
+	if fixture.state.checkRuns[0]["status"] != "in_progress" {
+		t.Fatalf("check status = %v, want in_progress: the completion never landed",
+			fixture.state.checkRuns[0]["status"])
+	}
+
+	// The model recovers and the same delivery arrives again.
+	model.heal()
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+
+	if times := timesReviewed(model, "file0.go"); times != 1 {
+		t.Fatalf("file0.go was analyzed %d times, want once: it answered on the first attempt", times)
+	}
+	if times := timesReviewed(model, "file1.go"); times != 2 {
+		t.Fatalf("file1.go was analyzed %d times, want twice: the resumed attempt owes the chunk it could not read",
+			times)
+	}
+	finished := decodedSummaryState(t, fixture)
+	if len(finished.Pending) != 0 {
+		t.Fatalf("pending = %v, want none once every chunk was read", finished.Pending)
+	}
+	if finished.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head", finished.LastReviewed)
+	}
+	if len(fixture.state.streamedComments) != 2 {
+		t.Fatalf("comments = %d, want one per finding across both attempts",
+			len(fixture.state.streamedComments))
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
+// A check run is created and started before the review reads anything, and
+// collecting the whole pull request and reconciling its threads both run before
+// the first checkpoint. A process that died in that window left its check in
+// progress and the durable state untouched, still naming the head an earlier
+// ordinary run reviewed.
+//
+// Resuming is therefore not on its own evidence that this delivery did any of
+// its forced work. A resume that read it that way would keep the earlier run's
+// baseline, find an empty range against the head, and clear the check as already
+// reviewed, so the label would have restarted the container and reviewed
+// nothing.
+func TestAForcedDeliveryResumedBeforeRecordingAnythingStillReviewsFromScratch(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         selfRangeEmptyCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+	job := fixture.forcedJob()
+	// An earlier ordinary run recorded this head as reviewed, and this delivery
+	// died between starting its check run and writing anything of its own.
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+			Completed:    nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":          float64(4242),
+		"name":        config.ReviewCheckName,
+		"head_sha":    testHeadSHA,
+		"status":      "in_progress",
+		"conclusion":  "",
+		"external_id": job.DeliveryID,
+	})
+
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the force request was dropped on the resume",
+				path, times)
+		}
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
+// A checkpoint records which chunks were read and never that the head was
+// reviewed. Only the write that follows a submitted verdict advances the
+// baseline, so a run that read every chunk and then stopped before submitting
+// leaves a marker that still owes the verdict.
+//
+// That ordering is load bearing rather than incidental, and this pins it. The
+// already reviewed exit asks whether the baseline names this head, and it takes
+// the answer as proof that a verdict was published there. Advancing the baseline
+// at checkpoint time would make that inference false: the next delivery would
+// find the head recorded as reviewed, clear the check, and leave the pull
+// request green with findings raised and no verdict ruling on them. Nothing else
+// in the service checks for that, so if the baseline write ever moves earlier,
+// this test is what catches it.
+func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		listThreadsStatus:          http.StatusInternalServerError,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the run stopped before it submitted a verdict")
+	}
+	owed := decodedSummaryState(t, fixture)
+	if owed.LastReviewed == domain.HeadSHA(testHeadSHA) {
+		t.Fatal("the checkpoint advanced the baseline to the head before any verdict was submitted")
+	}
+	if len(owed.Completed) != 2 {
+		t.Fatalf("completed = %v, want both chunks recorded as read", owed.Completed)
+	}
+	if len(fixture.state.submittedReviews) != 0 {
+		t.Fatalf("submitted reviews = %d, want none: the run stopped before submitting",
+			len(fixture.state.submittedReviews))
+	}
+	if fixture.state.checkRuns[0]["status"] != "in_progress" {
+		t.Fatalf("check status = %v, want in_progress", fixture.state.checkRuns[0]["status"])
+	}
+
+	fixture.state.listThreadsStatus = http.StatusOK
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("redelivered Run: %v", err)
+	}
+
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want the verdict the dead run owed",
+			len(fixture.state.submittedReviews))
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want the open findings to block",
+			fixture.state.lastSubmitReview["event"])
+	}
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the redelivery owes the verdict, not the analysis",
+				path, times)
+		}
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
+// admitOnCompletedCheck admits an ordinary job at a head whose check has already
+// concluded the given way, and returns what admission decided.
+func admitOnCompletedCheck(t *testing.T, conclusion string) (domain.ReviewJob, *serviceFixture) {
+	t.Helper()
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+		"id":          float64(4242),
+		"name":        config.ReviewCheckName,
+		"head_sha":    testHeadSHA,
+		"status":      "completed",
+		"conclusion":  conclusion,
+		"external_id": "",
+	})
+
+	admitted, wasAdmitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if !wasAdmitted {
+		t.Fatal("the job was not admitted")
+	}
+	return admitted, fixture
+}
+
+// A check that has concluded is not one a new review may report through. The
+// review that follows writes its progress and its outcome into that check, so
+// leaving it terminal means a reader sees a finished review for the whole time
+// one is actually running, and nothing ever moves it back.
+//
+// The check is restarted rather than replaced, so the head keeps carrying one
+// check of this name and there is no question which of two a branch rule reads.
+func TestAnOrdinaryRunRestartsAConcludedCheckBeforeReviewingThroughIt(t *testing.T) {
+	for _, conclusion := range []string{"failure", "action_required", "cancelled", "neutral"} {
+		admitted, fixture := admitOnCompletedCheck(t, conclusion)
+
+		if admitted.CheckRunStatus != "in_progress" {
+			t.Fatalf("conclusion %s: check status = %q, want in_progress before any review work",
+				conclusion, admitted.CheckRunStatus)
+		}
+		if admitted.CheckRunConclusion != "" {
+			t.Fatalf("conclusion %s: conclusion = %q, want it cleared with the restart",
+				conclusion, admitted.CheckRunConclusion)
+		}
+		if admitted.CheckRunID != 4242 {
+			t.Fatalf("conclusion %s: check run id = %d, want the head's own check restarted rather than a second created",
+				conclusion, admitted.CheckRunID)
+		}
+		if len(fixture.state.checkRuns) != 1 {
+			t.Fatalf("conclusion %s: check runs = %d, want 1", conclusion, len(fixture.state.checkRuns))
+		}
+	}
+}
+
+// A completed successful check is the exception. The run that follows stops on
+// it rather than reviewing, so it has nothing to report through it, and
+// restarting it would pull a satisfied required check off a head that really was
+// reviewed in order to conclude it again unchanged moments later.
+func TestAnOrdinaryRunLeavesACompletedSuccessfulCheckAlone(t *testing.T) {
+	admitted, fixture := admitOnCompletedCheck(t, "success")
+
+	if admitted.CheckRunStatus != "completed" {
+		t.Fatalf("check status = %q, want the successful check left completed", admitted.CheckRunStatus)
+	}
+	if admitted.CheckRunConclusion != "success" {
+		t.Fatalf("conclusion = %q, want success carried through", admitted.CheckRunConclusion)
+	}
+	if fixture.state.checkDetailsURL != "" {
+		t.Fatal("the successful check was restarted, taking a satisfied required check off a reviewed head")
+	}
+}
+
+// A replayed delivery carries the body it was created from, headers and all, so
+// the job it produces names the head that body names rather than whatever the
+// pull request has moved to since. The dedup lookup therefore asks about the
+// head the first attempt used, which is where that attempt left its check.
+//
+// The pull request advances here between the two admissions, which is the
+// condition under which a lookup keyed on the current head would miss. It does
+// not miss, because no part of admission reads the current head.
+func TestAForcedReplayAfterTheHeadMovedStillFindsItsCompletedCheck(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("first delivery: %v", err)
+	}
+
+	// The pull request moves on. The replay still carries its original body, so
+	// the job is unchanged and still names the head it was created for.
+	fixture.state.headSHA = testStaleHeadSHA
+
+	_, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("replayed Admit: %v", err)
+	}
+	if wasAdmitted {
+		t.Fatal("the replay was admitted again, so the same forced review would run twice")
+	}
+	if model.callCount != 1 {
+		t.Fatalf("model calls = %d, want 1", model.callCount)
+	}
+	if len(fixture.state.checkRuns) != 1 {
+		t.Fatalf("check runs = %d, want 1: the replay must not create a second",
+			len(fixture.state.checkRuns))
+	}
+}
+
+// The run identifier names whichever run wrote the marker last, so another
+// delivery reviewing the same head moves it off the forced delivery that
+// cleared the state. Reading the clearing out of that identifier forgets it
+// happened, and the forced delivery's own resume then clears the state a second
+// time and pays for every chunk again.
+//
+// The forcing delivery is recorded separately for exactly that reason, and this
+// drives the sequence that loses it: a forced delivery reviews and stops before
+// settling, another delivery writes the marker at the same head, and the forced
+// delivery is replayed.
+func TestAnotherDeliveryWritingTheMarkerDoesNotForgetTheForcedDelivery(t *testing.T) {
+	model := newChunkScriptedModel("")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:                  twoChunkCollector{},
+		minimumImportance:          9,
+		model:                      model,
+		listThreadsStatus:          http.StatusInternalServerError,
+		firstCheckCompletionStatus: http.StatusInternalServerError,
+	})
+
+	job := fixture.forcedJob()
+	if err := fixture.run(context.Background(), job); err == nil {
+		t.Fatal("first delivery: want the run stopped before it settled its check")
+	}
+	cleared := decodedSummaryState(t, fixture)
+	if cleared.ForcedBy != job.DeliveryID {
+		t.Fatalf("forced by = %q, want the delivery that cleared the state", cleared.ForcedBy)
+	}
+	if len(cleared.Completed) != 2 {
+		t.Fatalf("completed = %v, want both chunks recorded as read", cleared.Completed)
+	}
+
+	// Another delivery reviews the same head and writes the marker, which is
+	// what moves the run identifier off the forced delivery.
+	overwritten := cleared
+	overwritten.RunID = "delivery-other"
+	fixture.state.issueComments[0]["body"] = "## Review\n\nanother run\n\n" + marker.EncodeState(overwritten)
+
+	fixture.state.listThreadsStatus = http.StatusOK
+	if err := fixture.run(context.Background(), job); err != nil {
+		t.Fatalf("resumed Run: %v", err)
+	}
+
+	for _, path := range []string{"file0.go", "file1.go"} {
+		if times := timesReviewed(model, path); times != 1 {
+			t.Fatalf("%s was analyzed %d times, want once: the forced delivery's own record was forgotten",
+				path, times)
+		}
+	}
+	if fixture.state.checkRuns[0]["status"] != "completed" {
+		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	}
+}
+
+// The check run a redelivery is looking for is exactly the one newer check runs
+// of the same name have replaced, and a pull request labelled more than once
+// accumulates them. GitHub documents this listing as returning only the most
+// recent check run of a name unless asked for all, and as paginated, so a
+// lookup that takes either default cannot see its own earlier work and forces
+// the review again.
+//
+// The check run sought here is neither the newest nor on the first page, so
+// taking either default loses it.
+func TestAForcedRedeliveryFindsItsCheckRunBehindNewerOnesAndPageBoundaries(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+	job := fixture.forcedJob()
+	const soughtIndex = 2
+	for index := range 5 {
+		externalID := fmt.Sprintf("delivery-other-%d", index)
+		if index == soughtIndex {
+			externalID = job.DeliveryID
+		}
+		fixture.state.checkRuns = append(fixture.state.checkRuns, map[string]any{
+			"id":          float64(500 + index),
+			"name":        config.ReviewCheckName,
+			"head_sha":    testHeadSHA,
+			"status":      "completed",
+			"conclusion":  "success",
+			"external_id": externalID,
+		})
+	}
+	if soughtIndex < serviceCheckRunPageSize {
+		t.Fatalf("the sought check run sits on the first page, so this test proves nothing about pagination")
+	}
+
+	_, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	if wasAdmitted {
+		t.Fatal("the redelivery could not see the check run it created, so it forces the whole review again")
+	}
+	if len(fixture.state.checkRuns) != 5 {
+		t.Fatalf("check runs = %d, want 5: the redelivery must not create a duplicate",
+			len(fixture.state.checkRuns))
+	}
+}
+
+// A second label event is a genuinely new force request, and carries its own
+// delivery identifier. The identifier rather than the fact of being forced is
+// what separates a repeat from a new request.
+func TestASecondLabelEventIsANewForceRequest(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{
+		{CoverageComplete: true, Findings: nil},
+		{CoverageComplete: true, Findings: nil},
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	first := fixture.forcedJob()
+	if err := fixture.run(context.Background(), first); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+
+	second := fixture.forcedJob()
+	second.DeliveryID = "delivery-forced-again"
+	if err := fixture.run(context.Background(), second); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+
+	if len(fixture.state.checkRuns) != 2 {
+		t.Fatalf("check runs = %d, want 2: a new label event is a new force request",
+			len(fixture.state.checkRuns))
+	}
+	if model.callCount != 2 {
+		t.Fatalf("model calls = %d, want 2", model.callCount)
+	}
+}
+
+// A forced pass derives its chunks from the whole pull request, so the ids it
+// leaves pending name whole pull request chunks. Writing those beside the old
+// baseline leaves a marker that contradicts itself, and the next run compares
+// that commit against the head, finds an empty range, and advances the baseline
+// over chunks nobody ever read.
+func TestAnIncompleteForcedRunLeavesAResumableCheckpoint(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         selfRangeEmptyCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+	// An earlier ordinary run recorded this head as reviewed.
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(1),
+		"body": marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateDone,
+			Pending:      nil,
+			Completed:    nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
+		t.Fatalf("forced Run: %v", err)
+	}
+
+	incomplete := decodedSummaryState(t, fixture)
+	if len(incomplete.Pending) == 0 {
+		t.Fatalf("state = %+v, want the chunk that failed left pending", incomplete)
+	}
+	if incomplete.LastReviewed != "" {
+		t.Fatalf("last reviewed = %q, want empty: the pending ids name whole pull request chunks",
+			incomplete.LastReviewed)
+	}
+
+	// The next ordinary run must be able to derive a range those ids appear in,
+	// read the chunk that was left, and only then call the head reviewed.
+	model.heal()
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if times := timesReviewed(model, "file1.go"); times != 2 {
+		t.Fatalf("file1.go was analyzed %d times, want twice: the next run must finish the pending chunk", times)
+	}
+	done := decodedSummaryState(t, fixture)
+	if len(done.Pending) != 0 {
+		t.Fatalf("state = %+v, want nothing pending once the chunk was read", done)
+	}
+	if done.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head only after every chunk was read", done.LastReviewed)
+	}
+}
+
+// A forced run asks for the whole pull request, not for permission to review
+// one. An oversized delta is oversized however it was triggered, so admission
+// declines it exactly as it declines an ordinary one, and the check stops short
+// of any conclusion GitHub counts as passing.
+func TestAForcedRunStillDeclinesAnOversizedDelta(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:       twoChunkCollector{},
+		reviewMaxChunks: 1,
+	})
+
+	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "action_required" {
+		t.Fatalf("conclusion = %v, want action_required: a forced oversized delta must not read as passing",
+			conclusion)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatal("a declined delta submitted a review")
+	}
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("issue comments = %d, want 1", len(fixture.state.issueComments))
+	}
+	body, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok {
+		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
+	}
+	if !strings.Contains(body, "Review skipped:") {
+		t.Fatalf("summary comment = %q, want it to say the review was skipped", body)
+	}
+	skipped, ok := marker.DecodeState(body)
+	if !ok || skipped.Status != marker.StateSkipped {
+		t.Fatalf("state = %+v ok=%v, want a decodable skipped marker", skipped, ok)
+	}
+}
+
 // An incomplete run is not a judgment, so it must leave no review object at
 // all. An earlier design submitted a blocking review here, and a model
 // provider outage then turned every open pull request into a wall of requested
@@ -1875,7 +2757,7 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	// approval event carries the meaning and the one top level comment carries
 	// the prose and the table, so any prose here renders a second Review box
 	// saying what the comment above it already said.
-	if body != marker.Review(domain.HeadSHA(testHeadSHA)) {
+	if body != marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionApprove) {
 		t.Fatalf("approving verdict body = %q, want the review marker alone", body)
 	}
 	commentBody, ok := fixture.state.issueComments[0]["body"].(string)
@@ -1932,7 +2814,9 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The finding posts as its chunk answers, the checkpoint follows it, and
+	// The comment saying the review began comes as soon as the run knows it has
+	// work, so the pull request is never silent while a long delta is read. Then
+	// the finding posts as its chunk answers, the checkpoint follows it, and
 	// only then come the head refresh, the thread read the verdict is computed
 	// from, and the review that carries it.
 	wantOrder := []string{
@@ -1942,10 +2826,12 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -2038,7 +2924,7 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 				"id":        float64(11),
 				"commit_id": string(head),
 				"state":     "COMMENTED",
-				"body":      marker.Review(head) + "\nExisting review.",
+				"body":      marker.Review(head, domain.ReviewDecisionRequestChanges) + "\nExisting review.",
 				"user":      map[string]any{"login": testBotLogin},
 			},
 		}},
@@ -2052,9 +2938,10 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 0", fixture.reconciler.callCount)
 	}
 
-	// The durable state is never read here. A head an existing review marker
-	// already covers owes no delta, so the run pays for no issue comment read
-	// on its way out.
+	// A head an existing review marker already covers owes no delta, so the run
+	// reads no durable state on its way out and says nothing on the pull
+	// request. Announcing a start here would leave the comment describing a
+	// review nobody is having, with nothing after it to correct the wording.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
@@ -2509,10 +3396,12 @@ func TestASeparateDefectOnAnAnsweredFileStillPublishes(t *testing.T) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES while the answered thread is open",
 			fixture.state.lastSubmitReview["event"])
 	}
-	body, ok := fixture.state.lastSubmitReview["body"].(string)
-	if !ok || !strings.Contains(body, "main.go:1") {
-		t.Fatalf("verdict body = %v, want the surviving open thread named",
-			fixture.state.lastSubmitReview["body"])
+	// What the block waits on is named in the one top level comment, which is
+	// the only place this service writes prose above the diff.
+	comment, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || !strings.Contains(comment, "`main.go`:1") {
+		t.Fatalf("comment = %v, want the surviving open thread named",
+			fixture.state.issueComments[0]["body"])
 	}
 }
 
@@ -2586,7 +3475,7 @@ func TestTheChunkPromptDoesNotPresentEveryReplyAsTheAuthors(t *testing.T) {
 func blockingVerdictReviewPage(head domain.HeadSHA, withMarker bool) [][]map[string]any {
 	body := "## Review\n\nSevere findings are listed inline."
 	if withMarker {
-		body += "\n\n" + marker.Review(head)
+		body += "\n\n" + marker.Review(head, domain.ReviewDecisionRequestChanges)
 	}
 	return [][]map[string]any{{
 		{
@@ -2708,7 +3597,7 @@ func TestThreadResolutionCannotApproveAPartiallyReviewedHead(t *testing.T) {
 	pages[0][0]["body"] = "## Review\n\nSevere findings are listed inline.\n\nWaiting on:\n- " +
 		"This head was not fully reviewed, so nothing here can approve it yet. " +
 		"The next push reviews what this run could not." +
-		"\n\n" + marker.Review(head)
+		"\n\n" + marker.Review(head, domain.ReviewDecisionRequestChanges)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages:      pages,
 		reconcileThreads: []githubapp.ReviewThread{resolvedBotThread("thread-resolved")},
@@ -2799,7 +3688,7 @@ func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
 				"id":        float64(41),
 				"commit_id": string(head),
 				"state":     "CHANGES_REQUESTED",
-				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head, domain.ReviewDecisionRequestChanges),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 			// Then another head was approved, and the branch was forced back here.
@@ -2808,7 +3697,7 @@ func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
 				"id":        float64(42),
 				"commit_id": string(stale),
 				"state":     "APPROVED",
-				"body":      "## Review\n\nNo severe findings.\n\n" + marker.Review(stale),
+				"body":      "## Review\n\nNo severe findings.\n\n" + marker.Review(stale, domain.ReviewDecisionRequestChanges),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 		}},
@@ -2833,11 +3722,23 @@ func TestAForcePushBackDoesNotLeaveANewerApprovalStanding(t *testing.T) {
 	}
 }
 
-// A dismissal withdraws the verdict; it does not restore the one before it. A
-// refresh that read the older state as still standing, found it equal to the
-// decision it recomputed, and submitted nothing would leave the pull request
-// carrying no verdict while a thread is open.
-func TestADismissedVerdictLeavesNoStandingStateToMatch(t *testing.T) {
+// A dismissal withdraws the verdict; it does not restore the one before it, so
+// no standing state is left for a recomputed verdict to match and be suppressed
+// by. That mechanism is what lets the approval in the second half of this test
+// land, and it is unchanged.
+//
+// What a dismissal means for a block is the reverse of what this test used to
+// require. It once demanded the block be restated while a thread was open, so
+// that a dismissal could not leave the pull request carrying no verdict.
+// Dismissing is how a person says they do not want this block, and restating it
+// from thread state alone, seconds later and with nothing new learned, is
+// exactly the stale block this service exists to prevent. A withdrawn block now
+// comes back only from a run that read something, which means a push or the
+// force label.
+//
+// The approval is not withheld with it. That is the verdict the person was
+// reaching for, and the refresh is the only path that reaches it without a push.
+func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages: [][]map[string]any{{
@@ -2845,7 +3746,7 @@ func TestADismissedVerdictLeavesNoStandingStateToMatch(t *testing.T) {
 				"id":        float64(51),
 				"commit_id": string(head),
 				"state":     "CHANGES_REQUESTED",
-				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"body":      blockingVerdictBody(head),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 			// Somebody dismissed it, so nothing stands.
@@ -2853,7 +3754,7 @@ func TestADismissedVerdictLeavesNoStandingStateToMatch(t *testing.T) {
 				"id":        float64(52),
 				"commit_id": string(head),
 				"state":     "DISMISSED",
-				"body":      "## Review\n\nSevere findings are listed inline.\n\n" + marker.Review(head),
+				"body":      blockingVerdictBody(head),
 				"user":      map[string]any{"login": testBotLogin},
 			},
 		}},
@@ -2863,14 +3764,213 @@ func TestADismissedVerdictLeavesNoStandingStateToMatch(t *testing.T) {
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
-		t.Fatalf("Run: %v", err)
+		t.Fatalf("Run with the thread open: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("event = %v was submitted, reinstating a block a person withdrew",
+			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
+	if !ok {
+		t.Fatal("summary comment body is not a string")
+	}
+	if !strings.Contains(body, "dismissed by hand") {
+		t.Fatalf("summary comment does not say why the open findings carry no block:\n%s", body)
+	}
+
+	// The person resolves the finding, which is the only delivery that reaches a
+	// verdict here without a push.
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-open")})
+	resolved := fixture.job()
+	resolved.DeliveryID = "delivery-resolved"
+	if err := fixture.run(context.Background(), resolved); err != nil {
+		t.Fatalf("Run with the thread resolved: %v", err)
 	}
 	if fixture.state.lastSubmitReview == nil {
-		t.Fatal("no verdict was submitted, so a dismissed review left the head unguarded with a thread open")
+		t.Fatal("no approval was submitted, so one dismissal left the head with no verdict for good")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE once every thread is resolved",
+			fixture.state.lastSubmitReview["event"])
+	}
+	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA {
+		t.Fatalf("commit_id = %v, want the head the dismissed verdict named",
+			fixture.state.lastSubmitReview["commit_id"])
+	}
+}
+
+// Dismissing on GitHub rewrites the review's own state rather than adding a
+// second object, so a pull request whose only verdict was dismissed lists one
+// review, dismissed. That is the shape production sees, and it is the shape the
+// old lookup could not read: accepting only approved and changes-requested, it
+// reported nothing found, and the refresh returned without ever ruling on that
+// head again.
+func TestTheOnlyVerdictBeingDismissedStillLetsTheHeadBeApproved(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(51),
+			"commit_id": string(head),
+			"state":     "DISMISSED",
+			"body":      blockingVerdictBody(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-done")})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted, so the only dismissal disabled this head's refresh for good")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE once every thread is resolved",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// blockingVerdictBody is what this service writes as the body of a blocking
+// verdict: the blocking lead, what the block waits on, and the review marker.
+// Dismissing a review does not edit its body, so this is also what a dismissed
+// block still carries, and it is the only surviving record that the verdict was
+// a block.
+func blockingVerdictBody(head domain.HeadSHA) string {
+	return marker.Review(head, domain.ReviewDecisionRequestChanges)
+}
+
+// approvingVerdictBody is what this service writes as the body of an approving
+// verdict. Both bodies are the review marker and nothing visible: the one top
+// level comment says everything a reader needs, and the decision itself is a
+// GitHub event.
+func approvingVerdictBody(head domain.HeadSHA) string {
+	return marker.Review(head, domain.ReviewDecisionApprove)
+}
+
+// legacyBlockingVerdictBody is what this service wrote as the body of a
+// blocking verdict before the body became the marker alone. Reviews shaped like
+// this are standing on open pull requests, and dismissing one has to be
+// recognized as dismissing a block.
+func legacyBlockingVerdictBody(head domain.HeadSHA) string {
+	return "Changes requested.\n\nWaiting on:\n- file0.go:2\n\n" +
+		"<!-- pr-review-agent:review:v1 head=" + string(head) + " -->"
+}
+
+// A block dismissed before the marker recorded decisions is still a dismissed
+// block. Reading its body as an approval would restate the block a person had
+// just withdrawn, which is the failure the withholding rule exists to end, and
+// it would hit every pull request carrying a review written before this change.
+func TestDismissingALegacyBlockIsStillADismissedBlock(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(52),
+			"commit_id": string(head),
+			"state":     "DISMISSED",
+			"body":      legacyBlockingVerdictBody(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("event = %v, want no verdict: the person dismissed this block and it must not come back",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// Dismissing an approval is the opposite request to dismissing a block. The
+// person is saying they do not accept this approval and want more scrutiny, so
+// withholding a later block would hand them less of it. Only a dismissed block
+// is withheld from, and that is read from the body, because dismissing rewrites
+// the review's state and leaves nothing else saying what it used to be.
+func TestDismissingAnApprovalStillLetsALaterBlockBeSubmitted(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(51),
+			"commit_id": string(head),
+			"state":     "DISMISSED",
+			"body":      approvingVerdictBody(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted, so dismissing an approval bought less scrutiny rather than more")
 	}
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES restated after the dismissal",
+		t.Fatalf("event = %v, want REQUEST_CHANGES: the open thread still blocks",
 			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
+	if !ok {
+		t.Fatal("summary comment body is not a string")
+	}
+	if strings.Contains(body, "dismissed by hand") {
+		t.Fatalf("summary comment reports a withheld block where one was submitted:\n%s", body)
+	}
+}
+
+// The control for the dismissal rule: a head whose verdict nobody withdrew keeps
+// refreshing exactly as it did. An open thread leaves the standing block alone
+// rather than restating it, and resolving the thread flips the verdict to an
+// approval, with nothing in the comment about a withdrawal that never happened.
+func TestAVerdictNobodyDismissedRefreshesAsBefore(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(51),
+			"commit_id": string(head),
+			"state":     "CHANGES_REQUESTED",
+			"body":      blockingVerdictBody(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run with the thread open: %v", err)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("event = %v was submitted, want the standing block left alone",
+			fixture.state.lastSubmitReview["event"])
+	}
+	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
+	if !ok {
+		t.Fatal("summary comment body is not a string")
+	}
+	if strings.Contains(body, "dismissed by hand") {
+		t.Fatalf("summary comment reports a dismissal that never happened:\n%s", body)
+	}
+
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{resolvedBotThread("thread-open")})
+	resolved := fixture.job()
+	resolved.DeliveryID = "delivery-resolved"
+	if err := fixture.run(context.Background(), resolved); err != nil {
+		t.Fatalf("Run with the thread resolved: %v", err)
+	}
+	if fixture.state.lastSubmitReview == nil {
+		t.Fatal("no verdict was submitted once every thread was resolved")
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
 	}
 }
 
@@ -3031,10 +4131,10 @@ func TestARefreshUpdatesTheBlockingListWhenTheVerdictDoesNotMove(t *testing.T) {
 			fixture.state.lastSubmitReview)
 	}
 	body := fixture.state.issueComments[0]["body"].(string)
-	if !strings.Contains(body, "main.go:5") {
+	if !strings.Contains(body, "`main.go`:5") {
 		t.Fatalf("summary comment = %q, want the thread still open named", body)
 	}
-	if strings.Contains(body, "main.go:2") {
+	if strings.Contains(body, "`main.go`:2") {
 		t.Fatalf("summary comment still names the thread that was resolved, so a reader "+
 			"goes looking for something already dealt with:\n%s", body)
 	}
@@ -3070,7 +4170,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 				"id":        float64(12),
 				"commit_id": string(head),
 				"state":     "COMMENTED",
-				"body":      marker.Review(head) + "\nForeign review.",
+				"body":      marker.Review(head, domain.ReviewDecisionRequestChanges) + "\nForeign review.",
 				"user":      map[string]any{"login": "other-user"},
 			},
 		}},
@@ -3088,10 +4188,12 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -3121,8 +4223,10 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The head check that guards the first chunk's comments catches the move,
-	// so the run ends there rather than posting to a commit nobody is reading.
+	// The comment saying the review began comes as soon as the run knows it has
+	// work. Then the head check that guards the first chunk's comments catches
+	// the move, so the run ends there rather than posting to a commit nobody is
+	// reading.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
@@ -3130,6 +4234,8 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
@@ -3161,6 +4267,8 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		t.Fatal("Run: want error")
 	}
 
+	// One comment is created at the start and edited from then on, including by
+	// the failure notice, so nothing here posts a second one.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
@@ -3168,10 +4276,12 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
+		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
@@ -3740,6 +4850,10 @@ func TestAnIncompleteRunOmitsTheReviewMarkerSoTheHeadIsReviewedAgain(t *testing.
 // The failure notice edits the one comment the service already owns rather
 // than leaving a second one behind, so a pull request that fails repeatedly
 // still shows one summary.
+//
+// A run edits that comment more than once, first to say the review started and
+// again to say how it ended, which is the point: one comment, rewritten in
+// place, never a second one.
 func TestServiceFailureNoticeEditsTheExistingSummaryComment(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reconcileErr: errors.New("reconcile failed"),
@@ -3758,8 +4872,12 @@ func TestServiceFailureNoticeEditsTheExistingSummaryComment(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run: want error")
 	}
-	if fixture.state.issueCommentUpdates != 1 {
-		t.Fatalf("issue comment updates = %d, want the existing comment edited once", fixture.state.issueCommentUpdates)
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("top level comments = %d, want the existing one edited rather than a second posted",
+			len(fixture.state.issueComments))
+	}
+	if fixture.state.issueCommentUpdates == 0 {
+		t.Fatal("the existing comment was never edited, so it still shows a review that is over")
 	}
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, "Review failed while reconciling existing findings.") {
@@ -3954,7 +5072,7 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 
-	admitted, err := fixture.service.Admit(context.Background(), fixture.job())
+	admitted, _, err := fixture.service.Admit(context.Background(), fixture.job())
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
 	}
@@ -4496,7 +5614,7 @@ func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Waiting on:",
-		"main.go:2",
+		"`main.go`:2",
 		"https://github.com/owner/repo/pull/7#discussion_r4242",
 	} {
 		if !strings.Contains(body, want) {
@@ -4564,7 +5682,7 @@ func TestServiceStopsPublicationWhenTheServiceShutsDown(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	admitted, err := fixture.service.Admit(ctx, fixture.job())
+	admitted, _, err := fixture.service.Admit(ctx, fixture.job())
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
 	}
@@ -4935,6 +6053,8 @@ type serviceFixtureOptions struct {
 	pullRequestStatus               int
 	pullRequestStatusAfterFirstRead int
 	reviewListStatus                int
+	startCheckRunStatus             int
+	firstCheckCompletionStatus      int
 	submitReviewStatus              int
 	updateReviewStatus              int
 	createCommentStatus             int
@@ -4989,7 +6109,16 @@ type serviceServerState struct {
 	pullRequestStatus               int
 	pullRequestStatusAfterFirstRead int
 	reviewListStatus                int
-	lastSubmitReview                map[string]any
+	// startCheckRunStatus fails the PATCH that starts a check run, leaving it
+	// created and queued.
+	startCheckRunStatus int
+	// firstCheckCompletionStatus fails the first PATCH that completes a check
+	// run and then clears itself, leaving the check in progress over a review
+	// that already published. It is the window between publication and
+	// settlement, and it heals so the delivery that lands in it can still be
+	// followed to its conclusion.
+	firstCheckCompletionStatus int
+	lastSubmitReview           map[string]any
 	// submittedReviews are the reviews this pull request now carries, which
 	// ListReviews serves from the next call onward.
 	submittedReviews    []map[string]any
@@ -5011,6 +6140,10 @@ type serviceServerState struct {
 	threadNodes         []map[string]any
 	issueComments       []map[string]any
 	issueCommentUpdates int
+	// issueCommentBodies is every body the one top level comment has carried, in
+	// the order it carried them. The order is the point: a reader watching a
+	// pending check has to be told the review began before anything else.
+	issueCommentBodies []string
 }
 
 // recordingReconciler answers with the configured threads plus one thread per
@@ -5181,6 +6314,162 @@ func (twoChunkCollector) CollectRange(
 	return diff.ReviewInput{PullRequest: pullRequest, Files: files}, nil
 }
 
+// testGitHubAppID is the app the fixture speaks as. Check run listings carry
+// the owning app, and the lookup filters on it, so the fixture has to answer
+// with the same identity its client is configured with.
+const testGitHubAppID = 12345
+
+// serviceCheckRunPageSize is how many check runs the fixture serves per page.
+// GitHub paginates this listing, and a page smaller than the caller asked for
+// is a normal answer, so a deliberately small one is what shows whether a
+// caller follows the links.
+const serviceCheckRunPageSize = 2
+
+// A pull request carries exactly one top level comment from this service, and
+// it says the review started before the review reads anything.
+//
+// Until this held, the pull request said nothing until the first chunk came
+// back. On a long delta that is minutes of a pending check with no way to tell a
+// slow review from one that never began, and the operator reported it three
+// times in one evening.
+func TestTheReviewSaysItStartedBeforeItReadsAnything(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(fixture.state.issueCommentBodies) == 0 {
+		t.Fatal("the pull request was never told anything")
+	}
+	// The start body is the only one that promises a rewrite and counts no
+	// chunks, because it is written before any chunk has been read.
+	first := fixture.state.issueCommentBodies[0]
+	if !strings.Contains(first, "This comment is rewritten when the review finishes.") {
+		t.Fatalf("the first thing written to the pull request was %q, want the review saying it started", first)
+	}
+	// Nothing is reviewed yet, so the first write must not claim this head was.
+	if _, found := marker.FindReview(first); found {
+		t.Fatalf("the start comment carries a review marker, so the next run reads this head as done: %q", first)
+	}
+	if len(fixture.state.issueComments) != 1 {
+		t.Fatalf("top level comments = %d, want exactly one for the whole run", len(fixture.state.issueComments))
+	}
+	// The same comment ends holding the verdict, rewritten in place.
+	last, ok := fixture.state.issueComments[0]["body"].(string)
+	if !ok || !strings.Contains(last, "<summary>Review details</summary>") {
+		t.Fatalf("the comment did not end holding the finished summary: %v", fixture.state.issueComments[0]["body"])
+	}
+}
+
+// The comment names what the review is already waiting on while it is still
+// reading, so a reader can start on the first finding rather than waiting for
+// the whole run. The two facts arrive in either order and appear together.
+func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
+	model := newChunkScriptedModel("file1.go")
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoChunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// The first chunk answered with a finding and the second failed, so the run
+	// wrote a progress body while a chunk was still owed.
+	progress := ""
+	for _, body := range fixture.state.issueCommentBodies {
+		if strings.Contains(body, "still to read") {
+			progress = body
+		}
+	}
+	if progress == "" {
+		t.Fatalf("no progress body was written: %v", fixture.state.issueCommentBodies)
+	}
+	if !strings.Contains(progress, "Waiting on:") {
+		t.Fatalf("the progress comment names nothing to act on yet: %q", progress)
+	}
+	// The path is a code span, because it is whatever the pull request named a
+	// file and this comment carries the service's own identity.
+	if !strings.Contains(progress, "`file0.go`:2") {
+		t.Fatalf("the progress comment does not name the finding already posted: %q", progress)
+	}
+}
+
+// A resumed pass posts only the findings it reads itself, so the comment names
+// what the pull request was already waiting on as well. Without that, finishing
+// the last chunk of a long review would drop every finding an earlier pass had
+// put on the page.
+func TestTheCommentKeepsNamingWhatAnEarlierPassAlreadyPosted(t *testing.T) {
+	body := review.RenderProgressBody(
+		domain.HeadSHA(testHeadSHA),
+		1,
+		[]string{"`old.go`:9", "`new.go`:2"},
+	)
+	for _, want := range []string{"`old.go`:9", "`new.go`:2"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the progress comment dropped %s: %q", want, body)
+		}
+	}
+}
+
+// recordCommentBody keeps every body the one top level comment has carried.
+func (state *serviceServerState) recordCommentBody(body any) {
+	text, ok := body.(string)
+	if !ok {
+		return
+	}
+	state.issueCommentBodies = append(state.issueCommentBodies, text)
+}
+
+// writeServiceCheckRunPage serves one page of a check run listing and links the
+// next, the way GitHub's paginated endpoint does.
+func writeServiceCheckRunPage(
+	writer http.ResponseWriter,
+	request *http.Request,
+	matches []map[string]any,
+) {
+	page := 1
+	if parsed, err := strconv.Atoi(request.URL.Query().Get("page")); err == nil && parsed > 0 {
+		page = parsed
+	}
+	start := min((page-1)*serviceCheckRunPageSize, len(matches))
+	end := min(start+serviceCheckRunPageSize, len(matches))
+	if end < len(matches) {
+		nextURL := *request.URL
+		nextQuery := nextURL.Query()
+		nextQuery.Set("page", strconv.Itoa(page+1))
+		nextURL.RawQuery = nextQuery.Encode()
+		writer.Header().Set("Link", `<http://`+request.Host+nextURL.RequestURI()+`>; rel="next"`)
+	}
+	serviceWriteJSON(writer, http.StatusOK, map[string]any{
+		"total_count": len(matches),
+		"check_runs":  matches[start:end],
+	})
+}
+
+// selfRangeEmptyCollector answers a range the way GitHub's compare does: a
+// range asked for from a commit to that same commit holds nothing.
+//
+// twoChunkCollector discards the base, so a test built on it cannot show what a
+// stale baseline costs. It is exactly that emptiness that turns a checkpoint
+// naming the head into chunks nobody can ever resume.
+type selfRangeEmptyCollector struct{}
+
+func (selfRangeEmptyCollector) CollectRange(
+	ctx context.Context,
+	ref domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	base domain.HeadSHA,
+) (diff.ReviewInput, error) {
+	if base == pullRequest.Head {
+		return diff.ReviewInput{PullRequest: pullRequest, Files: nil, MergeBase: base}, nil
+	}
+	return twoChunkCollector{}.CollectRange(ctx, ref, pullRequest, base)
+}
+
 type serialGateModel struct {
 	noConsolidation
 	mu      sync.Mutex
@@ -5263,6 +6552,8 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		pullRequestStatus:               options.pullRequestStatus,
 		pullRequestStatusAfterFirstRead: options.pullRequestStatusAfterFirstRead,
 		reviewListStatus:                options.reviewListStatus,
+		startCheckRunStatus:             options.startCheckRunStatus,
+		firstCheckCompletionStatus:      options.firstCheckCompletionStatus,
 		submitReviewStatus:              options.submitReviewStatus,
 		updateReviewStatus:              options.updateReviewStatus,
 		createCommentStatus:             options.createCommentStatus,
@@ -5325,7 +6616,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 
 	cfg := config.Config{
 		Port:             "3000",
-		GitHubAppID:      12345,
+		GitHubAppID:      testGitHubAppID,
 		GitHubPrivateKey: privateKey, // gitleaks:allow
 		GitHubBotLogin:   testBotLogin,
 		GitHubAPIBaseURL: apiURL,
@@ -5413,10 +6704,16 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	}
 }
 
+// run admits the job and reviews it, the way one webhook delivery does. A job
+// admission refuses, because this delivery was already admitted, reviews
+// nothing, exactly as the handler enqueues nothing for it.
 func (fixture *serviceFixture) run(ctx context.Context, job domain.ReviewJob) error {
-	admitted, err := fixture.service.Admit(ctx, job)
+	admitted, wasAdmitted, err := fixture.service.Admit(ctx, job)
 	if err != nil {
 		return err
+	}
+	if !wasAdmitted {
+		return nil
 	}
 	return fixture.service.Run(ctx, admitted)
 }
@@ -5431,6 +6728,15 @@ func (fixture *serviceFixture) job() domain.ReviewJob {
 			Head:           domain.HeadSHA(testHeadSHA),
 		},
 	}
+}
+
+// forcedJob is the same job a ForceReviewLabelPrefix label produces, which is
+// the one delivery that reviews a pull request from scratch.
+func (fixture *serviceFixture) forcedJob() domain.ReviewJob {
+	job := fixture.job()
+	job.DeliveryID = "delivery-forced"
+	job.Forced = true
+	return job
 }
 
 func handleServiceRequest(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {
@@ -5484,6 +6790,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			"user": map[string]any{"login": testBotLogin},
 		}
 		state.issueComments = append(state.issueComments, created)
+		state.recordCommentBody(body["body"])
 		serviceWriteJSON(writer, http.StatusCreated, created)
 		return
 	}
@@ -5509,6 +6816,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			updated = item
 		}
 		state.issueCommentUpdates++
+		state.recordCommentBody(body["body"])
 		serviceWriteJSON(writer, http.StatusOK, updated)
 		return
 	}
@@ -5658,10 +6966,14 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 				matches = append(matches, item)
 			}
 		}
-		serviceWriteJSON(writer, http.StatusOK, map[string]any{
-			"total_count": len(matches),
-			"check_runs":  matches,
-		})
+		// GitHub documents filter as defaulting to latest, which returns only
+		// the most recent check run of a name. Modelling that is what lets a
+		// test show that a caller taking the default cannot see the check runs
+		// a newer one replaced.
+		if query.Get("filter") != "all" && len(matches) > 1 {
+			matches = matches[len(matches)-1:]
+		}
+		writeServiceCheckRunPage(writer, request, matches)
 		return
 	}
 
@@ -5672,12 +6984,22 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			return
 		}
 		state.lastCreateCheckRun = body
+		// Every created check run gets its own id, the way GitHub assigns one,
+		// and keeps the delivery that created it so a redelivery can find it.
+		createdID := state.nextCheckRunID
+		state.nextCheckRunID++
 		created := map[string]any{
-			"id":         float64(state.nextCheckRunID),
-			"name":       body["name"],
-			"head_sha":   body["head_sha"],
-			"status":     body["status"],
-			"conclusion": "",
+			"id":          float64(createdID),
+			"name":        body["name"],
+			"head_sha":    body["head_sha"],
+			"status":      body["status"],
+			"conclusion":  "",
+			"external_id": body["external_id"],
+			// GitHub names the app that owns every check run it returns. The
+			// lookup filters on it, because a check run name is not reserved and
+			// another app publishing the same name on this head must not be read
+			// as this service's own result.
+			"app": map[string]any{"id": float64(testGitHubAppID)},
 		}
 		state.checkRuns = append(state.checkRuns, created)
 		serviceWriteJSON(writer, http.StatusCreated, created)
@@ -5688,6 +7010,21 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		body, err := serviceReadJSONBody(request)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A start that GitHub refuses leaves the check run created and queued,
+		// which is the window the resume path exists for.
+		if body["status"] == "in_progress" && state.startCheckRunStatus != 0 {
+			http.Error(writer, "start check run failed", state.startCheckRunStatus)
+			return
+		}
+		// A completion GitHub refuses leaves the check in progress over a review
+		// that already reached the pull request, which is the window a redelivery
+		// lands in.
+		if body["status"] == "completed" && state.firstCheckCompletionStatus != 0 {
+			status := state.firstCheckCompletionStatus
+			state.firstCheckCompletionStatus = 0
+			http.Error(writer, "complete check run failed", status)
 			return
 		}
 		state.lastUpdateCheckRun = body

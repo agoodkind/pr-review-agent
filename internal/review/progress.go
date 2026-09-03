@@ -22,9 +22,17 @@ type reviewProgress struct {
 	published         []domain.Finding
 	priorReviews      []reviewTrace
 	threads           []threadTrace
+	// forced records that a label asked for this run, so every summary rendered
+	// from this progress reports the same trigger the successful one does.
+	forced bool
 }
 
-func newReviewProgress(head domain.HeadSHA, startedAt time.Time, minimumImportance int) *reviewProgress {
+func newReviewProgress(
+	head domain.HeadSHA,
+	startedAt time.Time,
+	minimumImportance int,
+	forced bool,
+) *reviewProgress {
 	return &reviewProgress{
 		head:              head,
 		startedAt:         startedAt,
@@ -38,6 +46,7 @@ func newReviewProgress(head domain.HeadSHA, startedAt time.Time, minimumImportan
 		published:         nil,
 		priorReviews:      nil,
 		threads:           nil,
+		forced:            forced,
 	}
 }
 
@@ -86,5 +95,6 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		Threads:      progress.threads,
 		Reached:      progress.stage,
 		Failed:       true,
+		Forced:       progress.forced,
 	}
 }

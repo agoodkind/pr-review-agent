@@ -79,6 +79,7 @@ func (service *Service) collectAndAdmit(
 	checkRun githubapp.CheckRun,
 	base domain.HeadSHA,
 	progress *reviewProgress,
+	settings reviewSettings,
 ) (deltaWork, bool, error) {
 	logger := gklog.L(ctx)
 	empty := deltaWork{Files: nil, Chunks: nil}
@@ -102,7 +103,7 @@ func (service *Service) collectAndAdmit(
 	}
 	work := deltaWork{Files: input.Files, Chunks: chunks}
 
-	verdict := admitDelta(len(input.Files), len(chunks), service.reviewMaxFiles, service.reviewMaxChunks)
+	verdict := admitDelta(len(input.Files), len(chunks), settings.maxFiles, settings.maxChunks)
 	if !verdict.Skip {
 		return work, false, nil
 	}
@@ -171,6 +172,11 @@ func (service *Service) declineReview(
 				// request has already paid for.
 				Pending:   existing.Pending,
 				Completed: existing.Completed,
+				// The forcing delivery carries forward for the same reason. A
+				// decline is not that delivery finishing, so dropping its record
+				// here would send its own resume over the whole pull request
+				// again.
+				ForcedBy: existing.ForcedBy,
 			},
 		}
 	}); err != nil {

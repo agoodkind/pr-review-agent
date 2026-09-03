@@ -164,3 +164,54 @@ func TestStateMarkerWithoutACompletedListStillDecodes(t *testing.T) {
 		t.Fatalf("completed = %v, want none: the older marker recorded none", decoded.Completed)
 	}
 }
+
+// Every pull request already carrying a marker was written before the forcing
+// delivery was recorded in one. Reading those as unparseable would throw away
+// the pending and completed lists they do carry, and send every open pull
+// request over its whole diff again on the first run after the deploy.
+func TestStateMarkerWithoutAForcingDeliveryStillDecodes(t *testing.T) {
+	body := "<!-- pr-review-agent:state:v1 last_reviewed=a3c4f1cac7f595bc824704b9d2a1f1191630dc32 " +
+		"run=delivery-abc status=reviewing pending=a1b2c3d4e5f6 completed=0123456789ab -->"
+
+	decoded, ok := DecodeState(body)
+	if !ok {
+		t.Fatalf("DecodeState(%q): want the older marker decoded", body)
+	}
+	if len(decoded.Pending) != 1 || decoded.Pending[0] != "a1b2c3d4e5f6" {
+		t.Fatalf("pending = %v, want the id the older marker carried", decoded.Pending)
+	}
+	if len(decoded.Completed) != 1 || decoded.Completed[0] != "0123456789ab" {
+		t.Fatalf("completed = %v, want the id the older marker carried", decoded.Completed)
+	}
+	if decoded.ForcedBy != "" {
+		t.Fatalf("forced by = %q, want empty: the older marker named no forcing delivery", decoded.ForcedBy)
+	}
+}
+
+// The forcing delivery has to survive the round trip beside the lists rather
+// than in place of them, because the resume that reads it also reads the chunks
+// it must not pay for again.
+func TestStateMarkerRoundTripsTheForcingDelivery(t *testing.T) {
+	original := State{
+		LastReviewed: "",
+		RunID:        "delivery-later",
+		Status:       StateReviewing,
+		Pending:      []string{"a1b2c3d4e5f6"},
+		Completed:    []string{"0123456789ab"},
+		ForcedBy:     "delivery-forced",
+	}
+
+	decoded, ok := DecodeState("## Review\n\nprose\n\n" + EncodeState(original) + "\n")
+	if !ok {
+		t.Fatal("DecodeState: marker not found")
+	}
+	if decoded.ForcedBy != "delivery-forced" {
+		t.Fatalf("forced by = %q, want the delivery that cleared the state", decoded.ForcedBy)
+	}
+	if decoded.RunID != "delivery-later" {
+		t.Fatalf("run id = %q, want the run that wrote last, kept apart from the forcing one", decoded.RunID)
+	}
+	if len(decoded.Pending) != 1 || len(decoded.Completed) != 1 {
+		t.Fatalf("pending = %v completed = %v, want both lists intact", decoded.Pending, decoded.Completed)
+	}
+}

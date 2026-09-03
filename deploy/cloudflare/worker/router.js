@@ -1,6 +1,24 @@
+import {
+  REVIEW_SETTINGS_HEADER,
+  REVIEW_SETTINGS_SIGNATURE_HEADER,
+  createReviewSettingsHeader,
+  signReviewSettings,
+} from "./configuration.js";
 import { entryFromDelivery, forwardFailed } from "./replaylogic.js";
 import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
 
+// This worker forwards every delivery and decides nothing about any of them.
+//
+// It used to destroy the container when a delivery carried a forcing label, so
+// the review that followed read its configuration fresh. Nothing here does that
+// any more: a restart takes down whatever reviews are in flight, and the label
+// asks for a full review rather than for other people's work to be killed. The
+// configuration it was reaching for travels with the delivery instead.
+//
+// Losing the restart takes the label inspection with it, and the signature check
+// that existed only to gate it. The Go service already verifies every delivery
+// before acting and already applies the label and draft rules, so nothing this
+// file dropped went unenforced; it stopped being enforced twice.
 export async function routeRequest(request, env) {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health") {
@@ -20,10 +38,21 @@ export async function routeRequest(request, env) {
   const metadata = await readWebhookMetadata(request);
   console.log(JSON.stringify({ message: "webhook forwarding", ...metadata }));
 
+  // The tuning values ride on the forwarded request rather than on the container
+  // environment, because a running container keeps whatever it booted with: a
+  // chunk timeout changed and restored still governed reviews long afterwards,
+  // because nothing had replaced the process. Attaching them per delivery is what
+  // makes a correction take effect on the next review.
+  //
+  // The headers are set on a copy rather than on the caller's request, so the
+  // body GitHub signed and the entry queued for replay stay exactly as they
+  // arrived.
+  const forwarded = await withReviewSettings(request, body, env);
+
   let response = null;
   try {
     const container = env.PR_AGENT.getByName("github-app");
-    response = await container.fetch(request);
+    response = await container.fetch(forwarded);
   } catch (error) {
     console.error(JSON.stringify({ message: "webhook forward threw", ...metadata, error: String(error) }));
   }
@@ -77,11 +106,56 @@ async function enqueueForReplay(env, path, request, body, metadata) {
   return entry.id;
 }
 
+// withReviewSettings returns the request to forward, carrying this worker's
+// review tuning values and a signature over them.
+//
+// Both headers are removed before either is set, and on every path, including
+// the one where this worker has nothing to send. Returning the caller's request
+// untouched there let an inbound header through, so a sender could name its own
+// tuning values by finding a worker that had none, which is the opposite of a
+// worker that decides. Stripping unconditionally leaves one way in, and it is
+// the one that gets signed.
+//
+// A worker holding no signing key sends no values either. It cannot authenticate
+// them, and an unauthenticated value here is one anybody could have chosen.
+async function withReviewSettings(request, body, env) {
+  const forwarded = new Request(request);
+  forwarded.headers.delete(REVIEW_SETTINGS_HEADER);
+  forwarded.headers.delete(REVIEW_SETTINGS_SIGNATURE_HEADER);
+
+  const settings = createReviewSettingsHeader(env);
+  if (settings === "" || !env.GITHUB_WEBHOOK_SECRET) {
+    return forwarded;
+  }
+  forwarded.headers.set(REVIEW_SETTINGS_HEADER, settings);
+  forwarded.headers.set(
+    REVIEW_SETTINGS_SIGNATURE_HEADER,
+    await signReviewSettings(env.GITHUB_WEBHOOK_SECRET, settings, body),
+  );
+  return forwarded;
+}
+
+// stringField returns a payload value when it is a string and the empty string
+// otherwise, so every metadata field is one whatever the sender wrote.
+//
+// The metadata is built from a body nobody has verified and goes straight into a
+// log line, and a log line must not be able to throw on what a stranger put in
+// the payload. It once did: a reader called a string method on the label, and a
+// labeled payload carrying a number for its name threw before the delivery was
+// forwarded. That reader is gone, and this stays, because the next one should
+// not have to rediscover that these values are whatever the sender wrote.
+function stringField(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  return "";
+}
+
 async function readWebhookMetadata(request) {
   const deliveryId = request.headers.get("x-github-delivery") ?? "";
   const eventType = request.headers.get("x-github-event") ?? "";
   if (eventType !== "pull_request") {
-    return { deliveryId, eventType, action: "", head: "" };
+    return { deliveryId, eventType, action: "", head: "", label: "" };
   }
 
   try {
@@ -89,10 +163,15 @@ async function readWebhookMetadata(request) {
     return {
       deliveryId,
       eventType,
-      action: payload.action ?? "",
-      head: payload.pull_request?.head?.sha ?? "",
+      action: stringField(payload.action),
+      head: stringField(payload.pull_request?.head?.sha),
+      // The label object is present only on a labeled or unlabeled delivery.
+      // Every other action reads as an empty name, and so does a name of any
+      // type but a string. Nothing acts on it: it is here so an operator reading
+      // the log can tie a run back to the label somebody added.
+      label: stringField(payload.label?.name),
     };
   } catch {
-    return { deliveryId, eventType, action: "invalid_json", head: "" };
+    return { deliveryId, eventType, action: "invalid_json", head: "", label: "" };
   }
 }

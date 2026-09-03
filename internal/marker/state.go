@@ -26,12 +26,14 @@ const statePrefix = "<!-- pr-review-agent:state:v1 "
 // name. Requiring a commit there would make the encoder write markers the
 // decoder rejects, and the pending list inside them would be lost.
 //
-// The completed list is optional so a marker written before it existed still
-// decodes. Reading such a marker as unparseable would throw away the pending
-// list it does carry and re-review the whole pull request.
+// The completed list and the forcing delivery are optional for the same reason:
+// a marker written before either existed still decodes. Reading such a marker as
+// unparseable would throw away the pending list it does carry and re-review the
+// whole pull request.
 var statePattern = regexp.MustCompile(
 	`<!-- pr-review-agent:state:v1 last_reviewed=([0-9a-f]{40}|[0-9a-f]{64})? run=(\S+) ` +
-		`status=(reviewing|done|skipped|failed) pending=(\S*)(?: completed=(\S*))? -->`,
+		`status=(reviewing|done|skipped|failed) pending=(\S*)(?: completed=(\S*))?` +
+		`(?: forced_by=(\S*))? -->`,
 )
 
 // State is the durable review position kept on the one top level comment. It
@@ -49,18 +51,29 @@ type State struct {
 	// twice while a chunk a new commit introduced is still reviewed. It is
 	// meaningless once LastReviewed advances, and is dropped there.
 	Completed []string
+	// ForcedBy names the forced delivery that last cleared this state to review
+	// the pull request from scratch.
+	//
+	// It is deliberately not RunID. RunID names whichever run wrote the marker
+	// last, so any later delivery reviewing the same head overwrites it, and the
+	// record that a forced delivery already did its clearing is gone. A resume of
+	// that forced delivery would then clear the state a second time and pay for
+	// every chunk again. This field is written only by the run that clears, so
+	// nothing else moves it, and every other writer carries it forward untouched.
+	ForcedBy string
 }
 
 // EncodeState renders the state as one HTML comment line.
 func EncodeState(state State) string {
 	return fmt.Sprintf(
-		"%slast_reviewed=%s run=%s status=%s pending=%s completed=%s%s",
+		"%slast_reviewed=%s run=%s status=%s pending=%s completed=%s forced_by=%s%s",
 		statePrefix,
 		state.LastReviewed,
 		state.RunID,
 		state.Status,
 		strings.Join(state.Pending, ","),
 		strings.Join(state.Completed, ","),
+		state.ForcedBy,
 		markerSuffix,
 	)
 }
@@ -68,7 +81,7 @@ func EncodeState(state State) string {
 // DecodeState finds and parses the state marker anywhere in a comment body.
 func DecodeState(body string) (State, bool) {
 	matches := statePattern.FindStringSubmatch(body)
-	if len(matches) != 6 {
+	if len(matches) != 7 {
 		return emptyState(), false
 	}
 	head := domain.HeadSHA("")
@@ -85,6 +98,7 @@ func DecodeState(body string) (State, bool) {
 		Status:       matches[3],
 		Pending:      splitIDs(matches[4]),
 		Completed:    splitIDs(matches[5]),
+		ForcedBy:     matches[6],
 	}, true
 }
 
@@ -98,7 +112,7 @@ func splitIDs(value string) []string {
 }
 
 func emptyState() State {
-	return State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil}
+	return State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: ""}
 }
 
 // HasState reports whether a comment body carries the state marker.

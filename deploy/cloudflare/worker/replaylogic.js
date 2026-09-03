@@ -1,11 +1,18 @@
 // Pure decisions for the webhook replay queue, kept free of Cloudflare
 // imports so node can test them directly.
 
-// RETRYABLE_STATUS is the one status the Go service never returns, so seeing
-// it means the container library answered for a container that was not there.
-// Every status the service does return, including its own 502 and 503, is the
-// service speaking for itself and is not replayed.
-const RETRYABLE_STATUS = 500;
+// CONTAINER_ABSENT_STATUS is the one status the Go service never returns, so
+// seeing it means the container library answered for a container that was not
+// there.
+const CONTAINER_ABSENT_STATUS = 500;
+
+// QUEUE_FULL_STATUS is the service saying it accepted nothing because its own
+// review queue was full. It is the one status the service returns that must be
+// replayed rather than passed through: the delivery was admitted on GitHub and
+// then dropped, so a check exists that nothing will ever finish, and GitHub
+// does not redeliver on its own. Every other status the service returns is an
+// answer about the delivery rather than a refusal to take it.
+const QUEUE_FULL_STATUS = 503;
 
 // abandonAfterMs bounds how long a delivery is retried. A day covers any
 // realistic outage; past it the entry is dropped loudly rather than replayed
@@ -22,7 +29,10 @@ export const maxDelayMs = 5 * 60 * 1000;
 // forwardFailed reports whether a forward outcome means the container never
 // processed the delivery. A thrown fetch has no response at all.
 export function forwardFailed(response) {
-  return response === null || response.status === RETRYABLE_STATUS;
+  if (response === null) {
+    return true;
+  }
+  return response.status === CONTAINER_ABSENT_STATUS || response.status === QUEUE_FULL_STATUS;
 }
 
 // replayDelayMs returns the backoff before the next attempt.

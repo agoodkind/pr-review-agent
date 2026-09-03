@@ -24,7 +24,13 @@ const (
 )
 
 var (
-	reviewPattern = regexp.MustCompile(`<!-- pr-review-agent:review:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) -->`)
+	// reviewPattern accepts a marker with or without the decision. A verdict
+	// body carries no prose any more, so the decision a dismissal erased from
+	// GitHub's own record survives only here; markers written before this field
+	// existed carry none, and those reviews outlive this change.
+	reviewPattern = regexp.MustCompile(
+		`<!-- pr-review-agent:review:v1 head=([0-9a-f]{40}|[0-9a-f]{64})(?: decision=(approve|request_changes))? -->`,
+	)
 	// findingPattern accepts a marker with either claim key, both, or neither.
 	// Every comment published before a key existed has none, and those comments
 	// outlive this change on every open pull request, so a pattern requiring one
@@ -50,15 +56,42 @@ type FindingMarker struct {
 	ClaimTextKey string
 }
 
-// Review returns the review marker for one head SHA.
-func Review(head domain.HeadSHA) string {
-	return reviewPrefix + string(head) + markerSuffix
+// Review returns the review marker for one head SHA and the decision the review
+// carried.
+//
+// The decision is recorded because a verdict body carries no prose. Dismissing a
+// review rewrites its state to DISMISSED, so GitHub no longer says what it was,
+// and this marker becomes the only surviving record of whether a person withdrew
+// a block or an approval.
+func Review(head domain.HeadSHA, decision domain.ReviewDecision) string {
+	body := reviewPrefix + string(head)
+	if wire := reviewDecisionWire(decision); wire != "" {
+		body += " decision=" + wire
+	}
+	return body + markerSuffix
+}
+
+// reviewDecisionWire names a decision in the marker, or nothing for a decision
+// that carries no verdict.
+func reviewDecisionWire(decision domain.ReviewDecision) string {
+	switch decision {
+	case domain.ReviewDecisionApprove:
+		return "approve"
+	case domain.ReviewDecisionRequestChanges:
+		return "request_changes"
+	case domain.ReviewDecisionComment:
+		// A comment review states no verdict, so there is none to record and
+		// nothing a later dismissal could have withdrawn.
+		return ""
+	default:
+		return ""
+	}
 }
 
 // FindReview extracts a review marker head SHA from a review body.
 func FindReview(body string) (domain.HeadSHA, bool) {
 	matches := reviewPattern.FindStringSubmatch(body)
-	if len(matches) != 2 {
+	if len(matches) < 2 {
 		return "", false
 	}
 	head, err := domain.ParseHeadSHA(matches[1])
@@ -66,6 +99,18 @@ func FindReview(body string) (domain.HeadSHA, bool) {
 		return "", false
 	}
 	return head, true
+}
+
+// ReviewBlocked reports whether a review body's marker records a blocking
+// verdict. A marker written before the decision was recorded reports false, so
+// a block dismissed in that era is restated rather than withheld, which is the
+// safe direction to be wrong in.
+func ReviewBlocked(body string) bool {
+	matches := reviewPattern.FindStringSubmatch(body)
+	if len(matches) < 3 {
+		return false
+	}
+	return matches[2] == "request_changes"
 }
 
 // Summary returns the marker for the single editable review summary.

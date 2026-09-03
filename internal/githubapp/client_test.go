@@ -541,12 +541,18 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 		testRepo(),
 		domain.HeadSHA(testHeadSHA),
 		config.ReviewCheckName,
+		"delivery-check-lifecycle",
 	)
 	if err != nil {
 		t.Fatalf("CreateCheckRun: %v", err)
 	}
 	if state.lastCreateCheckRun["status"] != "queued" {
 		t.Fatalf("create status = %v", state.lastCreateCheckRun["status"])
+	}
+	// The delivery travels to GitHub, because it is the only record of which
+	// delivery created this check run that outlives the container.
+	if state.lastCreateCheckRun["external_id"] != "delivery-check-lifecycle" {
+		t.Fatalf("create external_id = %v, want the delivery id", state.lastCreateCheckRun["external_id"])
 	}
 
 	if err := client.StartCheckRun(context.Background(), 99, testRepo(), created.ID, "https://example.test/run"); err != nil {

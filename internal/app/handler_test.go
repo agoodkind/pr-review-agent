@@ -89,10 +89,10 @@ type blockingRunner struct {
 
 type passThroughAdmitter struct{}
 
-func (passThroughAdmitter) Admit(_ context.Context, job domain.ReviewJob) (domain.ReviewJob, error) {
+func (passThroughAdmitter) Admit(_ context.Context, job domain.ReviewJob) (domain.ReviewJob, bool, error) {
 	job.CheckRunID = 1
 	job.CheckRunStatus = "in_progress"
-	return job, nil
+	return job, true, nil
 }
 
 func (passThroughAdmitter) Reject(context.Context, domain.ReviewJob, error) error {

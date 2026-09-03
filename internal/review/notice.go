@@ -163,6 +163,10 @@ func (service *Service) writeFailureSummary(
 				// pending ones do. Dropping them here would send the next run
 				// over work this pull request has already paid for.
 				Completed: existing.Completed,
+				// So does the forcing delivery. A failed run is not that delivery
+				// finishing, and losing the record would make its own resume clear
+				// the very checkpoint this notice is preserving.
+				ForcedBy: existing.ForcedBy,
 			},
 		}
 	})
