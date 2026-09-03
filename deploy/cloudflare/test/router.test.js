@@ -315,7 +315,7 @@ test("every forwarded delivery carries the review tuning values and no secret", 
 // out every review it governs, and the service reads an absent field as its own
 // configuration standing, which is the answer a misconfigured binding deserves.
 test("a chunk timeout binding that is not a positive duration is not forwarded", async function () {
-  for (const value of ["", "soon", "0s", "-5m", "5", "5 m"]) {
+  for (const value of ["", "soon", "0s", "0m0s", "0h0m0s", "-5m", "5", "5 m"]) {
     const environment = createForwardingEnvironment([], []);
     environment.REVIEW_CHUNK_TIMEOUT = value;
     let forwarded = null;

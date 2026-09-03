@@ -104,7 +104,16 @@ function readPositiveDuration(value) {
   if (typeof value !== "string" || !durationPattern.test(value)) {
     return null;
   }
-  if (value.startsWith("-") || /^\+?0+(\.0+)?(ns|us|ms|s|m|h)$/.test(value)) {
+  if (value.startsWith("-")) {
+    return null;
+  }
+  // Every pair in the value is checked rather than the value as a whole,
+  // because a Go duration is a sequence of them: 0m0s is as much a zero as 0s
+  // is, and a rule that only recognized the single-pair form would forward it.
+  const positive = [...value.matchAll(/(\d+(?:\.\d+)?)(?:ns|us|ms|s|m|h)/g)].some(function (pair) {
+    return Number(pair[1]) > 0;
+  });
+  if (!positive) {
     return null;
   }
   return value;

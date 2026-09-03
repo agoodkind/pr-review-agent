@@ -296,7 +296,6 @@ func (service *Service) runLocked(
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
 	progress.reached("the pull request")
-	service.announceStart(ctx, job, head)
 
 	reviews, reviewed, err := service.loadReviewHistory(ctx, job, head, progress)
 	if err != nil {
@@ -390,6 +389,12 @@ func (service *Service) reviewOwedWork(
 		}
 		return refreshErr
 	}
+
+	// The pull request is told the review began here, and not earlier, because
+	// every exit above this line is a run that reviews nothing. One of those
+	// announcing a start would leave the comment saying a review is under way
+	// that nobody is having, and nothing after it would correct the wording.
+	service.announceStart(ctx, job, head)
 
 	// Admission runs before reconciliation. Reconciliation makes a model call
 	// and resolves threads, so running it first would spend both on the exact

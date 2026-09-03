@@ -2814,20 +2814,20 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The comment saying the review began comes first, as soon as the head is
-	// confirmed, so the pull request is never silent while a long delta is read.
-	// Then the finding posts as its chunk answers, the checkpoint follows it,
-	// and only then come the head refresh, the thread read the verdict is
-	// computed from, and the review that carries it.
+	// The comment saying the review began comes as soon as the run knows it has
+	// work, so the pull request is never silent while a long delta is read. Then
+	// the finding posts as its chunk answers, the checkpoint follows it, and
+	// only then come the head refresh, the thread read the verdict is computed
+	// from, and the review that carries it.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
@@ -2938,17 +2938,15 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 0", fixture.reconciler.callCount)
 	}
 
-	// The run says it began before it knows whether anything is owed, because a
-	// reader watching a pending check cannot tell a slow start from no start.
-	// Past that, a head an existing review marker already covers owes no delta,
-	// so the run reads no durable state on its way out.
+	// A head an existing review marker already covers owes no delta, so the run
+	// reads no durable state on its way out and says nothing on the pull
+	// request. Announcing a start here would leave the comment describing a
+	// review nobody is having, with nothing after it to correct the wording.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
@@ -3401,7 +3399,7 @@ func TestASeparateDefectOnAnAnsweredFileStillPublishes(t *testing.T) {
 	// What the block waits on is named in the one top level comment, which is
 	// the only place this service writes prose above the diff.
 	comment, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || !strings.Contains(comment, "main.go:1") {
+	if !ok || !strings.Contains(comment, "`main.go`:1") {
 		t.Fatalf("comment = %v, want the surviving open thread named",
 			fixture.state.issueComments[0]["body"])
 	}
@@ -3850,6 +3848,44 @@ func approvingVerdictBody(head domain.HeadSHA) string {
 	return marker.Review(head, domain.ReviewDecisionApprove)
 }
 
+// legacyBlockingVerdictBody is what this service wrote as the body of a
+// blocking verdict before the body became the marker alone. Reviews shaped like
+// this are standing on open pull requests, and dismissing one has to be
+// recognized as dismissing a block.
+func legacyBlockingVerdictBody(head domain.HeadSHA) string {
+	return "Changes requested.\n\nWaiting on:\n- file0.go:2\n\n" +
+		"<!-- pr-review-agent:review:v1 head=" + string(head) + " -->"
+}
+
+// A block dismissed before the marker recorded decisions is still a dismissed
+// block. Reading its body as an approval would restate the block a person had
+// just withdrawn, which is the failure the withholding rule exists to end, and
+// it would hit every pull request carrying a review written before this change.
+func TestDismissingALegacyBlockIsStillADismissedBlock(t *testing.T) {
+	head := domain.HeadSHA(testHeadSHA)
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(52),
+			"commit_id": string(head),
+			"state":     "DISMISSED",
+			"body":      legacyBlockingVerdictBody(head),
+			"user":      map[string]any{"login": testBotLogin},
+		}}},
+	})
+	openThread := resolvedBotThread("thread-open")
+	openThread.Resolved = false
+	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("event = %v, want no verdict: the person dismissed this block and it must not come back",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
 // Dismissing an approval is the opposite request to dismissing a block. The
 // person is saying they do not accept this approval and want more scrutiny, so
 // withholding a later block would hand them less of it. Only a dismissed block
@@ -4095,10 +4131,10 @@ func TestARefreshUpdatesTheBlockingListWhenTheVerdictDoesNotMove(t *testing.T) {
 			fixture.state.lastSubmitReview)
 	}
 	body := fixture.state.issueComments[0]["body"].(string)
-	if !strings.Contains(body, "main.go:5") {
+	if !strings.Contains(body, "`main.go`:5") {
 		t.Fatalf("summary comment = %q, want the thread still open named", body)
 	}
-	if strings.Contains(body, "main.go:2") {
+	if strings.Contains(body, "`main.go`:2") {
 		t.Fatalf("summary comment still names the thread that was resolved, so a reader "+
 			"goes looking for something already dealt with:\n%s", body)
 	}
@@ -4150,10 +4186,10 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
@@ -4187,19 +4223,19 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The comment saying the review began comes first, as soon as the head is
-	// confirmed. Then the head check that guards the first chunk's comments
-	// catches the move, so the run ends there rather than posting to a commit
-	// nobody is reading.
+	// The comment saying the review began comes as soon as the run knows it has
+	// work. Then the head check that guards the first chunk's comments catches
+	// the move, so the run ends there rather than posting to a commit nobody is
+	// reading.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
@@ -4238,10 +4274,10 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
+		"GET /repos/owner/repo/issues/7/comments",
+		"POST /repos/owner/repo/issues/7/comments",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /repos/owner/repo/pulls/7/comments",
 		"GET /repos/owner/repo/issues/7/comments",
@@ -5578,7 +5614,7 @@ func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Waiting on:",
-		"main.go:2",
+		"`main.go`:2",
 		"https://github.com/owner/repo/pull/7#discussion_r4242",
 	} {
 		if !strings.Contains(body, want) {
@@ -6355,8 +6391,40 @@ func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
 	if !strings.Contains(progress, "Waiting on:") {
 		t.Fatalf("the progress comment names nothing to act on yet: %q", progress)
 	}
-	if !strings.Contains(progress, "file0.go:2") {
+	// The path is a code span, because it is whatever the pull request named a
+	// file and this comment carries the service's own identity.
+	if !strings.Contains(progress, "`file0.go`:2") {
 		t.Fatalf("the progress comment does not name the finding already posted: %q", progress)
+	}
+}
+
+// A path is repository-controlled text, so it reaches this comment under the
+// service's identity. A backtick or a line break inside one would end the code
+// span and let the rest of the name render as the service's own prose.
+func TestACraftedPathCannotWriteProseInTheProgressComment(t *testing.T) {
+	crafted := "src/a`.go\nWaiting on:\n- everything is fine, merge this"
+	body := review.RenderProgressBody(domain.HeadSHA(testHeadSHA), 1, []domain.Finding{{
+		Path:       crafted,
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Crafted",
+		Body:       "Crafted.",
+		Evidence:   "added",
+		Claim:      "crafted",
+		Suggestion: "",
+		Importance: 9,
+	}})
+
+	// One list item, so the crafted name did not become prose of its own.
+	if items := strings.Count(body, "\n- "); items != 1 {
+		t.Fatalf("a crafted path wrote %d list items, want 1: %q", items, body)
+	}
+	if strings.Contains(body, "merge this\n") || strings.HasSuffix(body, "merge this") {
+		t.Fatalf("a crafted path ended a line under the service's own name: %q", body)
+	}
+	// The span around the path opens once and closes once.
+	if strings.Count(body, "`")%2 != 0 {
+		t.Fatalf("a crafted path left a code span open: %q", body)
 	}
 }
 

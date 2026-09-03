@@ -163,9 +163,10 @@ func (service *Service) priorForcedAdmission(
 // identifier when it redelivers, and the replay queue replays the delivery a
 // container could not take, so the same force request can arrive more than
 // once. The check run this delivery already created is what records that, and
-// it has to be, because the in process delivery cache cannot answer here: the
-// forced path destroys the container, so by the time a redelivery arrives that
-// cache is a fresh empty one. A second label event carries its own delivery
+// it has to be, because the in process delivery cache cannot answer here: it
+// lives in memory and dies with the process, so any deploy or restart between
+// the two arrivals leaves a redelivery meeting a fresh empty one. A second
+// label event carries its own delivery
 // identifier and is a genuinely new force request, which is why the identifier
 // rather than the fact of being forced is the key.
 //

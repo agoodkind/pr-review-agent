@@ -92,9 +92,13 @@ const unreviewedHeadReason = "This head was not fully reviewed, so nothing here 
 // describeOpenThread names one open thread the way a reader can act on it: the
 // place in the code it objects to, linked to the comment itself.
 func describeOpenThread(thread githubapp.ReviewThread, ref domain.PullRequestRef) string {
-	label := strings.TrimSpace(thread.RootComment.Path)
-	if label == "" {
-		label = thread.NodeID
+	// The path is whatever the pull request named a file, so it is rendered as a
+	// code span for the same reason it is in the progress prose: a bracket, a
+	// backtick or a line break in it would otherwise end the link text and let
+	// the rest render as the service's own words.
+	label := codeSpan(strings.TrimSpace(thread.RootComment.Path))
+	if strings.TrimSpace(thread.RootComment.Path) == "" {
+		label = codeSpan(thread.NodeID)
 	} else if thread.RootComment.EndLine > 0 {
 		label = fmt.Sprintf("%s:%d", label, thread.RootComment.EndLine)
 	}
@@ -196,16 +200,21 @@ func latestBotVerdictAtHead(
 //
 // Dismissing rewrites the review's own state to DISMISSED, so what it used to
 // say is gone from the listing and its body is the only record left. That body
-// carries no prose, because a pull request gets one top level comment and this
-// is not it, so the decision is read from the review marker.
+// carries no prose any more, because a pull request gets one top level comment
+// and this is not it, so the decision is read from the review marker.
 //
-// A marker written before the decision was recorded reports false and the block
-// is restated rather than withheld. That is the older behavior and the safe
-// direction to be wrong in: a misread errs toward scrutiny, and only a dismissal
-// correctly recognized as a block relaxes anything.
+// The legacy lead is still recognized, and dropping it would be the wrong kind
+// of tidy. Every blocking review this service published before the marker
+// carried a decision opens with that sentence, and those reviews are standing on
+// open pull requests right now. Reading one as an approval would restate a block
+// a person had already dismissed, which is the failure this rule exists to end.
 func dismissedVerdictBlocked(body string) bool {
-	return marker.ReviewBlocked(body)
+	return marker.ReviewBlocked(body) || strings.Contains(body, legacyBlockingVerdictLead)
 }
+
+// legacyBlockingVerdictLead opened every blocking verdict body this service
+// wrote before that body became the review marker alone.
+const legacyBlockingVerdictLead = "Changes requested."
 
 // latestBotVerdictState is the state GitHub currently shows for this service on
 // the pull request: its newest review carrying a verdict, whatever head that

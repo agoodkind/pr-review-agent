@@ -337,9 +337,27 @@ func findingLocations(published []domain.Finding) []string {
 		if err != nil {
 			continue
 		}
-		locations = append(locations, fmt.Sprintf("%s:%d", normalizedPath, finding.EndLine))
+		locations = append(locations, fmt.Sprintf("%s:%d", codeSpan(normalizedPath), finding.EndLine))
 	}
 	return locations
+}
+
+// codeSpan renders repository-controlled text as an inline code span that the
+// text cannot break out of.
+//
+// A path is whatever the pull request named a file, so it reaches this comment
+// under the service's own identity. A backtick would close the span and let the
+// rest render as Markdown, and a line break would end the list item and let the
+// remainder pose as the service's own prose, which is how a crafted filename
+// puts a mention or a false verdict in a comment nobody would doubt.
+func codeSpan(text string) string {
+	// Every shape of line break becomes one, and that one becomes a space, so
+	// the span stays on the line the service put it on. The reply formatter
+	// already enumerates those shapes, and a second list of them would drift.
+	flattened := strings.ReplaceAll(replyLineBreaks.Replace(text), "\n", " ")
+	// A backtick inside a span closes it. The modifier letter at U+02CB renders
+	// like one and closes nothing.
+	return "`" + strings.ReplaceAll(flattened, "`", string(rune(0x2CB))) + "`"
 }
 
 // RenderIncompleteBody renders the visible comment for a pass that could not

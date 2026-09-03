@@ -1037,7 +1037,9 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	if !strings.Contains(comment, "Waiting on:") {
 		t.Fatalf("the comment names nothing to fix, so no edit can satisfy the block: %q", comment)
 	}
-	if !strings.Contains(comment, testFindingPath+":3") {
+	// The path is a code span wherever it is rendered, because it is
+	// repository-controlled text in a comment carrying this service's identity.
+	if !strings.Contains(comment, "`"+testFindingPath+"`:3") {
 		t.Fatalf("the comment does not name the thread holding the block: %q", comment)
 	}
 	assertVerdictBody(t, review["body"], testDefectiveHead, true)
