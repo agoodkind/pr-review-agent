@@ -316,13 +316,13 @@ func RenderSkipBody(reason string) string {
 // It shares no renderer with the finished summary on purpose. The summary
 // carries the review marker, which means this head was reviewed, and a comment
 // describing an unfinished review must never say that.
-func RenderProgressBody(head domain.HeadSHA, remaining int, published []domain.Finding) string {
+func RenderProgressBody(head domain.HeadSHA, remaining int, waitingOn []string) string {
 	progress := fmt.Sprintf("Reviewing `%s`. %s still to read.", shortHead(head), chunkCount(remaining))
 	if remaining == 0 {
 		progress = "Reviewing `" + shortHead(head) + "`. Every chunk has been read."
 	}
 	parts := []string{"## Review", progress}
-	if waiting := renderBlocking(findingLocations(published)); waiting != "" {
+	if waiting := renderBlocking(waitingOn); waiting != "" {
 		parts = append(parts, waiting)
 	}
 	return strings.Join(parts, "\n\n")
@@ -340,6 +340,40 @@ func findingLocations(published []domain.Finding) []string {
 		locations = append(locations, fmt.Sprintf("%s:%d", codeSpan(normalizedPath), finding.EndLine))
 	}
 	return locations
+}
+
+// openThreadLocations names each finding of this service's own that the pull
+// request is still waiting on, in the same shape a freshly published one takes.
+func openThreadLocations(threads []githubapp.ReviewThread, botLogin string) []string {
+	locations := make([]string, 0, len(threads))
+	for _, thread := range threads {
+		if thread.RootComment.Author != botLogin || thread.Resolved {
+			continue
+		}
+		normalizedPath, err := marker.NormalizePath(thread.RootComment.Path)
+		if err != nil {
+			continue
+		}
+		locations = append(locations, fmt.Sprintf("%s:%d", codeSpan(normalizedPath), thread.RootComment.EndLine))
+	}
+	return locations
+}
+
+// mergeLocations joins two lists of places without naming one twice, keeping
+// the order they were given in.
+func mergeLocations(first []string, second []string) []string {
+	merged := make([]string, 0, len(first)+len(second))
+	seen := make(map[string]struct{}, len(first)+len(second))
+	for _, list := range [][]string{first, second} {
+		for _, location := range list {
+			if _, found := seen[location]; found {
+				continue
+			}
+			seen[location] = struct{}{}
+			merged = append(merged, location)
+		}
+	}
+	return merged
 }
 
 // codeSpan renders repository-controlled text as an inline code span that the

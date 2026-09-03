@@ -243,7 +243,7 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 	}
 	selection := collectPublicationState(nil, nil, summaryCommentTestBotLogin)
 	settings := reviewSettings{minimumImportance: 1, maxFiles: 100, maxChunks: 60, chunkTimeout: time.Minute}
-	pass := newChunkPass(work, settings, &selection, collectDisputes(nil, summaryCommentTestBotLogin))
+	pass := newChunkPass(work, settings, &selection, collectDisputes(nil, summaryCommentTestBotLogin), nil)
 	service := &Service{
 		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
 		model:              postPlanModel{},
@@ -369,6 +369,7 @@ func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
 		reviewSettings{minimumImportance: 1, maxFiles: 10, maxChunks: 10, chunkTimeout: carried},
 		&publicationState{},
 		disputeContext{},
+		nil,
 	)
 	candidates := []domain.Finding{
 		{Path: "a.go", StartLine: 1, EndLine: 1, Title: "one", Body: "b", Evidence: "e", Importance: 8},

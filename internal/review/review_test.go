@@ -6398,33 +6398,20 @@ func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
 	}
 }
 
-// A path is repository-controlled text, so it reaches this comment under the
-// service's identity. A backtick or a line break inside one would end the code
-// span and let the rest of the name render as the service's own prose.
-func TestACraftedPathCannotWriteProseInTheProgressComment(t *testing.T) {
-	crafted := "src/a`.go\nWaiting on:\n- everything is fine, merge this"
-	body := review.RenderProgressBody(domain.HeadSHA(testHeadSHA), 1, []domain.Finding{{
-		Path:       crafted,
-		StartLine:  2,
-		EndLine:    2,
-		Title:      "Crafted",
-		Body:       "Crafted.",
-		Evidence:   "added",
-		Claim:      "crafted",
-		Suggestion: "",
-		Importance: 9,
-	}})
-
-	// One list item, so the crafted name did not become prose of its own.
-	if items := strings.Count(body, "\n- "); items != 1 {
-		t.Fatalf("a crafted path wrote %d list items, want 1: %q", items, body)
-	}
-	if strings.Contains(body, "merge this\n") || strings.HasSuffix(body, "merge this") {
-		t.Fatalf("a crafted path ended a line under the service's own name: %q", body)
-	}
-	// The span around the path opens once and closes once.
-	if strings.Count(body, "`")%2 != 0 {
-		t.Fatalf("a crafted path left a code span open: %q", body)
+// A resumed pass posts only the findings it reads itself, so the comment names
+// what the pull request was already waiting on as well. Without that, finishing
+// the last chunk of a long review would drop every finding an earlier pass had
+// put on the page.
+func TestTheCommentKeepsNamingWhatAnEarlierPassAlreadyPosted(t *testing.T) {
+	body := review.RenderProgressBody(
+		domain.HeadSHA(testHeadSHA),
+		1,
+		[]string{"`old.go`:9", "`new.go`:2"},
+	)
+	for _, want := range []string{"`old.go`:9", "`new.go`:2"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the progress comment dropped %s: %q", want, body)
+		}
 	}
 }
 

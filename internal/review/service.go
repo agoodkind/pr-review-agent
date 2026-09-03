@@ -390,12 +390,6 @@ func (service *Service) reviewOwedWork(
 		return refreshErr
 	}
 
-	// The pull request is told the review began here, and not earlier, because
-	// every exit above this line is a run that reviews nothing. One of those
-	// announcing a start would leave the comment saying a review is under way
-	// that nobody is having, and nothing after it would correct the wording.
-	service.announceStart(ctx, job, head)
-
 	// Admission runs before reconciliation. Reconciliation makes a model call
 	// and resolves threads, so running it first would spend both on the exact
 	// delta admission exists to refuse.
@@ -405,6 +399,13 @@ func (service *Service) reviewOwedWork(
 	if stop {
 		return err
 	}
+
+	// The pull request is told the review began here, and no earlier. Every exit
+	// above this line is a run that reviews nothing, admission included, and it
+	// writes its own account of why. One of them announcing a start first would
+	// leave the comment saying a review is under way that nobody is having, and
+	// a declined delta would say it twice and contradict itself.
+	service.announceStart(ctx, job, head)
 
 	threads, err := service.reconcileThreads(ctx, job, checkRun.ID, progress)
 	if err != nil {
@@ -416,7 +417,7 @@ func (service *Service) reviewOwedWork(
 	// call.
 	selection := collectPublicationState(reviews, threads, service.botLogin)
 	disputes := collectDisputes(threads, service.botLogin)
-	pass := newChunkPass(work, settings, &selection, disputes)
+	pass := newChunkPass(work, settings, &selection, disputes, openThreadLocations(threads, service.botLogin))
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {

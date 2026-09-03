@@ -93,6 +93,13 @@ type chunkPass struct {
 	// the lock.
 	disputes      disputeContext
 	disputePrompt string
+	// carried names what the pull request was already waiting on when this pass
+	// started, taken from the service's own open threads. A resumed pass posts
+	// only the findings it reads itself, so without this the progress comment
+	// would drop everything an earlier pass had already put on the page. It is
+	// built once and never written again, so the chunks read it without the
+	// lock.
+	carried []string
 
 	mu        sync.Mutex
 	collector *findingCollector
@@ -133,6 +140,7 @@ func newChunkPass(
 	settings reviewSettings,
 	selection *publicationState,
 	disputes disputeContext,
+	carried []string,
 ) *chunkPass {
 	return &chunkPass{
 		work:          work,
@@ -140,6 +148,7 @@ func newChunkPass(
 		selection:     selection,
 		disputes:      disputes,
 		disputePrompt: disputes.promptSection(),
+		carried:       carried,
 		mu:            sync.Mutex{},
 		collector:     newFindingCollector(work.Files, settings.minimumImportance),
 		models:        modelSet{names: nil, seen: nil},
@@ -508,13 +517,16 @@ func (service *Service) checkpoint(
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
-	// The findings are read before the tracker lock is taken, because the pass
-	// has a lock of its own and holding both in one order here while a chunk
-	// takes them in the other is how a deadlock is built.
-	published := pass.publishedFindings()
-
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+
+	// The findings are read inside the tracker lock, so the order checkpoints
+	// take that lock is also the order their snapshots were taken. Reading first
+	// let a chunk that acquired the lock late overwrite the comment with a list
+	// that predated a newer finding. Nothing holds the pass lock while waiting
+	// on this one, so taking it here cannot deadlock.
+	published := pass.publishedFindings()
+	waiting := mergeLocations(pass.carried, findingLocations(published))
 
 	tracker.unfinished = removeChunkID(tracker.unfinished, id)
 	tracker.completed = append(tracker.completed, id)
@@ -523,7 +535,7 @@ func (service *Service) checkpoint(
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderProgressBody(head, len(tracker.unfinished), published),
+		Prose: RenderProgressBody(head, len(tracker.unfinished), waiting),
 		State: tracker.state,
 	})
 	if err != nil {
