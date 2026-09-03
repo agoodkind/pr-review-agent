@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 
 let routeRequest;
 let createPrAgentEnvironment;
+let signReviewSettings;
 const execFileAsync = promisify(execFile);
 
 try {
@@ -18,7 +19,7 @@ try {
 } catch {}
 
 try {
-  ({ createPrAgentEnvironment } = await import("../worker/configuration.js"));
+  ({ createPrAgentEnvironment, signReviewSettings } = await import("../worker/configuration.js"));
 } catch {}
 
 function createEnvironment(forwardedRequests) {
@@ -297,6 +298,84 @@ test("every forwarded delivery carries the review tuning values and no secret", 
   const headerText = JSON.stringify([...forwarded.headers]);
   assert.doesNotMatch(headerText, /private key nobody may forward/);
   assert.doesNotMatch(headerText, /model key nobody may forward/);
+
+  // The values carry their own signature, over themselves and the body, because
+  // the webhook signature covers the body alone and says nothing about a header
+  // travelling beside it.
+  const expected = await signReviewSettings(
+    testWebhookSecret, // gitleaks:allow
+    forwarded.headers.get("X-Pr-Agent-Review-Settings"),
+    await forwarded.clone().text(),
+  );
+  assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), expected);
+});
+
+// A sender must not be able to name its own tuning values by finding a worker
+// that has none of its own. Both headers are stripped on every path, including
+// the one where this worker sends nothing, so the only way in is the one that
+// gets signed.
+test("an inbound settings header is stripped whether or not the worker sends its own", async function () {
+  for (const configured of [true, false]) {
+    const events = [];
+    let forwarded = null;
+    const environment = createForwardingEnvironment(events, []);
+    if (configured) {
+      environment.REVIEW_MIN_IMPORTANCE = "6";
+    }
+    environment.PR_AGENT = {
+      getByName() {
+        return {
+          async fetch(request) {
+            forwarded = request;
+            events.push("forward");
+            return new Response("proxied", { status: 202 });
+          },
+        };
+      },
+    };
+
+    const inbound = labeledWebhookRequest("opened", "");
+    inbound.headers.set("X-Pr-Agent-Review-Settings", '{"minimum_importance":1,"chunk_timeout":"1ms"}');
+    inbound.headers.set("X-Pr-Agent-Review-Settings-Signature", "sha256=" + "0".repeat(64));
+
+    const response = await routeRequest(inbound, environment);
+
+    const where = `configured=${configured}`;
+    assert.equal(response.status, 202, where);
+    const settings = forwarded.headers.get("X-Pr-Agent-Review-Settings");
+    assert.doesNotMatch(String(settings), /1ms/, `${where}: the caller's values survived`);
+    if (!configured) {
+      assert.equal(settings, null, where);
+      assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null, where);
+    }
+  }
+});
+
+// A worker holding no signing key cannot authenticate what it sends, and an
+// unauthenticated value here is one anybody could have chosen, so it sends none.
+test("a worker with no signing key attaches no settings", async function () {
+  const events = [];
+  let forwarded = null;
+  const environment = createForwardingEnvironment(events, []);
+  environment.REVIEW_MIN_IMPORTANCE = "6";
+  delete environment.GITHUB_WEBHOOK_SECRET;
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async fetch(request) {
+          forwarded = request;
+          events.push("forward");
+          return new Response("proxied", { status: 202 });
+        },
+      };
+    },
+  };
+
+  const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
+
+  assert.equal(response.status, 202);
+  assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings"), null);
+  assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null);
 });
 
 // A worker with nothing configured must send nothing, because the service reads

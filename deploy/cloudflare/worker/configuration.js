@@ -1,8 +1,40 @@
 // REVIEW_SETTINGS_HEADER carries the review tuning values on each forwarded
 // delivery, so a corrected value governs the next review rather than waiting for
-// the process to be replaced. The service reads it only once the signature on
-// the body has verified.
+// the process to be replaced.
 export const REVIEW_SETTINGS_HEADER = "X-Pr-Agent-Review-Settings";
+
+// REVIEW_SETTINGS_SIGNATURE_HEADER authenticates those values.
+//
+// The webhook signature covers the request body and nothing else, so it says
+// nothing about a header travelling beside it. Treating a verified body as
+// authority over the headers would let anyone who can put a request in front of
+// the container set a chunk timeout that fails every review, or an importance
+// floor that suppresses every finding while the verdict still reports success.
+// The values carry their own signature instead.
+export const REVIEW_SETTINGS_SIGNATURE_HEADER = "X-Pr-Agent-Review-Settings-Signature";
+
+// signReviewSettings binds the tuning values to the body they travel with.
+//
+// The body is part of what is signed, so a signature is worth nothing on any
+// other delivery: lifting a valid pair off one request and replaying it in front
+// of another fails, because the digest covers a body that is no longer there.
+export async function signReviewSettings(signingKey, settings, body) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signed = new TextEncoder().encode(settings + "\n" + body);
+  const digest = await crypto.subtle.sign("HMAC", key, signed);
+  const hex = [...new Uint8Array(digest)]
+    .map(function (byte) {
+      return byte.toString(16).padStart(2, "0");
+    })
+    .join("");
+  return "sha256=" + hex;
+}
 
 // createReviewSettingsHeader renders the tuning values the service applies per
 // review, or the empty string when this worker has none configured.

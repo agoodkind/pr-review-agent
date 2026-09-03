@@ -498,6 +498,98 @@ func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 	}
 }
 
+// The webhook signature covers the request body and nothing else, so a verified
+// body is no authority over a header travelling beside it. Reading the tuning
+// values on that basis let anyone able to put a request in front of this service
+// choose them: a chunk timeout that fails every review, or an importance floor
+// that suppresses every finding while the verdict still reports success.
+//
+// The values carry their own signature, over themselves and the body together.
+// Altering them here leaves the body verifying exactly as before, which is the
+// whole point: the delivery is still real, and only what it claimed about
+// configuration is refused.
+func TestSettingsAlteredBesideAVerifiedBodyAreRefused(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	body := openedPayload(testDefectiveHead)
+	honest := `{"chunk_timeout":"9s","minimum_importance":3}`
+	altered := `{"chunk_timeout":"1ms","minimum_importance":11}`
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-altered",
+		body:       body,
+		settings:   altered,
+		// A signature that verifies, over the values somebody else sent.
+		settingsSignature: signReviewSettings(honest, body),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: the body verified, so the review is not in doubt",
+			response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("chunk_timeout = %v, want the process value: the altered one must be refused",
+			started[0]["chunk_timeout"])
+	}
+	if started[0]["minimum_importance"] != float64(testMinimumImportance) {
+		t.Fatalf("minimum_importance = %v, want the process value %d",
+			started[0]["minimum_importance"], testMinimumImportance)
+	}
+	carried, ok := started[0]["settings_carried"].([]any)
+	if !ok || len(carried) != 0 {
+		t.Fatalf("settings_carried = %v, want none: nothing it carried was applied",
+			started[0]["settings_carried"])
+	}
+}
+
+// A signature is worth nothing on any other delivery, because the body is part
+// of what it covers. Lifting a valid pair off one request and replaying it in
+// front of another is the same attack one step along, and it fails the same way.
+func TestSettingsLiftedFromAnotherDeliveryAreRefused(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	settings := `{"chunk_timeout":"9s"}`
+	otherBody := labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"other")
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-settings-lifted",
+		body:       openedPayload(testDefectiveHead),
+		settings:   settings,
+		// Valid, for the same values, against a different delivery's body.
+		settingsSignature: signReviewSettings(settings, otherBody),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	started := fixture.logLinesContaining("review job started")
+	if len(started) != 1 {
+		t.Fatalf("review job started lines = %d, want 1", len(started))
+	}
+	if started[0]["chunk_timeout"] != float64(time.Minute) {
+		t.Fatalf("chunk_timeout = %v, want the process value: a signature from another delivery is not one",
+			started[0]["chunk_timeout"])
+	}
+}
+
 // The point of carrying the values is that a change is visible when it takes
 // effect, so the run has to say which came with the delivery and which it booted
 // with. A start line reporting only the resolved numbers leaves a reader unable
@@ -1741,6 +1833,9 @@ type webhookRequestOptions struct {
 	// settings is the review tuning header the worker attaches, sent verbatim so
 	// a test can post one the service has to refuse to read.
 	settings string
+	// settingsSignature overrides the signature sent beside those values, so a
+	// test can send a valid signature over something other than what it sent.
+	settingsSignature string
 }
 
 func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptions) *http.Response {
@@ -1767,6 +1862,11 @@ func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptio
 	request.Header.Set("X-Hub-Signature-256", signature)
 	if options.settings != "" {
 		request.Header.Set("X-Pr-Agent-Review-Settings", options.settings)
+		settingsSignature := options.settingsSignature
+		if settingsSignature == "" {
+			settingsSignature = signReviewSettings(options.settings, options.body)
+		}
+		request.Header.Set("X-Pr-Agent-Review-Settings-Signature", settingsSignature)
 	}
 
 	response, err := fixture.client.Do(request)
@@ -1778,6 +1878,16 @@ func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptio
 
 func signBody(body []byte) string {
 	mac := hmac.New(sha256.New, []byte(testWebhookSecret)) // gitleaks:allow
+	_, _ = mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// signReviewSettings signs the tuning values the way the worker does: over the
+// values and the body together, so a signature is worth nothing on any other
+// delivery.
+func signReviewSettings(settings string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(testWebhookSecret)) // gitleaks:allow
+	_, _ = mac.Write([]byte(settings + "\n"))
 	_, _ = mac.Write(body)
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }

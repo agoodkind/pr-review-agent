@@ -1,4 +1,9 @@
-import { REVIEW_SETTINGS_HEADER, createReviewSettingsHeader } from "./configuration.js";
+import {
+  REVIEW_SETTINGS_HEADER,
+  REVIEW_SETTINGS_SIGNATURE_HEADER,
+  createReviewSettingsHeader,
+  signReviewSettings,
+} from "./configuration.js";
 import { entryFromDelivery, forwardFailed } from "./replaylogic.js";
 import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
 
@@ -39,9 +44,10 @@ export async function routeRequest(request, env) {
   // because nothing had replaced the process. Attaching them per delivery is what
   // makes a correction take effect on the next review.
   //
-  // The header is set on a copy rather than on the caller's request, so the body
-  // GitHub signed and the entry queued for replay stay exactly as they arrived.
-  const forwarded = withReviewSettings(request, env);
+  // The headers are set on a copy rather than on the caller's request, so the
+  // body GitHub signed and the entry queued for replay stay exactly as they
+  // arrived.
+  const forwarded = await withReviewSettings(request, body, env);
 
   let response = null;
   try {
@@ -101,19 +107,31 @@ async function enqueueForReplay(env, path, request, body, metadata) {
 }
 
 // withReviewSettings returns the request to forward, carrying this worker's
-// review tuning values.
+// review tuning values and a signature over them.
 //
-// A worker with none configured forwards the request untouched, and the service
-// then runs on what it booted with. Any header the caller sent under this name
-// is replaced rather than added to, so a value can only come from this worker's
-// own bindings.
-function withReviewSettings(request, env) {
-  const settings = createReviewSettingsHeader(env);
-  if (settings === "") {
-    return request;
-  }
+// Both headers are removed before either is set, and on every path, including
+// the one where this worker has nothing to send. Returning the caller's request
+// untouched there let an inbound header through, so a sender could name its own
+// tuning values by finding a worker that had none, which is the opposite of a
+// worker that decides. Stripping unconditionally leaves one way in, and it is
+// the one that gets signed.
+//
+// A worker holding no signing key sends no values either. It cannot authenticate
+// them, and an unauthenticated value here is one anybody could have chosen.
+async function withReviewSettings(request, body, env) {
   const forwarded = new Request(request);
+  forwarded.headers.delete(REVIEW_SETTINGS_HEADER);
+  forwarded.headers.delete(REVIEW_SETTINGS_SIGNATURE_HEADER);
+
+  const settings = createReviewSettingsHeader(env);
+  if (settings === "" || !env.GITHUB_WEBHOOK_SECRET) {
+    return forwarded;
+  }
   forwarded.headers.set(REVIEW_SETTINGS_HEADER, settings);
+  forwarded.headers.set(
+    REVIEW_SETTINGS_SIGNATURE_HEADER,
+    await signReviewSettings(env.GITHUB_WEBHOOK_SECRET, settings, body),
+  );
   return forwarded;
 }
 

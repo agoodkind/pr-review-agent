@@ -24,6 +24,26 @@ var errReviewQueueFull = errors.New("review queue full")
 // waiting for the process to be replaced.
 const reviewSettingsHeader = "X-Pr-Agent-Review-Settings"
 
+// reviewSettingsSignatureHeader authenticates those values.
+//
+// The webhook signature covers the request body and nothing else, so a verified
+// body is no authority over a header travelling beside it. These carry their own.
+const reviewSettingsSignatureHeader = "X-Pr-Agent-Review-Settings-Signature"
+
+// reviewSettingsSigningInput is what the settings signature covers: the values
+// and the body they arrived with.
+//
+// The body is in it so a signature is worth nothing anywhere else. Signing the
+// values alone would make one valid pair reusable in front of every later
+// delivery, which is the same hole one step further along.
+func reviewSettingsSigningInput(settings string, body []byte) []byte {
+	signed := make([]byte, 0, len(settings)+1+len(body))
+	signed = append(signed, settings...)
+	signed = append(signed, '\n')
+	signed = append(signed, body...)
+	return signed
+}
+
 // reviewSettingsPayload is the wire form of those values. Every field is
 // optional, and one the worker left out stays zero, which the service reads as
 // the process configuration standing.
@@ -34,20 +54,38 @@ type reviewSettingsPayload struct {
 	ChunkTimeout      string `json:"chunk_timeout"`
 }
 
-// readReviewSettings parses the tuning values a delivery carried.
+// readReviewSettings parses the tuning values a delivery carried, and applies
+// none it cannot authenticate.
 //
-// It is called only after the signature verifies, and that ordering is the whole
-// security of it. These values arrive beside the signed body rather than inside
-// it, so on a request nobody has verified they are whatever the sender wanted,
-// and configuration is exactly what an attacker would choose to set.
+// Reading these on the strength of the body's signature was the hole this
+// closes. That signature covers the body alone, so it says nothing about a
+// header beside it, and anyone able to put a request in front of this service
+// could have set a chunk timeout that fails every review, or an importance floor
+// that suppresses every finding while the verdict still reported success.
 //
-// A header that will not parse is treated as no header at all. The delivery is
-// still a real review, and refusing it over a value it did not need would turn a
-// worker that sent something odd into an outage.
-func readReviewSettings(request *http.Request, logger *slog.Logger) domain.ReviewSettings {
+// Values that do not verify are refused and the run falls back to the process
+// configuration. Refusing the whole delivery instead would hand anyone who can
+// alter a header an outage, and the review itself is not in doubt: its body
+// verified. A header that will not parse is refused the same way, and loudly,
+// because a worker sending something odd must not become an outage either.
+func readReviewSettings(
+	request *http.Request,
+	body []byte,
+	secret []byte,
+	logger *slog.Logger,
+) domain.ReviewSettings {
 	empty := domain.ReviewSettings{MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0}
 	raw := request.Header.Get(reviewSettingsHeader)
 	if raw == "" {
+		return empty
+	}
+	signature := request.Header.Get(reviewSettingsSignatureHeader)
+	if err := webhook.VerifySHA256(signature, secret, reviewSettingsSigningInput(raw, body)); err != nil {
+		logger.Error(
+			"review settings refused, signature did not verify",
+			slog.String("err", err.Error()),
+			slog.Bool("signature_present", signature != ""),
+		)
 		return empty
 	}
 	var payload reviewSettingsPayload
@@ -205,9 +243,10 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	// The tuning values are read here rather than beside the other headers,
 	// because everything above this point runs on a delivery nobody has verified
 	// and these are the one thing on the request that changes how a review
-	// behaves.
+	// behaves. They carry their own signature, so this ordering is convenience
+	// rather than the thing keeping them safe.
 	job := event.Job()
-	job.Settings = readReviewSettings(request, logger)
+	job.Settings = readReviewSettings(request, body, handler.webhookHMACKey, logger)
 
 	job, admitted, err := handler.admitter.Admit(ctx, job)
 	if err != nil {
