@@ -174,7 +174,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		slog.Duration("chunk_timeout", settings.chunkTimeout),
 		slog.Int("max_files", settings.maxFiles),
 		slog.Int("max_chunks", settings.maxChunks),
-		slog.Any("settings_carried", carriedSettingFields(job.Settings)),
+		slog.Any("settings_carried", service.carriedSettingFields(job)),
 	)
 	if job.CheckRunID == 0 {
 		return errors.New("review check was not admitted")
@@ -457,18 +457,27 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 // never arrived, and a log that named it as carried would describe a run nobody
 // is having. Making a change visible when it takes effect is the whole reason
 // these travel with the delivery at all.
-func carriedSettingFields(settings domain.ReviewSettings) []string {
+// It asks the resolution rather than repeating its rules, because a second copy
+// of them drifts: the importance ceiling was added in one place and this list
+// went on naming a refused value as carried.
+func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
 	carried := make([]string, 0, 4)
-	if settings.MinimumImportance > 0 {
+	empty := service.settingsFor(domain.ReviewJob{
+		Settings: domain.ReviewSettings{
+			MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
+		},
+	})
+	resolved := service.settingsFor(job)
+	if resolved.minimumImportance != empty.minimumImportance {
 		carried = append(carried, "minimum_importance")
 	}
-	if settings.MaxFiles > 0 {
+	if resolved.maxFiles != empty.maxFiles {
 		carried = append(carried, "max_files")
 	}
-	if settings.MaxChunks > 0 {
+	if resolved.maxChunks != empty.maxChunks {
 		carried = append(carried, "max_chunks")
 	}
-	if settings.ChunkTimeout > 0 {
+	if resolved.chunkTimeout != empty.chunkTimeout {
 		carried = append(carried, "chunk_timeout")
 	}
 	return carried

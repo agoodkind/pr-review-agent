@@ -751,6 +751,18 @@ func TestAnImportanceFloorAboveTheScaleFallsBackToTheProcessValue(t *testing.T) 
 		t.Fatalf("minimum_importance = %v, want the process value 7: a floor above ten clears nothing",
 			started[0]["minimum_importance"])
 	}
+	// The start line names what the run took, not what the delivery sent. A
+	// refused value falls back exactly like one that never arrived, and naming it
+	// as carried would describe a run nobody is having.
+	carried, ok := started[0]["settings_carried"].([]any)
+	if !ok {
+		t.Fatalf("settings_carried = %v, want a list", started[0]["settings_carried"])
+	}
+	for _, field := range carried {
+		if field == "minimum_importance" {
+			t.Fatal("the start line named a refused importance floor as carried")
+		}
+	}
 }
 
 // A label decides that a review runs, never how it runs. Anyone with triage
