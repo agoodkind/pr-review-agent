@@ -103,8 +103,14 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !strings.Contains(systemContent, "Return only JSON") {
 		t.Fatalf("system message missing JSON-only fallback")
 	}
-	if !strings.Contains(systemContent, `"coverage_complete"`) {
+	if !strings.Contains(systemContent, `"findings"`) {
 		t.Fatalf("system message missing review schema fallback")
+	}
+	// Coverage is a fact about what this service handed the model, so the model
+	// is never asked for it. A schema that asks anyway gets a boolean filled in
+	// blind, and one blind false used to block the whole head.
+	if strings.Contains(systemContent, "coverage_complete") {
+		t.Fatalf("system message asks the model for coverage it cannot know")
 	}
 
 	responseFormat, ok := body["response_format"].(map[string]any)
@@ -210,7 +216,7 @@ func TestReviewRejectsInvalidFindings(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
 
-	state.completionContent = `{"coverage_complete":true,"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
+	state.completionContent = `{"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review with invalid importance: want error")
@@ -556,9 +562,6 @@ func TestFallbackAnswersWhenThePrimaryReportsExhaustedUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	if !completion.Result.CoverageComplete {
-		t.Fatalf("result = %+v, want the fallback result", completion.Result)
-	}
 	if completion.Model != testFallbackModel {
 		t.Fatalf("model = %q, want the fallback model %q", completion.Model, testFallbackModel)
 	}
@@ -738,7 +741,7 @@ func brokenStreamPayload() string {
 func writeBrokenStream(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
-	encoded, _ := json.Marshal(completionStreamChunk(`{"coverage_complete":`, ""))
+	encoded, _ := json.Marshal(completionStreamChunk(`{"findings":`, ""))
 	_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	_, _ = writer.Write([]byte("data: " + brokenStreamPayload() + "\n\n"))
 }
@@ -1015,7 +1018,7 @@ func gatewayUsageExceededPayload() map[string]any {
 }
 
 func validReviewContent() string {
-	return `{"coverage_complete":true,"findings":[]}`
+	return `{"findings":[]}`
 }
 
 func writeJSON(writer http.ResponseWriter, status int, payload any) {

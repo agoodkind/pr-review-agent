@@ -212,12 +212,11 @@ func TestABlockingSummaryWithNothingInlineDoesNotClaimInlineFindings(t *testing.
 }
 
 // The same case reached end to end through a real run, which is how it reached
-// production. A hunk that cannot split leaves the head partly unread, so the run
-// blocks with coverage incomplete and posts no inline comment at all. That is
-// the shape of run f465b240-a4d9-11f1-805b-98a2bfccbda0.
+// production: run f465b240-a4d9-11f1-805b-98a2bfccbda0 left hunks unread, posted
+// no inline comment, and still published a review a person then had to dismiss.
 //
-// TestAHunkThatCannotSplitLeavesTheHeadUnapproved covers the decision and the
-// coverage row on this same path. This covers the sentence over them.
+// TestAHunkThatCannotSplitLeavesTheHeadUnapproved covers the gate and the
+// coverage row on this same path. This covers what the reader is told.
 func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         multiHunkCollector{},
@@ -229,11 +228,8 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	// The premise: this run blocks and published nothing inline.
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES over a head that was not fully read",
-			fixture.state.lastSubmitReview["event"])
-	}
+	// The premise: this run held the gate and published nothing inline.
+	assertDeclinedCheckDoesNotPass(t, fixture)
 	if len(fixture.state.streamedComments) != 0 {
 		t.Fatalf("streamed comments = %d, want none", len(fixture.state.streamedComments))
 	}
@@ -245,11 +241,12 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 	if !strings.Contains(body, "| Findings published inline | `0` |") {
 		t.Fatalf("summary detail table does not report an empty publication:\n%s", body)
 	}
-	if !strings.Contains(body, "Changes are requested for the reasons listed below.") {
-		t.Fatalf("summary does not point at what is holding the block:\n%s", body)
+	if !strings.Contains(body, "Not read:") {
+		t.Fatalf("summary does not name what went unread:\n%s", body)
 	}
-	if !strings.Contains(body, "This head was not fully reviewed") {
-		t.Fatalf("summary does not name the unread head as the reason:\n%s", body)
+	// The promise a later run cannot keep is the thing this path used to make.
+	if strings.Contains(body, "The next push reviews") {
+		t.Fatalf("summary promises a push that reaches the same limit:\n%s", body)
 	}
 }
 
@@ -510,7 +507,7 @@ func (model *truncatedModel) Review(_ context.Context, prompt string) (review.Co
 		return review.Completion{}, &openai.TruncatedError{Model: testReviewModel}
 	}
 	return review.Completion{
-		Result: domain.ReviewResult{CoverageComplete: true, Findings: model.findings},
+		Result: domain.ReviewResult{Findings: model.findings},
 		Model:  testReviewModel,
 	}, nil
 }
@@ -616,8 +613,9 @@ func TestTheSplitRecursesWhileTheAnswerKeepsTruncating(t *testing.T) {
 	}
 }
 
-// A hunk that cannot split is skipped rather than failing the chunk, so the
-// head is not fully reviewed and nothing here may approve it.
+// A hunk that cannot split is a hunk nobody got an answer about, and a later run
+// reaches the same limit on it, so the run names it, holds the gate, and submits
+// no verdict for anyone to dismiss.
 func TestAHunkThatCannotSplitLeavesTheHeadUnapproved(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         multiHunkCollector{},
@@ -628,19 +626,24 @@ func TestAHunkThatCannotSplitLeavesTheHeadUnapproved(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES over a head that was not fully read",
-			fixture.state.lastSubmitReview["event"])
+	if len(fixture.state.submittedReviews) != 0 {
+		t.Fatalf("submitted reviews = %v, want none over a head nobody read whole",
+			fixture.state.submittedReviews)
 	}
+	assertDeclinedCheckDoesNotPass(t, fixture)
 	body := failureSummaryComment(t, fixture)
-	if !strings.Contains(body, "This head was not fully reviewed") {
-		t.Fatalf("summary comment does not say the head went partly unread:\n%s", body)
+	if !strings.Contains(body, "completion budget") {
+		t.Fatalf("summary comment does not name why the hunk went unread:\n%s", body)
 	}
 	if !strings.Contains(body, "| Coverage complete | no |") {
 		t.Fatalf("summary comment claims coverage it never established:\n%s", body)
 	}
 	if len(fixture.state.streamedComments) != 0 {
 		t.Fatalf("streamed comments = %d, want none", len(fixture.state.streamedComments))
+	}
+	if state := decodedSummaryState(t, fixture); state.LastReviewed != "" {
+		t.Fatalf("last reviewed = %q, want a baseline that never advanced over unread hunks",
+			state.LastReviewed)
 	}
 }
 
@@ -745,8 +748,8 @@ func TestTheSameFindingFromTwoChunksIsPublishedOnce(t *testing.T) {
 		collector:         twoChunkSameFileCollector{},
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{
-			{CoverageComplete: true, Findings: []domain.Finding{duplicate}},
-			{CoverageComplete: true, Findings: []domain.Finding{
+			{Findings: []domain.Finding{duplicate}},
+			{Findings: []domain.Finding{
 				duplicate,
 				{
 					Path:       "main.go",
@@ -784,7 +787,7 @@ func TestTheSameFindingFromTwoChunksIsPublishedOnce(t *testing.T) {
 }
 
 func TestTheChunkPromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
-	model := &sequenceModel{results: []domain.ReviewResult{{CoverageComplete: true}}}
+	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{minimumImportance: 9, model: model})
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
@@ -812,7 +815,7 @@ func TestTheChunkPromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 // as different. The prompt now asks for one report per defect, at one anchor,
 // carrying one claim sentence the service can compare across wordings.
 func TestTheChunkPromptAsksForOneClaimPerDefect(t *testing.T) {
-	model := &sequenceModel{results: []domain.ReviewResult{{CoverageComplete: true}}}
+	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{minimumImportance: 9, model: model})
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
@@ -840,7 +843,6 @@ func TestTheChunkPromptAsksForOneClaimPerDefect(t *testing.T) {
 func TestAnInvalidModelResultLeavesItsChunkPending(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
 				StartLine:  2,
@@ -1063,7 +1065,7 @@ func TestPublishedRunLogNamesEachChunkDuration(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+			results: []domain.ReviewResult{{Findings: nil}},
 		},
 	})
 
@@ -1133,7 +1135,7 @@ func TestSuccessfulReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+			results: []domain.ReviewResult{{Findings: nil}},
 		},
 	})
 
@@ -1217,7 +1219,7 @@ func TestEveryQualifyingFindingIsPublished(t *testing.T) {
 		collector:         wideCollector{},
 		minimumImportance: 9,
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: findings}},
+			results: []domain.ReviewResult{{Findings: findings}},
 		},
 	})
 
@@ -1258,8 +1260,7 @@ func TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost(t *testing.T) {
 		minimumImportance:   9,
 		createCommentHangup: true,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{severeFinding()},
+			Findings: []domain.Finding{severeFinding()},
 		}}},
 	})
 
@@ -1294,8 +1295,7 @@ func TestACommentGitHubRefusesFinishesItsChunkAndStillBlocks(t *testing.T) {
 		minimumImportance:   9,
 		createCommentStatus: http.StatusUnprocessableEntity,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{severeFinding()},
+			Findings: []domain.Finding{severeFinding()},
 		}}},
 	})
 
@@ -1389,7 +1389,6 @@ func (model *chunkScriptedModel) Review(_ context.Context, prompt string) (revie
 	}
 	return review.Completion{
 		Result: domain.ReviewResult{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       path,
 				StartLine:  2,
@@ -1763,8 +1762,8 @@ func TestTheSameForcedDeliveryAdmittedTwiceReviewsOnce(t *testing.T) {
 	// analysis is counted rather than failing on an unscripted call and leaving
 	// the count at one.
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 
@@ -1814,8 +1813,8 @@ func TestTheSameForcedDeliveryAdmittedTwiceReviewsOnce(t *testing.T) {
 // exists to prevent.
 func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model:               model,
@@ -1879,8 +1878,8 @@ func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
 // process running that review is answered from the claim.
 func TestAForcedDeliveryWhoseProcessDiedMidReviewIsResumed(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 	job := fixture.forcedJob()
@@ -2246,8 +2245,8 @@ func TestAnOrdinaryRunLeavesACompletedSuccessfulCheckAlone(t *testing.T) {
 // not miss, because no part of admission reads the current head.
 func TestAForcedReplayAfterTheHeadMovedStillFindsItsCompletedCheck(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 
@@ -2379,8 +2378,8 @@ func TestAForcedRedeliveryFindsItsCheckRunBehindNewerOnesAndPageBoundaries(t *te
 // what separates a repeat from a new request.
 func TestASecondLabelEventIsANewForceRequest(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 
@@ -2590,7 +2589,7 @@ func (model *deadlineProbeModel) Review(ctx context.Context, _ string) (review.C
 		time.Sleep(model.firstWait)
 	}
 	return review.Completion{
-		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
+		Result: domain.ReviewResult{Findings: nil},
 		Model:  testReviewModel,
 	}, nil
 }
@@ -2682,7 +2681,7 @@ func (model *concurrencyProbeModel) Review(context.Context, string) (review.Comp
 	model.inFlight--
 	model.mu.Unlock()
 	return review.Completion{
-		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
+		Result: domain.ReviewResult{Findings: nil},
 		Model:  testReviewModel,
 	}, nil
 }
@@ -2729,7 +2728,6 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 		minimumImportance: 9,
 		model: &sequenceModel{
 			results: []domain.ReviewResult{{
-				CoverageComplete: true,
 				Findings: []domain.Finding{{
 					Path:       "main.go",
 					StartLine:  2,
@@ -2996,7 +2994,6 @@ func TestServiceReviewsNothingWhenTheStateAlreadyNamesTheHead(t *testing.T) {
 func TestAFindingWithEvidenceFromTheShownSourceIsPublished(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
 				StartLine:  2,
@@ -3025,7 +3022,6 @@ func TestAFindingWithEvidenceFromTheShownSourceIsPublished(t *testing.T) {
 func TestEvidenceCarryingItsDiffMarkerIsStillGrounded(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
 				StartLine:  2,
@@ -3076,7 +3072,6 @@ func TestAFindingWhoseEvidenceIsNotAWholeShownLineIsDropped(t *testing.T) {
 			fixture := newServiceFixture(t, serviceFixtureOptions{
 				logWriter: logs,
 				model: &sequenceModel{results: []domain.ReviewResult{{
-					CoverageComplete: true,
 					Findings: []domain.Finding{{
 						Path:       "main.go",
 						StartLine:  2,
@@ -3259,8 +3254,7 @@ func disputeFixture(t *testing.T, thread githubapp.ReviewThread) *serviceFixture
 		minimumImportance: 9,
 		reconcileThreads:  []githubapp.ReviewThread{thread},
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{newFindingOnTheSameFile()},
+			Findings: []domain.Finding{newFindingOnTheSameFile()},
 		}}},
 	})
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{thread})
@@ -3280,8 +3274,7 @@ func disputeFixtureWith(
 		minimumImportance: 9,
 		reconcileThreads:  []githubapp.ReviewThread{thread},
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         findings,
+			Findings: findings,
 		}}},
 	})
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{thread})
@@ -4667,7 +4660,7 @@ func TestUnsetReviewBudgetsAdmitANormalDelta(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		unsetReviewBudgets: true,
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+			results: []domain.ReviewResult{{Findings: nil}},
 		},
 	})
 
@@ -5339,7 +5332,7 @@ func (model *failThenSucceedModel) Review(context.Context, string) (review.Compl
 		return review.Completion{}, model.err
 	}
 	return review.Completion{
-		Result: domain.ReviewResult{CoverageComplete: true, Findings: nil},
+		Result: domain.ReviewResult{Findings: nil},
 		Model:  testReviewModel,
 	}, nil
 }
@@ -5392,7 +5385,6 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 			},
 		}},
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{
 				{
 					Path:       "main.go",
@@ -5449,7 +5441,6 @@ func TestServiceKeepsPublishingWhileAnEarlierThreadIsOpen(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
 				StartLine:  2,
@@ -5509,8 +5500,7 @@ func TestServiceApprovesWhenEveryFindingIsAlreadyResolved(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{resolvedFinding},
+			Findings: []domain.Finding{resolvedFinding},
 		}}},
 		reconcileThreads: []githubapp.ReviewThread{{
 			NodeID:   "resolved-thread",
@@ -5549,7 +5539,6 @@ func TestARunThatPostsANewFindingDoesNotApprove(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
 				StartLine:  2,
@@ -5585,7 +5574,7 @@ func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+			results: []domain.ReviewResult{{Findings: nil}},
 		},
 		reconcileThreads: []githubapp.ReviewThread{{
 			NodeID:   "open-thread",
@@ -5643,8 +5632,7 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{openFinding},
+			Findings: []domain.Finding{openFinding},
 		}}},
 		reconcileThreads: []githubapp.ReviewThread{{
 			NodeID:   "open-thread",
@@ -5677,7 +5665,7 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 func TestServiceStopsPublicationWhenTheServiceShutsDown(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+			results: []domain.ReviewResult{{Findings: nil}},
 		},
 	})
 
@@ -5706,7 +5694,6 @@ func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{results: []domain.ReviewResult{{
-			CoverageComplete: true,
 			Findings: []domain.Finding{{
 				Path:       "main.go",
 				StartLine:  2,
@@ -6501,7 +6488,7 @@ func (model *serialGateModel) Review(context.Context, string) (review.Completion
 	model.mu.Unlock()
 
 	return review.Completion{
-		Result: domain.ReviewResult{CoverageComplete: true},
+		Result: domain.ReviewResult{},
 		Model:  testReviewModel,
 	}, nil
 }
@@ -6662,7 +6649,6 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	if model == nil {
 		model = &sequenceModel{
 			results: []domain.ReviewResult{{
-				CoverageComplete: true,
 				Findings: []domain.Finding{{
 					Path:       "main.go",
 					StartLine:  2,

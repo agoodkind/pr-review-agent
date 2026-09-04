@@ -264,3 +264,80 @@ func (service *Service) checkRunForHead(
 	}
 	return created, nil
 }
+
+// succeed concludes a check run as passing, with the run summary the reader
+// sees on the pull request.
+func (service *Service) succeed(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRunID int64,
+	title string,
+	summary string,
+) error {
+	logger := gklog.L(ctx)
+	if err := service.completeCheckRun(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		checkRunID,
+		"success",
+		title,
+		summary,
+	); err != nil {
+		logger.ErrorContext(ctx, "complete successful check run", slog.String("err", err.Error()))
+		return fmt.Errorf("complete check run: %w", err)
+	}
+	return nil
+}
+
+// cancelCheck concludes a check run the run abandoned, which is what a head
+// that moved mid review leaves behind.
+func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
+	logger := gklog.L(ctx)
+	if err := service.completeCheckRun(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		checkRunID,
+		"cancelled",
+		checkSummaryCancelled,
+		checkSummaryCancelled,
+	); err != nil {
+		logger.ErrorContext(ctx, "complete cancelled check run", slog.String("err", err.Error()))
+		return fmt.Errorf("complete cancelled check run: %w", err)
+	}
+	return nil
+}
+
+// completeCheckRun writes one terminal conclusion, under its own timeout so a
+// cancelled review still records how it ended.
+func (service *Service) completeCheckRun(
+	ctx context.Context,
+	installationID int64,
+	repository domain.Repository,
+	checkRunID int64,
+	conclusion string,
+	title string,
+	summary string,
+) error {
+	logger := gklog.L(ctx)
+	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
+	defer cancel()
+	// The log is rendered before the completion call, so the published text is
+	// everything the run recorded up to the moment it finished.
+	err := service.github.CompleteCheckRun(
+		completionCtx,
+		installationID,
+		repository,
+		checkRunID,
+		conclusion,
+		title,
+		summary,
+		renderRunLog(ctx),
+	)
+	if err != nil {
+		logger.ErrorContext(ctx, "complete check run", slog.String("err", err.Error()))
+		return fmt.Errorf("complete check run: %w", err)
+	}
+	return nil
+}

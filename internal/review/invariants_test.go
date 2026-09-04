@@ -124,8 +124,7 @@ func chunkFinding(path string) domain.Finding {
 func chunkAnswer(path string) review.Completion {
 	return review.Completion{
 		Result: domain.ReviewResult{
-			CoverageComplete: true,
-			Findings:         []domain.Finding{chunkFinding(path)},
+			Findings: []domain.Finding{chunkFinding(path)},
 		},
 		Model: testReviewModel,
 	}
@@ -500,7 +499,7 @@ func TestTheRunIdentifierIsTheSameStringEverywhere(t *testing.T) {
 		minimumImportance: 9,
 		logWriter:         logs,
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+			results: []domain.ReviewResult{{Findings: nil}},
 		},
 	})
 
@@ -542,7 +541,7 @@ func TestARunWhoseHeadMovedUnderItSubmitsNoVerdict(t *testing.T) {
 		minimumImportance: 9,
 		headAfterAnalysis: testStaleHeadSHA,
 		model: &sequenceModel{
-			results: []domain.ReviewResult{{CoverageComplete: true, Findings: nil}},
+			results: []domain.ReviewResult{{Findings: nil}},
 		},
 	})
 

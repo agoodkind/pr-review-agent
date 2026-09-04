@@ -261,10 +261,21 @@ func formatFields(fields map[string]string) string {
 // body the service signed its name to.
 var lineBreakEscaper = strings.NewReplacer("\r", "\\r", "\n", "\\n")
 
+// EscapeLineBreaks keeps one repository controlled value on the line it was
+// rendered onto.
+//
+// It is exported because the run log is not the only place this service prints
+// a path someone else chose inside a code block it signs its name to. Every
+// such surface has the same problem and takes the same answer, so they share
+// this one rather than each growing an escape of its own.
+func EscapeLineBreaks(value string) string {
+	return lineBreakEscaper.Replace(value)
+}
+
 // publishedValue returns what one field may say on a public surface.
 func publishedValue(key string, value string) string {
 	if _, published := publishedFields[key]; published {
-		return lineBreakEscaper.Replace(value)
+		return EscapeLineBreaks(value)
 	}
 	return withheldValue
 }

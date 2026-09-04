@@ -2,29 +2,24 @@ package domain
 
 import "testing"
 
-func TestReviewResultAllowsIncompleteCoverage(t *testing.T) {
-	result := ReviewResult{
-		CoverageComplete: false,
-	}
-	if err := result.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-
-	findings := []Finding{{
+// A model answer carries findings and nothing else. It used to carry a coverage
+// boolean the model was required to fill in blind, and the run believed it.
+func TestReviewResultCarriesOnlyFindings(t *testing.T) {
+	result := ReviewResult{Findings: []Finding{{
 		Path:       "main.go",
 		StartLine:  1,
 		EndLine:    1,
 		Title:      "Blocker",
-		Body:       "Would request changes if coverage were complete.",
+		Body:       "The changed line breaks core behavior.",
+		Evidence:   "return err",
+		Suggestion: "",
 		Importance: 7,
-	}}
-	for _, finding := range findings {
-		if err := finding.Validate(); err != nil {
-			t.Fatalf("finding validate: %v", err)
-		}
+	}}}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
-	if result.CoverageComplete {
-		t.Fatal("coverage_complete = true, want false")
+	if len(result.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(result.Findings))
 	}
 }
 
@@ -145,8 +140,7 @@ func TestReviewResultValidateRejectsDuplicateFindings(t *testing.T) {
 		Importance: 3,
 	}
 	result := ReviewResult{
-		CoverageComplete: true,
-		Findings:         []Finding{finding, finding},
+		Findings: []Finding{finding, finding},
 	}
 	if err := result.Validate(); err == nil {
 		t.Fatal("duplicate findings: want error")

@@ -195,9 +195,16 @@ func (finding Finding) Validate() error {
 }
 
 // ReviewResult is the structured model output for one review pass.
+//
+// It carries findings and nothing else. It used to carry a coverage_complete
+// boolean the schema required on every answer, while the prompt never said what
+// the field meant, so the model filled a required boolean blind. One false
+// answer set the whole pass incomplete, which blocked the head and printed a
+// promise that the next push would finish reading it. Whether this service
+// handed the model the whole diff is a fact only this service can know, so it is
+// computed from what this process observed and never asked of the model.
 type ReviewResult struct {
-	CoverageComplete bool      `json:"coverage_complete"`
-	Findings         []Finding `json:"findings"`
+	Findings []Finding `json:"findings"`
 }
 
 // Validate rejects invalid findings and exact duplicates.

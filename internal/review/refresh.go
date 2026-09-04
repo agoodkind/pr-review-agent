@@ -59,7 +59,17 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// this head, because that is the run that knew. What the pull request
 	// currently shows is a separate question, answered by the newest verdict
 	// whatever head it named. A thread resolution changes neither.
-	headFullyReviewed := !strings.Contains(inputs.verdict.Body, unreviewedHeadReason)
+	//
+	// The durable checkpoint outranks that body wherever it speaks to this head.
+	//
+	// A read that failed decides nothing and stops the refresh here. Answering
+	// true would approve a head whose incompleteness is recorded only in the
+	// comment this call could not read, which is the one way this path opens a
+	// gate over code nobody covered.
+	headFullyReviewed, err := service.headReadWhole(ctx, job, inputs.verdict.Body)
+	if err != nil {
+		return err
+	}
 	// Only a dismissed block is withheld from. Dismissing a block and dismissing
 	// an approval are opposite requests, and the review's own state no longer
 	// tells them apart, so the body it kept does.
@@ -72,6 +82,49 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		blockWithdrawn:    blockWithdrawn,
 		settings:          settings,
 	})
+}
+
+// headReadWhole reports whether any completed run read this whole head.
+//
+// A checkpoint naming this head answers it outright, because the baseline
+// advances when and only when a run read the whole head with nothing left
+// pending. That is the direct record, and it is right where the verdict body is
+// wrong: every head blocked by the coverage the model used to be asked to answer
+// blind carries the unreviewed sentence over a checkpoint recording the head as
+// read whole, so believing the body there keeps a block standing on a fact that
+// was never true.
+//
+// A checkpoint naming some other commit says nothing about this head, so the
+// body decides. That case is a force push back to a commit already reviewed: the
+// baseline sits on the commit in between, this head still carries the verdict
+// the run that read it submitted, and treating an unrelated checkpoint as the
+// answer would replace a valid approval with a block nobody can clear. The same
+// holds for a pull request carrying no checkpoint at all.
+//
+// A read that failed is not an absence and is reported rather than guessed. The
+// caller stops there, because a run that could not read the whole head submits
+// no verdict, so its incompleteness exists only in the comment this call just
+// failed to read.
+func (service *Service) headReadWhole(
+	ctx context.Context,
+	job domain.ReviewJob,
+	verdictBody string,
+) (bool, error) {
+	logger := gklog.L(ctx)
+	state, hasState, err := service.readState(ctx, job)
+	if err != nil {
+		logger.ErrorContext(
+			ctx,
+			"read durable state for the verdict refresh",
+			slog.String("err", err.Error()),
+		)
+		return false, fmt.Errorf("read durable state for the verdict refresh: %w", err)
+	}
+	// Pending work beside this baseline belongs to a later commit.
+	if hasState && state.LastReviewed == job.Head {
+		return true, nil
+	}
+	return !strings.Contains(verdictBody, unreviewedHeadReason), nil
 }
 
 // verdictRefreshInputs is everything a refresh decides from.

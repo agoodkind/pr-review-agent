@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -106,11 +107,15 @@ type chunkPass struct {
 	models    modelSet
 	published []domain.Finding
 	failures  []chunkFailure
-	coverage  bool
-	requests  int
-	posted    int
-	failed    int
-	panicked  *chunkPanicError
+	// unreadable names hunks this service could not get a whole answer about,
+	// which no later run reads any better. It is the run's own observation, not
+	// anything the model reported about itself.
+	unreadable []unreadHunk
+	coverage   bool
+	requests   int
+	posted     int
+	failed     int
+	panicked   *chunkPanicError
 }
 
 // chunkPanicError marks a chunk that panicked, so the run reports an internal
@@ -154,6 +159,7 @@ func newChunkPass(
 		models:        modelSet{names: nil, seen: nil},
 		published:     make([]domain.Finding, 0),
 		failures:      make([]chunkFailure, 0),
+		unreadable:    make([]unreadHunk, 0),
 		coverage:      inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
 		requests:      0,
 		posted:        0,
@@ -174,18 +180,48 @@ func chunksCoverageComplete(chunks []diff.Chunk) bool {
 
 // recordCall folds one chunk's own model accounting back into the pass. Each
 // call keeps its own so nothing is written concurrently through one pointer.
-func (pass *chunkPass) recordCall(models modelSet, requests int, results []domain.ReviewResult) {
+//
+// Nothing the model answered decides coverage here. The schema used to require a
+// coverage_complete boolean that the prompt never explained, so the model filled
+// it blind, and one false answer set the whole pass incomplete. That blocked
+// heads with nothing wrong with them and promised a next push that had nothing
+// left to read. Coverage is now only what this process observed: the files and
+// hunks the delta could not carry, the chunks that failed, and the hunks below.
+func (pass *chunkPass) recordCall(models modelSet, requests int) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	for _, name := range models.names {
 		pass.models.add(name)
 	}
 	pass.requests += requests
-	for _, result := range results {
-		if !result.CoverageComplete {
-			pass.coverage = false
-		}
+}
+
+// recordUnreadable records hunks this service could not get a whole answer
+// about. They are a slice of the head nobody covered, so they end the coverage
+// claim exactly as a failed chunk does.
+func (pass *chunkPass) recordUnreadable(hunks []unreadHunk) {
+	if len(hunks) == 0 {
+		return
 	}
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	pass.unreadable = append(pass.unreadable, hunks...)
+	pass.coverage = false
+}
+
+// structuralShortfall is everything about this head that a later run reads no
+// better: the pieces the delta itself cannot carry, and the hunks whose answer
+// never arrived whole.
+//
+// The recorded hunks are sorted before they are appended, because chunks answer
+// concurrently and every surface that names them has to read the same whichever
+// chunk answered first.
+func (pass *chunkPass) structuralShortfall() structuralShortfall {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	shortfall := classifyStructuralShortfall(pass.work)
+	shortfall.Hunks = append(shortfall.Hunks, sortedUnreadHunks(pass.unreadable)...)
+	return shortfall
 }
 
 // recordConsolidationRequest counts the extra model call a chunk spent asking
@@ -306,6 +342,7 @@ func (service *Service) reviewDelta(
 		mu:         sync.Mutex{},
 		unfinished: work.owed,
 		completed:  work.completed,
+		unread:     work.unread,
 		state:      state,
 	}
 	fatal := service.reviewChunksConcurrently(ctx, job, head, work.chunks, pass, tracker)
@@ -318,7 +355,9 @@ func (service *Service) reviewDelta(
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
-	return concludeState(tracker.snapshot(), job, head, tracker), nil
+	// A completed chunk can retain an unread hunk from an earlier pass.
+	unreadable := pass.structuralShortfall().present() || len(tracker.unreadable()) > 0
+	return concludeState(tracker.snapshot(), job, head, tracker, unreadable), nil
 }
 
 // deltaOwed is the work one pass has to do: the chunks to review, the ids they
@@ -327,6 +366,9 @@ type deltaOwed struct {
 	chunks    []diff.Chunk
 	owed      []string
 	completed []string
+	// unread names the chunks an earlier run recorded as never read whole, kept
+	// only where the current delta still holds them.
+	unread []string
 }
 
 // pendingWork is the delta as it stands now, minus the chunks already read
@@ -375,14 +417,32 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 			)
 		}
 	}
+	// A content change replaces the chunk id and clears its old shortfall.
+	unread := make([]string, 0, len(state.Unread))
+	rewritten := make([]string, 0, len(state.Unread))
+	for _, id := range state.Unread {
+		if _, found := present[id]; !found {
+			rewritten = append(rewritten, id)
+			continue
+		}
+		unread = append(unread, id)
+	}
+	if len(rewritten) > 0 {
+		logger.InfoContext(
+			ctx,
+			"unread chunks are no longer in the delta",
+			slog.Any("chunks", rewritten),
+		)
+	}
 	logger.InfoContext(
 		ctx,
 		"review work computed",
 		slog.Int("delta_chunks", len(chunks)),
 		slog.Int("already_read", len(carried)),
 		slog.Int("owed", len(owed)),
+		slog.Int("unread", len(unread)),
 	)
-	return deltaOwed{chunks: remaining, owed: owed, completed: carried}
+	return deltaOwed{chunks: remaining, owed: owed, completed: carried, unread: unread}
 }
 
 // pendingTracker owns the pending list, the completed list, and the durable
@@ -392,7 +452,28 @@ type pendingTracker struct {
 	mu         sync.Mutex
 	unfinished []string
 	completed  []string
-	state      marker.State
+	// unread names the chunks holding a hunk no answer covered, carried in from
+	// the durable state and added to as this pass finds more. It is what stops a
+	// later run advancing the baseline over a chunk that answered in part.
+	unread []string
+	state  marker.State
+}
+
+// recordUnread notes that one chunk holds a hunk no answer covered, once.
+func (tracker *pendingTracker) recordUnread(id string) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if slices.Contains(tracker.unread, id) {
+		return
+	}
+	tracker.unread = append(tracker.unread, id)
+}
+
+// unreadable returns the chunk ids whose hunks were never read whole.
+func (tracker *pendingTracker) unreadable() []string {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	return append([]string{}, tracker.unread...)
 }
 
 func (tracker *pendingTracker) snapshot() marker.State {
@@ -448,10 +529,14 @@ func (service *Service) reviewChunksConcurrently(
 					pass.recordPanic(chunk.Index, fmt.Sprint(recovered))
 				}
 			}()
-			slots <- struct{}{}
-			err := service.reviewOneChunk(ctx, job, head, chunk, pass)
-			<-slots
-			if endsRun := service.settleChunk(ctx, job, head, chunk, err, pass, tracker); endsRun != nil {
+			// The inner defer returns the slot after success, failure, or panic.
+			outcome, err := func() (chunkOutcome, error) {
+				slots <- struct{}{}
+				defer func() { <-slots }()
+				return service.reviewOneChunk(ctx, job, head, chunk, pass)
+			}()
+			settled := chunkSettlement{chunk: chunk, err: err, outcome: outcome}
+			if endsRun := service.settleChunk(ctx, job, head, settled, pass, tracker); endsRun != nil {
 				fatal <- endsRun
 			}
 		})
@@ -462,20 +547,61 @@ func (service *Service) reviewChunksConcurrently(
 	return <-fatal
 }
 
+// chunkOutcome is how much of one chunk this service got an answer about.
+type chunkOutcome struct {
+	// unread marks a chunk whose answer never arrived at all, which the model
+	// reaching its completion budget on a chunk too small to split produces.
+	// Nothing failed, and nothing was read either.
+	unread bool
+	// shortfall marks a chunk holding any hunk no answer covered, whether or not
+	// the rest of the chunk answered. A chunk that answered in part is finished
+	// and still carries this, which is the case the in-memory record used to
+	// lose: it is checkpointed as completed, so no later run re-derives it and
+	// nothing would otherwise remember that part of it was never read.
+	shortfall bool
+}
+
+// chunkSettlement is one chunk's outcome: what it was, what went wrong, and
+// how much of it this service ever got an answer about.
+type chunkSettlement struct {
+	chunk   diff.Chunk
+	err     error
+	outcome chunkOutcome
+}
+
 // settleChunk records one chunk's outcome and reports the failures that end the
 // whole run instead of leaving the chunk pending.
 func (service *Service) settleChunk(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
-	chunk diff.Chunk,
-	err error,
+	settled chunkSettlement,
 	pass *chunkPass,
 	tracker *pendingTracker,
 ) error {
 	logger := gklog.L(ctx)
+	chunk := settled.chunk
+	err := settled.err
 	id := chunkID(chunk)
+	// Record a partial answer before the completed checkpoint.
+	if settled.outcome.shortfall {
+		tracker.recordUnread(id)
+	}
 	switch {
+	case err == nil && settled.outcome.unread:
+		// The call came back and covered none of this chunk. Recording it as
+		// finished would put a chunk nobody read into the completed list, and the
+		// next run subtracts that list from the delta: the chunk would never be
+		// re-derived, the shortfall would live only in this process's memory, and
+		// the run after this one would advance the baseline over code nobody has
+		// ever read. It is owed instead, so a later run re-derives it.
+		logger.WarnContext(
+			ctx,
+			"chunk left owed because no whole answer arrived",
+			slog.String("chunk", id),
+			slog.Int("index", chunk.Index),
+		)
+		return nil
 	case err == nil:
 	case errors.Is(err, errHeadMoved):
 		return err
@@ -532,6 +658,7 @@ func (service *Service) checkpoint(
 	tracker.completed = append(tracker.completed, id)
 	tracker.state.Pending = append([]string{}, tracker.unfinished...)
 	tracker.state.Completed = append([]string{}, tracker.completed...)
+	tracker.state.Unread = append([]string{}, tracker.unread...)
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
@@ -546,52 +673,29 @@ func (service *Service) checkpoint(
 	return nil
 }
 
-// concludeState closes the pass out. The last reviewed commit advances only
-// when nothing is left pending, so a run that could not read the whole head
-// never claims it did.
-//
-// Advancing it also drops the completed set. That set exists to keep the next
-// run from re-reading chunks under the same baseline; once the baseline moves,
-// the next delta starts after them and every id in it names a chunk that can
-// never appear again.
-func concludeState(
-	state marker.State,
-	job domain.ReviewJob,
-	head domain.HeadSHA,
-	tracker *pendingTracker,
-) marker.State {
-	unfinished := tracker.remaining()
-	state.Pending = unfinished
-	state.Completed = tracker.finished()
-	state.RunID = job.DeliveryID
-	state.Status = marker.StateReviewing
-	if len(unfinished) == 0 {
-		state.LastReviewed = head
-		state.Status = marker.StateDone
-		state.Completed = nil
-	}
-	return state
-}
-
 // reviewOneChunk makes one chunk's model call under its own timeout and posts
 // what that call found.
 //
 // The timeout is built from the caller's context on every call, so no chunk
 // inherits a clock another chunk already spent. The truncation split runs
 // inside the call, which is why the split halves stay inside the same budget.
+// It reports whether the chunk went unread, which is not a failure: the call
+// answered, and the answer covered none of the chunk. The caller leaves such a
+// chunk owed rather than finished.
 func (service *Service) reviewOneChunk(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
 	chunk diff.Chunk,
 	pass *chunkPass,
-) error {
+) (chunkOutcome, error) {
 	// Each call keeps its own accounting, so concurrent chunks never write
 	// through one pointer, and the pass folds them in afterwards.
 	var models modelSet
 	requests := 0
+	nothing := chunkOutcome{unread: false, shortfall: false}
 	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
-	results, err := reviewChunk(
+	analysis, err := reviewChunk(
 		callCtx,
 		service.model,
 		chunk,
@@ -602,16 +706,22 @@ func (service *Service) reviewOneChunk(
 		service.now,
 	)
 	cancel()
-	pass.recordCall(models, requests, results)
+	pass.recordCall(models, requests)
 	if err != nil {
-		return err
+		return nothing, err
 	}
+	pass.recordUnreadable(analysis.Unreadable)
 
 	findings := make([]domain.Finding, 0)
-	for _, result := range results {
+	for _, result := range analysis.Results {
 		findings = append(findings, result.Findings...)
 	}
-	return service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
+	// A fully unread chunk remains owed. A partial answer completes the chunk and
+	// records its shortfall.
+	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
+	shortfall := len(analysis.Unreadable) > 0 && !unread
+	return chunkOutcome{unread: unread, shortfall: shortfall},
+		service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
 }
 
 // postCandidate pairs one finding with its rendered comment, so ordering
