@@ -120,8 +120,9 @@ func (service *Service) headReadWhole(
 		)
 		return false, fmt.Errorf("read durable state for the verdict refresh: %w", err)
 	}
+	// Pending work beside this baseline belongs to a later commit.
 	if hasState && state.LastReviewed == job.Head {
-		return len(state.Pending) == 0, nil
+		return true, nil
 	}
 	return !strings.Contains(verdictBody, unreviewedHeadReason), nil
 }

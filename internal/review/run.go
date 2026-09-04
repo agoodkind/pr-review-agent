@@ -355,10 +355,7 @@ func (service *Service) reviewDelta(
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
-	// The shortfall this pass saw and the one an earlier pass recorded both count.
-	// A resumed run re-derives none of the chunks already completed, so what it
-	// observes for itself is silent about them, and only the recorded ids say that
-	// part of this head was never read.
+	// A completed chunk can retain an unread hunk from an earlier pass.
 	unreadable := pass.structuralShortfall().present() || len(tracker.unreadable()) > 0
 	return concludeState(tracker.snapshot(), job, head, tracker, unreadable), nil
 }
@@ -420,11 +417,7 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 			)
 		}
 	}
-	// A recorded shortfall survives only while the delta still holds the chunk it
-	// was recorded against. Chunk ids are content digests, so once the author
-	// rewrites that code its id matches nothing here and the baseline is free to
-	// advance; keeping the id past that would block the pull request forever on a
-	// hunk that no longer exists.
+	// A content change replaces the chunk id and clears its old shortfall.
 	unread := make([]string, 0, len(state.Unread))
 	rewritten := make([]string, 0, len(state.Unread))
 	for _, id := range state.Unread {
@@ -536,9 +529,12 @@ func (service *Service) reviewChunksConcurrently(
 					pass.recordPanic(chunk.Index, fmt.Sprint(recovered))
 				}
 			}()
-			slots <- struct{}{}
-			outcome, err := service.reviewOneChunk(ctx, job, head, chunk, pass)
-			<-slots
+			// The inner defer returns the slot after success, failure, or panic.
+			outcome, err := func() (chunkOutcome, error) {
+				slots <- struct{}{}
+				defer func() { <-slots }()
+				return service.reviewOneChunk(ctx, job, head, chunk, pass)
+			}()
 			settled := chunkSettlement{chunk: chunk, err: err, outcome: outcome}
 			if endsRun := service.settleChunk(ctx, job, head, settled, pass, tracker); endsRun != nil {
 				fatal <- endsRun
@@ -587,8 +583,7 @@ func (service *Service) settleChunk(
 	chunk := settled.chunk
 	err := settled.err
 	id := chunkID(chunk)
-	// Recorded before the checkpoint, so the id is in the durable state the same
-	// write that marks the chunk completed carries.
+	// Record a partial answer before the completed checkpoint.
 	if settled.outcome.shortfall {
 		tracker.recordUnread(id)
 	}
@@ -721,12 +716,10 @@ func (service *Service) reviewOneChunk(
 	for _, result := range analysis.Results {
 		findings = append(findings, result.Findings...)
 	}
-	// A chunk that answered nothing at all is owed, so a later run re-derives it.
-	// A chunk that answered in part is finished, because re-reading it would pay
-	// for the half that did answer every run forever; its shortfall is recorded
-	// durably instead, which is what keeps the baseline from advancing over it.
+	// A fully unread chunk remains owed. A partial answer completes the chunk and
+	// records its shortfall.
 	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
-	shortfall := len(analysis.Unreadable) > 0
+	shortfall := len(analysis.Unreadable) > 0 && !unread
 	return chunkOutcome{unread: unread, shortfall: shortfall},
 		service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
 }

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -608,5 +609,103 @@ func TestARecordedShortfallIsDroppedOnceItsChunkIsGone(t *testing.T) {
 	}
 	if len(state.Unread) != 0 {
 		t.Fatalf("unread = %v, want the stale id dropped", state.Unread)
+	}
+}
+
+// A chunk that panics returns its worker slot, so later chunks can start.
+func TestAPanickingChunkReturnsItsWorkerSlot(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector: manyChunkCollector{},
+		model:     panicModel{},
+	})
+
+	// A timeout turns the former deadlock into a test failure.
+	done := make(chan error, 1)
+	go func() {
+		done <- fixture.run(context.Background(), fixture.job())
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run returned no error, want the panic reported")
+		}
+		if !strings.Contains(err.Error(), "panicked") {
+			t.Fatalf("Run error = %v, want the chunk panic reported", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the run never returned: every worker slot was consumed by a panic and never given back")
+	}
+}
+
+// Pending work from a later commit does not block an already reviewed head.
+func TestPendingWorkFromALaterCommitDoesNotBlockAReviewedHead(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reviewPages: [][]map[string]any{{{
+			"id":        float64(4100),
+			"commit_id": testHeadSHA,
+			"state":     "CHANGES_REQUESTED",
+			"body": "Changes requested.\n\n" +
+				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
+			"user": map[string]any{"login": testBotLogin},
+		}}},
+	})
+	// This head was read whole, and a run on a commit after it left a chunk owed
+	// before the branch was reset back here.
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(2000),
+		"body": "## Review\n" + marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(testHeadSHA),
+			RunID:        "delivery-0",
+			Status:       marker.StateReviewing,
+			Pending:      []string{"c0ffeec0ffee"},
+			Completed:    nil,
+			ForcedBy:     "",
+			Unread:       nil,
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want the reviewed head approved once every thread is resolved",
+			fixture.state.lastSubmitReview["event"])
+	}
+}
+
+// A fully unread chunk advances after a later run reads it successfully.
+func TestAFullyUnreadChunkClearsAfterASuccessfulRetry(t *testing.T) {
+	model := &truncatedModel{truncateCalls: 1000}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         multiHunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+	seedReviewedBaseline(fixture)
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first := decodedSummaryState(t, fixture)
+	if len(first.Pending) != 1 {
+		t.Fatalf("pending after first run = %v, want one unread chunk", first.Pending)
+	}
+	if len(first.Unread) != 0 {
+		t.Fatalf("unread after first run = %v, want the owed chunk tracked only as pending", first.Unread)
+	}
+	model.truncateCalls = model.calls
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	second := decodedSummaryState(t, fixture)
+	if second.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the head after the retry succeeded", second.LastReviewed)
+	}
+	if len(second.Pending) != 0 || len(second.Unread) != 0 {
+		t.Fatalf("pending = %v, unread = %v, want no remaining work", second.Pending, second.Unread)
 	}
 }
