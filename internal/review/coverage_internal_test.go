@@ -13,11 +13,9 @@ import (
 
 const noticeTestHead = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
 
-// A path someone else chose cannot become markdown in a body this service
-// signs. A backtick or a newline in a filename closes an inline code span and
-// turns the rest of the notice into whatever that name says.
+// A repository path cannot close the code fence or inject Markdown.
 func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
-	hostile := "src/`x`\nBODY: [click](https://evil.example)/main.go"
+	hostile := "```\nBODY: [click](https://evil.example)/main.go"
 
 	notice := structuralShortfallNotice(
 		domain.HeadSHA(noticeTestHead),
@@ -35,8 +33,7 @@ func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
 	if !strings.Contains(notice, `\n`) {
 		t.Fatalf("the newline was dropped rather than escaped:\n%s", notice)
 	}
-	// Whatever the path still says has to stay inside the fence, so this counts
-	// the fence lines and requires exactly the pair the renderer opened.
+	// The renderer must emit exactly one opening and one closing fence.
 	if opened := strings.Count(notice, "\n```"); opened != 2 {
 		t.Fatalf("fence lines = %d, want one opened and one closed:\n%s", opened, notice)
 	}

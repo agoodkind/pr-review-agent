@@ -256,14 +256,7 @@ const maximumListedUnreadHunks = 40
 // repository path can be long enough to crowd out the rest on its own.
 const maximumUnreadHunkLabelBytes = 220
 
-// renderUnreadHunks lists what nobody read, one line each.
-//
-// The list is a fenced block rather than markdown bullets. Every path and hunk
-// header in it is repository controlled: someone who can name a file can put a
-// backtick or a newline in that name, and inside an inline code span either one
-// closes the span and turns the rest into markdown on a body this service signs.
-// A fenced block plus the line break escaping the run log already applies to the
-// same problem leaves nothing that can close it.
+// renderUnreadHunks lists each unread hunk as inert code text.
 func renderUnreadHunks(hunks []unreadHunk) string {
 	listed := hunks
 	omitted := 0
@@ -285,9 +278,9 @@ func renderUnreadHunks(hunks []unreadHunk) string {
 
 // describeUnreadHunk names one unread piece the way a reader can go and find it.
 func describeUnreadHunk(hunk unreadHunk) string {
-	label := runlog.EscapeLineBreaks(hunk.Path)
+	label := escapeUnreadHunkText(hunk.Path)
 	if hunk.Header != "" {
-		label += " " + runlog.EscapeLineBreaks(hunk.Header)
+		label += " " + escapeUnreadHunkText(hunk.Header)
 	}
 	if len(label) > maximumUnreadHunkLabelBytes {
 		label = label[:maximumUnreadHunkLabelBytes] + "..."
@@ -296,6 +289,12 @@ func describeUnreadHunk(hunk unreadHunk) string {
 		return label
 	}
 	return label + " (" + hunk.Reason + ")"
+}
+
+// escapeUnreadHunkText prevents repository text from closing the code fence.
+func escapeUnreadHunkText(text string) string {
+	withoutLines := runlog.EscapeLineBreaks(text)
+	return strings.ReplaceAll(withoutLines, "`", string(rune(0x2CB)))
 }
 
 // hunkCount names a number of unread hunks without the plural mismatch a bare
