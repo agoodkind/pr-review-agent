@@ -48,7 +48,7 @@ func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
 func TestALongUnreadListIsBoundedAndSaysHowManyItOmitted(t *testing.T) {
 	const extra = 5
 	hunks := make([]unreadHunk, 0, maximumListedUnreadHunks+extra)
-	for index := range maximumListedUnreadHunks + extra {
+	for index := 0; index < maximumListedUnreadHunks+extra; index++ {
 		hunks = append(hunks, unreadHunk{
 			Path:   fmt.Sprintf("pkg/%s%d.go", strings.Repeat("deep/", 40), index),
 			Header: "@@ -1,1 +1,2 @@",

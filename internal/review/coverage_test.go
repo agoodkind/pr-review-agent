@@ -50,7 +50,7 @@ const (
 func coveragePatch(addedLines int) string {
 	lines := make([]string, 0, addedLines+2)
 	lines = append(lines, fmt.Sprintf("@@ -1,1 +1,%d @@", addedLines+1), " package main")
-	for index := range addedLines {
+	for index := 0; index < addedLines; index++ {
 		lines = append(lines, "+"+coverageAddedLine(index))
 	}
 	return strings.Join(lines, "\n")
@@ -60,7 +60,7 @@ func coveragePatch(addedLines int) string {
 func coverageContent(addedLines int) string {
 	lines := make([]string, 0, addedLines+1)
 	lines = append(lines, "package main")
-	for index := range addedLines {
+	for index := 0; index < addedLines; index++ {
 		lines = append(lines, coverageAddedLine(index))
 	}
 	return strings.Join(lines, "\n") + "\n"
