@@ -177,6 +177,9 @@ func (service *Service) declineReview(
 				// here would send its own resume over the whole pull request
 				// again.
 				ForcedBy: existing.ForcedBy,
+				// So does the recorded shortfall. A decline read nothing, so it
+				// cannot have cleared a hunk an earlier run could not read.
+				Unread: existing.Unread,
 			},
 		}
 	}); err != nil {

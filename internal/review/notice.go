@@ -167,6 +167,10 @@ func (service *Service) writeFailureSummary(
 				// finishing, and losing the record would make its own resume clear
 				// the very checkpoint this notice is preserving.
 				ForcedBy: existing.ForcedBy,
+				// So does the recorded shortfall, which a failure cannot clear:
+				// dropping it would let the next run advance the baseline over a
+				// hunk that is still unread.
+				Unread: existing.Unread,
 			},
 		}
 	})

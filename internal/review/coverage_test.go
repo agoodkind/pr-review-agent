@@ -19,6 +19,8 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/openai"
+	"goodkind.io/pr-review-agent/internal/review"
 )
 
 const (
@@ -479,5 +481,132 @@ func TestAFailedStateReadStopsTheRefreshRatherThanApproving(t *testing.T) {
 	if len(fixture.state.submittedReviews) != 0 {
 		t.Fatalf("submitted reviews = %v, want none decided from a read that failed",
 			fixture.state.submittedReviews)
+	}
+}
+
+// partiallyReadableModel answers exactly one call and truncates every other, so
+// a chunk that splits comes back with findings from one half and nothing at all
+// from the other.
+type partiallyReadableModel struct {
+	noConsolidation
+	answerOnCall int
+	calls        int
+}
+
+func (model *partiallyReadableModel) Review(
+	_ context.Context,
+	_ string,
+) (review.Completion, error) {
+	model.calls++
+	if model.calls != model.answerOnCall {
+		return review.Completion{}, &openai.TruncatedError{Model: testReviewModel}
+	}
+	return review.Completion{
+		Result: domain.ReviewResult{Findings: []domain.Finding{{
+			Path:       "main.go",
+			StartLine:  2,
+			EndLine:    2,
+			Title:      "Severe defect",
+			Body:       "The changed line breaks core behavior.",
+			Evidence:   "added1",
+			Suggestion: "",
+			Importance: 9,
+		}}},
+		Model: testReviewModel,
+	}, nil
+}
+
+// A chunk that answered in part is finished, and the head it left unread is
+// still unread on every later run.
+//
+// This is the half of the shortfall that in-memory bookkeeping lost. A chunk
+// whose split produced findings from one half and no answer at all from the
+// other is not owed: re-reading it would pay for the half that did answer on
+// every run forever. So it lands in the completed set, the next run subtracts
+// that set from the delta and never re-derives it, and nothing it observes for
+// itself says any part of this head went unread. Only the recorded id does, and
+// without it the second run advances the baseline over code nobody has read.
+//
+// One run cannot show that, because the run that saw the shortfall still holds
+// the baseline on what it remembers. The second one can.
+func TestAPartlyReadChunkKeepsTheBaselineHeldOnTheNextRun(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         multiHunkCollector{},
+		minimumImportance: 9,
+		// The whole chunk truncates, splits, and the first half answers; the
+		// second half truncates down to single hunks that cannot split again.
+		model: &partiallyReadableModel{answerOnCall: 2},
+	})
+	seedReviewedBaseline(fixture)
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	first := decodedSummaryState(t, fixture)
+	if len(first.Completed) == 0 {
+		t.Fatalf("completed after the first run = %v, want the chunk that answered in part recorded as read",
+			first.Completed)
+	}
+	if len(first.Unread) == 0 {
+		t.Fatalf("unread after the first run = %v, want the chunk's shortfall recorded durably",
+			first.Unread)
+	}
+	if first.LastReviewed != domain.HeadSHA(coveragePriorHead) {
+		t.Fatalf("last reviewed after the first run = %q, want the held baseline", first.LastReviewed)
+	}
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	second := decodedSummaryState(t, fixture)
+	if second.LastReviewed != domain.HeadSHA(coveragePriorHead) {
+		t.Fatalf("last reviewed after the second run = %q, want the baseline still held over a hunk nobody read",
+			second.LastReviewed)
+	}
+	// Blocking here is right, because the half that answered found a real defect.
+	// Approving would not be: part of this head has never been read.
+	if event := fixture.state.lastSubmitReview["event"]; event == string(domain.ReviewDecisionApprove) {
+		t.Fatal("the second run approved a head part of which nobody has read")
+	}
+}
+
+// The recorded shortfall clears itself once the author rewrites that code.
+//
+// Chunk ids are content digests, so an id recorded against a hunk nobody could
+// read matches nothing in a delta that no longer holds it. Keeping it past that
+// would block the pull request forever on code that is gone, which is the one
+// way this record could be worse than the bug it fixes.
+func TestARecordedShortfallIsDroppedOnceItsChunkIsGone(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         readableOnlyCollector{},
+		minimumImportance: 9,
+		model:             &sequenceModel{results: []domain.ReviewResult{{Findings: nil}}},
+	})
+	// A checkpoint naming a shortfall against a chunk this delta does not hold.
+	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
+		"id": float64(2000),
+		"body": "## Review\n" + marker.EncodeState(marker.State{
+			LastReviewed: domain.HeadSHA(coveragePriorHead),
+			RunID:        "delivery-0",
+			Status:       marker.StateReviewing,
+			Pending:      nil,
+			Completed:    nil,
+			ForcedBy:     "",
+			Unread:       []string{"deadbeefdead"},
+		}),
+		"user": map[string]any{"login": testBotLogin},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	state := decodedSummaryState(t, fixture)
+	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
+		t.Fatalf("last reviewed = %q, want the baseline advanced once the unread chunk left the delta",
+			state.LastReviewed)
+	}
+	if len(state.Unread) != 0 {
+		t.Fatalf("unread = %v, want the stale id dropped", state.Unread)
 	}
 }

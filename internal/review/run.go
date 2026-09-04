@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -341,6 +342,7 @@ func (service *Service) reviewDelta(
 		mu:         sync.Mutex{},
 		unfinished: work.owed,
 		completed:  work.completed,
+		unread:     work.unread,
 		state:      state,
 	}
 	fatal := service.reviewChunksConcurrently(ctx, job, head, work.chunks, pass, tracker)
@@ -353,9 +355,12 @@ func (service *Service) reviewDelta(
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
-	return concludeState(
-		tracker.snapshot(), job, head, tracker, pass.structuralShortfall().present(),
-	), nil
+	// The shortfall this pass saw and the one an earlier pass recorded both count.
+	// A resumed run re-derives none of the chunks already completed, so what it
+	// observes for itself is silent about them, and only the recorded ids say that
+	// part of this head was never read.
+	unreadable := pass.structuralShortfall().present() || len(tracker.unreadable()) > 0
+	return concludeState(tracker.snapshot(), job, head, tracker, unreadable), nil
 }
 
 // deltaOwed is the work one pass has to do: the chunks to review, the ids they
@@ -364,6 +369,9 @@ type deltaOwed struct {
 	chunks    []diff.Chunk
 	owed      []string
 	completed []string
+	// unread names the chunks an earlier run recorded as never read whole, kept
+	// only where the current delta still holds them.
+	unread []string
 }
 
 // pendingWork is the delta as it stands now, minus the chunks already read
@@ -412,14 +420,36 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 			)
 		}
 	}
+	// A recorded shortfall survives only while the delta still holds the chunk it
+	// was recorded against. Chunk ids are content digests, so once the author
+	// rewrites that code its id matches nothing here and the baseline is free to
+	// advance; keeping the id past that would block the pull request forever on a
+	// hunk that no longer exists.
+	unread := make([]string, 0, len(state.Unread))
+	rewritten := make([]string, 0, len(state.Unread))
+	for _, id := range state.Unread {
+		if _, found := present[id]; !found {
+			rewritten = append(rewritten, id)
+			continue
+		}
+		unread = append(unread, id)
+	}
+	if len(rewritten) > 0 {
+		logger.InfoContext(
+			ctx,
+			"unread chunks are no longer in the delta",
+			slog.Any("chunks", rewritten),
+		)
+	}
 	logger.InfoContext(
 		ctx,
 		"review work computed",
 		slog.Int("delta_chunks", len(chunks)),
 		slog.Int("already_read", len(carried)),
 		slog.Int("owed", len(owed)),
+		slog.Int("unread", len(unread)),
 	)
-	return deltaOwed{chunks: remaining, owed: owed, completed: carried}
+	return deltaOwed{chunks: remaining, owed: owed, completed: carried, unread: unread}
 }
 
 // pendingTracker owns the pending list, the completed list, and the durable
@@ -429,7 +459,28 @@ type pendingTracker struct {
 	mu         sync.Mutex
 	unfinished []string
 	completed  []string
-	state      marker.State
+	// unread names the chunks holding a hunk no answer covered, carried in from
+	// the durable state and added to as this pass finds more. It is what stops a
+	// later run advancing the baseline over a chunk that answered in part.
+	unread []string
+	state  marker.State
+}
+
+// recordUnread notes that one chunk holds a hunk no answer covered, once.
+func (tracker *pendingTracker) recordUnread(id string) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	if slices.Contains(tracker.unread, id) {
+		return
+	}
+	tracker.unread = append(tracker.unread, id)
+}
+
+// unreadable returns the chunk ids whose hunks were never read whole.
+func (tracker *pendingTracker) unreadable() []string {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	return append([]string{}, tracker.unread...)
 }
 
 func (tracker *pendingTracker) snapshot() marker.State {
@@ -486,9 +537,9 @@ func (service *Service) reviewChunksConcurrently(
 				}
 			}()
 			slots <- struct{}{}
-			unread, err := service.reviewOneChunk(ctx, job, head, chunk, pass)
+			outcome, err := service.reviewOneChunk(ctx, job, head, chunk, pass)
 			<-slots
-			settled := chunkSettlement{chunk: chunk, err: err, unread: unread}
+			settled := chunkSettlement{chunk: chunk, err: err, outcome: outcome}
 			if endsRun := service.settleChunk(ctx, job, head, settled, pass, tracker); endsRun != nil {
 				fatal <- endsRun
 			}
@@ -500,15 +551,26 @@ func (service *Service) reviewChunksConcurrently(
 	return <-fatal
 }
 
-// chunkSettlement is one chunk's outcome: what it was, what went wrong, and
-// whether this service ever got a whole answer about it.
-type chunkSettlement struct {
-	chunk diff.Chunk
-	err   error
-	// unread marks a chunk whose answer never arrived whole, which the model
+// chunkOutcome is how much of one chunk this service got an answer about.
+type chunkOutcome struct {
+	// unread marks a chunk whose answer never arrived at all, which the model
 	// reaching its completion budget on a chunk too small to split produces.
 	// Nothing failed, and nothing was read either.
 	unread bool
+	// shortfall marks a chunk holding any hunk no answer covered, whether or not
+	// the rest of the chunk answered. A chunk that answered in part is finished
+	// and still carries this, which is the case the in-memory record used to
+	// lose: it is checkpointed as completed, so no later run re-derives it and
+	// nothing would otherwise remember that part of it was never read.
+	shortfall bool
+}
+
+// chunkSettlement is one chunk's outcome: what it was, what went wrong, and
+// how much of it this service ever got an answer about.
+type chunkSettlement struct {
+	chunk   diff.Chunk
+	err     error
+	outcome chunkOutcome
 }
 
 // settleChunk records one chunk's outcome and reports the failures that end the
@@ -525,8 +587,13 @@ func (service *Service) settleChunk(
 	chunk := settled.chunk
 	err := settled.err
 	id := chunkID(chunk)
+	// Recorded before the checkpoint, so the id is in the durable state the same
+	// write that marks the chunk completed carries.
+	if settled.outcome.shortfall {
+		tracker.recordUnread(id)
+	}
 	switch {
-	case err == nil && settled.unread:
+	case err == nil && settled.outcome.unread:
 		// The call came back and covered none of this chunk. Recording it as
 		// finished would put a chunk nobody read into the completed list, and the
 		// next run subtracts that list from the delta: the chunk would never be
@@ -596,6 +663,7 @@ func (service *Service) checkpoint(
 	tracker.completed = append(tracker.completed, id)
 	tracker.state.Pending = append([]string{}, tracker.unfinished...)
 	tracker.state.Completed = append([]string{}, tracker.completed...)
+	tracker.state.Unread = append([]string{}, tracker.unread...)
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
@@ -608,45 +676,6 @@ func (service *Service) checkpoint(
 	}
 	logger.InfoContext(ctx, "review checkpoint advanced", slog.Int("pending", len(tracker.unfinished)))
 	return nil
-}
-
-// concludeState closes the pass out. The last reviewed commit advances only
-// when nothing is left pending, so a run that could not read the whole head
-// never claims it did.
-//
-// Advancing it also drops the completed set. That set exists to keep the next
-// run from re-reading chunks under the same baseline; once the baseline moves,
-// the next delta starts after them and every id in it names a chunk that can
-// never appear again.
-//
-// unreadable says the delta holds something no run can read, such as a hunk
-// larger than one model request. Nothing is pending in that case, because every
-// chunk answered, so the baseline would otherwise advance over code nobody read
-// and the next delta would start after it. Holding it keeps that code in every
-// later delta, exactly as a declined delta stays in one. The completed set is
-// kept for the same reason it is kept while chunks are pending: the chunks that
-// did answer must not be paid for twice.
-func concludeState(
-	state marker.State,
-	job domain.ReviewJob,
-	head domain.HeadSHA,
-	tracker *pendingTracker,
-	unreadable bool,
-) marker.State {
-	unfinished := tracker.remaining()
-	state.Pending = unfinished
-	state.Completed = tracker.finished()
-	state.RunID = job.DeliveryID
-	state.Status = marker.StateReviewing
-	if unreadable {
-		return state
-	}
-	if len(unfinished) == 0 {
-		state.LastReviewed = head
-		state.Status = marker.StateDone
-		state.Completed = nil
-	}
-	return state
 }
 
 // reviewOneChunk makes one chunk's model call under its own timeout and posts
@@ -664,11 +693,12 @@ func (service *Service) reviewOneChunk(
 	head domain.HeadSHA,
 	chunk diff.Chunk,
 	pass *chunkPass,
-) (bool, error) {
+) (chunkOutcome, error) {
 	// Each call keeps its own accounting, so concurrent chunks never write
 	// through one pointer, and the pass folds them in afterwards.
 	var models modelSet
 	requests := 0
+	nothing := chunkOutcome{unread: false, shortfall: false}
 	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
 	analysis, err := reviewChunk(
 		callCtx,
@@ -683,7 +713,7 @@ func (service *Service) reviewOneChunk(
 	cancel()
 	pass.recordCall(models, requests)
 	if err != nil {
-		return false, err
+		return nothing, err
 	}
 	pass.recordUnreadable(analysis.Unreadable)
 
@@ -691,8 +721,14 @@ func (service *Service) reviewOneChunk(
 	for _, result := range analysis.Results {
 		findings = append(findings, result.Findings...)
 	}
+	// A chunk that answered nothing at all is owed, so a later run re-derives it.
+	// A chunk that answered in part is finished, because re-reading it would pay
+	// for the half that did answer every run forever; its shortfall is recorded
+	// durably instead, which is what keeps the baseline from advancing over it.
 	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
-	return unread, service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
+	shortfall := len(analysis.Unreadable) > 0
+	return chunkOutcome{unread: unread, shortfall: shortfall},
+		service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
 }
 
 // postCandidate pairs one finding with its rendered comment, so ordering

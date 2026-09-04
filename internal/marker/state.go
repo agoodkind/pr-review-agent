@@ -33,7 +33,7 @@ const statePrefix = "<!-- pr-review-agent:state:v1 "
 var statePattern = regexp.MustCompile(
 	`<!-- pr-review-agent:state:v1 last_reviewed=([0-9a-f]{40}|[0-9a-f]{64})? run=(\S+) ` +
 		`status=(reviewing|done|skipped|failed) pending=(\S*)(?: completed=(\S*))?` +
-		`(?: forced_by=(\S*))? -->`,
+		`(?: forced_by=(\S*))?(?: unread=(\S*))? -->`,
 )
 
 // State is the durable review position kept on the one top level comment. It
@@ -61,12 +61,25 @@ type State struct {
 	// every chunk again. This field is written only by the run that clears, so
 	// nothing else moves it, and every other writer carries it forward untouched.
 	ForcedBy string
+	// Unread names the chunks this service could not get a whole answer about,
+	// such as one holding a hunk larger than a single model request.
+	//
+	// It is durable for the same reason Pending is. Such a chunk still answers,
+	// so it lands in Completed and the next run subtracts it from the delta and
+	// never re-derives it. Without this field the shortfall would live only in
+	// the memory of the run that saw it, and the run after that one would find
+	// nothing pending and advance LastReviewed over code nobody has ever read.
+	//
+	// The ids are content digests, so this clears itself: once the author
+	// rewrites that code its chunk hashes differently, the recorded id matches
+	// nothing in the delta, and the baseline is free to advance again.
+	Unread []string
 }
 
 // EncodeState renders the state as one HTML comment line.
 func EncodeState(state State) string {
 	return fmt.Sprintf(
-		"%slast_reviewed=%s run=%s status=%s pending=%s completed=%s forced_by=%s%s",
+		"%slast_reviewed=%s run=%s status=%s pending=%s completed=%s forced_by=%s unread=%s%s",
 		statePrefix,
 		state.LastReviewed,
 		state.RunID,
@@ -74,6 +87,7 @@ func EncodeState(state State) string {
 		strings.Join(state.Pending, ","),
 		strings.Join(state.Completed, ","),
 		state.ForcedBy,
+		strings.Join(state.Unread, ","),
 		markerSuffix,
 	)
 }
@@ -81,7 +95,7 @@ func EncodeState(state State) string {
 // DecodeState finds and parses the state marker anywhere in a comment body.
 func DecodeState(body string) (State, bool) {
 	matches := statePattern.FindStringSubmatch(body)
-	if len(matches) != 7 {
+	if len(matches) != 8 {
 		return emptyState(), false
 	}
 	head := domain.HeadSHA("")
@@ -99,6 +113,7 @@ func DecodeState(body string) (State, bool) {
 		Pending:      splitIDs(matches[4]),
 		Completed:    splitIDs(matches[5]),
 		ForcedBy:     matches[6],
+		Unread:       splitIDs(matches[7]),
 	}, true
 }
 
@@ -112,7 +127,9 @@ func splitIDs(value string) []string {
 }
 
 func emptyState() State {
-	return State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: ""}
+	return State{
+		LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil,
+	}
 }
 
 // HasState reports whether a comment body carries the state marker.
