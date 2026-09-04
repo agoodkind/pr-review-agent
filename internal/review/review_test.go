@@ -1762,8 +1762,8 @@ func TestTheSameForcedDeliveryAdmittedTwiceReviewsOnce(t *testing.T) {
 	// analysis is counted rather than failing on an unscripted call and leaving
 	// the count at one.
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 
@@ -1813,8 +1813,8 @@ func TestTheSameForcedDeliveryAdmittedTwiceReviewsOnce(t *testing.T) {
 // exists to prevent.
 func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		model:               model,
@@ -1878,8 +1878,8 @@ func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
 // process running that review is answered from the claim.
 func TestAForcedDeliveryWhoseProcessDiedMidReviewIsResumed(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 	job := fixture.forcedJob()
@@ -2245,8 +2245,8 @@ func TestAnOrdinaryRunLeavesACompletedSuccessfulCheckAlone(t *testing.T) {
 // not miss, because no part of admission reads the current head.
 func TestAForcedReplayAfterTheHeadMovedStillFindsItsCompletedCheck(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 
@@ -2378,8 +2378,8 @@ func TestAForcedRedeliveryFindsItsCheckRunBehindNewerOnesAndPageBoundaries(t *te
 // what separates a repeat from a new request.
 func TestASecondLabelEventIsANewForceRequest(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{
-		{CoverageComplete: true, Findings: nil},
-		{CoverageComplete: true, Findings: nil},
+		{Findings: nil},
+		{Findings: nil},
 	}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 

@@ -231,7 +231,7 @@ func TestAResolutionTrustsTheCheckpointOverAStaleVerdictSentence(t *testing.T) {
 			// The whole sentence, because that is what the refresh used to test
 			// the body for. A fragment would pass whichever signal decided.
 			"body": "Changes requested.\n\nWaiting on:\n- " + testUnreviewedHeadReason + "\n\n" +
-				marker.Review(domain.HeadSHA(testHeadSHA)),
+				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
 			"user": map[string]any{"login": testBotLogin},
 		}}},
 	})
@@ -436,8 +436,9 @@ func TestACheckpointAboutAnotherCommitLeavesTheVerdictBodyToDecide(t *testing.T)
 			"id":        float64(4100),
 			"commit_id": testHeadSHA,
 			"state":     "CHANGES_REQUESTED",
-			"body":      "Changes requested.\n\n" + marker.Review(domain.HeadSHA(testHeadSHA)),
-			"user":      map[string]any{"login": testBotLogin},
+			"body": "Changes requested.\n\n" +
+				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
+			"user": map[string]any{"login": testBotLogin},
 		}}},
 	})
 	seedReviewedBaseline(fixture)
@@ -465,8 +466,9 @@ func TestAFailedStateReadStopsTheRefreshRatherThanApproving(t *testing.T) {
 			"id":        float64(4100),
 			"commit_id": testHeadSHA,
 			"state":     "CHANGES_REQUESTED",
-			"body":      "Changes requested.\n\n" + marker.Review(domain.HeadSHA(testHeadSHA)),
-			"user":      map[string]any{"login": testBotLogin},
+			"body": "Changes requested.\n\n" +
+				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
+			"user": map[string]any{"login": testBotLogin},
 		}}},
 	})
 
