@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"goodkind.io/pr-review-agent/internal/domain"
 )
@@ -36,6 +37,22 @@ func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
 	// The renderer must emit exactly one opening and one closing fence.
 	if opened := strings.Count(notice, "\n```"); opened != 2 {
 		t.Fatalf("fence lines = %d, want one opened and one closed:\n%s", opened, notice)
+	}
+}
+
+// A long Unicode path remains valid UTF-8 after truncation.
+func TestUnreadHunkTruncationKeepsAWholeRune(t *testing.T) {
+	label := describeUnreadHunk(unreadHunk{
+		Path:   strings.Repeat("界", maximumUnreadHunkLabelBytes),
+		Header: "",
+		Reason: "",
+	})
+
+	if !utf8.ValidString(label) {
+		t.Fatalf("label contains a partial UTF-8 rune: %q", label)
+	}
+	if len(label) > maximumUnreadHunkLabelBytes+len("...") {
+		t.Fatalf("label bytes = %d, want at most %d", len(label), maximumUnreadHunkLabelBytes+len("..."))
 	}
 }
 

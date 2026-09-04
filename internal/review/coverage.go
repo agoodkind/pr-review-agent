@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -283,12 +284,21 @@ func describeUnreadHunk(hunk unreadHunk) string {
 		label += " " + escapeUnreadHunkText(hunk.Header)
 	}
 	if len(label) > maximumUnreadHunkLabelBytes {
-		label = label[:maximumUnreadHunkLabelBytes] + "..."
+		label = truncateUTF8(label, maximumUnreadHunkLabelBytes) + "..."
 	}
 	if hunk.Reason == "" {
 		return label
 	}
 	return label + " (" + hunk.Reason + ")"
+}
+
+// truncateUTF8 keeps the byte limit without splitting a rune.
+func truncateUTF8(text string, maximumBytes int) string {
+	end := min(len(text), maximumBytes)
+	for end > 0 && !utf8.ValidString(text[:end]) {
+		end--
+	}
+	return text[:end]
 }
 
 // escapeUnreadHunkText prevents repository text from closing the code fence.
