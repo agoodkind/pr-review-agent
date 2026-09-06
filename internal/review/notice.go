@@ -76,10 +76,10 @@ func failureTitle(stage string, cause error) string {
 	switch {
 	case usageExceeded(cause):
 		return checkFailureUsage
-	case providerUnavailable(cause):
-		return checkFailureUnavailable
 	case errors.Is(cause, context.DeadlineExceeded):
 		return checkFailureDeadline
+	case providerUnavailable(cause):
+		return checkFailureUnavailable
 	case isChunkPanic(cause):
 		return checkFailurePanic
 	}
@@ -100,10 +100,10 @@ func chunkFailureReason(failures []chunkFailure) string {
 		switch {
 		case usageExceeded(failure.err):
 			return checkFailureUsage
-		case providerUnavailable(failure.err):
-			return checkFailureUnavailable
 		case errors.Is(failure.err, context.DeadlineExceeded):
 			return checkFailureDeadline
+		case providerUnavailable(failure.err):
+			return checkFailureUnavailable
 		}
 	}
 	return ""

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -101,7 +102,26 @@ type ProviderError struct {
 // ProviderUnavailable reports a server-side failure rather than a refusal of
 // this request.
 func (providerError *ProviderError) ProviderUnavailable() bool {
-	return providerError.StatusCode >= http.StatusInternalServerError
+	if providerError.StatusCode >= http.StatusInternalServerError {
+		return true
+	}
+	status, found := upstreamStatus(providerError.Message)
+	return found && status >= http.StatusInternalServerError
+}
+
+func upstreamStatus(message string) (int, bool) {
+	normalized := strings.NewReplacer("_", " ", "=", " ", ":", " ").Replace(message)
+	fields := strings.Fields(normalized)
+	for index := 0; index+2 < len(fields); index++ {
+		if fields[index] != "upstream" || fields[index+1] != "status" {
+			continue
+		}
+		status, err := strconv.Atoi(strings.Trim(fields[index+2], "(),.;"))
+		if err == nil {
+			return status, true
+		}
+	}
+	return 0, false
 }
 
 // providerErrorFields are the fields the gateway states when it refuses a

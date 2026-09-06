@@ -17,6 +17,10 @@ func TestProviderUnavailableIsReportedWithoutRetryAdvice(t *testing.T) {
 		err  error
 	}{
 		{name: "HTTP failure", err: &openai.ProviderError{StatusCode: http.StatusBadGateway}},
+		{name: "flattened upstream failure", err: &openai.ProviderError{
+			StatusCode: http.StatusBadRequest,
+			Message:    "upstream call failed: upstream_status=502",
+		}},
 		{name: "broken stream", err: &openai.StreamError{
 			Model: "test-model", Cause: errors.New("connection reset"), Provider: nil,
 		}},
@@ -42,8 +46,9 @@ func assertProviderUnavailable(t *testing.T, providerError error) {
 	if !strings.Contains(body, want) {
 		t.Fatalf("summary comment = %q, want %q", body, want)
 	}
-	if strings.Contains(body, "The next push reviews") {
-		t.Fatalf("summary comment recommends another request during an outage: %q", body)
+	recovery := "The model provider must recover before the next push can review what remains."
+	if !strings.Contains(body, recovery) {
+		t.Fatalf("summary comment = %q, want %q", body, recovery)
 	}
 
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
@@ -58,5 +63,24 @@ func assertProviderUnavailable(t *testing.T, providerError error) {
 	}
 	if len(fixture.state.submittedReviews) != 0 {
 		t.Fatalf("submitted reviews = %v, want none during an outage", fixture.state.submittedReviews)
+	}
+}
+
+func TestAStreamDeadlineKeepsTheTimeoutClassification(t *testing.T) {
+	model := &failThenSucceedModel{err: &openai.StreamError{
+		Model: "test-model", Cause: context.DeadlineExceeded, Provider: nil,
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body := failureSummaryComment(t, fixture)
+	if !strings.Contains(body, "Review stopped: it ran out of time.") {
+		t.Fatalf("summary comment = %q, want the timeout classification", body)
+	}
+	if strings.Contains(body, "provider is unavailable") {
+		t.Fatalf("summary comment misclassifies a deadline: %q", body)
 	}
 }
