@@ -415,7 +415,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 			continue
 		}
 		for _, hunk := range parsed.hunks {
-			text := formatHunkChunk(file.Path, file.Status, file.CurrentContent, hunk)
+			text := formatHunkChunk(file.Path, file.Status, file.CurrentContent, hunk, maxSize)
 			coverageComplete := file.CoverageComplete
 			oversized := len(text) > maxSize
 			if oversized {

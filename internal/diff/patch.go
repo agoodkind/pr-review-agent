@@ -19,8 +19,9 @@ type parsedPatch struct {
 }
 
 type parsedHunk struct {
-	header string
-	text   string
+	header      string
+	text        string
+	coordinates hunkHeader
 }
 
 type hunkHeader struct {
@@ -35,6 +36,7 @@ type hunkParser struct {
 	hunkIndex    int
 	hunkLines    []string
 	hunkHeader   string
+	hunkPosition hunkHeader
 	oldLine      int
 	newLine      int
 	oldRemaining int
@@ -205,6 +207,7 @@ func parsePatch(patch string) (parsedPatch, error) {
 		hunkIndex:    -1,
 		hunkLines:    nil,
 		hunkHeader:   "",
+		hunkPosition: hunkHeader{oldStart: 0, oldCount: 0, newStart: 0, newCount: 0},
 		oldLine:      0,
 		newLine:      0,
 		oldRemaining: 0,
@@ -272,6 +275,7 @@ func parseHunkHeader(line string) (hunkHeader, error) {
 func (parser *hunkParser) startHunk(line string, header hunkHeader) {
 	parser.hunkIndex++
 	parser.hunkHeader = line
+	parser.hunkPosition = header
 	parser.hunkLines = []string{line}
 	parser.inHunk = true
 	parser.oldLine = header.oldStart
@@ -288,8 +292,9 @@ func (parser *hunkParser) finishHunk() {
 		parser.result.complete = false
 	}
 	parser.result.hunks = append(parser.result.hunks, parsedHunk{
-		header: parser.hunkHeader,
-		text:   strings.Join(parser.hunkLines, "\n"),
+		header:      parser.hunkHeader,
+		text:        strings.Join(parser.hunkLines, "\n"),
+		coordinates: parser.hunkPosition,
 	})
 	parser.inHunk = false
 	parser.hunkLines = nil
@@ -363,17 +368,67 @@ func hunkCoordinates(header string) string {
 	return hunkHeaderPattern.FindString(header)
 }
 
-func formatHunkChunk(path string, status string, content string, hunk parsedHunk) string {
-	var builder strings.Builder
-	builder.WriteString("File: ")
-	builder.WriteString(path)
-	builder.WriteString("\nStatus: ")
-	builder.WriteString(status)
-	builder.WriteString("\n\nCurrent content:\n")
-	builder.WriteString(content)
-	builder.WriteString("\n\nDiff hunk:\n")
-	builder.WriteString(hunk.text)
-	return builder.String()
+func formatHunkChunk(
+	path string,
+	status string,
+	content string,
+	hunk parsedHunk,
+	maximumBytes int,
+) string {
+	prefix := "File: " + path + "\nStatus: " + status + "\n\nCurrent content:\n"
+	suffix := "\n\nDiff hunk:\n" + hunk.text
+	contentBudget := maximumBytes - len(prefix) - len(suffix)
+	currentContent := boundedCurrentContent(content, hunk.coordinates, contentBudget)
+	return prefix + currentContent + suffix
+}
+
+// boundedCurrentContent keeps the full file when it fits. Larger files use
+// the widest contiguous line range around the hunk that fits.
+func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes int) string {
+	if content == "" || len(content) <= maximumBytes {
+		return content
+	}
+	if maximumBytes <= 0 {
+		return ""
+	}
+
+	lines := strings.SplitAfter(content, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	start := coordinates.newStart - 1
+	end := start + coordinates.newCount
+	if start < 0 || start > len(lines) || end < start || end > len(lines) {
+		return content
+	}
+
+	selectedBytes := 0
+	for _, line := range lines[start:end] {
+		selectedBytes += len(line)
+	}
+	if selectedBytes > maximumBytes {
+		return strings.Join(lines[start:end], "")
+	}
+
+	left := start
+	right := end
+	for {
+		added := false
+		if left > 0 && selectedBytes+len(lines[left-1]) <= maximumBytes {
+			left--
+			selectedBytes += len(lines[left])
+			added = true
+		}
+		if right < len(lines) && selectedBytes+len(lines[right]) <= maximumBytes {
+			selectedBytes += len(lines[right])
+			right++
+			added = true
+		}
+		if !added {
+			break
+		}
+	}
+	return strings.Join(lines[left:right], "")
 }
 
 func formatOversizedHunkChunk(path string, maxSize int) string {
