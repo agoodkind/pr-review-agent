@@ -76,6 +76,8 @@ func failureTitle(stage string, cause error) string {
 	switch {
 	case usageExceeded(cause):
 		return checkFailureUsage
+	case providerUnavailable(cause):
+		return checkFailureUnavailable
 	case errors.Is(cause, context.DeadlineExceeded):
 		return checkFailureDeadline
 	case isChunkPanic(cause):
@@ -98,6 +100,8 @@ func chunkFailureReason(failures []chunkFailure) string {
 		switch {
 		case usageExceeded(failure.err):
 			return checkFailureUsage
+		case providerUnavailable(failure.err):
+			return checkFailureUnavailable
 		case errors.Is(failure.err, context.DeadlineExceeded):
 			return checkFailureDeadline
 		}
@@ -121,6 +125,15 @@ func publicFailureDetail(job domain.ReviewJob) string {
 // usageExceededError is any provider error that reports exhausted usage.
 type usageExceededError interface {
 	UsageExceeded() bool
+}
+
+type providerUnavailableError interface {
+	ProviderUnavailable() bool
+}
+
+func providerUnavailable(cause error) bool {
+	var unavailable providerUnavailableError
+	return errors.As(cause, &unavailable) && unavailable.ProviderUnavailable()
 }
 
 func usageExceeded(cause error) bool {

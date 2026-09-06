@@ -35,6 +35,7 @@ const (
 	checkFailurePublish     = "Review failed while publishing the final decision."
 	checkFailurePanic       = "Review failed after an internal panic."
 	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
+	checkFailureUnavailable = "The model provider is unavailable. Wait for it to recover."
 	checkFailureDeadline    = "Review stopped: it ran out of time."
 	// checkTitleAlreadyReviewed names a run that found nothing owed, whether
 	// the durable state says so or an existing review marker does.

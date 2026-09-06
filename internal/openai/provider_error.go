@@ -63,6 +63,12 @@ func (streamError *StreamError) Unwrap() error {
 	return streamError.Cause
 }
 
+// ProviderUnavailable reports a connection that ended before the provider
+// stated a refusal.
+func (streamError *StreamError) ProviderUnavailable() bool {
+	return streamError.Provider == nil || streamError.Provider.ProviderUnavailable()
+}
+
 // TruncatedError reports that the model stopped before finishing its answer
 // because it reached the completion token budget. Reasoning and answer tokens
 // share that budget, so a chunk that yields many findings can exhaust it. A
@@ -90,6 +96,12 @@ type ProviderError struct {
 	Code       string
 	Param      string
 	Message    string
+}
+
+// ProviderUnavailable reports a server-side failure rather than a refusal of
+// this request.
+func (providerError *ProviderError) ProviderUnavailable() bool {
+	return providerError.StatusCode >= http.StatusInternalServerError
 }
 
 // providerErrorFields are the fields the gateway states when it refuses a

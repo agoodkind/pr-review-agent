@@ -406,22 +406,44 @@ func codeSpan(text string) string {
 // published a verdict, so there is no stage it stopped at, and a chunk nobody
 // read is exactly what the coverage row is for.
 func RenderIncompleteBody(summary Summary, pending int, reason string, detail string) string {
-	parts := []string{
-		"## Review",
-		fmt.Sprintf(
-			"%s could not be reviewed on `%s`. The next push reviews %s.",
+	lead := fmt.Sprintf(
+		"%s could not be reviewed on `%s`. The next push reviews %s.",
+		chunkCount(pending),
+		shortHead(summary.Head),
+		chunkPronoun(pending),
+	)
+	blocking := summary.Blocking
+	if reason == checkFailureUnavailable {
+		lead = fmt.Sprintf(
+			"%s could not be reviewed on `%s`. %s",
 			chunkCount(pending),
 			shortHead(summary.Head),
-			chunkPronoun(pending),
-		),
+			reason,
+		)
+		blocking = replaceBlockingReason(blocking, unreviewedHeadReason, unreviewedProviderReason)
+		reason = ""
 	}
-	for _, note := range []string{reason, renderBlocking(summary.Blocking), detail} {
+	parts := []string{
+		"## Review",
+		lead,
+	}
+	for _, note := range []string{reason, renderBlocking(blocking), detail} {
 		if trimmed := strings.TrimSpace(note); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
 	parts = append(parts, RenderDetails(summary))
 	return strings.Join(parts, "\n\n")
+}
+
+func replaceBlockingReason(reasons []string, oldReason string, newReason string) []string {
+	replaced := append([]string{}, reasons...)
+	for index, reason := range replaced {
+		if reason == oldReason {
+			replaced[index] = newReason
+		}
+	}
+	return replaced
 }
 
 // chunkCount names a number of chunks without the plural mismatch a bare
