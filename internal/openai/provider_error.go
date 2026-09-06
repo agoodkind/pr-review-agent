@@ -102,15 +102,30 @@ type ProviderError struct {
 // ProviderUnavailable reports a server-side failure rather than a refusal of
 // this request.
 func (providerError *ProviderError) ProviderUnavailable() bool {
-	if providerError.StatusCode >= http.StatusInternalServerError {
+	if providerError.StatusCode >= http.StatusInternalServerError && providerError.StatusCode <= 599 {
 		return true
 	}
-	status, found := upstreamStatus(providerError.Message)
-	return found && status >= http.StatusInternalServerError
+	status, found := upstreamStatus(providerError)
+	return found && status >= http.StatusInternalServerError && status <= 599
 }
 
-func upstreamStatus(message string) (int, bool) {
-	normalized := strings.NewReplacer("_", " ", "=", " ", ":", " ").Replace(message)
+func upstreamStatus(providerError *ProviderError) (int, bool) {
+	if !strings.EqualFold(providerError.Type, "invalid_request_error") ||
+		!strings.EqualFold(providerError.Code, "upstream_failed") {
+		return 0, false
+	}
+	message := strings.ToLower(strings.TrimSpace(providerError.Message))
+	const prefix = "upstream call failed:"
+	if !strings.HasPrefix(message, prefix) {
+		return 0, false
+	}
+	metadata := strings.TrimSpace(strings.TrimPrefix(message, prefix))
+	for _, boundary := range []string{"upstream_message=", "upstream message "} {
+		if index := strings.Index(metadata, boundary); index >= 0 {
+			metadata = metadata[:index]
+		}
+	}
+	normalized := strings.NewReplacer("_", " ", "=", " ", ":", " ").Replace(metadata)
 	fields := strings.Fields(normalized)
 	for index := 0; index+2 < len(fields); index++ {
 		if fields[index] != "upstream" || fields[index+1] != "status" {

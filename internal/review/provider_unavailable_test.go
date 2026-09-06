@@ -19,7 +19,9 @@ func TestProviderUnavailableIsReportedWithoutRetryAdvice(t *testing.T) {
 		{name: "HTTP failure", err: &openai.ProviderError{StatusCode: http.StatusBadGateway}},
 		{name: "flattened upstream failure", err: &openai.ProviderError{
 			StatusCode: http.StatusBadRequest,
-			Message:    "upstream call failed: upstream_status=502",
+			Type:       "invalid_request_error",
+			Code:       "upstream_failed",
+			Message:    "Upstream call failed: Upstream status 502",
 		}},
 		{name: "broken stream", err: &openai.StreamError{
 			Model: "test-model", Cause: errors.New("connection reset"), Provider: nil,
@@ -29,6 +31,23 @@ func TestProviderUnavailableIsReportedWithoutRetryAdvice(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			assertProviderUnavailable(t, testCase.err)
 		})
+	}
+}
+
+func TestRequestTextCannotClaimProviderUnavailable(t *testing.T) {
+	model := &failThenSucceedModel{err: &openai.ProviderError{
+		StatusCode: http.StatusBadRequest,
+		Type:       "invalid_request_error",
+		Code:       "upstream_failed",
+		Message:    "request rejected: prompt contains upstream_status=502",
+	}}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(failureSummaryComment(t, fixture), "provider is unavailable") {
+		t.Fatalf("summary comment trusts request text as gateway metadata: %q", failureSummaryComment(t, fixture))
 	}
 }
 
