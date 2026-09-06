@@ -226,23 +226,21 @@ func TestReviewRejectsInvalidFindings(t *testing.T) {
 	}
 }
 
-func TestReviewRetriesTransientFailures(t *testing.T) {
+func TestReviewDoesNotRetryTransientHTTPFailures(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
 
 	state.statusSequence = []int{
 		http.StatusInternalServerError,
-		http.StatusTooManyRequests,
 		http.StatusOK,
 	}
 	state.completionContent = validReviewContent()
 
-	_, err := client.Review(context.Background(), "prompt")
-	if err != nil {
-		t.Fatalf("Review: %v", err)
+	if _, err := client.Review(context.Background(), "prompt"); err == nil {
+		t.Fatal("Review: want the first HTTP failure")
 	}
-	if state.requestCount != 3 {
-		t.Fatalf("request count = %d, want 3", state.requestCount)
+	if state.requestCount != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
 	}
 }
 
@@ -662,20 +660,20 @@ func TestFallbackEngagesForUsageExhaustionReportedInAStream(t *testing.T) {
 	}
 }
 
-// A dropped connection is not a refusal, so the primary keeps the request and
-// retries it rather than spending the fallback on a transient failure.
+// A dropped connection is not usage exhaustion, so it neither retries nor
+// spends the fallback request.
 func TestFallbackStaysUnusedForADroppedStream(t *testing.T) {
 	fixture := newFallbackTestClient(t, false)
-	fixture.primary.streamResponse = breakStreamThenSucceed(1)
+	fixture.primary.streamResponse = writeBrokenStream
 
-	if _, err := fixture.client.Review(context.Background(), "prompt"); err != nil {
-		t.Fatalf("Review: %v", err)
+	if _, err := fixture.client.Review(context.Background(), "prompt"); err == nil {
+		t.Fatal("Review: want the stream failure")
 	}
 	if got := atomic.LoadInt32(&fixture.fallback.requestCount); got != 0 {
 		t.Fatalf("fallback request count = %d, want 0", got)
 	}
-	if got := atomic.LoadInt32(&fixture.primary.requestCount); got != 2 {
-		t.Fatalf("primary request count = %d, want 2", got)
+	if got := atomic.LoadInt32(&fixture.primary.requestCount); got != 1 {
+		t.Fatalf("primary request count = %d, want 1 without retry", got)
 	}
 }
 
@@ -746,55 +744,7 @@ func writeBrokenStream(writer http.ResponseWriter) {
 	_, _ = writer.Write([]byte("data: " + brokenStreamPayload() + "\n\n"))
 }
 
-// breakStreamThenSucceed fails the first breakCount attempts with a dropped
-// stream and answers normally after that.
-func breakStreamThenSucceed(breakCount int) func(http.ResponseWriter) {
-	var seen int32
-	return func(writer http.ResponseWriter) {
-		if int(atomic.AddInt32(&seen, 1)) <= breakCount {
-			writeBrokenStream(writer)
-			return
-		}
-		writeStream(writer, validReviewContent())
-	}
-}
-
-// A dropped connection loses a request the model was already answering. The
-// gateway reports it inside the stream rather than as an HTTP status, so the
-// SDK's own retry never sees it, and one drop used to end a whole review.
-func TestReviewRetriesABrokenStream(t *testing.T) {
-	client, server, state := newTestClient(t)
-	defer server.Close()
-
-	state.streamResponse = breakStreamThenSucceed(1)
-
-	if _, err := client.Review(context.Background(), "prompt"); err != nil {
-		t.Fatalf("Review: %v", err)
-	}
-	if got := atomic.LoadInt32(&state.requestCount); got != 2 {
-		t.Fatalf("request count = %d, want 2", got)
-	}
-}
-
-// A drop that clears only on the last allowed attempt still recovers, so the
-// review completes rather than reporting nothing.
-func TestReviewRecoversOnTheLastStreamAttempt(t *testing.T) {
-	client, server, state := newTestClient(t)
-	defer server.Close()
-
-	state.streamResponse = breakStreamThenSucceed(2)
-
-	if _, err := client.Review(context.Background(), "prompt"); err != nil {
-		t.Fatalf("Review: %v", err)
-	}
-	if got := atomic.LoadInt32(&state.requestCount); got != 3 {
-		t.Fatalf("request count = %d, want 3", got)
-	}
-}
-
-// Retrying is bounded, so a provider that keeps dropping cannot spend the whole
-// review budget on one chunk.
-func TestReviewStopsRetryingAfterTheStreamAttemptBudget(t *testing.T) {
+func TestReviewDoesNotRetryABrokenStream(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
 
@@ -811,8 +761,8 @@ func TestReviewStopsRetryingAfterTheStreamAttemptBudget(t *testing.T) {
 	if streamError.Model != testPrimaryModel {
 		t.Fatalf("model = %q, want %q", streamError.Model, testPrimaryModel)
 	}
-	if got := atomic.LoadInt32(&state.requestCount); got != 3 {
-		t.Fatalf("request count = %d, want 3 attempts then a stop", got)
+	if got := atomic.LoadInt32(&state.requestCount); got != 1 {
+		t.Fatalf("request count = %d, want 1 without retry", got)
 	}
 }
 
@@ -835,25 +785,6 @@ func TestReviewDoesNotRetryUsageExhaustionReportedInAStream(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&state.requestCount); got != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", got)
-	}
-}
-
-// A cancelled review must not keep retrying, because the work it would finish
-// has no one left to publish it.
-func TestReviewStopsRetryingWhenTheReviewDeadlinePasses(t *testing.T) {
-	client, server, state := newTestClient(t)
-	defer server.Close()
-
-	state.streamResponse = writeBrokenStream
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if _, err := client.Review(ctx, "prompt"); err == nil {
-		t.Fatal("Review: want an error")
-	}
-	if got := atomic.LoadInt32(&state.requestCount); got > 1 {
-		t.Fatalf("request count = %d, want at most 1 on a cancelled review", got)
 	}
 }
 
