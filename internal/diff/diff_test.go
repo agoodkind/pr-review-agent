@@ -573,6 +573,39 @@ func TestChunkInputBoundsCurrentContentAroundEachHunk(t *testing.T) {
 	}
 }
 
+// A hunk outside the current source is refused instead of reviewed without context.
+func TestChunkInputRefusesMismatchedHunkCoordinates(t *testing.T) {
+	const maximumBytes = 400
+	input := diff.ReviewInput{
+		PullRequest: githubapp.PullRequest{},
+		Files: []diff.FileContext{{
+			Path:              "a.go",
+			Status:            "modified",
+			Patch:             "@@ -500,1 +500,2 @@\n absent\n+added\n",
+			CurrentContent:    strings.Repeat("current line\n", 200),
+			ChangedRightLines: nil,
+			ChangedRightHunks: nil,
+			CoverageComplete:  true,
+			Gap:               diff.CoverageGapNone,
+		}},
+		MergeBase: "",
+	}
+
+	chunks, err := diff.ChunkInput(input, maximumBytes)
+	if err != nil {
+		t.Fatalf("ChunkInput: %v", err)
+	}
+	if len(chunks) != 1 || len(chunks[0].Pieces) != 1 {
+		t.Fatalf("chunks = %d, pieces = %d, want one chunk with one hunk",
+			len(chunks), len(chunks[0].Pieces))
+	}
+	piece := chunks[0].Pieces[0]
+	if !piece.Oversized || piece.CoverageComplete {
+		t.Fatalf("mismatched hunk = oversized %t, complete %t, want refused",
+			piece.Oversized, piece.CoverageComplete)
+	}
+}
+
 type fakeSource struct {
 	files           []githubapp.ChangedFile
 	contents        map[string][]byte

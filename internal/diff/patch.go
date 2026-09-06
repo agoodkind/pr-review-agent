@@ -399,6 +399,8 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 	start := coordinates.newStart - 1
 	end := start + coordinates.newCount
 	if start < 0 || start > len(lines) || end < start || end > len(lines) {
+		// A mismatch means the patch and fetched source disagree. Keep the
+		// over-budget source so the caller refuses to review without evidence.
 		return content
 	}
 
@@ -407,6 +409,7 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 		selectedBytes += len(line)
 	}
 	if selectedBytes > maximumBytes {
+		// The hunk's own current lines do not fit, so the caller marks it oversized.
 		return strings.Join(lines[start:end], "")
 	}
 
