@@ -522,29 +522,87 @@ func TestEndToEndMoreThanOneHundredChangedFiles(t *testing.T) {
 	}
 }
 
-func TestChunkInputOversizedHunkIncomplete(t *testing.T) {
+// A small hunk uses nearby context when its full file exceeds the prompt.
+func TestChunkInputBoundsCurrentContentAroundEachHunk(t *testing.T) {
+	const maximumBytes = 400
+	lines := make([]string, 200)
+	for index := range lines {
+		lines[index] = fmt.Sprintf("distant-line-%03d", index+1)
+	}
+	lines[99] = "unchanged"
+	lines[100] = "added"
+
 	input := diff.ReviewInput{
+		PullRequest: githubapp.PullRequest{},
 		Files: []diff.FileContext{{
-			Path:             "a.go",
-			Status:           "modified",
-			Patch:            "@@ -1,1 +1,2 @@\n a\n+added\n",
-			CurrentContent:   strings.Repeat("x", 200),
-			CoverageComplete: true,
+			Path:              "a.go",
+			Status:            "modified",
+			Patch:             "@@ -100,1 +100,2 @@\n unchanged\n+added\n",
+			CurrentContent:    strings.Join(lines, "\n") + "\n",
+			ChangedRightLines: nil,
+			ChangedRightHunks: nil,
+			CoverageComplete:  true,
+			Gap:               diff.CoverageGapNone,
 		}},
+		MergeBase: "",
 	}
 
-	chunks, err := diff.ChunkInput(input, 80)
+	chunks, err := diff.ChunkInput(input, maximumBytes)
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
-	if len(chunks) != 1 {
-		t.Fatalf("chunk count = %d, want 1", len(chunks))
+	if len(chunks) != 1 || len(chunks[0].Pieces) != 1 {
+		t.Fatalf("chunks = %d, pieces = %d, want one chunk with one hunk",
+			len(chunks), len(chunks[0].Pieces))
 	}
-	if chunks[0].CoverageComplete {
-		t.Fatal("oversized hunk should force incomplete coverage")
+	piece := chunks[0].Pieces[0]
+	if piece.Oversized || !piece.CoverageComplete {
+		t.Fatalf("small hunk = oversized %t, complete %t, want reviewable",
+			piece.Oversized, piece.CoverageComplete)
 	}
-	if !strings.Contains(chunks[0].Text, "coverage incomplete") {
-		t.Fatalf("chunk text = %q, want incomplete metadata", chunks[0].Text)
+	if len(piece.Text) > maximumBytes {
+		t.Fatalf("hunk bytes = %d, want at most %d", len(piece.Text), maximumBytes)
+	}
+	for _, expected := range []string{"distant-line-099", "unchanged", "added", "distant-line-102"} {
+		if !strings.Contains(piece.Text, expected) {
+			t.Fatalf("hunk text omits nearby line %q: %q", expected, piece.Text)
+		}
+	}
+	if strings.Contains(piece.Text, "distant-line-001") {
+		t.Fatalf("hunk text includes the whole file: %q", piece.Text)
+	}
+}
+
+// A hunk outside the current source is refused instead of reviewed without context.
+func TestChunkInputRefusesMismatchedHunkCoordinates(t *testing.T) {
+	const maximumBytes = 400
+	input := diff.ReviewInput{
+		PullRequest: githubapp.PullRequest{},
+		Files: []diff.FileContext{{
+			Path:              "a.go",
+			Status:            "modified",
+			Patch:             "@@ -500,1 +500,2 @@\n absent\n+added\n",
+			CurrentContent:    strings.Repeat("current line\n", 200),
+			ChangedRightLines: nil,
+			ChangedRightHunks: nil,
+			CoverageComplete:  true,
+			Gap:               diff.CoverageGapNone,
+		}},
+		MergeBase: "",
+	}
+
+	chunks, err := diff.ChunkInput(input, maximumBytes)
+	if err != nil {
+		t.Fatalf("ChunkInput: %v", err)
+	}
+	if len(chunks) != 1 || len(chunks[0].Pieces) != 1 {
+		t.Fatalf("chunks = %d, pieces = %d, want one chunk with one hunk",
+			len(chunks), len(chunks[0].Pieces))
+	}
+	piece := chunks[0].Pieces[0]
+	if !piece.Oversized || piece.CoverageComplete {
+		t.Fatalf("mismatched hunk = oversized %t, complete %t, want refused",
+			piece.Oversized, piece.CoverageComplete)
 	}
 }
 

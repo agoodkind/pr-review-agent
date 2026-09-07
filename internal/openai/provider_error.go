@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -31,10 +32,8 @@ var usageExceededPhrases = []string{
 // answering.
 //
 // The gateway reports an upstream failure two different ways for the same
-// underlying refusal. Sometimes it answers with an HTTP status, and the SDK
-// surfaces a structured error. Sometimes it accepts the request, opens the
-// stream, and writes an error frame into it. The second path never reaches the
-// SDK's own retry, which sees HTTP statuses only.
+// underlying refusal. Sometimes it answers with an HTTP status. Sometimes it
+// accepts the request, opens the stream, and writes an error frame into it.
 //
 // A stream failure therefore carries the same structured provider error the
 // HTTP path produces, parsed out of the frame, so one refusal is classified the
@@ -65,19 +64,10 @@ func (streamError *StreamError) Unwrap() error {
 	return streamError.Cause
 }
 
-// Retryable reports whether repeating the identical request can succeed.
-//
-// The gateway labels a dropped connection and an exhausted quota with the same
-// code, so the label cannot separate them. What separates them is whether the
-// provider could answer the same request a moment later. A quota it has already
-// spent stays spent, so repeating that request only spends the review's
-// remaining time earning the same refusal. Everything else can still be
-// answered, and the attempt limit bounds what a repeat costs.
-func (streamError *StreamError) Retryable() bool {
-	if streamError.Provider == nil {
-		return true
-	}
-	return !streamError.Provider.UsageExceeded()
+// ProviderUnavailable reports a connection that ended before the provider
+// stated a refusal.
+func (streamError *StreamError) ProviderUnavailable() bool {
+	return streamError.Provider == nil || streamError.Provider.ProviderUnavailable()
 }
 
 // TruncatedError reports that the model stopped before finishing its answer
@@ -107,6 +97,46 @@ type ProviderError struct {
 	Code       string
 	Param      string
 	Message    string
+}
+
+// ProviderUnavailable reports a server-side failure rather than a refusal of
+// this request.
+func (providerError *ProviderError) ProviderUnavailable() bool {
+	if providerError.StatusCode >= http.StatusInternalServerError && providerError.StatusCode <= 599 {
+		return true
+	}
+	status, found := upstreamStatus(providerError)
+	return found && status >= http.StatusInternalServerError && status <= 599
+}
+
+func upstreamStatus(providerError *ProviderError) (int, bool) {
+	if !strings.EqualFold(providerError.Type, "invalid_request_error") ||
+		!strings.EqualFold(providerError.Code, "upstream_failed") {
+		return 0, false
+	}
+	message := strings.ToLower(strings.TrimSpace(providerError.Message))
+	const prefix = "upstream call failed:"
+	if !strings.HasPrefix(message, prefix) {
+		return 0, false
+	}
+	metadata := strings.TrimSpace(strings.TrimPrefix(message, prefix))
+	for _, boundary := range []string{"upstream_message=", "upstream message "} {
+		if index := strings.Index(metadata, boundary); index >= 0 {
+			metadata = metadata[:index]
+		}
+	}
+	normalized := strings.NewReplacer("_", " ", "=", " ", ":", " ").Replace(metadata)
+	fields := strings.Fields(normalized)
+	for index := 0; index+2 < len(fields); index++ {
+		if fields[index] != "upstream" || fields[index+1] != "status" {
+			continue
+		}
+		status, err := strconv.Atoi(strings.Trim(fields[index+2], "(),.;"))
+		if err == nil {
+			return status, true
+		}
+	}
+	return 0, false
 }
 
 // providerErrorFields are the fields the gateway states when it refuses a
@@ -152,9 +182,8 @@ func decodeStreamErrorFrame(encoded string) (providerErrorFields, bool) {
 //
 // The SDK reports the frame by embedding its raw JSON in the error text, so the
 // object is recovered from the first brace onward. A failure carrying no such
-// object is a dropped connection rather than a stated refusal, and it returns
-// nil so the caller retries instead of reporting a cause the provider never
-// gave.
+// object is a dropped connection rather than a stated refusal, so it returns
+// nil and the stream error reports the transport cause.
 func providerErrorFromStream(err error) *ProviderError {
 	text := err.Error()
 	start := strings.Index(text, "{")

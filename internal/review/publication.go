@@ -89,6 +89,8 @@ func blockingReasons(
 const unreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet. " +
 	"The next push reviews what this run could not."
 
+const unreviewedProviderReason = "The model provider must recover before the next push can review what remains."
+
 // describeOpenThread names one open thread the way a reader can act on it: the
 // place in the code it objects to, linked to the comment itself.
 func describeOpenThread(thread githubapp.ReviewThread, ref domain.PullRequestRef) string {

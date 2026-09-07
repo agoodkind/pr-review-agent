@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	openaigo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -19,18 +18,6 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/review"
-)
-
-const (
-	maxRetries = 3
-	// streamRetryAttempts bounds how many times one request is sent again after
-	// its stream broke. Three covers a transient drop without spending a large
-	// share of the review budget on one chunk.
-	streamRetryAttempts = 3
-	// streamRetryBackoff is the base wait between attempts, multiplied by the
-	// attempt number. A broken connection clears in well under a second, and a
-	// longer wait would cost more review time than it saves.
-	streamRetryBackoff = 500 * time.Millisecond
 )
 
 // provider is one model endpoint the client can send a completion to.
@@ -96,7 +83,7 @@ func newProviderSDK(
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithHTTPClient(httpClient),
-		option.WithMaxRetries(maxRetries),
+		option.WithMaxRetries(0),
 	}
 	if cfAccessClientID != "" && cfAccessClientSecret != "" {
 		opts = append(
@@ -200,7 +187,7 @@ func (client *Client) complete(
 	schemaName string,
 	schema json.RawMessage,
 ) (string, string, error) {
-	content, primaryErr := completeWithStreamRetry(
+	content, primaryErr := completeWith(
 		ctx,
 		client.primary,
 		prompt,
@@ -221,7 +208,7 @@ func (client *Client) complete(
 		"model provider fallback engaged",
 		slog.String("err", primaryErr.Error()),
 	)
-	content, fallbackErr := completeWithStreamRetry(
+	content, fallbackErr := completeWith(
 		ctx,
 		*client.fallback,
 		prompt,
@@ -249,106 +236,6 @@ func (client *Client) shouldUseFallback(err error) bool {
 		return false
 	}
 	return providerError.UsageExceeded()
-}
-
-// completeWithStreamRetry repeats one request whose stream broke mid answer.
-//
-// The gateway reports a broken upstream stream as an error frame inside the
-// stream, so it never reaches the SDK's own retry, which only sees HTTP
-// statuses. Without this, one dropped connection ends a whole review, and a
-// review that read most of its diff reports nothing.
-//
-// The request is identical each time and the review is a read, so repeating it
-// changes nothing. The review deadline bounds the loop: once it passes, the
-// wait returns the context error rather than sleeping past it.
-func completeWithStreamRetry(
-	ctx context.Context,
-	target provider,
-	prompt string,
-	policy string,
-	schemaName string,
-	schema json.RawMessage,
-) (string, error) {
-	logger := gklog.L(ctx)
-	content := ""
-	var lastErr error
-	attempts := 0
-	for attempt := 1; attempt <= streamRetryAttempts; attempt++ {
-		attempts = attempt
-		result, err := completeWith(ctx, target, prompt, policy, schemaName, schema)
-		lastErr = err
-		if err == nil {
-			content = result
-			break
-		}
-
-		var streamError *StreamError
-		if !errors.As(err, &streamError) || !streamError.Retryable() {
-			break
-		}
-		if attempt == streamRetryAttempts {
-			break
-		}
-		if !waitBeforeRetry(ctx, attempt) {
-			// The review deadline passed while backing off. The stream failure
-			// is still the cause worth reporting, and the expired deadline
-			// surfaces from the review that owns it.
-			logger.WarnContext(
-				ctx,
-				"model provider retry abandoned at the review deadline",
-				slog.String("model", target.model),
-				slog.Int("attempt", attempt),
-			)
-			break
-		}
-	}
-	if attempts > 1 {
-		// One line reports the whole retried request, so a reader sees that the
-		// stream broke and whether the repeat recovered it.
-		logger.LogAttrs(
-			ctx,
-			streamRetryLevel(lastErr),
-			"model provider stream retried",
-			slog.String("model", target.model),
-			slog.Int("attempts", attempts),
-			slog.Bool("recovered", lastErr == nil),
-			slog.String("last_err", errorText(lastErr)),
-		)
-	}
-	if lastErr != nil {
-		return "", lastErr
-	}
-	return content, nil
-}
-
-// streamRetryLevel rates a retried request. A repeat that recovered the answer
-// is normal operation; one that ran out of attempts ended the review.
-func streamRetryLevel(err error) slog.Level {
-	if err == nil {
-		return slog.LevelInfo
-	}
-	return slog.LevelError
-}
-
-func errorText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
-// waitBeforeRetry backs off between attempts and reports whether the wait
-// completed. It returns false once the review deadline passes, so a retry never
-// outlives the review that asked for it.
-func waitBeforeRetry(ctx context.Context, attempt int) bool {
-	timer := time.NewTimer(streamRetryBackoff * time.Duration(attempt))
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }
 
 func completeWith(
