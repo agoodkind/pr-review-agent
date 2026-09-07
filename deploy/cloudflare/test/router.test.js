@@ -572,7 +572,7 @@ test("every wrangler var reaches the Go service", function () {
 test("the fallback provider is declared where a reviewer can read it", function () {
   const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
 
-  for (const name of ["FALLBACK_BASE_URL", "FALLBACK_MODEL"]) {
+  for (const name of ["FALLBACK_BASE_URL", "FALLBACK_MODEL", "FALLBACK_ON"]) {
     assert.equal(typeof config.vars[name], "string", `${name} is not a declared variable`);
     assert.notEqual(config.vars[name], "", `${name} is declared empty`);
   }
