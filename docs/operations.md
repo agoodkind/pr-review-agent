@@ -84,7 +84,7 @@ Set `FALLBACK_BASE_URL`, `FALLBACK_MODEL`, and `FALLBACK_API_KEY` together. Sett
 
 The Cloudflare Access pair is optional and also all-or-nothing. Leave both unset for a public endpoint, which then receives no Access headers.
 
-The endpoint and the model are declared variables, beside the primary endpoint and model they mirror. Only the values that carry a credential are deployment secrets. A reviewer can therefore read which provider answers when the primary is spent, and a change to either one arrives as a diff rather than as a command somebody ran.
+The endpoint, the model, and the trigger are declared variables, beside the primary endpoint and model they mirror. Only the credential is a deployment secret. A reviewer can therefore read which provider answers when the primary is spent, and a change to any of them arrives as a diff rather than as a command somebody ran.
 
 A deployment replaces its declared variables with the ones in source while secrets persist, so deploying a revision predating those variables would leave the credential alone and the pair missing. The service refuses to start on that, and the release workflow requests the routed service status through the container after deploying, so a deployment carrying it fails rather than the first review.
 
