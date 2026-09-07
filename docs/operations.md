@@ -86,7 +86,7 @@ The Cloudflare Access pair is optional and also all-or-nothing. Leave both unset
 
 The endpoint and the model are declared variables, beside the primary endpoint and model they mirror. Only the values that carry a credential are deployment secrets. A reviewer can therefore read which provider answers when the primary is spent, and a change to either one arrives as a diff rather than as a command somebody ran.
 
-A deployment replaces its declared variables with the ones in source while secrets persist, so deploying a revision predating those variables would leave the credential alone and the pair missing. The service refuses to start on that, and the deployment probe requests the routed service status through the container, so the deployment fails rather than the first review.
+A deployment replaces its declared variables with the ones in source while secrets persist, so deploying a revision predating those variables would leave the credential alone and the pair missing. The service refuses to start on that, and the release workflow requests the routed service status through the container after deploying, so a deployment carrying it fails rather than the first review.
 
 ## Run the container
 

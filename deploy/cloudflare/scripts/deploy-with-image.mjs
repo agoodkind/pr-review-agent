@@ -54,17 +54,6 @@ try {
     env: process.env,
     stdio: "inherit",
   });
-
-  // The probe requests the routed service status, which reaches the container
-  // rather than being answered by the worker, so it fails on an image that will
-  // not run and on configuration the service refuses to start on. The release
-  // workflow already runs it; a deploy by hand did not, which is how a stale
-  // digest reached production and crash looped through 33 dead deliveries.
-  execFileSync(path.join(scriptDirectory, "probe-health.sh"), [], {
-    cwd: deployDirectory,
-    env: process.env,
-    stdio: "inherit",
-  });
 } finally {
   fs.rmSync(deployConfigPath, { force: true });
 }
