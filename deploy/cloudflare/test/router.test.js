@@ -564,6 +564,25 @@ test("every wrangler var reaches the Go service", function () {
   }
 });
 
+// The fallback endpoint and model carry no credential, and holding them in the
+// secret store left nobody able to read which provider answers when the primary
+// is spent. They are declared beside the primary endpoint and model they mirror,
+// so a change to either arrives as a diff. The credential stays out, because a
+// declared variable is committed in the clear.
+test("the fallback provider is declared where a reviewer can read it", function () {
+  const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
+
+  for (const name of ["FALLBACK_BASE_URL", "FALLBACK_MODEL"]) {
+    assert.equal(typeof config.vars[name], "string", `${name} is not a declared variable`);
+    assert.notEqual(config.vars[name], "", `${name} is declared empty`);
+  }
+  assert.match(config.vars.FALLBACK_BASE_URL, /^https:\/\//);
+
+  for (const name of Object.keys(config.vars)) {
+    assert.doesNotMatch(name, /_API_KEY$|_SECRET$|PRIVATE_KEY$/, `${name} is a credential in source`);
+  }
+});
+
 test("release image selection writes the exact immutable digest", async function () {
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pr-agent-cloudflare-"));
   const configPath = path.join(temporaryDirectory, "wrangler.jsonc");
