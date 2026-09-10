@@ -1,6 +1,6 @@
 module goodkind.io/pr-review-agent
 
-go 1.26.6
+go 1.27.1
 
 require (
 	github.com/openai/openai-go v1.12.0
