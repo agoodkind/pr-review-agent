@@ -73,12 +73,12 @@ const forcedRunNote = "Triggered by a `" + domain.ForceReviewLabelPrefix +
 // entry of, so the empty case points there rather than at nothing.
 func (summary Summary) Verdict() string {
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
-		return "No severe findings."
+		return "This review found no severe defects."
 	}
 	if len(summary.Published) > 0 {
-		return "Severe findings are listed inline."
+		return "This review found severe defects and listed them inline."
 	}
-	return "Changes are requested for the reasons listed below."
+	return "This review requests changes for the reasons listed below."
 }
 
 // Title names the outcome for the check run.
@@ -210,7 +210,8 @@ func renderAcceptedOmissions(hunks []unreadHunk) string {
 	if len(hunks) == 0 {
 		return ""
 	}
-	return "Omissions accepted for this verdict:\n\n" + renderUnreadHunks(hunks)
+	return "The remaining evidence supported a reliable verdict despite these omissions.\n\n" +
+		renderUnreadHunks(hunks)
 }
 
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can
@@ -220,7 +221,7 @@ func renderBlocking(reasons []string) string {
 		return ""
 	}
 	lines := make([]string, 0, len(reasons)+1)
-	lines = append(lines, "Waiting on:")
+	lines = append(lines, "This review is waiting on:")
 	for _, reason := range reasons {
 		lines = append(lines, "- "+reason)
 	}
@@ -318,7 +319,7 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 func RenderSkipBody(reason string) string {
 	return strings.Join([]string{
 		"## Review",
-		"Review skipped: " + reason + ".",
+		"The review skipped this pull request because " + reason + ".",
 	}, "\n\n")
 }
 

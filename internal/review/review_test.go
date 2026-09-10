@@ -139,21 +139,21 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			decision:  domain.ReviewDecisionApprove,
 			published: nil,
 			blocking:  nil,
-			message:   "No severe findings.",
+			message:   "This review found no severe defects.",
 		},
 		{
 			name:      "request changes over a published finding",
 			decision:  domain.ReviewDecisionRequestChanges,
 			published: []domain.Finding{testPublishedFinding()},
 			blocking:  []string{"[main.go:1](https://github.com/owner/repo/pull/7#discussion_r1)"},
-			message:   "Severe findings are listed inline.",
+			message:   "This review found severe defects and listed them inline.",
 		},
 		{
 			name:      "request changes with nothing inline",
 			decision:  domain.ReviewDecisionRequestChanges,
 			published: nil,
 			blocking:  []string{testUnreviewedHeadReason},
-			message:   "Changes are requested for the reasons listed below.",
+			message:   "This review requests changes for the reasons listed below.",
 		},
 	}
 	for _, test := range tests {
@@ -167,7 +167,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 
 			want := "## Review\n\n" + test.message + "\n\n"
 			if len(test.blocking) > 0 {
-				want += "Waiting on:\n- " + strings.Join(test.blocking, "\n- ") + "\n\n"
+				want += "This review is waiting on:\n- " + strings.Join(test.blocking, "\n- ") + "\n\n"
 			}
 			want += review.RenderDetails(summary) + "\n\n" +
 				marker.Summary() + "\n" + marker.Review(head, test.decision)
@@ -199,11 +199,11 @@ func TestABlockingSummaryWithNothingInlineDoesNotClaimInlineFindings(t *testing.
 	if strings.Contains(body, "listed inline") {
 		t.Fatalf("summary claims findings are inline while it published none:\n%s", body)
 	}
-	if !strings.Contains(body, "Changes are requested for the reasons listed below.") {
+	if !strings.Contains(body, "This review requests changes for the reasons listed below.") {
 		t.Fatalf("summary does not point at the reasons holding the block:\n%s", body)
 	}
 	// The reasons the sentence points at have to be under it, or it names nothing.
-	if !strings.Contains(body, "Waiting on:\n- "+testUnreviewedHeadReason) {
+	if !strings.Contains(body, "This review is waiting on:\n- "+testUnreviewedHeadReason) {
 		t.Fatalf("summary points below at a list it does not carry:\n%s", body)
 	}
 	if !strings.Contains(body, "| Findings published inline | `0` |") {
@@ -241,7 +241,7 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 	if !strings.Contains(body, "| Findings published inline | `0` |") {
 		t.Fatalf("summary detail table does not report an empty publication:\n%s", body)
 	}
-	if !strings.Contains(body, "Not read:") {
+	if !strings.Contains(body, "The model did not read these changes:") {
 		t.Fatalf("summary does not name what went unread:\n%s", body)
 	}
 	// The promise a later run cannot keep is the thing this path used to make.
@@ -2487,7 +2487,7 @@ func TestAForcedRunStillDeclinesAnOversizedDelta(t *testing.T) {
 	if !ok {
 		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
 	}
-	if !strings.Contains(body, "Review skipped:") {
+	if !strings.Contains(body, "The review skipped this pull request because") {
 		t.Fatalf("summary comment = %q, want it to say the review was skipped", body)
 	}
 	skipped, ok := marker.DecodeState(body)
@@ -3523,7 +3523,7 @@ func TestResolvedThreadsRefreshTheVerdictAtAReviewedHead(t *testing.T) {
 	// The visible comment must not keep claiming severe findings after the
 	// verdict flipped.
 	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
-	if !ok || !strings.Contains(body, "No severe findings.") {
+	if !ok || !strings.Contains(body, "This review found no severe defects.") {
 		t.Fatalf("summary comment = %v, want the refreshed verdict prose", body)
 	}
 }
@@ -5605,7 +5605,7 @@ func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
 		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
 	}
 	for _, want := range []string{
-		"Waiting on:",
+		"This review is waiting on:",
 		"`main.go`:2",
 		"https://github.com/owner/repo/pull/7#discussion_r4242",
 	} {
@@ -6378,7 +6378,7 @@ func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
 	if progress == "" {
 		t.Fatalf("no progress body was written: %v", fixture.state.issueCommentBodies)
 	}
-	if !strings.Contains(progress, "Waiting on:") {
+	if !strings.Contains(progress, "This review is waiting on:") {
 		t.Fatalf("the progress comment names nothing to act on yet: %q", progress)
 	}
 	// The path is a code span, because it is whatever the pull request named a

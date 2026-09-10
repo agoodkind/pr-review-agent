@@ -61,8 +61,9 @@ func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admi
 // and the chunks the model will be asked about. Admission measures exactly
 // these chunks, so nothing later re-derives a different set from the same diff.
 type deltaWork struct {
-	Files  []diff.FileContext
-	Chunks []diff.Chunk
+	PullRequest githubapp.PullRequest
+	Files       []diff.FileContext
+	Chunks      []diff.Chunk
 }
 
 // collectAndAdmit gathers the diff and applies the admission gate before any
@@ -82,7 +83,7 @@ func (service *Service) collectAndAdmit(
 	settings reviewSettings,
 ) (deltaWork, bool, error) {
 	logger := gklog.L(ctx)
-	empty := deltaWork{Files: nil, Chunks: nil}
+	var empty deltaWork
 	input, err := service.collector.CollectRange(ctx, job.PullRequestRef, pullRequest, base)
 	if err != nil {
 		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
@@ -101,7 +102,20 @@ func (service *Service) collectAndAdmit(
 			checkFailureDiff, fmt.Errorf("chunk input: %w", err),
 		)
 	}
-	work := deltaWork{Files: input.Files, Chunks: chunks}
+	work := deltaWork{PullRequest: input.PullRequest, Files: input.Files, Chunks: chunks}
+	shortfall := classifyStructuralShortfall(work)
+	if shortfall.present() {
+		contextBytes := len(pullRequestPrompt(work.PullRequest, work.Files, shortfall)) +
+			len(omissionPrompt(shortfall))
+		chunks, err = diff.ChunkInput(input, config.MaximumPromptBytes-contextBytes)
+		if err != nil {
+			return empty, true, service.failCheck(
+				ctx, job, checkRun.ID, progress.summary(service.now()),
+				checkFailureDiff, fmt.Errorf("chunk input with pull request context: %w", err),
+			)
+		}
+		work.Chunks = chunks
+	}
 
 	verdict := admitDelta(len(input.Files), len(chunks), settings.maxFiles, settings.maxChunks)
 	if !verdict.Skip {
