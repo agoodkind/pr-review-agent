@@ -146,7 +146,7 @@ func omissionPrompt(shortfall structuralShortfall) string {
 			escapeOmissionPromptText(hunk.Reason),
 		)
 	}
-	return "The service omitted the changed content described below. Set omissions_acceptable to true only when the pull request context, readable changes, and this metadata together support a reliable verdict. An omission can be acceptable without reading its content when the other evidence explains the change and leaves no material review risk. No file type or omission reason decides this by itself. Otherwise set it to false.\n" +
+	return "The service omitted the changed content described below. Set omissions_acceptable to true only when the pull request context, readable changes, and this metadata together support a reliable verdict. An omission can be acceptable without reading its content when the other evidence explains the change and leaves no material review risk. Do not treat missing access to the omitted content as material risk by itself. No file type or omission reason decides this by itself. Otherwise set it to false.\n" +
 		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
 }
 
