@@ -94,6 +94,16 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !strings.Contains(systemContent, review.UntrustedInputPolicy) {
 		t.Fatalf("system message missing untrusted input policy")
 	}
+	for _, requiredPolicy := range []string{
+		"comments are claims, not ground truth",
+		"Flag mock soup",
+		"Flag unnecessary defense in depth",
+		"failing loudly and visibly at the correct boundary",
+	} {
+		if !strings.Contains(systemContent, requiredPolicy) {
+			t.Fatalf("system message missing code review policy %q", requiredPolicy)
+		}
+	}
 	if !strings.Contains(systemContent, "importance 7 or higher") {
 		t.Fatalf("system message missing configured importance")
 	}
