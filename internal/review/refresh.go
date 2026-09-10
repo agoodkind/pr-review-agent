@@ -81,6 +81,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		headFullyReviewed: headFullyReviewed,
 		blockWithdrawn:    blockWithdrawn,
 		settings:          settings,
+		omissions:         decodeOmissionMarker(inputs.verdict.Body),
 	})
 }
 
@@ -192,7 +193,8 @@ type refreshedVerdict struct {
 	// model call, so only the reported threshold comes from here, and it comes
 	// from here rather than from the service so the summary a refresh writes and
 	// the summary a review writes cannot disagree about it.
-	settings reviewSettings
+	settings  reviewSettings
+	omissions []unreadHunk
 }
 
 // mayPublish reports whether the refresh may submit the verdict it computed.
@@ -273,11 +275,12 @@ func (service *Service) applyRefreshedVerdict(
 		Duration:          0,
 		FilesReviewed:     0,
 		Chunks:            0,
-		CoverageComplete:  refreshed.headFullyReviewed,
+		CoverageComplete:  refreshed.headFullyReviewed && len(refreshed.omissions) == 0,
 		MinimumImportance: refreshed.settings.minimumImportance,
 		Observed:          nil,
 		Eligible:          nil,
 		Published:         nil,
+		Omissions:         refreshed.omissions,
 		PriorReviews:      nil,
 		Threads:           traceThreads(refreshed.threads, service.botLogin),
 		Reached:           "",

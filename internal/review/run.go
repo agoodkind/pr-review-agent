@@ -110,12 +110,14 @@ type chunkPass struct {
 	// unreadable names hunks this service could not get a whole answer about,
 	// which no later run reads any better. It is the run's own observation, not
 	// anything the model reported about itself.
-	unreadable []unreadHunk
-	coverage   bool
-	requests   int
-	posted     int
-	failed     int
-	panicked   *chunkPanicError
+	unreadable  []unreadHunk
+	coverage    bool
+	requests    int
+	posted      int
+	failed      int
+	panicked    *chunkPanicError
+	votes       int
+	omissionsOK bool
 }
 
 // chunkPanicError marks a chunk that panicked, so the run reports an internal
@@ -165,6 +167,8 @@ func newChunkPass(
 		posted:        0,
 		failed:        0,
 		panicked:      nil,
+		votes:         0,
+		omissionsOK:   true,
 	}
 }
 
@@ -194,6 +198,21 @@ func (pass *chunkPass) recordCall(models modelSet, requests int) {
 		pass.models.add(name)
 	}
 	pass.requests += requests
+}
+
+func (pass *chunkPass) recordOmissionDecision(acceptable bool) {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	pass.votes++
+	if !acceptable {
+		pass.omissionsOK = false
+	}
+}
+
+func (pass *chunkPass) acceptsOmissions() bool {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	return pass.votes > 0 && pass.omissionsOK && len(pass.unreadable) == 0
 }
 
 // recordUnreadable records hunks this service could not get a whole answer
@@ -345,7 +364,18 @@ func (service *Service) reviewDelta(
 		unread:     work.unread,
 		state:      state,
 	}
-	fatal := service.reviewChunksConcurrently(ctx, job, head, work.chunks, pass, tracker)
+	reviewChunks := work.chunks
+	if len(reviewChunks) == 0 && pass.structuralShortfall().present() {
+		reviewChunks = []diff.Chunk{{
+			Index:            1,
+			Total:            1,
+			Text:             "No changed lines were available to review.",
+			Pieces:           nil,
+			Paths:            nil,
+			CoverageComplete: true,
+		}}
+	}
+	fatal := service.reviewChunksConcurrently(ctx, job, head, reviewChunks, pass, tracker)
 	// A panic ends the run rather than leaving a chunk pending: it is a defect
 	// here, not a provider having a bad minute, and the next push would hit it
 	// again.
@@ -355,8 +385,10 @@ func (service *Service) reviewDelta(
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
-	// A completed chunk can retain an unread hunk from an earlier pass.
-	unreadable := pass.structuralShortfall().present() || len(tracker.unreadable()) > 0
+	// A completed chunk can retain an unread hunk from an earlier pass. The
+	// model may accept only the structural omissions it was shown.
+	unreadable := (pass.structuralShortfall().present() && !pass.acceptsOmissions()) ||
+		len(tracker.unreadable()) > 0
 	return concludeState(tracker.snapshot(), job, head, tracker, unreadable), nil
 }
 
@@ -700,7 +732,7 @@ func (service *Service) reviewOneChunk(
 		service.model,
 		chunk,
 		pass.settings.minimumImportance,
-		pass.disputePrompt,
+		pass.disputePrompt+omissionPrompt(pass.structuralShortfall()),
 		&models,
 		&requests,
 		service.now,
@@ -714,6 +746,7 @@ func (service *Service) reviewOneChunk(
 
 	findings := make([]domain.Finding, 0)
 	for _, result := range analysis.Results {
+		pass.recordOmissionDecision(result.OmissionsAcceptable)
 		findings = append(findings, result.Findings...)
 	}
 	// A fully unread chunk remains owed. A partial answer completes the chunk and

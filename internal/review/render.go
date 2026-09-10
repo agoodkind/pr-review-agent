@@ -33,6 +33,7 @@ type Summary struct {
 	Observed          []domain.Finding
 	Eligible          []domain.Finding
 	Published         []domain.Finding
+	Omissions         []unreadHunk
 	PriorReviews      []reviewTrace
 	Threads           []threadTrace
 	// Reached names the last stage the review completed. A failed review fills
@@ -132,6 +133,9 @@ func RenderBody(summary Summary) string {
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
+	if omissions := renderAcceptedOmissions(summary.Omissions); omissions != "" {
+		parts = append(parts, omissions)
+	}
 	parts = append(
 		parts,
 		RenderDetails(summary),
@@ -154,11 +158,15 @@ func RenderBody(summary Summary) string {
 // first as two identical Review boxes around an approval, then as the same
 // waiting-on list printed under both.
 //
-// The review marker is the whole body. hasBotReviewMarker reads it to recognize
-// a head this service already reviewed, so an empty body would blind that gate.
-// As an HTML comment it renders as nothing, which is the point.
+// Only markers occupy the body. hasBotReviewMarker reads the review marker to
+// recognize a head this service already reviewed, while the omission marker
+// lets a later thread refresh keep the disclosure. Both render as nothing.
 func RenderVerdictBody(summary Summary) string {
-	return marker.Review(summary.Head, summary.Decision)
+	parts := []string{marker.Review(summary.Head, summary.Decision)}
+	if omissions := encodeOmissionMarker(summary.Omissions); omissions != "" {
+		parts = append(parts, omissions)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // withdrawnBlockNote explains a head whose findings are open while no blocking
@@ -187,12 +195,22 @@ func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
 		parts = append(parts, withdrawnBlockNote)
 	}
+	if omissions := renderAcceptedOmissions(summary.Omissions); omissions != "" {
+		parts = append(parts, omissions)
+	}
 	parts = append(
 		parts,
 		"Verdict refreshed from review thread state on `"+shortHead(summary.Head)+"` with no new push.",
 		marker.Summary()+"\n"+marker.Review(summary.Head, summary.Decision),
 	)
 	return strings.Join(parts, "\n\n")
+}
+
+func renderAcceptedOmissions(hunks []unreadHunk) string {
+	if len(hunks) == 0 {
+		return ""
+	}
+	return "Omissions accepted for this verdict:\n\n" + renderUnreadHunks(hunks)
 }
 
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can

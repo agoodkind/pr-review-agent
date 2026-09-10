@@ -787,11 +787,13 @@ func (service *Service) publish(
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureThreads, err)
 	}
 
-	// A head is fully reviewed only when every chunk it owed answered, every
-	// chunk covered its whole hunk, and every finding this run stands behind
-	// reached the page. A finding whose comment GitHub refused leaves the reader
-	// nothing to act on, so the run must not approve over it.
-	headFullyReviewed := len(state.Pending) == 0 && analysis.CoverageComplete && failed == 0
+	shortfall := pass.structuralShortfall()
+	omissionsAccepted := shortfall.present() && len(state.Pending) == 0 && len(state.Unread) == 0 &&
+		pass.acceptsOmissions()
+	// A head can receive a verdict when every chunk answered and any structural
+	// omission was accepted from the metadata supplied to the model.
+	headFullyReviewed := len(state.Pending) == 0 && len(state.Unread) == 0 &&
+		(analysis.CoverageComplete || omissionsAccepted) && failed == 0
 	summary := Summary{
 		Head:              head,
 		Decision:          reviewerDecision(threads, service.botLogin, headFullyReviewed),
@@ -810,11 +812,15 @@ func (service *Service) publish(
 		Reached:           "",
 		Failed:            false,
 		Forced:            job.Forced,
+		Omissions:         nil,
+	}
+	if omissionsAccepted {
+		summary.Omissions = shortfall.Hunks
 	}
 	// A head holding something no run can read is settled first. Its shortfall
 	// outlives every later push, so the pending path's promise that the next
 	// push covers it would be false even when chunks are pending too.
-	if shortfall := pass.structuralShortfall(); shortfall.present() {
+	if shortfall.present() && !omissionsAccepted {
 		return service.concludeStructurallyIncomplete(
 			ctx, job, checkRun, state, shortfall, summary, progress,
 		)
