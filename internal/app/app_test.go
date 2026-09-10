@@ -365,8 +365,8 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 
 	fixture.waitForClydeCalls(t, 2)
 	fixture.waitForCheckCompletions(t, 2)
-	if fixture.githubState.submitReviewCount() != 2 {
-		t.Fatalf("submit review count = %d, want 2: the label must publish a second review",
+	if fixture.githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count = %d, want 1: an unchanged verdict must remain one review",
 			fixture.githubState.submitReviewCount())
 	}
 	// A run measuring from the baseline the first run wrote would compare that
@@ -2754,9 +2754,12 @@ func githubReviewStateForEvent(event any) string {
 func (state *githubServerState) handleListReviews(writer http.ResponseWriter) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.reviewPageIndex >= len(state.listReviewPages) {
+	if len(state.listReviewPages) == 0 {
 		writeJSON(writer, http.StatusOK, []map[string]any{})
 		return
+	}
+	if state.reviewPageIndex >= len(state.listReviewPages) {
+		state.reviewPageIndex = 0
 	}
 	page := state.listReviewPages[state.reviewPageIndex]
 	state.reviewPageIndex++

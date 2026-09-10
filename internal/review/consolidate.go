@@ -11,9 +11,9 @@ package review
 // pr-review-agent 89 published four comments for one defect that way.
 //
 // Reading is the only thing that closes that gap, so one extra call reads them.
-// It sees the chunk's remaining candidates and the threads already open with
-// their replies, and it answers with groups: candidates that state one defect,
-// and groups that state what an open thread already states.
+// It sees the chunk's remaining candidates and the reviewer context with its
+// replies, and it answers with groups: candidates that state one defect, and
+// groups that restate that context.
 //
 // The call is bounded hard. One per chunk that still holds two or more
 // candidates, never one per candidate, and never a retry. A chunk with one
@@ -36,8 +36,8 @@ import (
 
 // minimumConsolidationCandidates is how many candidates a chunk must hold to be
 // worth asking about on their own. One candidate can restate nothing in its own
-// chunk; it can still restate a thread already open, which is what the open
-// thread half of the gate is for.
+// chunk; it can still restate the reviewer context, which is what the context
+// half of the gate is for.
 const minimumConsolidationCandidates = 2
 
 // maximumConsolidationReasonBytes bounds the model's own sentence in a log line.
@@ -54,9 +54,9 @@ const senseConsolidation = "consolidation"
 type ConsolidationGroup struct {
 	// Candidates are the numbers the prompt showed, counting from one.
 	Candidates []int `json:"candidates"`
-	// RestatesOpenThread marks a group that states what a finding already open
-	// on this pull request states. Every member of such a group is dropped,
-	// because the thread is where that conversation already is.
+	// RestatesOpenThread marks a group that states what the reviewer context
+	// already states. Every member of such a group is dropped, because the
+	// existing thread is where that conversation already is.
 	RestatesOpenThread bool `json:"restates_open_thread"`
 	// Reason is the model's one line for why these are one defect.
 	Reason string `json:"reason"`
@@ -169,11 +169,11 @@ func (pass *chunkPass) chunkCandidates(
 // one extra model call.
 //
 // Two things can be asked about, and either one is enough. Two candidates can
-// restate each other. One candidate can restate a thread already open, and
-// only when there is such a thread to show it: the deterministic layers have
-// already compared it against every open thread by claim key, claim text and
-// anchor, so what is left is a restatement that shares none of the three, and
-// nothing but reading the two can see that.
+// restate each other. One candidate can restate the reviewer context, and only
+// when there is such context to show it: the deterministic layers have already
+// compared it by claim key, claim text and anchor, so what is left is a
+// restatement that shares none of the three, and nothing but reading can see
+// that.
 //
 // A lone candidate was free until a probe published one. An open thread quoted
 // one line, the next run reported the same defect at another line in other
@@ -182,8 +182,8 @@ func (pass *chunkPass) chunkCandidates(
 // is not a corner: agoodkind/tack 169 took exactly that shape five times.
 //
 // A chunk with no candidates is always free, which is most chunks of most
-// deltas, and a pull request carrying no open finding of this service's own
-// pays nothing new either.
+// deltas, and a pull request carrying no reviewer context pays nothing new
+// either.
 func worthConsolidating(candidates []domain.Finding, disputes string) bool {
 	if len(candidates) == 0 {
 		return false
@@ -198,7 +198,7 @@ func worthConsolidating(candidates []domain.Finding, disputes string) bool {
 }
 
 // consolidateChunk asks the model once whether the candidates this chunk still
-// holds state one defect between them, or state what an open thread states.
+// holds state one defect between them, or restate the reviewer context.
 //
 // It returns the candidates unchanged whenever there is nothing to ask about,
 // whenever the call fails, and whenever the answer cannot be applied. Losing a
@@ -243,10 +243,10 @@ func (service *Service) consolidateChunk(
 
 // applyConsolidation keeps one candidate per group and drops the rest.
 //
-// A group that restates an open thread loses every member: the thread already
-// carries that conversation, and reopening it beside the old one is the failure
-// across pushes that the whole of this file exists to stop. Any other group
-// keeps its strongest member, on the same rule the deterministic collapse uses.
+// A group that restates the reviewer context loses every member: the existing
+// thread already carries that conversation, and reopening it beside the old one
+// is the failure this file exists to stop. Any other group keeps its strongest
+// member, on the same rule the deterministic collapse uses.
 func applyConsolidation(
 	ctx context.Context,
 	candidates []domain.Finding,
@@ -279,7 +279,7 @@ func applyConsolidation(
 func consolidationMatch(group ConsolidationGroup, survivor domain.Finding) duplicateMatch {
 	matched := survivor.Title
 	if group.RestatesOpenThread {
-		matched = "a finding already open on this pull request"
+		matched = "an existing finding in the reviewer context"
 	}
 	return duplicateMatch{
 		Sense:   senseConsolidation,
@@ -320,8 +320,8 @@ func strongestCandidate(numbers []int, candidates []domain.Finding) int {
 
 // buildConsolidationPrompt asks for the grouping of one chunk's candidates.
 //
-// The open threads come first, for the same reason they come first in a chunk
-// prompt: what has already been raised has to be in view before the model
+// The reviewer context comes first, for the same reason it comes first in a
+// chunk prompt: what has already been raised has to be in view before the model
 // decides what these findings add to it. The instruction is outside the
 // untrusted delimiters because this service wrote it; the findings and the
 // threads sit inside them, because both are model output and stranger prose.
@@ -331,7 +331,7 @@ func buildConsolidationPrompt(candidates []domain.Finding, disputes string) stri
 	builder.WriteString("These numbered findings all came from one review chunk. ")
 	builder.WriteString("Return a group for every set of numbers that state one defect between them. ")
 	builder.WriteString(
-		"Set restates_open_thread on a group that states what a finding already open on this pull request states. ",
+		"Set restates_open_thread on a group that states what an open finding or a resolved finding from this commit already states. ",
 	)
 	builder.WriteString("A finding that repeats nothing belongs in no group.\n")
 	builder.WriteString(WrapUntrusted(formatConsolidationCandidates(candidates)))

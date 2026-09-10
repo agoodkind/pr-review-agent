@@ -419,7 +419,7 @@ func (service *Service) reviewOwedWork(
 	// an answered claim again costs the run no extra read and no extra model
 	// call.
 	selection := collectPublicationState(reviews, threads, service.botLogin)
-	disputes := collectDisputes(threads, service.botLogin)
+	disputes := collectDisputes(threads, service.botLogin, head)
 	pass := newChunkPass(work, settings, &selection, disputes, openThreadLocations(threads, service.botLogin))
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
@@ -848,9 +848,9 @@ func (service *Service) openThreads(
 	return threads, nil
 }
 
-// publishVerdict writes the verdict this run computed: the review carrying the
-// decision, the one top level comment carrying the summary and the durable
-// state, and the completed check.
+// publishVerdict writes a changed verdict, then updates the one top level
+// comment and completes the check. An unchanged verdict at this head remains
+// the reviewer's single standing decision.
 func (service *Service) publishVerdict(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -860,29 +860,52 @@ func (service *Service) publishVerdict(
 	progress *reviewProgress,
 ) error {
 	logger := gklog.L(ctx)
-	publishedReview, err := service.github.SubmitReview(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-		githubapp.SubmitReviewRequest{
-			CommitID: summary.Head,
-			Body:     RenderVerdictBody(summary),
-			Event:    summary.Decision,
-			Comments: nil,
-		},
-	)
+	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePublish, err)
+		logger.ErrorContext(ctx, "refresh reviews for the verdict", slog.String("err", err.Error()))
+		return service.failCheck(
+			ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err,
+		)
 	}
-	logger.InfoContext(
-		ctx,
-		"review published",
-		slog.Int64("review_id", publishedReview.ID),
-		slog.String("event", string(summary.Decision)),
-		slog.Int("streamed_comments", len(summary.Published)),
-		slog.Any("blocking", summary.Blocking),
-	)
+	standing := latestBotVerdictAtHead(reviews, service.botLogin, summary.Head)
+	decisionState := reviewStateFor(summary.Decision)
+	unchanged := standing.found && !standing.withdrawn &&
+		standing.review.State == decisionState &&
+		latestBotVerdictState(reviews, service.botLogin) == decisionState
+	if unchanged {
+		logger.InfoContext(
+			ctx,
+			"review verdict unchanged",
+			slog.Int64("review_id", standing.review.ID),
+			slog.String("event", string(summary.Decision)),
+		)
+	} else {
+		publishedReview, err := service.github.SubmitReview(
+			ctx,
+			job.InstallationID,
+			job.Repository,
+			job.Number,
+			githubapp.SubmitReviewRequest{
+				CommitID: summary.Head,
+				Body:     RenderVerdictBody(summary),
+				Event:    summary.Decision,
+				Comments: nil,
+			},
+		)
+		if err != nil {
+			return service.failCheck(
+				ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePublish, err,
+			)
+		}
+		logger.InfoContext(
+			ctx,
+			"review published",
+			slog.Int64("review_id", publishedReview.ID),
+			slog.String("event", string(summary.Decision)),
+			slog.Int("streamed_comments", len(summary.Published)),
+			slog.Any("blocking", summary.Blocking),
+		)
+	}
 
 	// The one top level comment carries the same body plus the durable state
 	// the chunk loop advanced, so a later invocation resumes from a checkpoint

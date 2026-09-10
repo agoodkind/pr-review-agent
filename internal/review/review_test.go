@@ -2832,6 +2832,7 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
+		"GET /repos/owner/repo/pulls/7/reviews",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/issues/comments/2000",
@@ -4189,6 +4190,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
+		"GET /repos/owner/repo/pulls/7/reviews",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/issues/comments/2000",
@@ -4277,6 +4279,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"PATCH /repos/owner/repo/issues/comments/2000",
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
+		"GET /repos/owner/repo/pulls/7/reviews",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/issues/7/comments",
@@ -5483,31 +5486,31 @@ func TestServiceKeepsPublishingWhileAnEarlierThreadIsOpen(t *testing.T) {
 // Requesting changes there leaves a blocking review with no open thread and
 // nothing to fix, and only a human dismissal clears it.
 func TestServiceApprovesWhenEveryFindingIsAlreadyResolved(t *testing.T) {
-	resolvedFinding := domain.Finding{
-		Path:       "main.go",
-		StartLine:  2,
-		EndLine:    2,
-		Title:      "Severe defect",
-		Body:       "The changed line breaks core behavior.",
-		Evidence:   "added",
-		Importance: 9,
-	}
-	findingMarker, err := marker.Finding(domain.HeadSHA(testHeadSHA), resolvedFinding)
+	resolvedFinding := answeredThreadFinding()
+	restatement := rewordedRepeat()
+	restatement.Evidence = disputeOtherLine
+	findingBody, err := marker.EncodeFindingBody(domain.HeadSHA(testHeadSHA), resolvedFinding)
 	if err != nil {
-		t.Fatalf("Finding marker: %v", err)
+		t.Fatalf("Encode finding body: %v", err)
 	}
 
 	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         disputeCollector{},
 		minimumImportance: 9,
-		model: &sequenceModel{results: []domain.ReviewResult{{
-			Findings: []domain.Finding{resolvedFinding},
-		}}},
+		model: &sequenceModel{
+			results: []domain.ReviewResult{{Findings: []domain.Finding{restatement}}},
+			consolidations: []review.Consolidation{{Groups: []review.ConsolidationGroup{{
+				Candidates:         []int{1},
+				RestatesOpenThread: true,
+				Reason:             "This is the resolved finding in different words.",
+			}}}},
+		},
 		reconcileThreads: []githubapp.ReviewThread{{
 			NodeID:   "resolved-thread",
 			Resolved: true,
 			RootComment: domain.ReviewComment{
 				Author:    testBotLogin,
-				Body:      "The changed line breaks core behavior.\n\n" + findingMarker,
+				Body:      findingBody,
 				Path:      resolvedFinding.Path,
 				StartLine: resolvedFinding.StartLine,
 				EndLine:   resolvedFinding.EndLine,

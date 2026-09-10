@@ -34,8 +34,9 @@ package review
 // identity instead was measured to be a subset of the suppression
 // collectPublicationState already applies, so it decided nothing at all.
 //
-// Only open threads suppress. A resolved thread is a settled question, and a
-// defect reintroduced after a fix has to be raised again.
+// Open threads suppress across heads. A resolved thread suppresses only at the
+// head where the service raised it, so a forced rereview remembers what this
+// reviewer already settled without hiding a defect reintroduced by new code.
 
 import (
 	"fmt"
@@ -46,7 +47,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// maximumDisputeBytes bounds the open thread context added to one chunk prompt.
+// maximumDisputeBytes bounds the reviewer context added to one chunk prompt.
 // The chunk itself is already the larger half of the budget, and a pull request
 // with many open threads would otherwise push the code the run is supposed to be
 // reviewing out of the model's input.
@@ -55,66 +56,75 @@ const maximumDisputeBytes = 16000
 // disputeContext is what the pull request has already been told, rendered for
 // the chunk prompt.
 //
-// Only unresolved threads are in it. A resolved thread is a settled question,
-// and telling the model about it would argue against raising a defect that has
-// since come back.
+// Open threads are always in it. Resolved threads from the current head stay in
+// it because a forced rereview must retain what this reviewer already settled.
 type disputeContext struct {
-	// sections is one block per open thread, already truncated to the budget.
+	// sections is one block per relevant thread, already truncated to the budget.
 	sections []string
-	// open is what every open thread of the service's own already claims, keyed
-	// by claim key and by anchor range and labelled with the thread that carries
-	// it, so a withheld finding can name what answered it.
+	// known is what every relevant thread of the service's own already claims,
+	// keyed by claim key and by anchor range and labelled with the thread that
+	// carries it, so a withheld finding can name what answered it.
 	//
 	// A thread whose marker has no claim key still contributes its anchor range,
 	// which is what every comment published before the key existed has. Both are
 	// compared through the same function the within-run layers use.
-	open *claimMemory
+	known *claimMemory
 }
 
-// answered reports the open thread already carrying this finding's claim.
+// answered reports the thread already carrying this finding's claim.
 //
 // Both comparisons cover the path, so a match is always a claim about the same
 // file. A finding that derives neither key is never withheld, which is moot in
 // practice because the grounding and anchoring gates refuse it first.
 func (disputes disputeContext) answered(finding domain.Finding) (duplicateMatch, bool) {
-	return disputes.open.match(candidateKeys(finding))
+	return disputes.known.match(candidateKeys(finding))
 }
 
-// collectDisputes reads the open findings of the service's own from the threads
-// the run already loaded for reconciliation.
-func collectDisputes(threads []githubapp.ReviewThread, botLogin string) disputeContext {
+// collectDisputes reads the service's open findings and its resolved findings
+// from this head from the threads the run already loaded for reconciliation.
+func collectDisputes(
+	threads []githubapp.ReviewThread,
+	botLogin string,
+	currentHead domain.HeadSHA,
+) disputeContext {
 	disputes := disputeContext{
 		sections: make([]string, 0),
-		open:     newClaimMemory(),
+		known:    newClaimMemory(),
 	}
 	budget := maximumDisputeBytes
-	for _, thread := range threads {
-		if thread.Resolved || thread.RootComment.Author != botLogin {
-			continue
-		}
-		_, finding, err := marker.DecodeFindingBody(thread.RootComment)
-		if err != nil {
-			continue
-		}
-		normalizedPath, err := marker.NormalizePath(finding.Path)
-		if err != nil {
-			continue
-		}
-		if published, ok := marker.FindFinding(thread.RootComment.Body); ok {
-			disputes.open.remember(threadKeys(published, thread.RootComment), thread.NodeID)
-		}
+	// Open findings retain first claim on the bounded prompt. Resolved findings
+	// from this head use only the space left after every active conversation.
+	for _, resolved := range []bool{false, true} {
+		for _, thread := range threads {
+			if thread.Resolved != resolved || thread.RootComment.Author != botLogin {
+				continue
+			}
+			published, ok := marker.FindFinding(thread.RootComment.Body)
+			if !ok || (thread.Resolved && published.Head != currentHead) {
+				continue
+			}
+			_, finding, err := marker.DecodeFindingBody(thread.RootComment)
+			if err != nil {
+				continue
+			}
+			normalizedPath, err := marker.NormalizePath(finding.Path)
+			if err != nil {
+				continue
+			}
+			disputes.known.remember(threadKeys(published, thread.RootComment), thread.NodeID)
 
-		section := formatDisputeSection(normalizedPath, finding, thread.Replies, botLogin)
-		if len(section) <= budget {
-			disputes.sections = append(disputes.sections, section)
-			budget -= len(section)
+			section := formatDisputeSection(normalizedPath, finding, thread.Replies, botLogin, thread.Resolved)
+			if len(section) <= budget {
+				disputes.sections = append(disputes.sections, section)
+				budget -= len(section)
+			}
 		}
 	}
 	return disputes
 }
 
-// formatDisputeSection renders one open thread as the model sees it: where the
-// claim was made, what it said, and what anyone has replied.
+// formatDisputeSection renders one relevant thread as the model sees it: where
+// the claim was made, what it said, and what anyone has replied.
 //
 // The replies are not labelled as the author's. Anyone who can comment on a pull
 // request can reply on a thread, so presenting every reply as the author's
@@ -126,9 +136,14 @@ func formatDisputeSection(
 	finding domain.Finding,
 	replies []domain.ReviewComment,
 	botLogin string,
+	resolved bool,
 ) string {
 	var builder strings.Builder
-	builder.WriteString("Open finding\nPath: ")
+	if resolved {
+		builder.WriteString("Resolved finding from this commit\nPath: ")
+	} else {
+		builder.WriteString("Open finding\nPath: ")
+	}
 	builder.WriteString(normalizedPath)
 	builder.WriteString("\nTitle: ")
 	builder.WriteString(finding.Title)
@@ -151,8 +166,8 @@ func formatDisputeSection(
 	return builder.String()
 }
 
-// promptSection is the open thread context for one chunk prompt, or an empty
-// string when nothing is open.
+// promptSection is the relevant thread context for one chunk prompt, or an
+// empty string when the reviewer has raised nothing relevant.
 //
 // The instruction sits outside the untrusted delimiters because it is this
 // service speaking. The threads and the replies sit inside them, because a
@@ -163,7 +178,8 @@ func (disputes disputeContext) promptSection() string {
 	}
 	var builder strings.Builder
 	builder.WriteString(
-		"These findings are already open on this pull request, with any replies they have received. " +
+		"These findings are this reviewer's existing context, with any replies they have received. " +
+			"A resolved finding from this exact commit is settled and must not be raised again. " +
 			"A claim already raised and answered here must not be raised again in any wording, under any title, at any path. " +
 			"Weigh a reply by who wrote it and whether the code bears it out. " +
 			"If a reply is factually wrong, quote it and say why it is wrong; do not restate the original claim as though it were unanswered.\n",
