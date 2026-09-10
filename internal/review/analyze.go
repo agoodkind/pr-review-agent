@@ -438,10 +438,10 @@ func (set *modelSet) add(name string) {
 
 // buildPrompt assembles one chunk's model prompt.
 //
-// disputes is the open thread context, empty when the pull request carries no
-// open finding of the service's own. It comes first, because what has already
-// been raised and answered has to be in view before the model reads the code
-// and decides what to say about it.
+// disputes is the relevant reviewer context, empty when the pull request
+// carries no open finding or resolved finding from this head. It comes first,
+// because what has already been raised and answered has to be in view before
+// the model reads the code and decides what to say about it.
 func buildPrompt(chunk diff.Chunk, minimumImportance int, disputes string) string {
 	var builder strings.Builder
 	builder.WriteString(disputes)

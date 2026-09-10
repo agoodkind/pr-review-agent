@@ -320,8 +320,8 @@ func strongestCandidate(numbers []int, candidates []domain.Finding) int {
 
 // buildConsolidationPrompt asks for the grouping of one chunk's candidates.
 //
-// The open threads come first, for the same reason they come first in a chunk
-// prompt: what has already been raised has to be in view before the model
+// The reviewer context comes first, for the same reason it comes first in a
+// chunk prompt: what has already been raised has to be in view before the model
 // decides what these findings add to it. The instruction is outside the
 // untrusted delimiters because this service wrote it; the findings and the
 // threads sit inside them, because both are model output and stranger prose.

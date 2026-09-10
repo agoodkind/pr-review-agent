@@ -365,8 +365,8 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 
 	fixture.waitForClydeCalls(t, 2)
 	fixture.waitForCheckCompletions(t, 2)
-	if fixture.githubState.submitReviewCount() != 2 {
-		t.Fatalf("submit review count = %d, want 2: the label must publish a second review",
+	if fixture.githubState.submitReviewCount() != 1 {
+		t.Fatalf("submit review count = %d, want 1: an unchanged verdict must remain one review",
 			fixture.githubState.submitReviewCount())
 	}
 	// A run measuring from the baseline the first run wrote would compare that
