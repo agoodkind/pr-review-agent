@@ -982,8 +982,8 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 		t.Fatalf("the pull request carries %d Review headings, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
 			headings, comment, verdict)
 	}
-	sentences := strings.Count(comment, "No severe findings.") +
-		strings.Count(verdict, "No severe findings.")
+	sentences := strings.Count(comment, "This review found no severe defects.") +
+		strings.Count(verdict, "This review found no severe defects.")
 	if sentences != 1 {
 		t.Fatalf("the pull request states the verdict sentence %d times, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
 			sentences, comment, verdict)
@@ -1034,7 +1034,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
 	}
 	comment := fixture.githubState.summaryCommentBody()
-	if !strings.Contains(comment, "Waiting on:") {
+	if !strings.Contains(comment, "This review is waiting on:") {
 		t.Fatalf("the comment names nothing to fix, so no edit can satisfy the block: %q", comment)
 	}
 	// The path is a code span wherever it is rendered, because it is
@@ -3150,8 +3150,8 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 // the page, which is what a reader saw twice two seconds apart.
 var summaryProse = []string{
 	"## Review",
-	"No severe findings.",
-	"Severe findings are listed inline.",
+	"This review found no severe defects.",
+	"This review found severe defects and listed them inline.",
 	"<summary>Review details</summary>",
 }
 

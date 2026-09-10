@@ -45,6 +45,8 @@ type unreadHunk struct {
 
 const omissionMarkerPrefix = "<!-- pr-review-agent:omissions:v1 "
 
+const maximumPullRequestDescriptionBytes = 8000
+
 // structuralShortfall is everything one delta holds that no later run can read.
 type structuralShortfall struct {
 	Hunks []unreadHunk
@@ -144,8 +146,35 @@ func omissionPrompt(shortfall structuralShortfall) string {
 			escapeOmissionPromptText(hunk.Reason),
 		)
 	}
-	return "The service omitted the changed content described below. Set omissions_acceptable to true when this metadata makes the omission safe for a reliable verdict. A clearly binary file with no patch may qualify when its metadata is sufficient. Otherwise set it to false.\n" +
+	return "The service omitted the changed content described below. Set omissions_acceptable to true only when the pull request context, readable changes, and this metadata together support a reliable verdict. No file type or omission reason decides this by itself. Otherwise set it to false.\n" +
 		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
+}
+
+func pullRequestPrompt(
+	pullRequest githubapp.PullRequest,
+	files []diff.FileContext,
+	shortfall structuralShortfall,
+) string {
+	if !shortfall.present() {
+		return ""
+	}
+	var contextText strings.Builder
+	fmt.Fprintf(
+		&contextText,
+		"Title: %s\nDescription: %s\nChanged files:",
+		truncateUTF8(escapeOmissionPromptText(pullRequest.Title), maximumPullRequestDescriptionBytes),
+		truncateUTF8(escapeOmissionPromptText(pullRequest.Body), maximumPullRequestDescriptionBytes),
+	)
+	for _, file := range files {
+		fmt.Fprintf(
+			&contextText,
+			"\n- %s (%s)",
+			escapeOmissionPromptText(file.Path),
+			escapeOmissionPromptText(file.Status),
+		)
+	}
+	return "Review the pull request as a whole. Treat its stated intent as a claim, not proof. Decide whether the readable changes, changed-file list, and omission metadata support that claim and a reliable verdict.\n" +
+		WrapUntrusted(contextText.String()) + "\n"
 }
 
 func escapeOmissionPromptText(text string) string {
@@ -348,13 +377,13 @@ func renderUnreadHunks(hunks []unreadHunk) string {
 		listed = listed[:maximumListedUnreadHunks]
 	}
 	lines := make([]string, 0, len(listed)+4)
-	lines = append(lines, "Not read:", "```")
+	lines = append(lines, "The model did not read these changes:", "```")
 	for _, hunk := range listed {
 		lines = append(lines, describeUnreadHunk(hunk))
 	}
 	lines = append(lines, "```")
 	if omitted > 0 {
-		lines = append(lines, fmt.Sprintf("and %d more not listed here.", omitted))
+		lines = append(lines, fmt.Sprintf("This list omits %d more unread changes.", omitted))
 	}
 	return strings.Join(lines, "\n")
 }

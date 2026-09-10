@@ -727,12 +727,16 @@ func (service *Service) reviewOneChunk(
 	requests := 0
 	nothing := chunkOutcome{unread: false, shortfall: false}
 	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	promptShortfall := pass.structuralShortfall()
 	analysis, err := reviewChunk(
 		callCtx,
 		service.model,
 		chunk,
 		pass.settings.minimumImportance,
-		pass.disputePrompt+omissionPrompt(pass.structuralShortfall()),
+		pass.disputePrompt+pullRequestPrompt(
+			pass.work.PullRequest, pass.work.Files, promptShortfall,
+		)+
+			omissionPrompt(promptShortfall),
 		&models,
 		&requests,
 		service.now,
