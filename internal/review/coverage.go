@@ -144,7 +144,7 @@ func omissionPrompt(shortfall structuralShortfall) string {
 			escapeOmissionPromptText(hunk.Reason),
 		)
 	}
-	return "The service omitted the changed content described below. Set omissions_acceptable to true when this metadata makes the omission safe for a reliable verdict, including when a clearly binary file has no patch. Otherwise set it to false.\n" +
+	return "The service omitted the changed content described below. Set omissions_acceptable to true when this metadata makes the omission safe for a reliable verdict. A clearly binary file with no patch may qualify when its metadata is sufficient. Otherwise set it to false.\n" +
 		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
 }
 
