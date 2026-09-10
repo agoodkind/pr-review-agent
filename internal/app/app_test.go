@@ -2754,9 +2754,12 @@ func githubReviewStateForEvent(event any) string {
 func (state *githubServerState) handleListReviews(writer http.ResponseWriter) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.reviewPageIndex >= len(state.listReviewPages) {
+	if len(state.listReviewPages) == 0 {
 		writeJSON(writer, http.StatusOK, []map[string]any{})
 		return
+	}
+	if state.reviewPageIndex >= len(state.listReviewPages) {
+		state.reviewPageIndex = 0
 	}
 	page := state.listReviewPages[state.reviewPageIndex]
 	state.reviewPageIndex++

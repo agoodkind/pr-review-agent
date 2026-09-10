@@ -822,7 +822,7 @@ func (service *Service) publish(
 	if len(state.Pending) > 0 {
 		return service.concludeIncomplete(ctx, job, checkRun, state, pass, summary, progress)
 	}
-	return service.publishVerdict(ctx, job, checkRun, reviews, summary, state, progress)
+	return service.publishVerdict(ctx, job, checkRun, summary, state, progress)
 }
 
 // openThreads reads the service's own threads as they stand now, which is one
@@ -855,12 +855,18 @@ func (service *Service) publishVerdict(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRun githubapp.CheckRun,
-	reviews []githubapp.Review,
 	summary Summary,
 	state marker.State,
 	progress *reviewProgress,
 ) error {
 	logger := gklog.L(ctx)
+	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		logger.ErrorContext(ctx, "refresh reviews for the verdict", slog.String("err", err.Error()))
+		return service.failCheck(
+			ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err,
+		)
+	}
 	standing := latestBotVerdictAtHead(reviews, service.botLogin, summary.Head)
 	decisionState := reviewStateFor(summary.Decision)
 	unchanged := standing.found && !standing.withdrawn &&
