@@ -11,15 +11,16 @@ package review
 // deliver, and blocking with a verdict leaves a person a review to dismiss over
 // code this service was never going to read.
 //
-// So a structural shortfall ends here instead. It submits no verdict, holds the
-// merge gate with an action_required check, names every piece nobody read, and
-// leaves the durable baseline where it was so those pieces stay in every later
-// delta rather than vanishing behind an advanced checkpoint. The findings the
-// readable chunks produced are already on the pull request, because they are
-// real whatever else went unread.
+// The model receives metadata for every structural shortfall. When that
+// metadata is insufficient for a reliable verdict, the run submits no verdict,
+// holds the merge gate with an action_required check, and names every piece
+// nobody read. The findings the readable chunks produced are already on the
+// pull request, because they are real whatever else went unread.
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -37,10 +38,12 @@ import (
 // unreadHunk names one piece of the head nobody read, in the terms a reader can
 // go and look at: the file, the hunk inside it, and why it was not read.
 type unreadHunk struct {
-	Path   string
-	Header string
-	Reason string
+	Path   string `json:"path"`
+	Header string `json:"header"`
+	Reason string `json:"reason"`
 }
+
+const omissionMarkerPrefix = "<!-- pr-review-agent:omissions:v1 "
 
 // structuralShortfall is everything one delta holds that no later run can read.
 type structuralShortfall struct {
@@ -123,6 +126,85 @@ func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 		}
 	}
 	return structuralShortfall{Hunks: hunks}
+}
+
+// omissionPrompt gives the existing review call enough metadata to decide
+// whether a structural omission prevents a reliable verdict.
+func omissionPrompt(shortfall structuralShortfall) string {
+	if !shortfall.present() {
+		return "Set omissions_acceptable to true because no changed content was omitted.\n"
+	}
+	var metadata strings.Builder
+	for _, hunk := range sortedUnreadHunks(shortfall.Hunks) {
+		fmt.Fprintf(
+			&metadata,
+			"Path: %s\nHunk: %s\nReason: %s\n\n",
+			escapeOmissionPromptText(hunk.Path),
+			escapeOmissionPromptText(hunk.Header),
+			escapeOmissionPromptText(hunk.Reason),
+		)
+	}
+	return "The service omitted the changed content described below. Set omissions_acceptable to true only when this metadata makes the omission safe for a reliable verdict. Otherwise set it to false.\n" +
+		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
+}
+
+func escapeOmissionPromptText(text string) string {
+	escaped := runlog.EscapeLineBreaks(text)
+	escaped = strings.ReplaceAll(escaped, promptInputBegin, "<UNTRUSTED_INPUT>")
+	return strings.ReplaceAll(escaped, promptInputEnd, "<END_UNTRUSTED_INPUT>")
+}
+
+func encodeOmissionMarker(hunks []unreadHunk) string {
+	if len(hunks) == 0 {
+		return ""
+	}
+	payload, err := json.Marshal(boundedOmissionMarkerHunks(hunks))
+	if err != nil {
+		return ""
+	}
+	return omissionMarkerPrefix + base64.RawURLEncoding.EncodeToString(payload) + " -->"
+}
+
+func boundedOmissionMarkerHunks(hunks []unreadHunk) []unreadHunk {
+	bounded := sortedUnreadHunks(hunks)
+	if len(bounded) > maximumListedUnreadHunks {
+		retained := maximumListedUnreadHunks - 1
+		omitted := len(bounded) - retained
+		bounded = append(bounded[:retained], unreadHunk{
+			Path:   "Additional omissions",
+			Header: "",
+			Reason: fmt.Sprintf("%d more not listed here", omitted),
+		})
+	}
+	for index := range bounded {
+		bounded[index].Path = truncateUTF8(
+			runlog.EscapeLineBreaks(bounded[index].Path), maximumUnreadHunkLabelBytes,
+		)
+		bounded[index].Header = truncateUTF8(
+			runlog.EscapeLineBreaks(bounded[index].Header), maximumUnreadHunkLabelBytes,
+		)
+	}
+	return bounded
+}
+
+func decodeOmissionMarker(body string) []unreadHunk {
+	_, payload, found := strings.Cut(body, omissionMarkerPrefix)
+	if !found {
+		return nil
+	}
+	payload, _, found = strings.Cut(payload, " -->")
+	if !found {
+		return nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return nil
+	}
+	var hunks []unreadHunk
+	if err := json.Unmarshal(decoded, &hunks); err != nil {
+		return nil
+	}
+	return hunks
 }
 
 // fileGapReason states why a whole file went unread.
