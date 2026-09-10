@@ -173,7 +173,7 @@ func pullRequestPrompt(
 			escapeOmissionPromptText(file.Status),
 		)
 	}
-	return "Review the pull request as a whole. Treat its stated intent as a claim, not proof. Decide whether the readable changes, changed-file list, and omission metadata support that claim and a reliable verdict.\n" +
+	return "Review the pull request as a whole, as a human reviewer would. Treat its stated intent as a claim, not proof. Use the stated intent, readable changes, changed-file list, and omission metadata together to decide whether the change is understandable and whether any material review risk remains. Binary status is one signal, not an automatic decision.\n" +
 		WrapUntrusted(contextText.String()) + "\n"
 }
 
