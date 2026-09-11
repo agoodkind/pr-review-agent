@@ -129,10 +129,7 @@ export function createPrAgentEnvironment(bindings) {
     CLYDE_BASE_URL,
     FALLBACK_API_KEY,
     FALLBACK_BASE_URL,
-    FALLBACK_CF_ACCESS_CLIENT_ID,
-    FALLBACK_CF_ACCESS_CLIENT_SECRET,
     FALLBACK_MODEL,
-    FALLBACK_ON,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
@@ -146,19 +143,25 @@ export function createPrAgentEnvironment(bindings) {
     REVIEW_MIN_IMPORTANCE,
     REVIEW_MODEL,
     REVIEW_WORKERS,
+    USE_NANO_AS_PRIMARY,
   } = bindings;
 
-  return {
+  const clyde = {
     CF_ACCESS_CLIENT_ID,
     CF_ACCESS_CLIENT_SECRET,
     CLYDE_API_KEY: OPENAI_KEY,
     CLYDE_BASE_URL,
-    FALLBACK_API_KEY,
-    FALLBACK_BASE_URL,
-    FALLBACK_CF_ACCESS_CLIENT_ID,
-    FALLBACK_CF_ACCESS_CLIENT_SECRET,
-    FALLBACK_MODEL,
-    FALLBACK_ON,
+    REVIEW_MODEL,
+  };
+  const nano = {
+    CLYDE_API_KEY: FALLBACK_API_KEY,
+    CLYDE_BASE_URL: FALLBACK_BASE_URL,
+    REVIEW_MODEL: FALLBACK_MODEL,
+  };
+  const provider = USE_NANO_AS_PRIMARY ? nano : clyde;
+
+  return {
+    ...provider,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
@@ -169,7 +172,6 @@ export function createPrAgentEnvironment(bindings) {
     REVIEW_MAX_CHUNKS,
     REVIEW_MAX_FILES,
     REVIEW_MIN_IMPORTANCE,
-    REVIEW_MODEL,
     REVIEW_WORKERS,
   };
 }

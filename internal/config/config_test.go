@@ -43,8 +43,6 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		"GITHUB_BOT_LOGIN",
 		"CLYDE_BASE_URL",
 		"CLYDE_API_KEY",
-		"CF_ACCESS_CLIENT_ID",
-		"CF_ACCESS_CLIENT_SECRET",
 		"REVIEW_MIN_IMPORTANCE",
 		"REVIEW_WORKERS",
 		"REVIEW_MODEL",
@@ -52,6 +50,19 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 		if !strings.Contains(err.Error(), secret) {
 			t.Fatalf("error %q missing %q", err.Error(), secret)
 		}
+	}
+}
+
+func TestLoadAllowsPrimaryWithoutAccessHeaders(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{
+		"CF_ACCESS_CLIENT_ID":     "",
+		"CF_ACCESS_CLIENT_SECRET": "",
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.CFAccessClientID != "" || cfg.CFAccessClientSecret != "" {
+		t.Fatal("primary Cloudflare Access values are set")
 	}
 }
 

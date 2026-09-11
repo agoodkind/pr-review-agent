@@ -537,12 +537,36 @@ test("production configuration reaches the Go service", function () {
     ["REVIEW_MIN_IMPORTANCE", "8"],
     ["REVIEW_MODEL", "fixture-review-model"],
     ["REVIEW_WORKERS", "5"],
+    ["USE_NANO_AS_PRIMARY", false],
   ]);
   const environment = createPrAgentEnvironment(bindings);
 
   assert.equal(environment.CLYDE_API_KEY, bindings.OPENAI_KEY);
+  assert.equal(environment.CLYDE_BASE_URL, bindings.CLYDE_BASE_URL);
+  assert.equal(environment.REVIEW_MODEL, bindings.REVIEW_MODEL);
+  assert.equal(environment.CF_ACCESS_CLIENT_ID, bindings.CF_ACCESS_CLIENT_ID);
+  assert.equal(environment.CF_ACCESS_CLIENT_SECRET, bindings.CF_ACCESS_CLIENT_SECRET);
+  const omittedBindings = new Set([
+    "FALLBACK_API_KEY",
+    "FALLBACK_BASE_URL",
+    "FALLBACK_CF_ACCESS_CLIENT_ID",
+    "FALLBACK_CF_ACCESS_CLIENT_SECRET",
+    "FALLBACK_MODEL",
+    "FALLBACK_ON",
+    "OPENAI_KEY",
+    "USE_NANO_AS_PRIMARY",
+  ]);
   for (const name of Object.keys(bindings)) {
-    if (name === "OPENAI_KEY") {
+    if (omittedBindings.has(name)) {
+      assert.equal(name in environment, false, `${name} reached the service`);
+      continue;
+    }
+    if (
+      name === "CF_ACCESS_CLIENT_ID" ||
+      name === "CF_ACCESS_CLIENT_SECRET" ||
+      name === "CLYDE_BASE_URL" ||
+      name === "REVIEW_MODEL"
+    ) {
       continue;
     }
     assert.equal(environment[name], bindings[name], `${name} did not reach the service`);
@@ -555,27 +579,37 @@ test("an unlisted binding never reaches the Go service", function () {
   assert.equal("UNLISTED_BINDING" in environment, false);
 });
 
-test("every wrangler var reaches the Go service", function () {
+test("wrangler config selects Nano without forwarding Clyde access", function () {
   const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
-  const environment = createPrAgentEnvironment(config.vars);
+  const environment = createPrAgentEnvironment({
+    ...config.vars,
+    FALLBACK_API_KEY: "fixture-nano-key",
+  });
 
-  for (const name of Object.keys(config.vars)) {
-    assert.equal(environment[name], config.vars[name], `${name} is declared but never forwarded`);
-  }
+  assert.equal(environment.CLYDE_API_KEY, "fixture-nano-key");
+  assert.equal(environment.CLYDE_BASE_URL, "https://api.openai.com/v1");
+  assert.equal(environment.REVIEW_MODEL, "gpt-5.4-nano");
+  assert.equal(config.vars.USE_NANO_AS_PRIMARY, true);
+  assert.equal("CF_ACCESS_CLIENT_ID" in environment, false);
+  assert.equal("CF_ACCESS_CLIENT_SECRET" in environment, false);
 });
 
-// The fallback endpoint and model carry no credential, and holding them in the
-// secret store left nobody able to read which provider answers when the primary
-// is spent. They are declared beside the primary endpoint and model they mirror,
-// so a change to either arrives as a diff. The credential stays out, because a
-// declared variable is committed in the clear.
-test("the fallback provider is declared where a reviewer can read it", function () {
+// Both endpoints and models carry no credential, so reviewers can see each
+// provider and the active selection without exposing either key.
+test("both providers and their selector are declared", function () {
   const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
 
-  for (const name of ["FALLBACK_BASE_URL", "FALLBACK_MODEL", "FALLBACK_ON"]) {
+  for (const name of [
+    "CLYDE_BASE_URL",
+    "FALLBACK_BASE_URL",
+    "FALLBACK_MODEL",
+    "FALLBACK_ON",
+    "REVIEW_MODEL",
+  ]) {
     assert.equal(typeof config.vars[name], "string", `${name} is not a declared variable`);
     assert.notEqual(config.vars[name], "", `${name} is declared empty`);
   }
+  assert.equal(typeof config.vars.USE_NANO_AS_PRIMARY, "boolean");
   assert.match(config.vars.FALLBACK_BASE_URL, /^https:\/\//);
 
   for (const name of Object.keys(config.vars)) {
