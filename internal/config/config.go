@@ -344,17 +344,18 @@ func loadClyde(lookup LookupEnv, cfg *Config) []string {
 		cfg.ClydeAPIKey = clydeAPIKey
 	}
 
-	cfClientID, ok := lookup("CF_ACCESS_CLIENT_ID")
-	if !ok || strings.TrimSpace(cfClientID) == "" {
-		missing = append(missing, "CF_ACCESS_CLIENT_ID")
-	} else {
-		cfg.CFAccessClientID = cfClientID
+	cfClientID, hasClientID := loadRequiredText(lookup, "CF_ACCESS_CLIENT_ID")
+	cfAccessValue, hasClientSecret := loadRequiredText(lookup, "CF_ACCESS_CLIENT_SECRET")
+	if hasClientID != hasClientSecret {
+		if !hasClientID {
+			missing = append(missing, "CF_ACCESS_CLIENT_ID")
+		}
+		if !hasClientSecret {
+			missing = append(missing, "CF_ACCESS_CLIENT_SECRET")
+		}
 	}
-
-	cfAccessValue, ok := lookup("CF_ACCESS_CLIENT_SECRET")
-	if !ok || strings.TrimSpace(cfAccessValue) == "" {
-		missing = append(missing, "CF_ACCESS_CLIENT_SECRET")
-	} else {
+	if hasClientID && hasClientSecret {
+		cfg.CFAccessClientID = cfClientID
 		cfg.CFAccessClientSecret = cfAccessValue // gitleaks:allow
 	}
 

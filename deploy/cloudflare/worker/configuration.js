@@ -124,41 +124,27 @@ function readPositiveDuration(value) {
 // be added in both places.
 export function createPrAgentEnvironment(bindings) {
   const {
-    CF_ACCESS_CLIENT_ID,
-    CF_ACCESS_CLIENT_SECRET,
-    CLYDE_BASE_URL,
     FALLBACK_API_KEY,
     FALLBACK_BASE_URL,
-    FALLBACK_CF_ACCESS_CLIENT_ID,
-    FALLBACK_CF_ACCESS_CLIENT_SECRET,
     FALLBACK_MODEL,
-    FALLBACK_ON,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
     GITHUB_WEBHOOK_SECRET,
     LOG_FORWARD_URL,
-    OPENAI_KEY,
     PORT,
     REVIEW_CHUNK_TIMEOUT,
     REVIEW_MAX_CHUNKS,
     REVIEW_MAX_FILES,
     REVIEW_MIN_IMPORTANCE,
-    REVIEW_MODEL,
     REVIEW_WORKERS,
   } = bindings;
 
   return {
-    CF_ACCESS_CLIENT_ID,
-    CF_ACCESS_CLIENT_SECRET,
-    CLYDE_API_KEY: OPENAI_KEY,
-    CLYDE_BASE_URL,
-    FALLBACK_API_KEY,
-    FALLBACK_BASE_URL,
-    FALLBACK_CF_ACCESS_CLIENT_ID,
-    FALLBACK_CF_ACCESS_CLIENT_SECRET,
-    FALLBACK_MODEL,
-    FALLBACK_ON,
+    // Nano is the only provider passed to the service. Clyde remains bound to
+    // the Worker, so restoring it does not require replacing its secrets.
+    CLYDE_API_KEY: FALLBACK_API_KEY,
+    CLYDE_BASE_URL: FALLBACK_BASE_URL,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
@@ -169,7 +155,7 @@ export function createPrAgentEnvironment(bindings) {
     REVIEW_MAX_CHUNKS,
     REVIEW_MAX_FILES,
     REVIEW_MIN_IMPORTANCE,
-    REVIEW_MODEL,
+    REVIEW_MODEL: FALLBACK_MODEL,
     REVIEW_WORKERS,
   };
 }
