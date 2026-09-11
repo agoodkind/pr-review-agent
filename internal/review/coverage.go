@@ -45,11 +45,56 @@ type unreadHunk struct {
 
 const omissionMarkerPrefix = "<!-- pr-review-agent:omissions:v1 "
 
+const decisionReasonMarkerPrefix = "<!-- pr-review-agent:decision-reason:v1 "
+
 const maximumPullRequestDescriptionBytes = 8000
 
 // structuralShortfall is everything one delta holds that no later run can read.
 type structuralShortfall struct {
 	Hunks []unreadHunk
+}
+
+type omissionDecision struct {
+	chunk      int
+	acceptable bool
+	reason     string
+	recorded   bool
+}
+
+func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewResult) {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	pass.votes++
+	if !result.OmissionsAcceptable {
+		pass.omissionsOK = false
+	}
+	candidate := omissionDecision{
+		chunk:      chunk,
+		acceptable: result.OmissionsAcceptable,
+		reason:     sanitizeDecisionReason(result.DecisionReason),
+		recorded:   true,
+	}
+	preferRejected := !candidate.acceptable && pass.decision.acceptable
+	sameDecision := candidate.acceptable == pass.decision.acceptable
+	preferReason := sameDecision && pass.decision.reason == "" && candidate.reason != ""
+	sameReasonState := (candidate.reason == "") == (pass.decision.reason == "")
+	preferEarlier := sameDecision && sameReasonState &&
+		chunk < pass.decision.chunk
+	if !pass.decision.recorded || preferRejected || preferReason || preferEarlier {
+		pass.decision = candidate
+	}
+}
+
+func (pass *chunkPass) decisionReason() string {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	return pass.decision.reason
+}
+
+func sanitizeDecisionReason(reason string) string {
+	reason = strings.Join(strings.Fields(sanitizeProse(reason)), " ")
+	reason = strings.ReplaceAll(reason, "<!--", "&lt;!--")
+	return strings.ReplaceAll(reason, "-->", "--&gt;")
 }
 
 // present reports whether this delta holds anything unreadable at all.
@@ -134,7 +179,7 @@ func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 // whether a structural omission prevents a reliable verdict.
 func omissionPrompt(shortfall structuralShortfall) string {
 	if !shortfall.present() {
-		return "Set omissions_acceptable to true because no changed content was omitted.\n"
+		return "Set omissions_acceptable to true because no changed content was omitted. Set decision_reason to an empty string.\n"
 	}
 	var metadata strings.Builder
 	for _, hunk := range sortedUnreadHunks(shortfall.Hunks) {
@@ -146,7 +191,7 @@ func omissionPrompt(shortfall structuralShortfall) string {
 			escapeOmissionPromptText(hunk.Reason),
 		)
 	}
-	return "The service omitted the changed content described below. Set omissions_acceptable to true only when the pull request context, readable changes, and this metadata together support a reliable verdict. An omission can be acceptable without reading its content when the other evidence explains the change and leaves no material review risk. Do not treat missing access to the omitted content as material risk by itself. No file type or omission reason decides this by itself. Otherwise set it to false.\n" +
+	return "The service omitted the changed content described below. Set omissions_acceptable to true only when the pull request context, readable changes, and this metadata together support a reliable verdict. An omission can be acceptable without reading its content when the other evidence explains the change and leaves no material review risk. Do not treat missing access to the omitted content as material risk by itself. No file type or omission reason decides this by itself. Otherwise set it to false. Set decision_reason to one or two short sentences that name the concrete evidence you used and explain why the unread change does or does not prevent a decision. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n" +
 		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
 }
 
@@ -234,6 +279,30 @@ func decodeOmissionMarker(body string) []unreadHunk {
 		return nil
 	}
 	return hunks
+}
+
+func encodeDecisionReasonMarker(reason string) string {
+	reason = sanitizeDecisionReason(reason)
+	if reason == "" {
+		return ""
+	}
+	return decisionReasonMarkerPrefix + base64.RawURLEncoding.EncodeToString([]byte(reason)) + " -->"
+}
+
+func decodeDecisionReasonMarker(body string) string {
+	_, payload, found := strings.Cut(body, decisionReasonMarkerPrefix)
+	if !found {
+		return ""
+	}
+	payload, _, found = strings.Cut(payload, " -->")
+	if !found {
+		return ""
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+	return sanitizeDecisionReason(string(decoded))
 }
 
 // fileGapReason states why a whole file went unread.
@@ -442,5 +511,10 @@ func hunkPronoun(count int) string {
 // none: that marker means this head was reviewed, and this comment says the
 // opposite.
 func RenderUnreadableBody(summary Summary, notice string) string {
-	return strings.Join([]string{"## Review", notice, RenderDetails(summary)}, "\n\n")
+	parts := []string{"## Review", notice}
+	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
+		parts = append(parts, reason)
+	}
+	parts = append(parts, RenderDetails(summary))
+	return strings.Join(parts, "\n\n")
 }

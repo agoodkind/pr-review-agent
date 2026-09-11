@@ -118,6 +118,7 @@ type chunkPass struct {
 	panicked    *chunkPanicError
 	votes       int
 	omissionsOK bool
+	decision    omissionDecision
 }
 
 // chunkPanicError marks a chunk that panicked, so the run reports an internal
@@ -169,6 +170,9 @@ func newChunkPass(
 		panicked:      nil,
 		votes:         0,
 		omissionsOK:   true,
+		decision: omissionDecision{
+			chunk: 0, acceptable: false, reason: "", recorded: false,
+		},
 	}
 }
 
@@ -198,15 +202,6 @@ func (pass *chunkPass) recordCall(models modelSet, requests int) {
 		pass.models.add(name)
 	}
 	pass.requests += requests
-}
-
-func (pass *chunkPass) recordOmissionDecision(acceptable bool) {
-	pass.mu.Lock()
-	defer pass.mu.Unlock()
-	pass.votes++
-	if !acceptable {
-		pass.omissionsOK = false
-	}
 }
 
 func (pass *chunkPass) acceptsOmissions() bool {
@@ -750,7 +745,7 @@ func (service *Service) reviewOneChunk(
 
 	findings := make([]domain.Finding, 0)
 	for _, result := range analysis.Results {
-		pass.recordOmissionDecision(result.OmissionsAcceptable)
+		pass.recordOmissionDecision(chunk.Index, result)
 		findings = append(findings, result.Findings...)
 	}
 	// A fully unread chunk remains owed. A partial answer completes the chunk and

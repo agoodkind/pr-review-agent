@@ -18,8 +18,9 @@ const shortHeadLength = 7
 // comment and the check run both render from this one value, so the two can
 // never disagree.
 type Summary struct {
-	Head     domain.HeadSHA
-	Decision domain.ReviewDecision
+	Head           domain.HeadSHA
+	Decision       domain.ReviewDecision
+	DecisionReason string
 	// Blocking states what a requesting-changes verdict is waiting on, one
 	// entry per cause. A block that names nothing reads as a silent repeat, so
 	// a blocking verdict always carries at least one entry here.
@@ -127,13 +128,16 @@ func RenderDetails(summary Summary) string {
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(summary Summary) string {
 	parts := []string{"## Review", summary.Verdict()}
+	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
+		parts = append(parts, reason)
+	}
 	if summary.Forced {
 		parts = append(parts, forcedRunNote)
 	}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
-	if omissions := renderAcceptedOmissions(summary.Omissions); omissions != "" {
+	if omissions := renderAcceptedOmissions(summary.Omissions, summary.DecisionReason); omissions != "" {
 		parts = append(parts, omissions)
 	}
 	parts = append(
@@ -166,6 +170,9 @@ func RenderVerdictBody(summary Summary) string {
 	if omissions := encodeOmissionMarker(summary.Omissions); omissions != "" {
 		parts = append(parts, omissions)
 	}
+	if reason := encodeDecisionReasonMarker(summary.DecisionReason); reason != "" {
+		parts = append(parts, reason)
+	}
 	return strings.Join(parts, "\n")
 }
 
@@ -189,13 +196,16 @@ const withdrawnBlockNote = "The blocking review on this commit was dismissed by 
 // the comment is the only place a reader learns why.
 func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	parts := []string{"## Review", summary.Verdict()}
+	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
+		parts = append(parts, reason)
+	}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
 	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
 		parts = append(parts, withdrawnBlockNote)
 	}
-	if omissions := renderAcceptedOmissions(summary.Omissions); omissions != "" {
+	if omissions := renderAcceptedOmissions(summary.Omissions, summary.DecisionReason); omissions != "" {
 		parts = append(parts, omissions)
 	}
 	parts = append(
@@ -206,12 +216,14 @@ func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func renderAcceptedOmissions(hunks []unreadHunk) string {
+func renderAcceptedOmissions(hunks []unreadHunk, decisionReason string) string {
 	if len(hunks) == 0 {
 		return ""
 	}
-	return "The remaining evidence supported a reliable verdict despite these omissions.\n\n" +
-		renderUnreadHunks(hunks)
+	if strings.TrimSpace(decisionReason) != "" {
+		return renderUnreadHunks(hunks)
+	}
+	return "The model used the pull request description and the changes it could read to decide that the missing content did not prevent a review.\n\n" + renderUnreadHunks(hunks)
 }
 
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can
