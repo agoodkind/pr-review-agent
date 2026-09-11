@@ -537,7 +537,7 @@ test("production configuration reaches the Go service", function () {
     ["REVIEW_MIN_IMPORTANCE", "8"],
     ["REVIEW_MODEL", "fixture-review-model"],
     ["REVIEW_WORKERS", "5"],
-    ["USE_NANO_PROVIDER", false],
+    ["USE_NANO_AS_PRIMARY", false],
   ]);
   const environment = createPrAgentEnvironment(bindings);
 
@@ -554,7 +554,7 @@ test("production configuration reaches the Go service", function () {
     "FALLBACK_MODEL",
     "FALLBACK_ON",
     "OPENAI_KEY",
-    "USE_NANO_PROVIDER",
+    "USE_NANO_AS_PRIMARY",
   ]);
   for (const name of Object.keys(bindings)) {
     if (omittedBindings.has(name)) {
@@ -589,7 +589,7 @@ test("wrangler config selects Nano without forwarding Clyde access", function ()
   assert.equal(environment.CLYDE_API_KEY, "fixture-nano-key");
   assert.equal(environment.CLYDE_BASE_URL, "https://api.openai.com/v1");
   assert.equal(environment.REVIEW_MODEL, "gpt-5.4-nano");
-  assert.equal(config.vars.USE_NANO_PROVIDER, true);
+  assert.equal(config.vars.USE_NANO_AS_PRIMARY, true);
   assert.equal("CF_ACCESS_CLIENT_ID" in environment, false);
   assert.equal("CF_ACCESS_CLIENT_SECRET" in environment, false);
 });
@@ -609,7 +609,7 @@ test("both providers and their selector are declared", function () {
     assert.equal(typeof config.vars[name], "string", `${name} is not a declared variable`);
     assert.notEqual(config.vars[name], "", `${name} is declared empty`);
   }
-  assert.equal(typeof config.vars.USE_NANO_PROVIDER, "boolean");
+  assert.equal(typeof config.vars.USE_NANO_AS_PRIMARY, "boolean");
   assert.match(config.vars.FALLBACK_BASE_URL, /^https:\/\//);
 
   for (const name of Object.keys(config.vars)) {

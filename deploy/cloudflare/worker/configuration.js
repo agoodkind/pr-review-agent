@@ -143,7 +143,7 @@ export function createPrAgentEnvironment(bindings) {
     REVIEW_MIN_IMPORTANCE,
     REVIEW_MODEL,
     REVIEW_WORKERS,
-    USE_NANO_PROVIDER,
+    USE_NANO_AS_PRIMARY,
   } = bindings;
 
   const clyde = {
@@ -158,7 +158,7 @@ export function createPrAgentEnvironment(bindings) {
     CLYDE_BASE_URL: FALLBACK_BASE_URL,
     REVIEW_MODEL: FALLBACK_MODEL,
   };
-  const provider = USE_NANO_PROVIDER ? nano : clyde;
+  const provider = USE_NANO_AS_PRIMARY ? nano : clyde;
 
   return {
     ...provider,
