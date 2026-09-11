@@ -76,6 +76,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	blockWithdrawn := inputs.withdrawn && dismissedVerdictBlocked(inputs.verdict.Body)
 	return service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
 		decision:          reviewerDecision(inputs.threads, service.botLogin, headFullyReviewed),
+		decisionReason:    decodeDecisionReasonMarker(inputs.verdict.Body),
 		standingState:     inputs.standingState,
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
@@ -183,6 +184,7 @@ func (service *Service) loadVerdictRefreshInputs(
 // refreshedVerdict is what one refresh computed from current thread state.
 type refreshedVerdict struct {
 	decision          domain.ReviewDecision
+	decisionReason    string
 	standingState     string
 	threads           []githubapp.ReviewThread
 	headFullyReviewed bool
@@ -266,8 +268,9 @@ func (service *Service) applyRefreshedVerdict(
 	}
 
 	summary := Summary{
-		Head:     job.Head,
-		Decision: refreshed.decision,
+		Head:           job.Head,
+		Decision:       refreshed.decision,
+		DecisionReason: refreshed.decisionReason,
 		Blocking: blockingReasons(
 			refreshed.threads, service.botLogin, job.PullRequestRef, refreshed.headFullyReviewed,
 		),

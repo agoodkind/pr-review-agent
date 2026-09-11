@@ -199,6 +199,7 @@ func (finding Finding) Validate() error {
 // The service still determines what was read and reports every omission.
 type ReviewResult struct {
 	OmissionsAcceptable bool      `json:"omissions_acceptable"`
+	DecisionReason      string    `json:"decision_reason"`
 	Findings            []Finding `json:"findings"`
 }
 

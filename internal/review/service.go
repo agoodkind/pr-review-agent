@@ -797,6 +797,7 @@ func (service *Service) publish(
 	summary := Summary{
 		Head:              head,
 		Decision:          reviewerDecision(threads, service.botLogin, headFullyReviewed),
+		DecisionReason:    pass.decisionReason(),
 		Blocking:          blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed),
 		Models:            analysis.Models,
 		Duration:          service.now().Sub(startedAt),
