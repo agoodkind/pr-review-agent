@@ -92,6 +92,7 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		// comments on the page. Reporting none here would contradict what the
 		// reader sees on the same pull request.
 		Published:    progress.published,
+		Fallback:     nil,
 		Omissions:    nil,
 		PriorReviews: progress.priorReviews,
 		Threads:      progress.threads,

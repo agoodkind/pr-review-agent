@@ -270,16 +270,17 @@ func (collector *Collector) CollectRange(
 		return ReviewInput{}, fmt.Errorf("compare %s to %s: %w", base, pullRequest.Head, err)
 	}
 
-	// A range measured from somewhere other than the commit that was asked for
-	// still covers everything since that commit and more, so it is safe to
-	// review, but nothing downstream can tell without being told.
+	// A rewritten history makes GitHub compare from an older merge base. That
+	// range can include files outside the pull request, whose lines GitHub will
+	// refuse as review comment anchors. Review the current pull request instead.
 	if changedFiles.MergeBase != "" && changedFiles.MergeBase != base {
 		slog.WarnContext(
 			ctx,
-			"compare measured from the merge base rather than the requested commit",
+			"review history diverged, reviewing the whole pull request",
 			slog.String("requested", string(base)),
 			slog.String("merge_base", string(changedFiles.MergeBase)),
 		)
+		return collector.Collect(ctx, ref, pullRequest)
 	}
 	return ReviewInput{
 		PullRequest: pullRequest,

@@ -283,6 +283,7 @@ func (service *Service) applyRefreshedVerdict(
 		Observed:          nil,
 		Eligible:          nil,
 		Published:         nil,
+		Fallback:          nil,
 		Omissions:         refreshed.omissions,
 		PriorReviews:      nil,
 		Threads:           traceThreads(refreshed.threads, service.botLogin),

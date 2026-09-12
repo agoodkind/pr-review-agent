@@ -829,12 +829,10 @@ func TestCollectorRangeReviewsEverythingWhenTheBaseIsGone(t *testing.T) {
 	}
 }
 
-// GitHub compares from where two commits last agreed, so the patches are not
-// always measured from the commit the range asked for. Nothing downstream can
-// tell that from the files alone, and anything mapping coordinates from the
-// requested base would be mapping from a commit that was never in the patch, so
-// the collected input carries the commit the comparison actually used.
-func TestCollectRangeCarriesTheCommitTheComparisonMeasuredFrom(t *testing.T) {
+// A restack can leave the previous and current heads diverged. GitHub then
+// compares from their older merge base and includes files outside the pull
+// request, whose lines cannot accept review comments.
+func TestCollectRangeUsesThePullRequestWhenReviewHistoryDiverges(t *testing.T) {
 	const divergedMergeBase = "f8a9c5fdfaf828ef157a37e2f5d4f4424963af65"
 	source := &fakeSource{
 		files: []githubapp.ChangedFile{{
@@ -853,10 +851,11 @@ func TestCollectRangeCarriesTheCommitTheComparisonMeasuredFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectRange: %v", err)
 	}
-	if input.MergeBase != domain.HeadSHA(divergedMergeBase) {
-		t.Fatalf("merge base = %q, want %q: without it nothing downstream can tell the patches "+
-			"were measured from somewhere other than the commit asked for",
-			input.MergeBase, divergedMergeBase)
+	if source.listCalls != 1 {
+		t.Fatalf("list changed files calls = %d, want 1", source.listCalls)
+	}
+	if input.MergeBase != "" {
+		t.Fatalf("merge base = %q, want the current pull request file list", input.MergeBase)
 	}
 }
 
