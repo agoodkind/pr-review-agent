@@ -240,7 +240,7 @@ func (collector *Collector) CollectRange(
 	base domain.HeadSHA,
 ) (ReviewInput, error) {
 	if base == "" {
-		return collector.Collect(ctx, ref, pullRequest)
+		return ReviewInput{}, nil
 	}
 
 	changedFiles, err := collector.source.Compare(
