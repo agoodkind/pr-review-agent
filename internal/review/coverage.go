@@ -45,6 +45,8 @@ type unreadHunk struct {
 
 const omissionMarkerPrefix = "<!-- pr-review-agent:omissions:v1 "
 
+const omissionDecisionMarkerPrefix = "<!-- pr-review-agent:omissions-acceptable:v1 "
+
 const decisionReasonMarkerPrefix = "<!-- pr-review-agent:decision-reason:v1 "
 
 const maximumPullRequestDescriptionBytes = 8000
@@ -59,6 +61,12 @@ type omissionDecision struct {
 	acceptable bool
 	reason     string
 	recorded   bool
+}
+
+func (pass *chunkPass) decidedOmissions() bool {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	return pass.votes > 0 && len(pass.unreadable) == 0
 }
 
 func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewResult) {
@@ -198,11 +206,7 @@ func omissionPrompt(shortfall structuralShortfall) string {
 func pullRequestPrompt(
 	pullRequest githubapp.PullRequest,
 	files []diff.FileContext,
-	shortfall structuralShortfall,
 ) string {
-	if !shortfall.present() {
-		return ""
-	}
 	var contextText strings.Builder
 	fmt.Fprintf(
 		&contextText,
@@ -218,7 +222,7 @@ func pullRequestPrompt(
 			escapeOmissionPromptText(file.Status),
 		)
 	}
-	return "Review the pull request as a whole, as a human reviewer would. Treat its stated intent as a claim, not proof. Use the stated intent, readable changes, changed-file list, and omission metadata together to decide whether the change is understandable and whether any material review risk remains. Binary status is one signal, not an automatic decision.\n" +
+	return "Review the pull request as a whole, as a human reviewer would. Treat its stated intent as a claim, not proof. The latest title, description, complete changed-file list, current diff chunk, and current inline discussions are the review context. Use commit identifiers only to anchor comments and cancel a stale run. If changed content is unavailable, reason from every available signal. No file type or omission reason decides the verdict by itself.\n" +
 		WrapUntrusted(contextText.String()) + "\n"
 }
 
@@ -279,6 +283,28 @@ func decodeOmissionMarker(body string) []unreadHunk {
 		return nil
 	}
 	return hunks
+}
+
+func encodeOmissionDecisionMarker(accepted bool) string {
+	return fmt.Sprintf("%s%t -->", omissionDecisionMarkerPrefix, accepted)
+}
+
+func decodeOmissionDecisionMarker(body string) (bool, bool) {
+	_, payload, found := strings.Cut(body, omissionDecisionMarkerPrefix)
+	if !found {
+		return false, false
+	}
+	payload, _, found = strings.Cut(payload, " -->")
+	if !found {
+		return false, false
+	}
+	if payload == "true" {
+		return true, true
+	}
+	if payload == "false" {
+		return false, true
+	}
+	return false, false
 }
 
 func encodeDecisionReasonMarker(reason string) string {

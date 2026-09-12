@@ -418,8 +418,8 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	_ = labeled.Body.Close()
 
 	time.Sleep(300 * time.Millisecond)
-	if calls := fixture.clydeState.requestCount(); calls != 1 {
-		t.Fatalf("clyde requests = %d, want 1: a label this service does not own reviews nothing", calls)
+	if calls := fixture.clydeState.requestCount(); calls != 2 {
+		t.Fatalf("clyde requests = %d, want 2 from the completed review: an unrelated label adds none", calls)
 	}
 	if count := fixture.githubState.submitReviewCount(); count != 1 {
 		t.Fatalf("submit review count = %d, want 1", count)
@@ -854,7 +854,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	if first.StatusCode != http.StatusAccepted {
 		t.Fatalf("first status = %d, want 202", first.StatusCode)
 	}
-	fixture.waitForClydeCalls(t, 1)
+	fixture.waitForClydeCalls(t, 2)
 
 	second := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
@@ -865,8 +865,8 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 		t.Fatalf("second status = %d, want 202", second.StatusCode)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if fixture.clydeState.requestCount() != 1 {
-		t.Fatalf("clyde requests = %d, want 1", fixture.clydeState.requestCount())
+	if fixture.clydeState.requestCount() != 2 {
+		t.Fatalf("clyde requests = %d, want 2", fixture.clydeState.requestCount())
 	}
 }
 
@@ -1267,8 +1267,8 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 
 	runWebhook(t, "delivery-second-app")
 	time.Sleep(200 * time.Millisecond)
-	if clydeState.requestCount() != 1 {
-		t.Fatalf("clyde requests after fresh app = %d, want 1", clydeState.requestCount())
+	if clydeState.requestCount() != 2 {
+		t.Fatalf("clyde requests after fresh app = %d, want 2", clydeState.requestCount())
 	}
 	if githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count after fresh app = %d, want 1", githubState.submitReviewCount())
@@ -1347,21 +1347,19 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	})
 	_ = sync.Body.Close()
 
-	fixture.waitForClydeCalls(t, 3)
+	fixture.waitForClydeCalls(t, 5)
 	fixture.waitForSubmitReviews(t, 2)
 	// The comment is rewritten after the review is submitted, and again at every
 	// chunk checkpoint before it, so waiting on the review or on an update count
 	// races the rewrite this test reads. Wait for the state it asserts.
 	fixture.waitForSummaryHead(t, testCorrectedHead)
-	// The second run's summary comment names the first run's head, so the
-	// second run must have asked GitHub to compare that range rather than
-	// listing the whole pull request again.
-	if fixture.githubState.comparedRanges() < 1 {
-		t.Fatalf("compare range fetches = %d, want at least 1", fixture.githubState.comparedRanges())
+	// Every new head reads the current pull request rather than narrowing its
+	// view to the commit range after the previous review.
+	if fixture.githubState.comparedRanges() != 0 {
+		t.Fatalf("compare range fetches = %d, want 0", fixture.githubState.comparedRanges())
 	}
-	if fixture.githubState.listedFilePages() != 0 {
-		t.Fatalf("full file list page fetches = %d, want 0: the second run must not list the whole pull request again",
-			fixture.githubState.listedFilePages())
+	if fixture.githubState.listedFilePages() == 0 {
+		t.Fatal("full file list page fetches = 0, want the current pull request")
 	}
 	// Every verdict review states its decision. The old behavior submitted a
 	// marker-only body once a summary review existed, and that body blocked a
@@ -3050,11 +3048,15 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	}
 
 	isReconcile := false
+	isReport := false
 	if responseFormat, ok := body["response_format"].(map[string]any); ok {
 		if jsonSchema, ok := responseFormat["json_schema"].(map[string]any); ok {
-			if name, ok := jsonSchema["name"].(string); ok && name == "thread_resolutions" {
-				isReconcile = true
-				atomic.AddInt32(&state.reconcileRequests, 1)
+			if name, ok := jsonSchema["name"].(string); ok {
+				if name == "thread_resolutions" {
+					isReconcile = true
+					atomic.AddInt32(&state.reconcileRequests, 1)
+				}
+				isReport = name == "review_report"
 			}
 		}
 	}
@@ -3072,7 +3074,9 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	// A failing endpoint serves no content, and a fixture configured with only
 	// a status has no responses to index.
 	if !failed {
-		if isReconcile {
+		if isReport {
+			content = `{"summary":"This pull request updates the reviewed behavior.","walkthrough":["The change updates the current implementation."],"verdict_reason":"The current pull request has no open actionable findings."}`
+		} else if isReconcile {
 			if len(state.reconcileResponses) == 0 {
 				content = reconcileResolvedContent("thread-owned")
 			} else {
