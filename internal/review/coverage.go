@@ -361,23 +361,53 @@ func (service *Service) concludeStructurallyIncomplete(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRun githubapp.CheckRun,
+	pullRequest githubapp.PullRequest,
+	threads []githubapp.ReviewThread,
 	state marker.State,
 	shortfall structuralShortfall,
 	summary Summary,
 	progress *reviewProgress,
+	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
+	summary.Decision = domain.ReviewDecisionComment
+	summary.Omissions = shortfall.Hunks
+	summary.Blocking = replaceBlockingReason(
+		summary.Blocking,
+		unreviewedHeadReason,
+		"The unread changes listed above need review before a verdict.",
+	)
+	report, reportCalled := service.generateReport(
+		ctx, pullRequest, pass.work.Files, threads, summary, pass,
+	)
+	summary.Report = report
+	summary.Models = pass.analysis().Models
+	if reportCalled {
+		current, err := service.github.GetPullRequest(
+			ctx, job.InstallationID, job.Repository, job.Number,
+		)
+		if err != nil {
+			return service.failCheck(
+				ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, err,
+			)
+		}
+		if current.Head != summary.Head {
+			return service.cancelCheck(ctx, job, checkRun.ID)
+		}
+	}
 	notice := structuralShortfallNotice(summary.Head, shortfall, len(state.Pending))
-	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
+	publicationCtx, cancelPublication := service.publicationContext(ctx)
+	defer cancelPublication()
+	if err := service.upsertSummaryComment(publicationCtx, job, summaryCommentContent{
 		Prose: RenderUnreadableBody(summary, notice),
 		State: state,
 	}); err != nil {
 		return service.failCheck(
-			ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err,
+			publicationCtx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err,
 		)
 	}
 	if err := service.completeCheckRun(
-		ctx,
+		publicationCtx,
 		job.InstallationID,
 		job.Repository,
 		checkRun.ID,
@@ -537,10 +567,30 @@ func hunkPronoun(count int) string {
 // none: that marker means this head was reviewed, and this comment says the
 // opposite.
 func RenderUnreadableBody(summary Summary, notice string) string {
-	parts := []string{"## Review", notice}
-	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
+	parts := []string{
+		"## Review",
+		"### Summary\n\n" + renderReportSummary(summary.Report),
+		"### Walkthrough\n\n" + renderWalkthrough(summary.Report),
+		"### Coverage\n\n" + renderCoverage(summary),
+		"### Omissions\n\n" + notice,
+		verdictSectionStart,
+		"### Verdict",
+		"This review did not submit a verdict because the unread changes listed above prevent a complete review.",
+	}
+	if reason := sanitizeReportText(summary.Report.VerdictReason); reason != "" {
+		parts = append(parts, reason)
+	} else if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
 		parts = append(parts, reason)
 	}
-	parts = append(parts, RenderDetails(summary))
+	if len(summary.Published) > 0 {
+		parts = append(parts, "The actionable findings are in inline review comments.")
+	}
+	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
+		parts = append(parts, fallback)
+	}
+	if blocking := renderBlocking(summary.Blocking); blocking != "" {
+		parts = append(parts, blocking)
+	}
+	parts = append(parts, verdictSectionEnd, RenderDetails(summary))
 	return strings.Join(parts, "\n\n")
 }
