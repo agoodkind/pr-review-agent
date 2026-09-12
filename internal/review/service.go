@@ -847,13 +847,13 @@ func (service *Service) publish(
 	// outlives every later push, so the pending path's promise that the next
 	// push covers it would be false even when chunks are pending too.
 	if shortfall.present() && !omissionsDecided || len(state.Pending) > 0 {
-		publicationCtx, cancelPublication := service.publicationContext(ctx)
-		defer cancelPublication()
 		if shortfall.present() && !omissionsDecided {
 			return service.concludeStructurallyIncomplete(
-				publicationCtx, job, checkRun, state, shortfall, summary, progress,
+				ctx, job, checkRun, currentPullRequest, threads, state, shortfall, summary, progress, pass,
 			)
 		}
+		publicationCtx, cancelPublication := service.publicationContext(ctx)
+		defer cancelPublication()
 		return service.concludeIncomplete(
 			publicationCtx, job, checkRun, state, pass, summary, progress,
 		)

@@ -145,13 +145,17 @@ func reportPrompt(
 	const instruction = "Write the final report for the single top-level review comment. " +
 		"Use the supplied verdict exactly. Do not repeat actionable finding details because they are in inline review comments. " +
 		"Explain the pull request's purpose, the important behavior changes, the current discussion state, and why the verdict follows.\n"
+	verdict := string(summary.Decision)
+	if summary.Decision == domain.ReviewDecisionComment && len(summary.Omissions) > 0 {
+		verdict = "No verdict was submitted because the unread changes prevent a complete review."
+	}
 	var body strings.Builder
 	fmt.Fprintf(
 		&body,
 		"Current title: %s\nCurrent description: %s\nVerdict: %s\nChanged files:",
 		pullRequest.Title,
 		pullRequest.Body,
-		summary.Decision,
+		verdict,
 	)
 	for _, file := range files {
 		fmt.Fprintf(&body, "\n- %s (%s)", file.Path, file.Status)
@@ -211,6 +215,9 @@ func fallbackReport(summary Summary, overviews []string) Report {
 		walkthrough = append(walkthrough, "The review examined the changed files and their current diff.")
 	}
 	reason := "The current pull request has no open actionable findings."
+	if summary.Decision == domain.ReviewDecisionComment && len(summary.Omissions) > 0 {
+		reason = "The unread changes prevent a complete review, so no verdict was submitted."
+	}
 	if len(summary.Omissions) > 0 {
 		if omissionReason := sanitizeDecisionReason(summary.DecisionReason); omissionReason != "" {
 			reason = omissionReason
