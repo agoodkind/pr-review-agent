@@ -161,7 +161,7 @@ func RenderBody(summary Summary) string {
 		RenderDetails(summary),
 		marker.Summary()+"\n"+marker.Review(summary.Head, summary.Decision),
 	)
-	return strings.Join(parts, "\n\n")
+	return ""
 }
 
 func renderFallbackFindings(findings []domain.Finding) string {
