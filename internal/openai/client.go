@@ -122,6 +122,30 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 	return review.Completion{Result: result, Model: model}, nil
 }
 
+// Report requests the final prose for a completed deterministic review.
+func (client *Client) Report(ctx context.Context, prompt string) (review.ReportCompletion, error) {
+	content, model, err := client.complete(
+		ctx,
+		prompt,
+		review.ReportPolicy(),
+		reportSchemaName,
+		reportSchemaJSON,
+	)
+	if err != nil {
+		return review.ReportCompletion{}, err
+	}
+	var report review.Report
+	decoder := json.NewDecoder(strings.NewReader(content))
+	if err := decoder.Decode(&report); err != nil {
+		return review.ReportCompletion{}, errors.New("decode structured output: " + err.Error())
+	}
+	report = review.SanitizeReport(report)
+	if err := report.Validate(); err != nil {
+		return review.ReportCompletion{}, errors.New("validate review report: " + err.Error())
+	}
+	return review.ReportCompletion{Report: report, Model: model}, nil
+}
+
 // Reconcile requests one structured thread reconciliation completion.
 func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.ThreadResolution, error) {
 	content, _, err := client.complete(

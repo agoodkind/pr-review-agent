@@ -50,10 +50,28 @@ func (service *Service) refreshVerdictAtReviewedHead(
 ) error {
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
+	logger := gklog.L(ctx)
 
 	inputs, err := service.loadVerdictRefreshInputs(ctx, job, reviews)
 	if err != nil || !inputs.found {
 		return err
+	}
+	state, hasState, err := service.readState(ctx, job)
+	if err != nil {
+		logger.ErrorContext(
+			ctx,
+			"read durable state before the verdict refresh",
+			slog.String("err", err.Error()),
+		)
+		return fmt.Errorf("read durable state before the verdict refresh: %w", err)
+	}
+	if hasState && state.Status == marker.StateReviewing {
+		logger.InfoContext(
+			ctx,
+			"verdict refresh skipped",
+			slog.String("reason", "review_not_complete"),
+		)
+		return nil
 	}
 	// How much of the head was reviewed is recovered from the review that named
 	// this head, because that is the run that knew. What the pull request
@@ -74,15 +92,29 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// an approval are opposite requests, and the review's own state no longer
 	// tells them apart, so the body it kept does.
 	blockWithdrawn := inputs.withdrawn && dismissedVerdictBlocked(inputs.verdict.Body)
+	omissions := decodeOmissionMarker(inputs.verdict.Body)
+	omissionsAccepted := false
+	if accepted, found := decodeOmissionDecisionMarker(inputs.verdict.Body); found {
+		omissionsAccepted = accepted
+	}
+	decision := reviewerDecision(inputs.threads, service.botLogin, headFullyReviewed)
+	decisionReason := decodeDecisionReasonMarker(inputs.verdict.Body)
+	if len(omissions) > 0 && !omissionsAccepted {
+		decision = domain.ReviewDecisionRequestChanges
+		if decisionReason == "" {
+			decisionReason = "The unread changes listed below need review before approval."
+		}
+	}
 	return service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
-		decision:          reviewerDecision(inputs.threads, service.botLogin, headFullyReviewed),
-		decisionReason:    decodeDecisionReasonMarker(inputs.verdict.Body),
+		decision:          decision,
+		decisionReason:    decisionReason,
 		standingState:     inputs.standingState,
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
 		blockWithdrawn:    blockWithdrawn,
 		settings:          settings,
-		omissions:         decodeOmissionMarker(inputs.verdict.Body),
+		omissions:         omissions,
+		omissionsAccepted: omissionsAccepted,
 	})
 }
 
@@ -195,8 +227,9 @@ type refreshedVerdict struct {
 	// model call, so only the reported threshold comes from here, and it comes
 	// from here rather than from the service so the summary a refresh writes and
 	// the summary a review writes cannot disagree about it.
-	settings  reviewSettings
-	omissions []unreadHunk
+	settings          reviewSettings
+	omissions         []unreadHunk
+	omissionsAccepted bool
 }
 
 // mayPublish reports whether the refresh may submit the verdict it computed.
@@ -267,13 +300,22 @@ func (service *Service) applyRefreshedVerdict(
 		return nil
 	}
 
+	blocking := blockingReasons(
+		refreshed.threads, service.botLogin, job.PullRequestRef, refreshed.headFullyReviewed,
+	)
+	if len(refreshed.omissions) > 0 && !refreshed.omissionsAccepted {
+		blocking = mergeLocations(blocking, []string{refreshed.decisionReason})
+	}
 	summary := Summary{
 		Head:           job.Head,
 		Decision:       refreshed.decision,
 		DecisionReason: refreshed.decisionReason,
-		Blocking: blockingReasons(
-			refreshed.threads, service.botLogin, job.PullRequestRef, refreshed.headFullyReviewed,
-		),
+		Report: Report{
+			Summary:       "",
+			Walkthrough:   nil,
+			VerdictReason: refreshedVerdictReason(refreshed),
+		},
+		Blocking:          blocking,
 		Models:            nil,
 		Duration:          0,
 		FilesReviewed:     0,
@@ -285,6 +327,7 @@ func (service *Service) applyRefreshedVerdict(
 		Published:         nil,
 		Fallback:          nil,
 		Omissions:         refreshed.omissions,
+		OmissionsAccepted: refreshed.omissionsAccepted,
 		PriorReviews:      nil,
 		Threads:           traceThreads(refreshed.threads, service.botLogin),
 		Reached:           "",
@@ -305,9 +348,18 @@ func (service *Service) applyRefreshedVerdict(
 			slog.String("decision", string(refreshed.decision)),
 		)
 	}
-	if err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State) summaryCommentContent {
+	if err := service.upsertSummaryCommentFrom(ctx, job, func(
+		state marker.State,
+		existingBody string,
+	) summaryCommentContent {
+		if state.Status == marker.StateReviewing {
+			return summaryCommentContent{
+				Prose: stripDurableStateMarker(existingBody),
+				State: state,
+			}
+		}
 		return summaryCommentContent{
-			Prose: renderVerdictRefreshProse(summary, refreshed.blockWithdrawn),
+			Prose: refreshVerdictProse(existingBody, summary, refreshed.blockWithdrawn),
 			State: state,
 		}
 	}); err != nil {
@@ -315,6 +367,16 @@ func (service *Service) applyRefreshedVerdict(
 		return fmt.Errorf("update summary after verdict refresh: %w", err)
 	}
 	return nil
+}
+
+func refreshedVerdictReason(refreshed refreshedVerdict) string {
+	if len(refreshed.omissions) > 0 && !refreshed.omissionsAccepted {
+		return refreshed.decisionReason
+	}
+	if refreshed.decision == domain.ReviewDecisionRequestChanges {
+		return "The open inline review comments listed below still require action."
+	}
+	return "The current pull request has no open actionable findings."
 }
 
 // submitRefreshedVerdict publishes a fresh verdict review at the reviewed head.

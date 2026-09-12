@@ -126,34 +126,33 @@ func testPublishedFinding() domain.Finding {
 }
 
 func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
-	head := domain.HeadSHA(testHeadSHA)
 	tests := []struct {
 		name      string
 		decision  domain.ReviewDecision
 		published []domain.Finding
 		blocking  []string
-		message   string
+		verdict   string
 	}{
 		{
 			name:      "approve",
 			decision:  domain.ReviewDecisionApprove,
 			published: nil,
 			blocking:  nil,
-			message:   "This review found no severe defects.",
+			verdict:   "This review found no severe defects.",
 		},
 		{
 			name:      "request changes over a published finding",
 			decision:  domain.ReviewDecisionRequestChanges,
 			published: []domain.Finding{testPublishedFinding()},
 			blocking:  []string{"[main.go:1](https://github.com/owner/repo/pull/7#discussion_r1)"},
-			message:   "This review found severe defects and listed them inline.",
+			verdict:   "This review found severe defects and listed them inline.",
 		},
 		{
 			name:      "request changes with nothing inline",
 			decision:  domain.ReviewDecisionRequestChanges,
 			published: nil,
 			blocking:  []string{testUnreviewedHeadReason},
-			message:   "This review requests changes for the reasons listed below.",
+			verdict:   "This review requests changes for the reasons listed below.",
 		},
 	}
 	for _, test := range tests {
@@ -164,15 +163,23 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			summary.Blocking = test.blocking
 
 			body := review.RenderBody(summary)
-
-			want := "## Review\n\n" + test.message + "\n\n"
-			if len(test.blocking) > 0 {
-				want += "This review is waiting on:\n- " + strings.Join(test.blocking, "\n- ") + "\n\n"
+			previous := -1
+			for _, section := range []string{
+				"### Summary", "### Walkthrough", "### Coverage", "### Omissions",
+				"### Verdict", "<summary>Review details</summary>",
+			} {
+				index := strings.Index(body, section)
+				if index <= previous {
+					t.Fatalf("section %q is missing or out of order:\n%s", section, body)
+				}
+				previous = index
 			}
-			want += review.RenderDetails(summary) + "\n\n" +
-				marker.Summary() + "\n" + marker.Review(head, test.decision)
-			if body != want {
-				t.Fatalf("body = %q, want %q", body, want)
+			if !strings.Contains(body, test.verdict) {
+				t.Fatalf("body does not state verdict %q:\n%s", test.verdict, body)
+			}
+			if len(test.blocking) > 0 &&
+				!strings.Contains(body, "This review is waiting on:\n- "+strings.Join(test.blocking, "\n- ")) {
+				t.Fatalf("body does not name what blocks the review:\n%s", body)
 			}
 		})
 	}
@@ -3569,7 +3576,7 @@ func TestResolvedThreadsRefreshTheVerdictFromDurableState(t *testing.T) {
 
 // An open bot thread means the standing block is still right, so a delivery at
 // the reviewed head submits nothing.
-func TestOpenThreadsKeepTheVerdictAtAReviewedHead(t *testing.T) {
+func TestReplyReconcilesOpenThreadsAtAReviewedHead(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	openThread := resolvedBotThread("thread-open")
 	openThread.Resolved = false
@@ -3579,8 +3586,13 @@ func TestOpenThreadsKeepTheVerdictAtAReviewedHead(t *testing.T) {
 	})
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
 
-	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+	job := fixture.job()
+	job.ThreadRootCommentID = 700
+	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	if fixture.reconciler.callCount != 1 {
+		t.Fatalf("reconcile calls = %d, want 1 after a thread reply", fixture.reconciler.callCount)
 	}
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatalf("submitted review = %v, want none while a bot thread is open", fixture.state.lastSubmitReview)
@@ -5231,11 +5243,10 @@ func TestServiceCreatesTheSummaryCommentCarryingTheStateMarker(t *testing.T) {
 	}
 }
 
-// A pull request whose state marker names an earlier commit must cause the
-// run to request the compare range from that commit to the head, not the
-// full changed file list, so a run never reviews the same commit range
-// twice.
-func TestServiceRequestsTheDeltaSinceTheLastReviewedCommitWhenAMarkerExists(t *testing.T) {
+// A new head is reviewed as the pull request currently appears, even when the
+// durable marker names an earlier commit. The older commit remains an anchor
+// and never narrows what a human reviewer would see now.
+func TestServiceRequestsTheCurrentPullRequestWhenAMarkerExists(t *testing.T) {
 	collector := &recordingDeltaCollector{}
 	fixture := newServiceFixture(t, serviceFixtureOptions{collector: collector})
 	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
@@ -5257,8 +5268,8 @@ func TestServiceRequestsTheDeltaSinceTheLastReviewedCommitWhenAMarkerExists(t *t
 	if len(bases) != 1 {
 		t.Fatalf("CollectRange calls = %d, want 1", len(bases))
 	}
-	if bases[0] != domain.HeadSHA(testStaleHeadSHA) {
-		t.Fatalf("compare base = %q, want the last reviewed commit %q", bases[0], testStaleHeadSHA)
+	if bases[0] != "" {
+		t.Fatalf("compare base = %q, want the current pull request", bases[0])
 	}
 }
 

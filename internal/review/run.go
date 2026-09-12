@@ -102,12 +102,13 @@ type chunkPass struct {
 	// lock.
 	carried []string
 
-	mu        sync.Mutex
-	collector *findingCollector
-	models    modelSet
-	published []domain.Finding
-	fallback  []domain.Finding
-	failures  []chunkFailure
+	mu              sync.Mutex
+	collector       *findingCollector
+	models          modelSet
+	overviewByChunk map[int][]string
+	published       []domain.Finding
+	fallback        []domain.Finding
+	failures        []chunkFailure
 	// unreadable names hunks this service could not get a whole answer about,
 	// which no later run reads any better. It is the run's own observation, not
 	// anything the model reported about itself.
@@ -152,26 +153,27 @@ func newChunkPass(
 	carried []string,
 ) *chunkPass {
 	return &chunkPass{
-		work:          work,
-		settings:      settings,
-		selection:     selection,
-		disputes:      disputes,
-		disputePrompt: disputes.promptSection(),
-		carried:       carried,
-		mu:            sync.Mutex{},
-		collector:     newFindingCollector(work.Files, settings.minimumImportance),
-		models:        modelSet{names: nil, seen: nil},
-		published:     make([]domain.Finding, 0),
-		fallback:      make([]domain.Finding, 0),
-		failures:      make([]chunkFailure, 0),
-		unreadable:    make([]unreadHunk, 0),
-		coverage:      inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
-		requests:      0,
-		posted:        0,
-		failed:        0,
-		panicked:      nil,
-		votes:         0,
-		omissionsOK:   true,
+		work:            work,
+		settings:        settings,
+		selection:       selection,
+		disputes:        disputes,
+		disputePrompt:   disputes.promptSection(),
+		carried:         carried,
+		mu:              sync.Mutex{},
+		collector:       newFindingCollector(work.Files, settings.minimumImportance),
+		models:          modelSet{names: nil, seen: nil},
+		overviewByChunk: make(map[int][]string),
+		published:       make([]domain.Finding, 0),
+		fallback:        make([]domain.Finding, 0),
+		failures:        make([]chunkFailure, 0),
+		unreadable:      make([]unreadHunk, 0),
+		coverage:        inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
+		requests:        0,
+		posted:          0,
+		failed:          0,
+		panicked:        nil,
+		votes:           0,
+		omissionsOK:     true,
 		decision: omissionDecision{
 			chunk: 0, acceptable: false, reason: "", recorded: false,
 		},
@@ -730,9 +732,7 @@ func (service *Service) reviewOneChunk(
 		service.model,
 		chunk,
 		pass.settings.minimumImportance,
-		pass.disputePrompt+pullRequestPrompt(
-			pass.work.PullRequest, pass.work.Files, promptShortfall,
-		)+
+		pass.disputePrompt+pullRequestPrompt(pass.work.PullRequest, pass.work.Files)+
 			omissionPrompt(promptShortfall),
 		&models,
 		&requests,
@@ -747,6 +747,7 @@ func (service *Service) reviewOneChunk(
 
 	findings := make([]domain.Finding, 0)
 	for _, result := range analysis.Results {
+		pass.recordOverview(chunk.Index, result.Overview)
 		pass.recordOmissionDecision(chunk.Index, result)
 		findings = append(findings, result.Findings...)
 	}

@@ -77,6 +77,12 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		Head:           progress.head,
 		Decision:       "",
 		DecisionReason: "",
+		Report: Report{
+			Summary:       "",
+			Walkthrough:   nil,
+			VerdictReason: "",
+		},
+		OmissionsAccepted: false,
 		// A failed run carries no verdict, so there is nothing for it to be
 		// waiting on and nothing to name.
 		Blocking:          nil,

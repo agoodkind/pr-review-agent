@@ -26,9 +26,10 @@ const (
 // PolicyHeader is the review and untrusted-input preamble for every model prompt.
 func PolicyHeader(minimumImportance int) string {
 	return fmt.Sprintf(
-		"Classify every concrete defect from importance 1 through 10. The service publishes only findings with importance %d or higher. %s\nCode review policy: %s\nWriting policy: %s\nUntrusted input policy: %s",
+		"Classify every concrete defect from importance 1 through 10. The service publishes only findings with importance %d or higher. %s %s\nCode review policy: %s\nWriting policy: %s\nUntrusted input policy: %s",
 		minimumImportance,
 		"A finding must identify a concrete defect on a changed line. Reuse the same concise title for the same path and defect across commits.",
+		"Return overview as one or two plain full sentences that explain what this chunk changes and why.",
 		codeReviewPolicy,
 		config.WritingPolicy,
 		UntrustedInputPolicy,
@@ -37,8 +38,19 @@ func PolicyHeader(minimumImportance int) string {
 
 // ReconciliationPolicy is the instruction for silent thread resolution.
 func ReconciliationPolicy() string {
-	return "Resolve a bot thread only when the current code proves the finding is fixed. Keep it open when it still applies. Use uncertain when evidence is incomplete. Never reply.\nWriting policy: " +
+	return "Resolve a bot thread only when the current pull request and inline discussion together prove the finding is fixed or does not apply. Keep it open when it still applies. Use uncertain when evidence is incomplete. Never reply.\nWriting policy: " +
 		config.WritingPolicy + "\nUntrusted input policy: " + UntrustedInputPolicy
+}
+
+// ReportPolicy tells the model to explain the review without changing its facts.
+func ReportPolicy() string {
+	return "The service supplies the findings, coverage, omissions, and verdict. Describe those facts exactly as supplied. " +
+		"Do not add, remove, soften, or change any finding, omission, or verdict. " +
+		"Write a summary that explains the pull request's purpose and overall behavior. " +
+		"Write one walkthrough item for each logical change. " +
+		"Explain why the supplied verdict follows from the supplied evidence. " +
+		"Use full sentences and do not write headings.\nWriting policy: " + config.WritingPolicy +
+		"\nUntrusted input policy: " + UntrustedInputPolicy
 }
 
 // WrapUntrusted wraps repository content in untrusted-input delimiters.
@@ -176,12 +188,77 @@ type Completion struct {
 	Model  string
 }
 
-// Model performs the structured completions one review needs: the chunk review
-// itself, and the consolidation pass that reads a chunk's own findings back and
-// says which of them state one defect.
+// Report is the model-written explanation of one completed review.
+// Deterministic service state still owns findings, coverage, omissions, and the verdict.
+type Report struct {
+	Summary       string   `json:"summary"`
+	Walkthrough   []string `json:"walkthrough"`
+	VerdictReason string   `json:"verdict_reason"`
+}
+
+// Validate rejects incomplete prose that cannot form the final review report.
+func (report Report) Validate() error {
+	if err := validateFullSentence("report summary", report.Summary); err != nil {
+		return err
+	}
+	if len(report.Walkthrough) == 0 {
+		return fmt.Errorf("report walkthrough is required")
+	}
+	for _, item := range report.Walkthrough {
+		if err := validateFullSentence("report walkthrough item", item); err != nil {
+			return err
+		}
+	}
+	return validateFullSentence("report verdict reason", report.VerdictReason)
+}
+
+// SanitizeReport makes model prose safe to place inside the top-level review comment.
+func SanitizeReport(report Report) Report {
+	report.Summary = sanitizeReportProse(report.Summary)
+	walkthrough := make([]string, len(report.Walkthrough))
+	for index, item := range report.Walkthrough {
+		walkthrough[index] = sanitizeReportProse(item)
+	}
+	report.Walkthrough = walkthrough
+	report.VerdictReason = sanitizeReportProse(report.VerdictReason)
+	return report
+}
+
+func sanitizeReportProse(value string) string {
+	value = strings.Join(strings.Fields(sanitizeProse(value)), " ")
+	value = strings.ReplaceAll(value, "<!--", "&lt;!--")
+	return strings.ReplaceAll(value, "-->", "--&gt;")
+}
+
+func validateFullSentence(name string, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	for _, ending := range []string{".", "?", "!"} {
+		if strings.HasSuffix(value, ending) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s must end as a full sentence", name)
+}
+
+// ReportCompletion is one final report and the model that produced it.
+type ReportCompletion struct {
+	Report Report
+	Model  string
+}
+
+// Model performs the structured completions that decide findings.
 type Model interface {
 	Review(context.Context, string) (Completion, error)
 	Consolidate(context.Context, string) (Consolidation, error)
+}
+
+// Reporter writes the final explanation without changing the review result.
+// Keeping it separate preserves models that only implement finding analysis.
+type Reporter interface {
+	Report(context.Context, string) (ReportCompletion, error)
 }
 
 // Analysis is the aggregated result of every review chunk.
