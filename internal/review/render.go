@@ -34,6 +34,7 @@ type Summary struct {
 	Observed          []domain.Finding
 	Eligible          []domain.Finding
 	Published         []domain.Finding
+	Fallback          []domain.Finding
 	Omissions         []unreadHunk
 	PriorReviews      []reviewTrace
 	Threads           []threadTrace
@@ -75,6 +76,17 @@ const forcedRunNote = "Triggered by a `" + domain.ForceReviewLabelPrefix +
 func (summary Summary) Verdict() string {
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
 		return "This review found no severe defects."
+	}
+	if len(summary.Fallback) == 1 {
+		return "Changes requested. The review found one issue that must be resolved before merge. " +
+			"GitHub could not place the finding inline, so the complete finding appears below."
+	}
+	if len(summary.Fallback) > 1 {
+		return fmt.Sprintf(
+			"Changes requested. The review found %d issues that must be resolved before merge. "+
+				"GitHub could not place the findings inline, so the complete findings appear below.",
+			len(summary.Fallback),
+		)
 	}
 	if len(summary.Published) > 0 {
 		return "This review found severe defects and listed them inline."
@@ -128,6 +140,9 @@ func RenderDetails(summary Summary) string {
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(summary Summary) string {
 	parts := []string{"## Review", summary.Verdict()}
+	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
+		parts = append(parts, fallback)
+	}
 	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
 		parts = append(parts, reason)
 	}
@@ -146,6 +161,31 @@ func RenderBody(summary Summary) string {
 		marker.Summary()+"\n"+marker.Review(summary.Head, summary.Decision),
 	)
 	return strings.Join(parts, "\n\n")
+}
+
+func renderFallbackFindings(findings []domain.Finding) string {
+	sorted := append([]domain.Finding{}, findings...)
+	sortFindings(sorted)
+	sections := []string{"### Findings"}
+	for _, finding := range sorted {
+		normalizedPath, err := marker.NormalizePath(finding.Path)
+		if err != nil {
+			continue
+		}
+		finding = sanitizeFinding(finding)
+		parts := []string{
+			fmt.Sprintf("#### %s:%d: %s", codeSpan(normalizedPath), finding.EndLine, finding.Title),
+			finding.Body,
+		}
+		if finding.Suggestion != "" {
+			parts = append(parts, "```suggestion\n"+finding.Suggestion+"\n```")
+		}
+		sections = append(sections, strings.Join(parts, "\n\n"))
+	}
+	if len(sections) == 1 {
+		return ""
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 // RenderVerdictBody renders the body of the review that carries the verdict.

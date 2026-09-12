@@ -1286,11 +1286,9 @@ func TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost(t *testing.T) {
 	assertNoVerdictOverAnUnreadHead(t, fixture)
 }
 
-// A comment GitHub answered and refused is not a transient failure. Retrying it
-// on every later run would pin the pull request forever on an attempt already
-// known to fail, so the chunk finishes and the checkpoint advances. The run
-// still refuses to approve, because a finding nobody can see is still a finding.
-func TestACommentGitHubRefusesFinishesItsChunkAndStillBlocks(t *testing.T) {
+// A comment GitHub answered and refused is not a transient failure. The chunk
+// finishes, and the one summary comment carries the complete finding instead.
+func TestACommentGitHubRefusesFallsBackToTheSummaryAndStillBlocks(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance:   9,
 		createCommentStatus: http.StatusUnprocessableEntity,
@@ -1314,8 +1312,17 @@ func TestACommentGitHubRefusesFinishesItsChunkAndStillBlocks(t *testing.T) {
 			fixture.state.lastSubmitReview["event"])
 	}
 	body, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || !strings.Contains(body, "This head was not fully reviewed") {
-		t.Fatalf("summary comment does not say the head went partly unseen:\n%v",
+	if !ok || !strings.Contains(body, "GitHub could not place the finding inline") {
+		t.Fatalf("summary comment does not explain the fallback:\n%v",
+			fixture.state.issueComments[0]["body"])
+	}
+	for _, want := range []string{"### Findings", "`main.go`:2", "Severe defect", "The changed line breaks core behavior."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary comment does not carry %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "This head was not fully reviewed") {
+		t.Fatalf("summary comment misreports a publication failure as unread code:\n%v",
 			fixture.state.issueComments[0]["body"])
 	}
 }

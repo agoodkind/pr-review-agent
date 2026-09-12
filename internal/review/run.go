@@ -106,6 +106,7 @@ type chunkPass struct {
 	collector *findingCollector
 	models    modelSet
 	published []domain.Finding
+	fallback  []domain.Finding
 	failures  []chunkFailure
 	// unreadable names hunks this service could not get a whole answer about,
 	// which no later run reads any better. It is the run's own observation, not
@@ -161,6 +162,7 @@ func newChunkPass(
 		collector:     newFindingCollector(work.Files, settings.minimumImportance),
 		models:        modelSet{names: nil, seen: nil},
 		published:     make([]domain.Finding, 0),
+		fallback:      make([]domain.Finding, 0),
 		failures:      make([]chunkFailure, 0),
 		unreadable:    make([]unreadHunk, 0),
 		coverage:      inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
@@ -306,11 +308,11 @@ func (pass *chunkPass) analysis() Analysis {
 	}
 }
 
-// delivery reports what reached the page and what did not.
-func (pass *chunkPass) delivery() (posted int, failed int) {
+// delivery reports what reached the page, what did not, and what the summary can carry.
+func (pass *chunkPass) delivery() (posted int, failed int, fallback []domain.Finding) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
-	return pass.posted, pass.failed
+	return pass.posted, pass.failed, append([]domain.Finding{}, pass.fallback...)
 }
 
 // requestCount reports how many model requests the pass spent, the truncation
@@ -637,8 +639,8 @@ func (service *Service) settleChunk(
 		return fmt.Errorf("review cancelled: %w", ctx.Err())
 	case errors.Is(err, errCommentRefused):
 		// GitHub answered and refused. The chunk was read and its comment can
-		// never post, so it is finished rather than owed. The run still refuses
-		// to approve, because a finding nobody can see is still a finding.
+		// never post, so it is finished rather than owed. The summary carries the
+		// finding instead, and the run still requests changes.
 		logger.WarnContext(
 			ctx,
 			"chunk finished with a comment github refused",
@@ -822,8 +824,9 @@ func (service *Service) postChunkFindings(
 				slog.Int("line", post.comment.Line),
 				slog.String("err", err.Error()),
 			)
-			pass.recordUndelivered()
-			if commentRefusal(err) {
+			refusedComment := commentRefusal(err)
+			pass.recordUndelivered(post.finding, refusedComment)
+			if refusedComment {
 				refused++
 				if refusedErr == nil {
 					refusedErr = err
@@ -884,11 +887,14 @@ func (pass *chunkPass) recordDelivered(finding domain.Finding) {
 }
 
 // recordUndelivered records one finding whose comment did not reach the page.
-// The count is what stops the run approving over a defect nobody can see.
-func (pass *chunkPass) recordUndelivered() {
+// A refusal keeps the finding so the summary can show the complete reason.
+func (pass *chunkPass) recordUndelivered(finding domain.Finding, refused bool) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	pass.failed++
+	if refused {
+		pass.fallback = append(pass.fallback, finding)
+	}
 }
 
 // renderChunkFindings turns the candidates a chunk still stands behind into the

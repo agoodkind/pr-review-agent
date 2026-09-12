@@ -438,7 +438,7 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	logger := gklog.L(ctx)
 	analysis := pass.analysis()
 	unread := pass.unreadChunks()
-	posted, failed := pass.delivery()
+	posted, failed, _ := pass.delivery()
 	progress.applyAnalysis(analysis)
 	progress.applyPublished(pass.publishedFindings())
 	logChunkFailures(ctx, unread, len(pass.work.Chunks), pass.requestCount())
@@ -774,11 +774,11 @@ func (service *Service) publish(
 	}
 	progress.reached("the head refresh")
 
-	// The findings already reached the pull request as their chunks answered, so
-	// the review submitted here carries the verdict and the summary alone.
+	// Findings either reached the diff or were retained for the summary, so the
+	// review submitted here carries the verdict alone.
 	analysis := pass.analysis()
 	published := pass.publishedFindings()
-	posted, failed := pass.delivery()
+	posted, failed, fallback := pass.delivery()
 	logPublishedFindings(ctx, analysis.Anchored, published, posted, failed)
 	progress.reached("finding selection")
 
@@ -791,14 +791,24 @@ func (service *Service) publish(
 	omissionsAccepted := shortfall.present() && len(state.Pending) == 0 && len(state.Unread) == 0 &&
 		pass.acceptsOmissions()
 	// A head can receive a verdict when every chunk answered and any structural
-	// omission was accepted from the metadata supplied to the model.
+	// omission was accepted from the metadata supplied to the model. A refused
+	// inline comment still reached the reader when the summary carries it.
 	headFullyReviewed := len(state.Pending) == 0 && len(state.Unread) == 0 &&
-		(analysis.CoverageComplete || omissionsAccepted) && failed == 0
+		(analysis.CoverageComplete || omissionsAccepted) && failed == len(fallback)
+	decision := reviewerDecision(threads, service.botLogin, headFullyReviewed)
+	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed)
+	if headFullyReviewed && len(fallback) > 0 {
+		decision = domain.ReviewDecisionRequestChanges
+		blocking = mergeLocations(
+			openThreadLocations(threads, service.botLogin),
+			findingLocations(fallback),
+		)
+	}
 	summary := Summary{
 		Head:              head,
-		Decision:          reviewerDecision(threads, service.botLogin, headFullyReviewed),
+		Decision:          decision,
 		DecisionReason:    pass.decisionReason(),
-		Blocking:          blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed),
+		Blocking:          blocking,
 		Models:            analysis.Models,
 		Duration:          service.now().Sub(startedAt),
 		FilesReviewed:     analysis.FilesReviewed,
@@ -808,6 +818,7 @@ func (service *Service) publish(
 		Observed:          analysis.Observed,
 		Eligible:          analysis.Anchored,
 		Published:         published,
+		Fallback:          fallback,
 		PriorReviews:      traceReviews(reviews, service.botLogin),
 		Threads:           traceThreads(threads, service.botLogin),
 		Reached:           "",
