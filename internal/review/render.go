@@ -11,7 +11,8 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// shortHeadLength is how much of a head SHA the review details show.
+// shortHeadLength is how much of a head SHA the review details show in the
+// disposable restack validation.
 const shortHeadLength = 7
 
 // Summary is everything one published review reports about itself. The visible
