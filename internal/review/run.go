@@ -109,9 +109,8 @@ type chunkPass struct {
 	published       []domain.Finding
 	fallback        []domain.Finding
 	failures        []chunkFailure
-	// unreadable names hunks this service could not get a whole answer about,
-	// which no later run reads any better. It is the run's own observation, not
-	// anything the model reported about itself.
+	// unreadable names hunks this service could not get a whole answer about.
+	// It is the run's own observation, not anything the model reported.
 	unreadable  []unreadHunk
 	coverage    bool
 	requests    int
@@ -175,7 +174,7 @@ func newChunkPass(
 		votes:           0,
 		omissionsOK:     true,
 		decision: omissionDecision{
-			chunk: 0, acceptable: false, reason: "", recorded: false,
+			chunk: 0, acceptable: false, reason: "", recorded: false, complete: false,
 		},
 	}
 }
@@ -206,12 +205,6 @@ func (pass *chunkPass) recordCall(models modelSet, requests int) {
 		pass.models.add(name)
 	}
 	pass.requests += requests
-}
-
-func (pass *chunkPass) acceptsOmissions() bool {
-	pass.mu.Lock()
-	defer pass.mu.Unlock()
-	return pass.votes > 0 && pass.omissionsOK && len(pass.unreadable) == 0
 }
 
 // recordUnreadable records hunks this service could not get a whole answer
@@ -384,9 +377,14 @@ func (service *Service) reviewDelta(
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
+	if pass.hasUnreadableHunks() {
+		if err := service.decideUnreadableHunks(ctx, pass); err == nil {
+			tracker.completeUnreadChunks()
+		}
+	}
 	// A completed chunk can retain an unread hunk from an earlier pass. The
-	// model may accept only the structural omissions it was shown.
-	unreadable := (pass.structuralShortfall().present() && !pass.acceptsOmissions()) ||
+	// model may decide it only after seeing every omission.
+	unreadable := (pass.structuralShortfall().present() && !pass.decidedOmissions()) ||
 		len(tracker.unreadable()) > 0
 	return concludeState(tracker.snapshot(), job, head, tracker, unreadable), nil
 }
@@ -423,6 +421,9 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 	done := make(map[string]struct{}, len(state.Completed))
 	for _, id := range state.Completed {
 		done[id] = struct{}{}
+	}
+	for _, id := range state.Unread {
+		delete(done, id)
 	}
 
 	owed := make([]string, 0, len(chunks))
@@ -580,15 +581,10 @@ func (service *Service) reviewChunksConcurrently(
 
 // chunkOutcome is how much of one chunk this service got an answer about.
 type chunkOutcome struct {
-	// unread marks a chunk whose answer never arrived at all, which the model
-	// reaching its completion budget on a chunk too small to split produces.
-	// Nothing failed, and nothing was read either.
+	// unread marks a chunk whose answer never arrived at all.
 	unread bool
-	// shortfall marks a chunk holding any hunk no answer covered, whether or not
-	// the rest of the chunk answered. A chunk that answered in part is finished
-	// and still carries this, which is the case the in-memory record used to
-	// lose: it is checkpointed as completed, so no later run re-derives it and
-	// nothing would otherwise remember that part of it was never read.
+	// shortfall marks a chunk holding any hunk no answer covered, even when the
+	// rest of the chunk answered.
 	shortfall bool
 }
 
@@ -614,21 +610,21 @@ func (service *Service) settleChunk(
 	chunk := settled.chunk
 	err := settled.err
 	id := chunkID(chunk)
-	// Record a partial answer before the completed checkpoint.
-	if settled.outcome.shortfall {
+	// Record a partial or unread answer before the completed checkpoint.
+	if settled.outcome.shortfall || settled.outcome.unread {
 		tracker.recordUnread(id)
 	}
 	switch {
-	case err == nil && settled.outcome.unread:
-		// The call came back and covered none of this chunk. Recording it as
-		// finished would put a chunk nobody read into the completed list, and the
-		// next run subtracts that list from the delta: the chunk would never be
-		// re-derived, the shortfall would live only in this process's memory, and
-		// the run after this one would advance the baseline over code nobody has
-		// ever read. It is owed instead, so a later run re-derives it.
+	case err == nil && (settled.outcome.unread || settled.outcome.shortfall):
+		// The call came back and did not cover all of this chunk. Recording it as
+		// finished would put unread code into the completed list, and the next run
+		// subtracts that list from the delta: the chunk would never be re-derived,
+		// the shortfall would live only in this process's memory, and the run after
+		// this one would advance the baseline over code nobody has ever read. It is
+		// owed instead, so a later run re-derives it.
 		logger.WarnContext(
 			ctx,
-			"chunk left owed because no whole answer arrived",
+			"chunk left owed because part of it was unread",
 			slog.String("chunk", id),
 			slog.Int("index", chunk.Index),
 		)
@@ -687,6 +683,7 @@ func (service *Service) checkpoint(
 
 	tracker.unfinished = removeChunkID(tracker.unfinished, id)
 	tracker.completed = append(tracker.completed, id)
+	tracker.unread = removeChunkID(tracker.unread, id)
 	tracker.state.Pending = append([]string{}, tracker.unfinished...)
 	tracker.state.Completed = append([]string{}, tracker.completed...)
 	tracker.state.Unread = append([]string{}, tracker.unread...)
@@ -751,8 +748,7 @@ func (service *Service) reviewOneChunk(
 		pass.recordOmissionDecision(chunk.Index, result)
 		findings = append(findings, result.Findings...)
 	}
-	// A fully unread chunk remains owed. A partial answer completes the chunk and
-	// records its shortfall.
+	// Any unread hunk keeps its chunk owed until the final omission decision.
 	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
 	shortfall := len(analysis.Unreadable) > 0 && !unread
 	return chunkOutcome{unread: unread, shortfall: shortfall},

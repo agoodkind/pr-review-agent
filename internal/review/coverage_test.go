@@ -463,16 +463,13 @@ func (model *partiallyReadableModel) Review(
 	}, nil
 }
 
-// A chunk that answered in part is finished, and the head it left unread is
-// still unread on every later run.
+// A chunk that answered in part stays pending until the model decides whether
+// the unread remainder is acceptable in the current pull request.
 //
 // This is the half of the shortfall that in-memory bookkeeping lost. A chunk
-// whose split produced findings from one half and no answer at all from the
-// other is not owed: re-reading it would pay for the half that did answer on
-// every run forever. So it lands in the completed set, the next run subtracts
-// that set from the delta and never re-derives it, and nothing it observes for
-// itself says any part of this head went unread. Only the recorded id does, and
-// without it the second run advances the baseline over code nobody has read.
+// whose split produced findings from one half and no answer from the other must
+// remain pending. The final decision then reasons about that unread remainder,
+// and the next run retries it when the decision call also truncates.
 //
 // One run cannot show that, because the run that saw the shortfall still holds
 // the baseline on what it remembers. The second one can.
@@ -490,9 +487,13 @@ func TestAPartlyReadChunkKeepsTheBaselineHeldOnTheNextRun(t *testing.T) {
 		t.Fatalf("first Run: %v", err)
 	}
 	first := decodedSummaryState(t, fixture)
-	if len(first.Completed) == 0 {
-		t.Fatalf("completed after the first run = %v, want the chunk that answered in part recorded as read",
+	if len(first.Completed) != 0 {
+		t.Fatalf("completed after the first run = %v, want no partly read chunk recorded as complete",
 			first.Completed)
+	}
+	if len(first.Pending) != 1 {
+		t.Fatalf("pending after the first run = %v, want the partly read chunk retained",
+			first.Pending)
 	}
 	if len(first.Unread) == 0 {
 		t.Fatalf("unread after the first run = %v, want the chunk's shortfall recorded durably",
@@ -639,8 +640,8 @@ func TestAFullyUnreadChunkClearsAfterASuccessfulRetry(t *testing.T) {
 	if len(first.Pending) != 1 {
 		t.Fatalf("pending after first run = %v, want one unread chunk", first.Pending)
 	}
-	if len(first.Unread) != 0 {
-		t.Fatalf("unread after first run = %v, want the owed chunk tracked only as pending", first.Unread)
+	if len(first.Unread) != 1 {
+		t.Fatalf("unread after first run = %v, want the unread chunk recorded for the final decision", first.Unread)
 	}
 	model.truncateCalls = model.calls
 

@@ -64,11 +64,8 @@ type State struct {
 	// Unread names the chunks this service could not get a whole answer about,
 	// such as one holding a hunk larger than a single model request.
 	//
-	// It is durable for the same reason Pending is. Such a chunk still answers,
-	// so it lands in Completed and the next run subtracts it from the delta and
-	// never re-derives it. Without this field the shortfall would live only in
-	// the memory of the run that saw it, and the run after that one would find
-	// nothing pending and advance LastReviewed over code nobody has ever read.
+	// It is durable for the same reason Pending is. Without this field the
+	// shortfall would live only in the memory of the run that saw it.
 	//
 	// The ids are content digests, so this clears itself: once the author
 	// rewrites that code its chunk hashes differently, the recorded id matches
