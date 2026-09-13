@@ -144,7 +144,8 @@ func reportPrompt(
 ) string {
 	const instruction = "Write the final report for the single top-level review comment. " +
 		"Use the supplied verdict exactly. Do not repeat actionable finding details because they are in inline review comments. " +
-		"Explain the pull request's purpose, the important behavior changes, the current discussion state, and why the verdict follows.\n"
+		"Explain the pull request's purpose, the important behavior changes, and why the verdict follows. " +
+		"Explain which earlier concerns still apply and which no longer apply after considering the current code and replies.\n"
 	verdict := string(summary.Decision)
 	if summary.Decision == domain.ReviewDecisionComment && len(summary.Omissions) > 0 {
 		verdict = "No verdict was submitted because the unread changes prevent a complete review."
