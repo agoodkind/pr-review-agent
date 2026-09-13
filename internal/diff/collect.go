@@ -105,6 +105,17 @@ func (file *FileContext) markGap(gap CoverageGap) {
 	file.Gap = gap
 }
 
+func (file *FileContext) collectChangedLines() bool {
+	changedLines, changedHunks, err := ChangedRightLines(file.Patch)
+	if err != nil {
+		file.markGap(CoverageGapPatchUnreadable)
+		return false
+	}
+	file.ChangedRightLines = changedLines
+	file.ChangedRightHunks = changedHunks
+	return true
+}
+
 // ReviewInput is the collected pull request context for one review pass.
 type ReviewInput struct {
 	PullRequest githubapp.PullRequest
@@ -362,13 +373,9 @@ func (collector *Collector) collectFile(
 		return fileContext, nil
 	}
 
-	changedLines, changedHunks, err := ChangedRightLines(changedFile.Patch)
-	if err != nil {
-		fileContext.markGap(CoverageGapPatchUnreadable)
+	if !fileContext.collectChangedLines() {
 		return fileContext, nil
 	}
-	fileContext.ChangedRightLines = changedLines
-	fileContext.ChangedRightHunks = changedHunks
 
 	parsed, err := parsePatch(changedFile.Patch)
 	if err != nil || !parsed.complete {
@@ -389,6 +396,7 @@ func (collector *Collector) collectFile(
 	if err != nil {
 		gap := contentGapFor(err)
 		if !gap.Recurs() {
+			slog.ErrorContext(ctx, "load file content", slog.String("path", changedFile.Path), slog.String("err", err.Error()))
 			return FileContext{}, fmt.Errorf("load content for %s: %w", changedFile.Path, err)
 		}
 		fileContext.markGap(gap)

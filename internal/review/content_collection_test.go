@@ -136,8 +136,11 @@ func TestContentCollectionFailurePreservesReviewAndRetryRecovers(t *testing.T) {
 		t.Fatalf("recovered Run: %v", err)
 	}
 	assertContentCollectionApproved(t, fixture)
-	if len(fixture.state.dismissals) != 1 {
-		t.Fatalf("dismissals = %v, want stale requested-changes review dismissed", fixture.state.dismissals)
+	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA || len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("recovered review = %v, want one approval on current head", fixture.state.submittedReviews)
+	}
+	if len(fixture.state.issueComments) != 1 || fixture.state.issueCommentUpdates == 0 {
+		t.Fatalf("summary comments = %d, updates = %d, want original summary updated", len(fixture.state.issueComments), fixture.state.issueCommentUpdates)
 	}
 }
 
@@ -155,6 +158,33 @@ func TestContentCollectionSubmoduleFindingRequestsChanges(t *testing.T) {
 	}
 	if !strings.Contains(failureSummaryComment(t, fixture), "| Coverage complete | yes |") {
 		t.Fatal("submodule finding falsely reports incomplete coverage")
+	}
+}
+
+func TestContentCollectionForcedRunRecoversIncorrectlyReviewedHead(t *testing.T) {
+	model := &sequenceModel{results: []domain.ReviewResult{{}}}
+	fixture, _ := newContentCollectionFixture(t, model)
+	seedStateNaming(fixture, testHeadSHA)
+	fixture.state.reviewPages = [][]map[string]any{{{
+		"id": float64(4100), "commit_id": testHeadSHA, "state": "CHANGES_REQUESTED",
+		"body": "Changes requested.\n" + testUnreviewedHeadReason + "\n" + marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
+		"user": map[string]any{"login": testBotLogin},
+	}}}
+	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
+		t.Fatalf("forced Run: %v", err)
+	}
+	assertContentCollectionApproved(t, fixture)
+	if len(model.prompts) != 1 || !strings.Contains(model.prompts[0], collectionSubmoduleNew) || !strings.Contains(model.prompts[0], collectionSubmoduleURL) {
+		t.Fatalf("forced run did not analyze current submodule context: prompts=%v", model.prompts)
+	}
+	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA || len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("forced review = %v, want one approval on the current head", fixture.state.submittedReviews)
+	}
+	if len(fixture.state.issueComments) != 1 || fixture.state.issueComments[0]["id"] != float64(2000) || fixture.state.issueCommentUpdates == 0 {
+		t.Fatalf("forced run replaced original summary: comments=%v", fixture.state.issueComments)
+	}
+	if len(fixture.state.streamedComments) != 0 {
+		t.Fatalf("forced clean run posted findings: %v", fixture.state.streamedComments)
 	}
 }
 
