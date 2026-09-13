@@ -10,9 +10,9 @@ package review
 // from the current pull request and every signal that is available.
 //
 // The model receives metadata for every structural shortfall. When that
-// metadata is insufficient for approval, the run requests changes and explains
-// why. Only a model call that does not complete leaves the verdict undecided.
-// Findings from readable chunks are already inline on the pull request.
+// metadata is insufficient for approval, the run withholds approval and explains
+// why. Requested changes require an actionable inline finding. A model call that
+// does not complete leaves the verdict undecided.
 
 import (
 	"context"
@@ -126,14 +126,6 @@ func (pass *chunkPass) decisionReason() string {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	return pass.decision.reason
-}
-
-func rejectedOmissionReason(pass *chunkPass) string {
-	reason := pass.decisionReason()
-	if reason != "" {
-		return reason
-	}
-	return "The unread changes need review before approval."
 }
 
 func sanitizeDecisionReason(reason string) string {

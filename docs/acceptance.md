@@ -87,12 +87,18 @@ Expect:
 Resolving threads without pushing triggers nothing: runs start only on
 pull request webhooks. The next push is what recomputes.
 
-## 4. A run never approves over its own findings
+## 4. Requested changes require an actionable inline finding
 
 On a pull request where the run posts a new finding, expect the same run to
 request changes, naming the thread it just opened under "Waiting on". The
 verdict reads its threads after publication precisely so it cannot approve
 over a defect it raised minutes earlier.
+
+Make GitHub refuse the inline comment, or reject an omission without finding
+a defect. Expect `COMMENT` and an `action_required` check when no actionable
+inline finding remains. Repeat the delivery and refresh the threads: neither
+operation may turn that result into approval or requested changes. The summary
+retains any finding GitHub could not place inline.
 
 ## 5. An oversized delta is declined and stays declined
 
@@ -136,7 +142,7 @@ Expect:
 - push again with the provider healthy: the pending chunks are reviewed, the
   completed ones are not re-analyzed, and no finding posts twice
 
-## 7. A failed run reports its cause and touches nothing
+## 7. A failed read preserves earlier reviews
 
 Make a run fail outside the chunks, for example by breaking the GitHub token
 briefly.
@@ -146,6 +152,11 @@ identifier, a sanitized cause, and every review object exactly as the reader
 last saw it. One live failure rewrote an older blocking review's body while
 leaving its state standing, so an infrastructure outage read as a code
 verdict.
+
+Resolve the last inline finding during final report generation. Expect no new
+verdict and a failed check. When a fresh thread read confirms no actionable
+finding remains, expect the service to dismiss its unsupported earlier rejection.
+It must preserve other reviewers' decisions and must not guess an approval.
 
 ## 8. A lost delivery is replayed, not dropped
 

@@ -147,13 +147,6 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			blocking:  []string{"[main.go:1](https://github.com/owner/repo/pull/7#discussion_r1)"},
 			verdict:   "This review found severe defects and listed them inline.",
 		},
-		{
-			name:      "request changes with nothing inline",
-			decision:  domain.ReviewDecisionRequestChanges,
-			published: nil,
-			blocking:  []string{testUnreviewedHeadReason},
-			verdict:   "This review requests changes for the reasons listed below.",
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1295,7 +1288,7 @@ func TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost(t *testing.T) {
 
 // A comment GitHub answered and refused is not a transient failure. The chunk
 // finishes, and the one summary comment carries the complete finding instead.
-func TestACommentGitHubRefusesFallsBackToTheSummaryAndStillBlocks(t *testing.T) {
+func TestACommentGitHubRefusesFallsBackToTheSummaryWithoutBlocking(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance:   9,
 		createCommentStatus: http.StatusUnprocessableEntity,
@@ -1314,8 +1307,8 @@ func TestACommentGitHubRefusesFallsBackToTheSummaryAndStillBlocks(t *testing.T) 
 	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
 		t.Fatalf("last reviewed = %q, want the head: the chunk was read", state.LastReviewed)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES despite the refused comment",
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
+		t.Fatalf("event = %v, want COMMENT without a published inline finding",
 			fixture.state.lastSubmitReview["event"])
 	}
 	body, ok := fixture.state.issueComments[0]["body"].(string)
@@ -2847,6 +2840,7 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/issues/comments/2000",
@@ -2951,16 +2945,16 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 0", fixture.reconciler.callCount)
 	}
 
-	// A head an existing review marker already covers owes no delta, so the run
-	// reads no durable state on its way out and says nothing on the pull
-	// request. Announcing a start here would leave the comment describing a
-	// review nobody is having, with nothing after it to correct the wording.
+	// An existing review marker skips analysis. The durable summary still needs
+	// reading because an earlier run may have withheld approval after publication
+	// failed. Announcing a new review here would describe work nobody is doing.
 	wantOrder := []string{
 		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
 		"POST /repos/owner/repo/check-runs",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/pulls/7",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
@@ -3625,8 +3619,7 @@ func TestReplyReconcilesOpenThreadsAtAReviewedHead(t *testing.T) {
 	}
 }
 
-// A standing block that names an unreviewed head is not one a thread
-// resolution can lift: nothing about the code became reviewed.
+// Resolving the last inline finding removes a block without approving unread code.
 func TestThreadResolutionCannotApproveAPartiallyReviewedHead(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	pages := blockingVerdictReviewPage(head, true)
@@ -3643,9 +3636,12 @@ func TestThreadResolutionCannotApproveAPartiallyReviewedHead(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("submitted review = %v, want none: the head was never fully reviewed",
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
+		t.Fatalf("submitted review = %v, want COMMENT: the head was never fully reviewed",
 			fixture.state.lastSubmitReview)
+	}
+	if len(fixture.state.dismissals) != 1 {
+		t.Fatalf("dismissals = %v, want the unsupported earlier block removed", fixture.state.dismissals)
 	}
 }
 
@@ -4176,11 +4172,8 @@ func TestARefreshUpdatesTheBlockingListWhenTheVerdictDoesNotMove(t *testing.T) {
 	}
 }
 
-// A GitHub failure during the refresh must reach the caller. The refresh used
-// to log and swallow, so a failed refresh was indistinguishable from one that
-// found nothing to do. The check is still completed successfully first, because
-// this head is reviewed whatever the refresh managed.
-func TestAFailedVerdictRefreshIsReportedAndKeepsTheCheckGreen(t *testing.T) {
+// A failed verdict refresh reports failure and preserves the previous review.
+func TestAFailedVerdictRefreshFailsTheCheckAndPreservesReviews(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages:        blockingVerdictReviewPage(head, true),
@@ -4192,9 +4185,15 @@ func TestAFailedVerdictRefreshIsReportedAndKeepsTheCheckGreen(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run: want the refresh failure reported rather than swallowed")
 	}
-	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
-		t.Fatalf("conclusion = %v, want success: the head is reviewed whatever the refresh did",
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure: the verdict refresh did not publish",
 			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	if fixture.state.lastSubmitReview != nil || fixture.state.lastUpdateReview != nil || len(fixture.state.dismissals) != 0 {
+		t.Fatalf("failed refresh mutated reviews: submitted=%v updated=%v dismissed=%v", fixture.state.lastSubmitReview, fixture.state.lastUpdateReview, fixture.state.dismissals)
+	}
+	if fixture.state.reviewPages[0][0]["state"] != "CHANGES_REQUESTED" {
+		t.Fatalf("failed refresh changed previous review: %v", fixture.state.reviewPages[0][0])
 	}
 }
 
@@ -4233,6 +4232,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/issues/comments/2000",
@@ -4322,6 +4322,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7",
 		"POST /graphql",
 		"GET /repos/owner/repo/pulls/7/reviews",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/issues/7/comments",
@@ -6160,6 +6161,7 @@ type serviceServerState struct {
 	submitReviewStatus  int
 	updateReviewStatus  int
 	dismissals          []map[string]any
+	dismissReviewStatus int
 	createCommentStatus int
 	createCommentHangup bool
 	issueCommentStatus  int
@@ -6938,10 +6940,12 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		return
 	}
 
-	// Nothing in the service dismisses a review any more. The route stays so a
-	// test can prove that: an attempt would be recorded here rather than
-	// answered with a 404 nobody sees.
+	// GitHub changes the review itself, so subsequent reads must see the dismissal.
 	if request.Method == http.MethodPut && strings.HasSuffix(request.URL.Path, "/dismissals") {
+		if state.dismissReviewStatus != 0 && state.dismissReviewStatus != http.StatusOK {
+			http.Error(writer, "dismiss review failed", state.dismissReviewStatus)
+			return
+		}
 		body, err := serviceReadJSONBody(request)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -6950,6 +6954,18 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		trimmed := strings.TrimSuffix(request.URL.Path, "/dismissals")
 		body["review_id"] = trimmed[strings.LastIndex(trimmed, "/")+1:]
 		state.dismissals = append(state.dismissals, body)
+		for _, page := range state.reviewPages {
+			for _, item := range page {
+				if fmt.Sprintf("%.0f", item["id"]) == body["review_id"] {
+					item["state"] = "DISMISSED"
+				}
+			}
+		}
+		for _, item := range state.submittedReviews {
+			if fmt.Sprintf("%.0f", item["id"]) == body["review_id"] {
+				item["state"] = "DISMISSED"
+			}
+		}
 		serviceWriteJSON(writer, http.StatusOK, map[string]any{
 			"id":        float64(42),
 			"commit_id": testHeadSHA,

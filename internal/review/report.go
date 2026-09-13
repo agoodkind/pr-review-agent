@@ -84,7 +84,7 @@ func (service *Service) publishCompletedReview(
 	}
 	publicationCtx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
-	return service.publishVerdict(publicationCtx, job, checkRun, summary, state, progress)
+	return service.publishVerdict(publicationCtx, job, checkRun, summary, state)
 }
 
 func (service *Service) updateVerdictBody(
@@ -216,6 +216,9 @@ func fallbackReport(summary Summary, overviews []string) Report {
 		walkthrough = append(walkthrough, "The review examined the changed files and their current diff.")
 	}
 	reason := "The current pull request has no open actionable findings."
+	if summary.Decision == domain.ReviewDecisionComment {
+		reason = "Approval is withheld. This review has no actionable inline findings to support requesting changes."
+	}
 	if summary.Decision == domain.ReviewDecisionComment && len(summary.Omissions) > 0 {
 		reason = "The unread changes prevent a complete review, so no verdict was submitted."
 	}

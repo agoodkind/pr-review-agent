@@ -36,6 +36,7 @@ type publicationGitHub interface {
 	ListReviewThreads(context.Context, int64, domain.Repository, int) ([]githubapp.ReviewThread, error)
 	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
 	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
+	DismissReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
 	CreateReviewComment(
 		context.Context,
 		int64,

@@ -37,7 +37,7 @@ func reviewerDecision(
 		return domain.ReviewDecisionRequestChanges
 	}
 	if !headFullyReviewed {
-		return domain.ReviewDecisionRequestChanges
+		return domain.ReviewDecisionComment
 	}
 	return domain.ReviewDecisionApprove
 }
@@ -46,19 +46,29 @@ func reviewerDecision(
 // still open.
 func hasUnresolvedBotThread(threads []githubapp.ReviewThread, botLogin string) bool {
 	for _, thread := range threads {
-		if thread.RootComment.Author != botLogin {
-			continue
-		}
-		if !thread.Resolved {
+		if actionableBotThread(thread, botLogin) {
 			return true
 		}
 	}
 	return false
 }
 
-// blockingReasons states everything holding a requesting-changes verdict: one
-// line per open thread of the service's own, and one line when the head was
-// not fully reviewed.
+func actionableBotThread(thread githubapp.ReviewThread, botLogin string) bool {
+	comment := thread.RootComment
+	if thread.Resolved || comment.Author != botLogin || strings.TrimSpace(comment.Body) == "" {
+		return false
+	}
+	if comment.EndLine < 1 || comment.StartLine < 0 || comment.StartLine > comment.EndLine {
+		return false
+	}
+	if strings.TrimSpace(comment.Path) == "" {
+		return false
+	}
+	_, err := marker.NormalizePath(comment.Path)
+	return err == nil
+}
+
+// blockingReasons names only actionable inline findings of the service's own.
 //
 // A run that finds nothing new still blocks while an earlier thread is
 // unresolved, and with nothing said about it the review reads as a silent
@@ -69,23 +79,18 @@ func blockingReasons(
 	threads []githubapp.ReviewThread,
 	botLogin string,
 	ref domain.PullRequestRef,
-	headFullyReviewed bool,
 ) []string {
 	reasons := make([]string, 0)
 	for _, thread := range threads {
-		if thread.RootComment.Author != botLogin || thread.Resolved {
+		if !actionableBotThread(thread, botLogin) {
 			continue
 		}
 		reasons = append(reasons, describeOpenThread(thread, ref))
 	}
-	if !headFullyReviewed {
-		reasons = append(reasons, unreviewedHeadReason)
-	}
 	return reasons
 }
 
-// unreviewedHeadReason explains a block that no open thread accounts for: the
-// run could not read the whole head, or could not post what it found there.
+// unreviewedHeadReason recognizes incomplete reviews written by older releases.
 const unreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet. " +
 	"The next push reviews what this run could not."
 
@@ -155,8 +160,8 @@ func noHeadVerdict() headVerdict {
 }
 
 // latestBotVerdictAtHead returns what this service's verdict at this head
-// amounts to now. COMMENTED and PENDING reviews decide nothing and are passed
-// over.
+// amounts to now. Managed comments retain a withheld approval; unrelated
+// comments and pending reviews decide nothing and are passed over.
 //
 // The head is part of the test, not context. A pull request force pushed back to
 // a commit it already carried has verdicts from more than one head in one list,
@@ -187,6 +192,10 @@ func latestBotVerdictAtHead(
 		}
 		if item.State == reviewStateDismissed {
 			latest = headVerdict{review: item, withdrawn: true, found: true}
+			continue
+		}
+		if item.State == "COMMENTED" && strings.Contains(item.Body, approvalWithheldMarker) {
+			latest = headVerdict{review: item, withdrawn: false, found: true}
 			continue
 		}
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
@@ -242,6 +251,11 @@ func latestBotVerdictState(reviews []githubapp.Review, botLogin string) string {
 		// submit nothing, leaving the pull request carrying no verdict at all.
 		if item.State == reviewStateDismissed {
 			state = ""
+			continue
+		}
+		if item.State == "COMMENTED" && strings.Contains(item.Body, approvalWithheldMarker) &&
+			(state == "" || state == "COMMENTED") {
+			state = "COMMENTED"
 			continue
 		}
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {

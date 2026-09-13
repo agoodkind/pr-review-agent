@@ -21,6 +21,7 @@ type Summary struct {
 	Head              domain.HeadSHA
 	Decision          domain.ReviewDecision
 	DecisionReason    string
+	ApprovalWithheld  bool
 	Report            Report
 	OmissionsAccepted bool
 	// Blocking states what a requesting-changes verdict is waiting on, one
@@ -58,21 +59,11 @@ type Summary struct {
 const forcedRunNote = "Triggered by a `" + domain.ForceReviewLabelPrefix +
 	"` label, so this run reviewed the whole pull request again as it currently appears."
 
-// Verdict states the outcome in one plain sentence.
-//
-// A block is not the same claim as a finding. The sentence used to be chosen
-// from the decision alone, so every blocking verdict promised inline comments
-// whether or not this run posted any. A head the run could not finish reading
-// blocks with nothing inline, and one live review opened with "Severe findings
-// are listed inline." above its own detail table reading "Findings published
-// inline `0`", which sent the reader hunting for comments that were never
-// written.
-//
-// The sentence therefore follows what reached the pull request. What holds a
-// block with nothing inline is in the Waiting on list directly below, which
-// renderBlocking writes and which a blocking verdict always carries at least one
-// entry of, so the empty case points there rather than at nothing.
+// Verdict states the outcome without presenting withheld approval as rejection.
 func (summary Summary) Verdict() string {
+	if summary.Decision == domain.ReviewDecisionComment {
+		return "This review neither approves nor requests changes."
+	}
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
 		return "This review found no severe defects."
 	}
@@ -95,6 +86,9 @@ func (summary Summary) Verdict() string {
 
 // Title names the outcome for the check run.
 func (summary Summary) Title() string {
+	if summary.Decision == domain.ReviewDecisionComment {
+		return "Review needs attention"
+	}
 	if summary.Decision == domain.ReviewDecisionRequestChanges {
 		return "Changes requested"
 	}
@@ -146,7 +140,7 @@ func RenderBody(summary Summary) string {
 		"### Omissions\n\n" + renderOmissions(summary.Omissions),
 		renderVerdictSection(summary, false),
 		RenderDetails(summary),
-		marker.Summary() + "\n" + marker.Review(summary.Head, summary.Decision),
+		marker.Summary() + "\n" + RenderVerdictBody(summary),
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -225,7 +219,7 @@ func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
 		parts = append(parts, "The actionable findings are in inline review comments.")
 	}
 	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
-		parts = append(parts, fallback)
+		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
 	}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
@@ -284,6 +278,9 @@ func renderFallbackFindings(findings []domain.Finding) string {
 func RenderVerdictBody(summary Summary) string {
 	parts := make([]string, 0, 5)
 	parts = append(parts, marker.Review(summary.Head, summary.Decision))
+	if summary.ApprovalWithheld || summary.Decision == domain.ReviewDecisionComment {
+		parts = append(parts, approvalWithheldMarker)
+	}
 	if omissions := encodeOmissionMarker(summary.Omissions); omissions != "" {
 		parts = append(parts, omissions)
 		parts = append(parts, encodeOmissionDecisionMarker(summary.OmissionsAccepted))
@@ -293,6 +290,15 @@ func RenderVerdictBody(summary Summary) string {
 	}
 	return strings.Join(parts, "\n")
 }
+
+// A completed read may still have refused omissions or unplaced findings.
+// Thread refreshes must preserve that distinction until another review runs.
+const approvalWithheldMarker = "<!-- pr-review-agent:approval-withheld -->"
+
+const (
+	fallbackSectionStart = "<!-- pr-review-agent:fallback:start -->"
+	fallbackSectionEnd   = "<!-- pr-review-agent:fallback:end -->"
+)
 
 // withdrawnBlockNote explains a head whose findings are open while no blocking
 // verdict stands over them.
@@ -345,11 +351,21 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 		return renderVerdictRefreshProse(summary, blockWithdrawn)
 	}
 	end := start + endOffset + len(verdictSectionEnd)
+	verdict := renderVerdictSection(summary, blockWithdrawn)
+	if summary.ApprovalWithheld && len(summary.Fallback) == 0 {
+		if fallbackStart := strings.Index(prose[start:end], fallbackSectionStart); fallbackStart >= 0 {
+			fallback := prose[start+fallbackStart : end]
+			if fallbackEnd := strings.Index(fallback, fallbackSectionEnd); fallbackEnd >= 0 {
+				retained := fallback[:fallbackEnd+len(fallbackSectionEnd)]
+				verdict = strings.Replace(verdict, verdictSectionEnd, retained+"\n\n"+verdictSectionEnd, 1)
+			}
+		}
+	}
 	updated := strings.TrimSpace(prose[:start]) + "\n\n" +
-		renderVerdictSection(summary, blockWithdrawn) + prose[end:]
+		verdict + prose[end:]
 	if markerStart := strings.LastIndex(updated, marker.Summary()); markerStart >= 0 {
 		updated = strings.TrimSpace(updated[:markerStart]) + "\n\n" + marker.Summary() + "\n" +
-			marker.Review(summary.Head, summary.Decision)
+			RenderVerdictBody(summary)
 	}
 	return updated
 }
@@ -466,6 +482,10 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 	parts := []string{"## Review", strings.TrimSpace(title)}
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
 		parts = append(parts, trimmedDetail)
+	}
+	if summary.ApprovalWithheld && summary.Decision != "" {
+		summary.Decision = domain.ReviewDecisionComment
+		parts = append(parts, renderVerdictSection(summary, false), RenderVerdictBody(summary))
 	}
 	parts = append(parts, RenderDetails(summary), marker.Summary())
 	return strings.Join(parts, "\n\n")
@@ -590,6 +610,7 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 		chunkPronoun(pending),
 	)
 	blocking := summary.Blocking
+	coverageReason := unreviewedHeadReason
 	if reason == checkFailureUnavailable {
 		lead = fmt.Sprintf(
 			"%s could not be reviewed on `%s`. %s",
@@ -598,13 +619,14 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 			reason,
 		)
 		blocking = replaceBlockingReason(blocking, unreviewedHeadReason, unreviewedProviderReason)
+		coverageReason = unreviewedProviderReason
 		reason = ""
 	}
 	parts := []string{
 		"## Review",
 		lead,
 	}
-	for _, note := range []string{reason, renderBlocking(blocking), detail} {
+	for _, note := range []string{reason, coverageReason, renderBlocking(blocking), detail} {
 		if trimmed := strings.TrimSpace(note); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
