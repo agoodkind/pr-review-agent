@@ -996,14 +996,12 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	assertVerdictBody(t, review["body"], testDefectiveHead, false)
 }
 
-// A block names what to fix in the one top level comment, and the verdict
-// review carries no prose at all.
+// A block names what to fix in the one top-level comment, while the verdict
+// review carries no visible prose.
 //
 // A block naming nothing to fix leaves no edit that could satisfy it, so the
-// reasons have to be somewhere. They belong in the comment, because that is the
-// only place this service writes above the diff; printing them again in the
-// verdict body puts a second Review box on the page saying what the first one
-// said, which is what a reader reported twice.
+// reasons have to be visible in the existing report and inline findings. The
+// verdict review only carries the decision and hidden state.
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -3159,15 +3157,7 @@ var summaryProse = []string{
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks one verdict review body against the rule that a pull
-// request carries exactly one top level comment from this service and nothing
-// else above the diff.
-//
-// The body is the review marker and nothing visible, whatever the decision is.
-// GitHub renders the decision itself as an event, and the one comment already
-// says what the review is waiting on, so prose here is a second Review box
-// repeating the comment a few pixels above it. The marker stays because the
-// service reads it back to recognize a head it already reviewed.
+// assertVerdictBody checks that the verdict review adds no third visible comment.
 func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	t.Helper()
 	body, ok := value.(string)
@@ -3182,8 +3172,7 @@ func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 		decision = domain.ReviewDecisionRequestChanges
 	}
 	if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head), decision) {
-		t.Fatalf("verdict body carries visible prose beside the marker, so the reader sees a second Review box: %q",
-			body)
+		t.Fatalf("verdict body creates a third visible comment: %q", body)
 	}
 	// The marker records the decision because a dismissal erases GitHub's own
 	// record of it, and the withheld-block rule reads it back from here.

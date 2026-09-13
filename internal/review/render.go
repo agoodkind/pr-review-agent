@@ -276,25 +276,14 @@ func renderFallbackFindings(findings []domain.Finding) string {
 	return strings.Join(sections, "\n\n")
 }
 
-// RenderVerdictBody renders the body of the review that carries the verdict.
+// RenderVerdictBody renders the review object that carries the verdict.
 //
-// It carries no prose, whatever the verdict is. A pull request gets exactly one
-// top level comment from this service and nothing else above the diff: the
-// comment says the review started, then what it is waiting on, then the verdict,
-// rewritten in place each time. Everything else this service has to say is an
-// inline comment on the line it is about.
-//
-// A verdict review is not a second place to say any of that. GitHub already
-// renders the decision itself as an event, so prose here only repeats the
-// comment a few pixels above it, which is exactly what a reader reported twice:
-// first as two identical Review boxes around an approval, then as the same
-// waiting-on list printed under both.
-//
-// Only markers occupy the body. hasBotReviewMarker reads the review marker to
-// recognize a head this service already reviewed, while the omission marker
-// lets a later thread refresh keep the disclosure. Both render as nothing.
+// GitHub displays the decision itself. The hidden markers preserve review state
+// without creating a third visible comment beside the top-level report and the
+// inline findings.
 func RenderVerdictBody(summary Summary) string {
-	parts := []string{marker.Review(summary.Head, summary.Decision)}
+	parts := make([]string, 0, 5)
+	parts = append(parts, marker.Review(summary.Head, summary.Decision))
 	if omissions := encodeOmissionMarker(summary.Omissions); omissions != "" {
 		parts = append(parts, omissions)
 		parts = append(parts, encodeOmissionDecisionMarker(summary.OmissionsAccepted))

@@ -3,19 +3,16 @@ package review
 // This file is what a run leaves behind when part of the head is beyond what
 // this service can read at all.
 //
-// A shortfall has two kinds and they need opposite endings. A chunk whose model
-// call or comment post failed is temporary: it stays pending, the baseline
-// holds, and the next push really does finish it. A hunk larger than one model
-// request, a binary file, and a patch GitHub will not supply come back
-// identically on every later run, so pending them promises a push that cannot
-// deliver, and blocking with a verdict leaves a person a review to dismiss over
-// code this service was never going to read.
+// A shortfall has two kinds and they need different handling. A chunk whose
+// model call or comment post failed is temporary, so it stays pending. A hunk
+// larger than one model request, a binary file, and a patch GitHub will not
+// supply come back identically on every later run, so the model decides them
+// from the current pull request and every signal that is available.
 //
 // The model receives metadata for every structural shortfall. When that
-// metadata is insufficient for a reliable verdict, the run submits no verdict,
-// holds the merge gate with an action_required check, and names every piece
-// nobody read. The findings the readable chunks produced are already on the
-// pull request, because they are real whatever else went unread.
+// metadata is insufficient for approval, the run requests changes and explains
+// why. Only a model call that does not complete leaves the verdict undecided.
+// Findings from readable chunks are already inline on the pull request.
 
 import (
 	"context"
@@ -28,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
@@ -61,12 +59,26 @@ type omissionDecision struct {
 	acceptable bool
 	reason     string
 	recorded   bool
+	complete   bool
 }
 
 func (pass *chunkPass) decidedOmissions() bool {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
-	return pass.votes > 0 && len(pass.unreadable) == 0
+	return pass.votes > 0 && (len(pass.unreadable) == 0 || pass.decision.complete)
+}
+
+func (pass *chunkPass) acceptsOmissions() bool {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	return pass.votes > 0 && pass.omissionsOK &&
+		(len(pass.unreadable) == 0 || pass.decision.complete)
+}
+
+func (pass *chunkPass) hasUnreadableHunks() bool {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	return len(pass.unreadable) > 0
 }
 
 func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewResult) {
@@ -81,6 +93,7 @@ func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewRes
 		acceptable: result.OmissionsAcceptable,
 		reason:     sanitizeDecisionReason(result.DecisionReason),
 		recorded:   true,
+		complete:   false,
 	}
 	preferRejected := !candidate.acceptable && pass.decision.acceptable
 	sameDecision := candidate.acceptable == pass.decision.acceptable
@@ -93,10 +106,34 @@ func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewRes
 	}
 }
 
+// replaceOmissionDecision records the answer that saw every omission. Earlier
+// chunk answers could not include a hunk that became unread during their calls.
+func (pass *chunkPass) replaceOmissionDecision(result domain.ReviewResult) {
+	pass.mu.Lock()
+	defer pass.mu.Unlock()
+	pass.votes = 1
+	pass.omissionsOK = result.OmissionsAcceptable
+	pass.decision = omissionDecision{
+		chunk:      0,
+		acceptable: result.OmissionsAcceptable,
+		reason:     sanitizeDecisionReason(result.DecisionReason),
+		recorded:   true,
+		complete:   true,
+	}
+}
+
 func (pass *chunkPass) decisionReason() string {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	return pass.decision.reason
+}
+
+func rejectedOmissionReason(pass *chunkPass) string {
+	reason := pass.decisionReason()
+	if reason != "" {
+		return reason
+	}
+	return "The unread changes need review before approval."
 }
 
 func sanitizeDecisionReason(reason string) string {
@@ -201,6 +238,64 @@ func omissionPrompt(shortfall structuralShortfall) string {
 	}
 	return "The service omitted the changed content described below. Set omissions_acceptable to true only when the pull request context, readable changes, and this metadata together support a reliable verdict. An omission can be acceptable without reading its content when the other evidence explains the change and leaves no material review risk. Do not treat missing access to the omitted content as material risk by itself. No file type or omission reason decides this by itself. Otherwise set it to false. Set decision_reason to one or two short sentences that name the concrete evidence you used and explain why the unread change does or does not prevent a decision. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n" +
 		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
+}
+
+// decideUnreadableHunks asks one compact question after a chunk answer was cut
+// off. The model sees the current pull request, its discussions, the readable
+// summaries, and every unread hunk. Findings still require changed lines.
+func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPass) error {
+	logger := gklog.L(ctx)
+	shortfall := pass.structuralShortfall()
+	if !shortfall.present() || !pass.hasUnreadableHunks() {
+		return nil
+	}
+
+	var reviewed strings.Builder
+	for _, overview := range pass.overviews() {
+		if value := sanitizeReportText(overview); value != "" {
+			reviewed.WriteString("\n- ")
+			reviewed.WriteString(value)
+		}
+	}
+	const instruction = "This call decides only whether the pull request can receive a verdict. " +
+		"Return no findings because this call supplies no changed lines. " +
+		"A false omissions_acceptable answer requests changes. It does not withhold the verdict. " +
+		"Use the unread change list before the supporting context.\n"
+	required := instruction + omissionPrompt(shortfall)
+	contextText := pullRequestPrompt(pass.work.PullRequest, pass.work.Files) +
+		pass.disputePrompt + "The readable parts were summarized as follows:\n" +
+		WrapUntrusted(reviewed.String())
+	if len(required) > config.MaximumPromptBytes {
+		required = truncateUTF8(required, config.MaximumPromptBytes)
+	}
+	maximumContext := max(config.MaximumPromptBytes-len(required), 0)
+	prompt := required + truncateUTF8(contextText, maximumContext)
+
+	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	defer cancel()
+	completion, err := service.model.Review(callCtx, prompt)
+	models := modelSet{names: nil, seen: nil}
+	if completion.Model != "" {
+		models.add(completion.Model)
+	}
+	pass.recordCall(models, 1)
+	if err != nil {
+		logger.ErrorContext(ctx, "decide unread changes", slog.String("err", err.Error()))
+		return fmt.Errorf("decide unread changes: %w", err)
+	}
+	if err := completion.Result.Validate(); err != nil {
+		logger.ErrorContext(ctx, "validate unread change decision", slog.String("err", err.Error()))
+		return fmt.Errorf("validate unread change decision: %w", err)
+	}
+	pass.replaceOmissionDecision(completion.Result)
+	logger.InfoContext(
+		ctx,
+		"unread changes decided from current pull request",
+		slog.Bool("acceptable", completion.Result.OmissionsAcceptable),
+		slog.Int("unread_hunks", len(shortfall.Hunks)),
+		slog.String("model", completion.Model),
+	)
+	return nil
 }
 
 func pullRequestPrompt(

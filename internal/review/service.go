@@ -802,7 +802,7 @@ func (service *Service) publish(
 		decision = domain.ReviewDecisionRequestChanges
 		blocking = mergeLocations(
 			blocking,
-			[]string{"The unread changes listed above need review before approval."},
+			[]string{rejectedOmissionReason(pass)},
 		)
 	}
 	if headFullyReviewed && len(fallback) > 0 {
