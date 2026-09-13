@@ -26,6 +26,25 @@ func emptyReview() githubapp.Review {
 	return githubapp.Review{ID: 0, CommitID: "", Author: "", Body: "", State: ""}
 }
 
+func (service *Service) reconcileReplyAndRefreshVerdict(
+	ctx context.Context,
+	job domain.ReviewJob,
+	reviews []githubapp.Review,
+	settings reviewSettings,
+) error {
+	logger := gklog.L(ctx)
+	var threads []githubapp.ReviewThread
+	if job.ThreadRootCommentID != 0 {
+		var err error
+		threads, err = service.reconciler.Reconcile(ctx, job)
+		if err != nil {
+			logger.ErrorContext(ctx, "reconcile replied thread", slog.String("err", err.Error()))
+			return fmt.Errorf("reconcile replied thread: %w", err)
+		}
+	}
+	return service.refreshVerdictAtReviewedHead(ctx, job, reviews, threads, settings)
+}
+
 // refreshVerdictAtReviewedHead reconciles the standing verdict with current
 // thread state at a head that is already reviewed.
 //
@@ -46,13 +65,14 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	ctx context.Context,
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
+	threads []githubapp.ReviewThread,
 	settings reviewSettings,
 ) error {
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
 	logger := gklog.L(ctx)
 
-	inputs, err := service.loadVerdictRefreshInputs(ctx, job, reviews)
+	inputs, err := service.loadVerdictRefreshInputs(ctx, job, reviews, threads)
 	if err != nil || !inputs.found {
 		return err
 	}
@@ -182,6 +202,7 @@ func (service *Service) loadVerdictRefreshInputs(
 	ctx context.Context,
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
+	threads []githubapp.ReviewThread,
 ) (verdictRefreshInputs, error) {
 	logger := gklog.L(ctx)
 	missing := verdictRefreshInputs{
@@ -199,10 +220,13 @@ func (service *Service) loadVerdictRefreshInputs(
 	if !verdict.found {
 		return missing, nil
 	}
-	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
-	if err != nil {
-		logger.ErrorContext(ctx, "list threads for verdict refresh", slog.String("err", err.Error()))
-		return missing, fmt.Errorf("list threads for verdict refresh: %w", err)
+	if threads == nil {
+		listed, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
+		if err != nil {
+			logger.ErrorContext(ctx, "list threads for verdict refresh", slog.String("err", err.Error()))
+			return missing, fmt.Errorf("list threads for verdict refresh: %w", err)
+		}
+		threads = listed
 	}
 	return verdictRefreshInputs{
 		verdict:       verdict.review,

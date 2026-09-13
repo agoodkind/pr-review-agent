@@ -323,22 +323,6 @@ func (service *Service) runLocked(
 	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress, settings)
 }
 
-func (service *Service) reconcileReplyAndRefreshVerdict(
-	ctx context.Context,
-	job domain.ReviewJob,
-	reviews []githubapp.Review,
-	settings reviewSettings,
-) error {
-	logger := gklog.L(ctx)
-	if job.ThreadRootCommentID != 0 {
-		if _, err := service.reconciler.Reconcile(ctx, job); err != nil {
-			logger.ErrorContext(ctx, "reconcile replied thread", slog.String("err", err.Error()))
-			return fmt.Errorf("reconcile replied thread: %w", err)
-		}
-	}
-	return service.refreshVerdictAtReviewedHead(ctx, job, reviews, settings)
-}
-
 // reviewOwedWork reviews the current pull request as GitHub presents it now,
 // minus identical chunks this same incomplete review already finished.
 //
