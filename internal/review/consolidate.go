@@ -1,7 +1,6 @@
 package review
 
-// This file asks the model, once per chunk, whether the findings that chunk
-// still stands behind are really several findings.
+// This file asks the model whether findings are really separate defects.
 //
 // The deterministic layers compare a claim key, a claim sentence, and an anchor
 // range. Every one of them is exact, which is what makes them safe to run with
@@ -27,10 +26,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
@@ -49,14 +50,12 @@ const maximumConsolidationReasonBytes = 200
 // comparing keys.
 const senseConsolidation = "consolidation"
 
-// ConsolidationGroup is one set of a chunk's candidates the model says state a
-// single defect.
+// ConsolidationGroup is one set of candidates the model says state one defect.
 type ConsolidationGroup struct {
 	// Candidates are the numbers the prompt showed, counting from one.
 	Candidates []int `json:"candidates"`
-	// RestatesOpenThread marks a group that states what the reviewer context
-	// already states. Every member of such a group is dropped, because the
-	// existing thread is where that conversation already is.
+	// RestatesOpenThread marks a group that states what the reviewer context or
+	// an earlier chunk already states. The JSON name remains stable for clients.
 	RestatesOpenThread bool `json:"restates_open_thread"`
 	// Reason is the model's one line for why these are one defect.
 	Reason string `json:"reason"`
@@ -144,7 +143,67 @@ func (service *Service) chunkPosts(
 	pass *chunkPass,
 ) []postCandidate {
 	candidates := pass.chunkCandidates(ctx, chunkText, findings)
-	return service.renderChunkFindings(ctx, head, service.consolidateChunk(ctx, candidates, pass), pass)
+	candidates = service.consolidateChunk(ctx, candidates, pass)
+	for {
+		pass.publicationMu.Lock()
+		selectedCount := len(pass.selection.findings)
+		selected := slices.Clone(pass.selection.findings)
+		if selectedCount == 0 {
+			posts := service.renderChunkFindings(ctx, head, candidates, pass)
+			pass.publicationMu.Unlock()
+			return posts
+		}
+		pass.publicationMu.Unlock()
+
+		consolidated := service.consolidateAcrossChunks(
+			ctx, candidates, selected, pass, chunkText,
+		)
+		pass.publicationMu.Lock()
+		if len(pass.selection.findings) != selectedCount {
+			pass.publicationMu.Unlock()
+			continue
+		}
+		posts := service.renderChunkFindings(ctx, head, consolidated, pass)
+		pass.publicationMu.Unlock()
+		return posts
+	}
+}
+
+// consolidateAcrossChunks compares this chunk's candidates with findings an
+// earlier chunk selected, including restatements that share no exact key.
+func (service *Service) consolidateAcrossChunks(
+	ctx context.Context,
+	candidates []domain.Finding,
+	selected []domain.Finding,
+	pass *chunkPass,
+	chunkText string,
+) []domain.Finding {
+	if len(candidates) == 0 || len(selected) == 0 {
+		return candidates
+	}
+	prompt, ok := buildAcrossChunkConsolidationPrompt(
+		candidates, selected, pass.work, chunkText, pass.disputePrompt,
+	)
+	if !ok {
+		return candidates
+	}
+	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	answer, err := service.model.Consolidate(callCtx, prompt)
+	cancel()
+	pass.recordConsolidationRequest()
+	if err == nil {
+		err = answer.Validate(len(candidates))
+	}
+	if err != nil {
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"cross-chunk consolidation call failed, publishing what the deterministic layers left",
+			slog.Int("candidates", len(candidates)),
+			slog.String("err", err.Error()),
+		)
+		return candidates
+	}
+	return applyConsolidation(ctx, candidates, answer)
 }
 
 // chunkCandidates is what one chunk answer still stands behind after the
@@ -336,6 +395,86 @@ func buildConsolidationPrompt(candidates []domain.Finding, disputes string) stri
 	builder.WriteString("A finding that repeats nothing belongs in no group.\n")
 	builder.WriteString(WrapUntrusted(formatConsolidationCandidates(candidates)))
 	return builder.String()
+}
+
+// buildAcrossChunkConsolidationPrompt asks whether new candidates restate a
+// finding this run already selected. Candidate numbers refer only to the new
+// findings, so the model can drop a restatement without changing an earlier
+// comment.
+func buildAcrossChunkConsolidationPrompt(
+	candidates []domain.Finding,
+	carried []domain.Finding,
+	work deltaWork,
+	chunkText string,
+	disputes string,
+) (string, bool) {
+	const instruction = "Decide only whether each new candidate is the same underlying defect as a finding already selected. " +
+		"Use the current pull request, related current source, tests in that source, and inline discussions. " +
+		"Do not drop a candidate merely because its wording or effect sounds similar. " +
+		"Set restates_open_thread only when one fix resolves both findings. " +
+		"Return a group for each set of new candidate numbers that state one defect. " +
+		"A candidate that repeats nothing belongs in no group.\n"
+	findings := "Findings already selected:\n" + formatConsolidationCandidates(carried) +
+		"\n\nNew candidates:\n" + formatConsolidationCandidates(candidates)
+	minimumLength := len(instruction) + len(promptInputBegin) + len(promptInputEnd) +
+		len(findings) + 4
+	if minimumLength >= config.MaximumPromptBytes {
+		return "", false
+	}
+	contextBudget := config.MaximumPromptBytes - minimumLength
+	contextText := formatAcrossChunkContext(work, chunkText, disputes, carried)
+	if len(contextText) > contextBudget {
+		return "", false
+	}
+	input := contextText + "\n\n" + findings
+	input = strings.ReplaceAll(input, promptInputBegin, "<UNTRUSTED_INPUT>")
+	input = strings.ReplaceAll(input, promptInputEnd, "<END_UNTRUSTED_INPUT>")
+	return instruction + WrapUntrusted(input), true
+}
+
+func formatAcrossChunkContext(
+	work deltaWork,
+	chunkText string,
+	disputes string,
+	carried []domain.Finding,
+) string {
+	var builder strings.Builder
+	fmt.Fprintf(
+		&builder,
+		"Current pull request:\nTitle: %s\nDescription: %s\nChanged files:",
+		truncateUTF8(work.PullRequest.Title, maximumPullRequestDescriptionBytes),
+		truncateUTF8(work.PullRequest.Body, maximumPullRequestDescriptionBytes),
+	)
+	for _, file := range work.Files {
+		fmt.Fprintf(&builder, "\n- %s (%s)", file.Path, file.Status)
+	}
+	builder.WriteString("\n\nCurrent source context:\n")
+	builder.WriteString(chunkText)
+	paths := make(map[string]struct{}, len(carried))
+	for _, finding := range carried {
+		paths[finding.Path] = struct{}{}
+	}
+	for _, chunk := range work.Chunks {
+		if chunk.Text == chunkText || !chunkHasPath(chunk, paths) {
+			continue
+		}
+		builder.WriteString("\n\n")
+		builder.WriteString(chunk.Text)
+	}
+	if disputes != "" {
+		builder.WriteString("\n\nCurrent inline discussions:\n")
+		builder.WriteString(disputes)
+	}
+	return builder.String()
+}
+
+func chunkHasPath(chunk diff.Chunk, paths map[string]struct{}) bool {
+	for _, path := range chunk.Paths {
+		if _, found := paths[path]; found {
+			return true
+		}
+	}
+	return false
 }
 
 // formatConsolidationCandidates renders the candidates as the model sees them,

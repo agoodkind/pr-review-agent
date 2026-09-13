@@ -397,6 +397,80 @@ func TestTwoChunksNamingOneDefectPublishItOnce(t *testing.T) {
 	}
 }
 
+type semanticAcrossChunkModel struct {
+	consolidationPrompt string
+}
+
+func (model *semanticAcrossChunkModel) Review(
+	_ context.Context,
+	prompt string,
+) (review.Completion, error) {
+	finding := domain.Finding{
+		Path:       "file0.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "Empty routes disable steering",
+		Body:       "An empty route list prevents steering from starting.",
+		Evidence:   sharedClaimLine,
+		Claim:      "Steering does not start",
+		Importance: 9,
+	}
+	if promptFilePath(prompt) == "file1.go" {
+		finding.StartLine = 4
+		finding.EndLine = 4
+		finding.Title = "Missing members leave no balancer"
+		finding.Body = "The same empty configuration leaves the balancer disabled."
+		finding.Evidence = "third0"
+		finding.Claim = "No balancer is created"
+	}
+	return review.Completion{
+		Result: domain.ReviewResult{Findings: []domain.Finding{finding}},
+		Model:  testReviewModel,
+	}, nil
+}
+
+func (model *semanticAcrossChunkModel) Consolidate(
+	_ context.Context,
+	prompt string,
+) (review.Consolidation, error) {
+	model.consolidationPrompt = prompt
+	return review.Consolidation{Groups: []review.ConsolidationGroup{{
+		Candidates:         []int{1},
+		RestatesOpenThread: true,
+		Reason:             "Both findings describe the same disabled steering behavior.",
+	}}}, nil
+}
+
+// Two chunks can describe one behavior with different anchors, evidence,
+// titles, and claims. The second candidate is compared with the first finding,
+// so one underlying concern creates one inline thread.
+func TestTwoChunksPublishOneSemanticConcern(t *testing.T) {
+	model := &semanticAcrossChunkModel{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		collector:         twoFileChunkCollector{},
+		minimumImportance: 9,
+		model:             model,
+	})
+
+	bodies := publishedBodies(t, fixture)
+
+	if len(bodies) != 1 {
+		t.Fatalf("published comments = %v, want one semantic concern", bodies)
+	}
+	for _, want := range []string{
+		"Findings already selected",
+		"Empty routes disable steering",
+		"Missing members leave no balancer",
+		"Current pull request",
+		"Current source context",
+		"one fix resolves both findings",
+	} {
+		if !strings.Contains(model.consolidationPrompt, want) {
+			t.Fatalf("consolidation prompt missing %q:\n%s", want, model.consolidationPrompt)
+		}
+	}
+}
+
 // One claim sentence is a short label for a defect, and a label is true of many
 // files at once. Two findings carrying the identical label about two unrelated
 // files are two defects, and suppressing either loses a review.

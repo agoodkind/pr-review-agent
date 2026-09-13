@@ -195,16 +195,13 @@ func (finding Finding) Validate() error {
 }
 
 // ReviewResult is the structured model output for one review pass.
-//
-// It carries findings and nothing else. It used to carry a coverage_complete
-// boolean the schema required on every answer, while the prompt never said what
-// the field meant, so the model filled a required boolean blind. One false
-// answer set the whole pass incomplete, which blocked the head and printed a
-// promise that the next push would finish reading it. Whether this service
-// handed the model the whole diff is a fact only this service can know, so it is
-// computed from what this process observed and never asked of the model.
+// OmissionsAcceptable judges only the omission metadata supplied with the diff.
+// The service still determines what was read and reports every omission.
 type ReviewResult struct {
-	Findings []Finding `json:"findings"`
+	Overview            string    `json:"overview"`
+	OmissionsAcceptable bool      `json:"omissions_acceptable"`
+	DecisionReason      string    `json:"decision_reason"`
+	Findings            []Finding `json:"findings"`
 }
 
 // Validate rejects invalid findings and exact duplicates.
@@ -241,6 +238,9 @@ type ReviewJob struct {
 	CheckRunID         int64
 	CheckRunStatus     string
 	CheckRunConclusion string
+	// ThreadRootCommentID asks an already reviewed head to reconsider the
+	// inline finding that received this reply.
+	ThreadRootCommentID int64
 	// Forced marks a run a ForceReviewLabelPrefix label asked for. Such a run
 	// reviews the whole pull request from scratch: it ignores the commit the
 	// last completed run reviewed, the chunks earlier runs read, and every gate

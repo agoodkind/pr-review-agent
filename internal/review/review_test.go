@@ -126,34 +126,33 @@ func testPublishedFinding() domain.Finding {
 }
 
 func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
-	head := domain.HeadSHA(testHeadSHA)
 	tests := []struct {
 		name      string
 		decision  domain.ReviewDecision
 		published []domain.Finding
 		blocking  []string
-		message   string
+		verdict   string
 	}{
 		{
 			name:      "approve",
 			decision:  domain.ReviewDecisionApprove,
 			published: nil,
 			blocking:  nil,
-			message:   "No severe findings.",
+			verdict:   "This review found no severe defects.",
 		},
 		{
 			name:      "request changes over a published finding",
 			decision:  domain.ReviewDecisionRequestChanges,
 			published: []domain.Finding{testPublishedFinding()},
 			blocking:  []string{"[main.go:1](https://github.com/owner/repo/pull/7#discussion_r1)"},
-			message:   "Severe findings are listed inline.",
+			verdict:   "This review found severe defects and listed them inline.",
 		},
 		{
 			name:      "request changes with nothing inline",
 			decision:  domain.ReviewDecisionRequestChanges,
 			published: nil,
 			blocking:  []string{testUnreviewedHeadReason},
-			message:   "Changes are requested for the reasons listed below.",
+			verdict:   "This review requests changes for the reasons listed below.",
 		},
 	}
 	for _, test := range tests {
@@ -164,15 +163,23 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			summary.Blocking = test.blocking
 
 			body := review.RenderBody(summary)
-
-			want := "## Review\n\n" + test.message + "\n\n"
-			if len(test.blocking) > 0 {
-				want += "Waiting on:\n- " + strings.Join(test.blocking, "\n- ") + "\n\n"
+			previous := -1
+			for _, section := range []string{
+				"### Summary", "### Walkthrough", "### Coverage", "### Omissions",
+				"### Verdict", "<summary>Review details</summary>",
+			} {
+				index := strings.Index(body, section)
+				if index <= previous {
+					t.Fatalf("section %q is missing or out of order:\n%s", section, body)
+				}
+				previous = index
 			}
-			want += review.RenderDetails(summary) + "\n\n" +
-				marker.Summary() + "\n" + marker.Review(head, test.decision)
-			if body != want {
-				t.Fatalf("body = %q, want %q", body, want)
+			if !strings.Contains(body, test.verdict) {
+				t.Fatalf("body does not state verdict %q:\n%s", test.verdict, body)
+			}
+			if len(test.blocking) > 0 &&
+				!strings.Contains(body, "This review is waiting on:\n- "+strings.Join(test.blocking, "\n- ")) {
+				t.Fatalf("body does not name what blocks the review:\n%s", body)
 			}
 		})
 	}
@@ -199,11 +206,11 @@ func TestABlockingSummaryWithNothingInlineDoesNotClaimInlineFindings(t *testing.
 	if strings.Contains(body, "listed inline") {
 		t.Fatalf("summary claims findings are inline while it published none:\n%s", body)
 	}
-	if !strings.Contains(body, "Changes are requested for the reasons listed below.") {
+	if !strings.Contains(body, "This review requests changes for the reasons listed below.") {
 		t.Fatalf("summary does not point at the reasons holding the block:\n%s", body)
 	}
 	// The reasons the sentence points at have to be under it, or it names nothing.
-	if !strings.Contains(body, "Waiting on:\n- "+testUnreviewedHeadReason) {
+	if !strings.Contains(body, "This review is waiting on:\n- "+testUnreviewedHeadReason) {
 		t.Fatalf("summary points below at a list it does not carry:\n%s", body)
 	}
 	if !strings.Contains(body, "| Findings published inline | `0` |") {
@@ -241,7 +248,7 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 	if !strings.Contains(body, "| Findings published inline | `0` |") {
 		t.Fatalf("summary detail table does not report an empty publication:\n%s", body)
 	}
-	if !strings.Contains(body, "Not read:") {
+	if !strings.Contains(body, "The model did not read these changes:") {
 		t.Fatalf("summary does not name what went unread:\n%s", body)
 	}
 	// The promise a later run cannot keep is the thing this path used to make.
@@ -1286,11 +1293,9 @@ func TestTheMarkerAdvancesOnlyAfterAChunksFindingsPost(t *testing.T) {
 	assertNoVerdictOverAnUnreadHead(t, fixture)
 }
 
-// A comment GitHub answered and refused is not a transient failure. Retrying it
-// on every later run would pin the pull request forever on an attempt already
-// known to fail, so the chunk finishes and the checkpoint advances. The run
-// still refuses to approve, because a finding nobody can see is still a finding.
-func TestACommentGitHubRefusesFinishesItsChunkAndStillBlocks(t *testing.T) {
+// A comment GitHub answered and refused is not a transient failure. The chunk
+// finishes, and the one summary comment carries the complete finding instead.
+func TestACommentGitHubRefusesFallsBackToTheSummaryAndStillBlocks(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance:   9,
 		createCommentStatus: http.StatusUnprocessableEntity,
@@ -1314,8 +1319,17 @@ func TestACommentGitHubRefusesFinishesItsChunkAndStillBlocks(t *testing.T) {
 			fixture.state.lastSubmitReview["event"])
 	}
 	body, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || !strings.Contains(body, "This head was not fully reviewed") {
-		t.Fatalf("summary comment does not say the head went partly unseen:\n%v",
+	if !ok || !strings.Contains(body, "GitHub could not place the finding inline") {
+		t.Fatalf("summary comment does not explain the fallback:\n%v",
+			fixture.state.issueComments[0]["body"])
+	}
+	for _, want := range []string{"### Findings", "`main.go`:2", "Severe defect", "The changed line breaks core behavior."} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary comment does not carry %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "This head was not fully reviewed") {
+		t.Fatalf("summary comment misreports a publication failure as unread code:\n%v",
 			fixture.state.issueComments[0]["body"])
 	}
 }
@@ -2487,7 +2501,7 @@ func TestAForcedRunStillDeclinesAnOversizedDelta(t *testing.T) {
 	if !ok {
 		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
 	}
-	if !strings.Contains(body, "Review skipped:") {
+	if !strings.Contains(body, "The review skipped this pull request because") {
 		t.Fatalf("summary comment = %q, want it to say the review was skipped", body)
 	}
 	skipped, ok := marker.DecodeState(body)
@@ -3421,7 +3435,30 @@ func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
 		finding.Body,
 		replyText,
 		"other-user",
-		"must not be raised again in any wording",
+		"decide whether the current code and replies support it",
+	} {
+		if !strings.Contains(model.prompts[0], want) {
+			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])
+		}
+	}
+}
+
+func TestTheChunkPromptCarriesResolvedDiscussionsFromEarlierCommits(t *testing.T) {
+	const replyText = "The current module disables itself when the member list is empty."
+	fixture := disputeFixture(t, answeredThread(t, true, replyText))
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	model, ok := fixture.model.(*sequenceModel)
+	if !ok || len(model.prompts) != 1 {
+		t.Fatalf("model prompts = %v, want one current review prompt", model)
+	}
+	for _, want := range []string{
+		"Resolved finding from an earlier commit",
+		answeredThreadFinding().Title,
+		replyText,
+		"It does not decide the current review by itself",
 	} {
 		if !strings.Contains(model.prompts[0], want) {
 			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])
@@ -3523,7 +3560,7 @@ func TestResolvedThreadsRefreshTheVerdictAtAReviewedHead(t *testing.T) {
 	// The visible comment must not keep claiming severe findings after the
 	// verdict flipped.
 	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
-	if !ok || !strings.Contains(body, "No severe findings.") {
+	if !ok || !strings.Contains(body, "This review found no severe defects.") {
 		t.Fatalf("summary comment = %v, want the refreshed verdict prose", body)
 	}
 }
@@ -3562,7 +3599,7 @@ func TestResolvedThreadsRefreshTheVerdictFromDurableState(t *testing.T) {
 
 // An open bot thread means the standing block is still right, so a delivery at
 // the reviewed head submits nothing.
-func TestOpenThreadsKeepTheVerdictAtAReviewedHead(t *testing.T) {
+func TestReplyReconcilesOpenThreadsAtAReviewedHead(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	openThread := resolvedBotThread("thread-open")
 	openThread.Resolved = false
@@ -3572,8 +3609,13 @@ func TestOpenThreadsKeepTheVerdictAtAReviewedHead(t *testing.T) {
 	})
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
 
-	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+	job := fixture.job()
+	job.ThreadRootCommentID = 700
+	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("Run: %v", err)
+	}
+	if fixture.reconciler.callCount != 1 {
+		t.Fatalf("reconcile calls = %d, want 1 after a thread reply", fixture.reconciler.callCount)
 	}
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatalf("submitted review = %v, want none while a bot thread is open", fixture.state.lastSubmitReview)
@@ -5224,11 +5266,10 @@ func TestServiceCreatesTheSummaryCommentCarryingTheStateMarker(t *testing.T) {
 	}
 }
 
-// A pull request whose state marker names an earlier commit must cause the
-// run to request the compare range from that commit to the head, not the
-// full changed file list, so a run never reviews the same commit range
-// twice.
-func TestServiceRequestsTheDeltaSinceTheLastReviewedCommitWhenAMarkerExists(t *testing.T) {
+// A new head is reviewed as the pull request currently appears, even when the
+// durable marker names an earlier commit. The older commit remains an anchor
+// and never narrows what a human reviewer would see now.
+func TestServiceRequestsTheCurrentPullRequestWhenAMarkerExists(t *testing.T) {
 	collector := &recordingDeltaCollector{}
 	fixture := newServiceFixture(t, serviceFixtureOptions{collector: collector})
 	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
@@ -5250,8 +5291,8 @@ func TestServiceRequestsTheDeltaSinceTheLastReviewedCommitWhenAMarkerExists(t *t
 	if len(bases) != 1 {
 		t.Fatalf("CollectRange calls = %d, want 1", len(bases))
 	}
-	if bases[0] != domain.HeadSHA(testStaleHeadSHA) {
-		t.Fatalf("compare base = %q, want the last reviewed commit %q", bases[0], testStaleHeadSHA)
+	if bases[0] != "" {
+		t.Fatalf("compare base = %q, want the current pull request", bases[0])
 	}
 }
 
@@ -5605,7 +5646,7 @@ func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
 		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
 	}
 	for _, want := range []string{
-		"Waiting on:",
+		"This review is waiting on:",
 		"`main.go`:2",
 		"https://github.com/owner/repo/pull/7#discussion_r4242",
 	} {
@@ -6378,7 +6419,7 @@ func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
 	if progress == "" {
 		t.Fatalf("no progress body was written: %v", fixture.state.issueCommentBodies)
 	}
-	if !strings.Contains(progress, "Waiting on:") {
+	if !strings.Contains(progress, "This review is waiting on:") {
 		t.Fatalf("the progress comment names nothing to act on yet: %q", progress)
 	}
 	// The path is a code span, because it is whatever the pull request named a

@@ -18,8 +18,11 @@ const shortHeadLength = 7
 // comment and the check run both render from this one value, so the two can
 // never disagree.
 type Summary struct {
-	Head     domain.HeadSHA
-	Decision domain.ReviewDecision
+	Head              domain.HeadSHA
+	Decision          domain.ReviewDecision
+	DecisionReason    string
+	Report            Report
+	OmissionsAccepted bool
 	// Blocking states what a requesting-changes verdict is waiting on, one
 	// entry per cause. A block that names nothing reads as a silent repeat, so
 	// a blocking verdict always carries at least one entry here.
@@ -33,6 +36,8 @@ type Summary struct {
 	Observed          []domain.Finding
 	Eligible          []domain.Finding
 	Published         []domain.Finding
+	Fallback          []domain.Finding
+	Omissions         []unreadHunk
 	PriorReviews      []reviewTrace
 	Threads           []threadTrace
 	// Reached names the last stage the review completed. A failed review fills
@@ -42,10 +47,8 @@ type Summary struct {
 	// Failed marks a review that stopped early, so the detail table reports
 	// progress rather than a result.
 	Failed bool
-	// Forced marks a run a label asked for. Such a run measures from no baseline
-	// at all, so its statistics describe the whole pull request while an
-	// ordinary run's describe the range since the last reviewed commit. A reader
-	// comparing two summaries cannot tell those apart unless the run says so.
+	// Forced marks a run a label asked for, so the top-level review comment can
+	// explain why the same pull request was reviewed again.
 	Forced bool
 }
 
@@ -53,8 +56,7 @@ type Summary struct {
 // names the label prefix because that is what a reader searches for to find
 // what triggered the run.
 const forcedRunNote = "Triggered by a `" + domain.ForceReviewLabelPrefix +
-	"` label, so this run reviewed the whole pull request rather than only the delta " +
-	"since the last reviewed commit."
+	"` label, so this run reviewed the whole pull request again as it currently appears."
 
 // Verdict states the outcome in one plain sentence.
 //
@@ -72,12 +74,23 @@ const forcedRunNote = "Triggered by a `" + domain.ForceReviewLabelPrefix +
 // entry of, so the empty case points there rather than at nothing.
 func (summary Summary) Verdict() string {
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
-		return "No severe findings."
+		return "This review found no severe defects."
+	}
+	if len(summary.Fallback) == 1 {
+		return "Changes requested. The review found one issue that must be resolved before merge. " +
+			"GitHub could not place the finding inline, so the complete finding appears below."
+	}
+	if len(summary.Fallback) > 1 {
+		return fmt.Sprintf(
+			"Changes requested. The review found %d issues that must be resolved before merge. "+
+				"GitHub could not place the findings inline, so the complete findings appear below.",
+			len(summary.Fallback),
+		)
 	}
 	if len(summary.Published) > 0 {
-		return "Severe findings are listed inline."
+		return "This review found severe defects and listed them inline."
 	}
-	return "Changes are requested for the reasons listed below."
+	return "This review requests changes for the reasons listed below."
 }
 
 // Title names the outcome for the check run.
@@ -125,40 +138,160 @@ func RenderDetails(summary Summary) string {
 
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(summary Summary) string {
-	parts := []string{"## Review", summary.Verdict()}
+	parts := []string{
+		"## Review",
+		"### Summary\n\n" + renderReportSummary(summary.Report),
+		"### Walkthrough\n\n" + renderWalkthrough(summary.Report),
+		"### Coverage\n\n" + renderCoverage(summary),
+		"### Omissions\n\n" + renderOmissions(summary.Omissions),
+		renderVerdictSection(summary, false),
+		RenderDetails(summary),
+		marker.Summary() + "\n" + marker.Review(summary.Head, summary.Decision),
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func renderReportSummary(report Report) string {
+	value := sanitizeReportText(report.Summary)
+	if value != "" {
+		return value
+	}
+	return "This review checked the current pull request against its stated purpose and current changes."
+}
+
+func renderWalkthrough(report Report) string {
+	lines := make([]string, 0, len(report.Walkthrough))
+	for _, item := range report.Walkthrough {
+		if value := sanitizeReportText(item); value != "" {
+			lines = append(lines, "- "+value)
+		}
+	}
+	if len(lines) == 0 {
+		return "The review examined the changed files and their current diff."
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderCoverage(summary Summary) string {
+	var coverage string
+	if summary.CoverageComplete {
+		coverage = fmt.Sprintf(
+			"The review read %s across %s.",
+			reviewedFileCount(summary.FilesReviewed),
+			chunkCount(summary.Chunks),
+		)
+	} else {
+		coverage = fmt.Sprintf(
+			"The review read the available changes in %s across %s.",
+			reviewedFileCount(summary.FilesReviewed),
+			chunkCount(summary.Chunks),
+		)
+	}
 	if summary.Forced {
-		parts = append(parts, forcedRunNote)
+		return coverage + " " + forcedRunNote
+	}
+	return coverage
+}
+
+func reviewedFileCount(count int) string {
+	if count == 1 {
+		return "1 changed file"
+	}
+	return fmt.Sprintf("%d changed files", count)
+}
+
+func renderOmissions(hunks []unreadHunk) string {
+	if len(hunks) == 0 {
+		return "The review omitted no changed content."
+	}
+	return renderUnreadHunks(hunks)
+}
+
+const (
+	verdictSectionStart = "<!-- pr-review-agent:verdict-section:start -->"
+	verdictSectionEnd   = "<!-- pr-review-agent:verdict-section:end -->"
+)
+
+func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
+	parts := []string{verdictSectionStart, "### Verdict", verdictLead(summary)}
+	reason := sanitizeReportText(summary.Report.VerdictReason)
+	if reason == "" {
+		reason = sanitizeDecisionReason(summary.DecisionReason)
+	}
+	if reason != "" {
+		parts = append(parts, reason)
+	}
+	if len(summary.Published) > 0 {
+		parts = append(parts, "The actionable findings are in inline review comments.")
+	}
+	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
+		parts = append(parts, fallback)
 	}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
-	parts = append(
-		parts,
-		RenderDetails(summary),
-		marker.Summary()+"\n"+marker.Review(summary.Head, summary.Decision),
-	)
+	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
+		parts = append(parts, withdrawnBlockNote)
+	}
+	parts = append(parts, verdictSectionEnd)
 	return strings.Join(parts, "\n\n")
 }
 
-// RenderVerdictBody renders the body of the review that carries the verdict.
+func sanitizeReportText(value string) string {
+	value = strings.TrimSpace(sanitizeProse(value))
+	value = strings.ReplaceAll(value, "<!--", "&lt;!--")
+	return strings.ReplaceAll(value, "-->", "--&gt;")
+}
+
+func verdictLead(summary Summary) string {
+	return summary.Verdict()
+}
+
+func renderFallbackFindings(findings []domain.Finding) string {
+	if len(findings) == 0 {
+		return ""
+	}
+	sorted := append([]domain.Finding{}, findings...)
+	sortFindings(sorted)
+	explanation := "GitHub could not place the finding inline, so it appears here."
+	if len(sorted) != 1 {
+		explanation = "GitHub could not place the findings inline, so they appear here."
+	}
+	sections := []string{explanation, "#### Findings"}
+	for _, finding := range sorted {
+		normalizedPath, err := marker.NormalizePath(finding.Path)
+		if err != nil {
+			continue
+		}
+		finding = sanitizeFinding(finding)
+		parts := []string{
+			fmt.Sprintf("#### %s:%d: %s", codeSpan(normalizedPath), finding.EndLine, finding.Title),
+			finding.Body,
+		}
+		if finding.Suggestion != "" {
+			parts = append(parts, "```suggestion\n"+finding.Suggestion+"\n```")
+		}
+		sections = append(sections, strings.Join(parts, "\n\n"))
+	}
+	return strings.Join(sections, "\n\n")
+}
+
+// RenderVerdictBody renders the review object that carries the verdict.
 //
-// It carries no prose, whatever the verdict is. A pull request gets exactly one
-// top level comment from this service and nothing else above the diff: the
-// comment says the review started, then what it is waiting on, then the verdict,
-// rewritten in place each time. Everything else this service has to say is an
-// inline comment on the line it is about.
-//
-// A verdict review is not a second place to say any of that. GitHub already
-// renders the decision itself as an event, so prose here only repeats the
-// comment a few pixels above it, which is exactly what a reader reported twice:
-// first as two identical Review boxes around an approval, then as the same
-// waiting-on list printed under both.
-//
-// The review marker is the whole body. hasBotReviewMarker reads it to recognize
-// a head this service already reviewed, so an empty body would blind that gate.
-// As an HTML comment it renders as nothing, which is the point.
+// GitHub displays the decision itself. The hidden markers preserve review state
+// without creating a third visible comment beside the top-level report and the
+// inline findings.
 func RenderVerdictBody(summary Summary) string {
-	return marker.Review(summary.Head, summary.Decision)
+	parts := make([]string, 0, 5)
+	parts = append(parts, marker.Review(summary.Head, summary.Decision))
+	if omissions := encodeOmissionMarker(summary.Omissions); omissions != "" {
+		parts = append(parts, omissions)
+		parts = append(parts, encodeOmissionDecisionMarker(summary.OmissionsAccepted))
+	}
+	if reason := encodeDecisionReasonMarker(summary.DecisionReason); reason != "" {
+		parts = append(parts, reason)
+	}
+	return strings.Join(parts, "\n")
 }
 
 // withdrawnBlockNote explains a head whose findings are open while no blocking
@@ -181,11 +314,17 @@ const withdrawnBlockNote = "The blocking review on this commit was dismissed by 
 // the comment is the only place a reader learns why.
 func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	parts := []string{"## Review", summary.Verdict()}
+	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
+		parts = append(parts, reason)
+	}
 	if blocking := renderBlocking(summary.Blocking); blocking != "" {
 		parts = append(parts, blocking)
 	}
 	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
 		parts = append(parts, withdrawnBlockNote)
+	}
+	if omissions := renderAcceptedOmissions(summary.Omissions, summary.DecisionReason); omissions != "" {
+		parts = append(parts, omissions)
 	}
 	parts = append(
 		parts,
@@ -195,6 +334,44 @@ func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bool) string {
+	prose := stripDurableStateMarker(existingBody)
+	start := strings.Index(prose, verdictSectionStart)
+	if start < 0 {
+		return renderVerdictRefreshProse(summary, blockWithdrawn)
+	}
+	endOffset := strings.Index(prose[start:], verdictSectionEnd)
+	if endOffset < 0 {
+		return renderVerdictRefreshProse(summary, blockWithdrawn)
+	}
+	end := start + endOffset + len(verdictSectionEnd)
+	updated := strings.TrimSpace(prose[:start]) + "\n\n" +
+		renderVerdictSection(summary, blockWithdrawn) + prose[end:]
+	if markerStart := strings.LastIndex(updated, marker.Summary()); markerStart >= 0 {
+		updated = strings.TrimSpace(updated[:markerStart]) + "\n\n" + marker.Summary() + "\n" +
+			marker.Review(summary.Head, summary.Decision)
+	}
+	return updated
+}
+
+func stripDurableStateMarker(body string) string {
+	const stateMarker = "\n<!-- pr-review-agent:state:v1 "
+	if index := strings.LastIndex(body, stateMarker); index >= 0 {
+		return strings.TrimSpace(body[:index])
+	}
+	return strings.TrimSpace(body)
+}
+
+func renderAcceptedOmissions(hunks []unreadHunk, decisionReason string) string {
+	if len(hunks) == 0 {
+		return ""
+	}
+	if strings.TrimSpace(decisionReason) != "" {
+		return renderUnreadHunks(hunks)
+	}
+	return "The model used the pull request description and the changes it could read to decide that the missing content did not prevent a review.\n\n" + renderUnreadHunks(hunks)
+}
+
 // renderBlocking lists what a blocking verdict is waiting on, so a reader can
 // go straight to the thing holding the pull request.
 func renderBlocking(reasons []string) string {
@@ -202,7 +379,7 @@ func renderBlocking(reasons []string) string {
 		return ""
 	}
 	lines := make([]string, 0, len(reasons)+1)
-	lines = append(lines, "Waiting on:")
+	lines = append(lines, "This review is waiting on:")
 	for _, reason := range reasons {
 		lines = append(lines, "- "+reason)
 	}
@@ -300,7 +477,7 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 func RenderSkipBody(reason string) string {
 	return strings.Join([]string{
 		"## Review",
-		"Review skipped: " + reason + ".",
+		"The review skipped this pull request because " + reason + ".",
 	}, "\n\n")
 }
 

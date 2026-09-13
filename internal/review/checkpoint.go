@@ -12,6 +12,32 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
+// completeUnreadChunks closes unread chunks only when they are all that remains.
+// Other pending work keeps the full set for the next run to reconsider together.
+func (tracker *pendingTracker) completeUnreadChunks() {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	unread := make(map[string]struct{}, len(tracker.unread))
+	for _, id := range tracker.unread {
+		unread[id] = struct{}{}
+	}
+	unfinished := make(map[string]struct{}, len(tracker.unfinished))
+	for _, id := range tracker.unfinished {
+		unfinished[id] = struct{}{}
+		if _, found := unread[id]; !found {
+			return
+		}
+	}
+	for id := range unread {
+		if _, found := unfinished[id]; !found {
+			return
+		}
+	}
+	tracker.completed = append(tracker.completed, tracker.unfinished...)
+	tracker.unfinished = nil
+	tracker.unread = nil
+}
+
 // concludeState closes the pass out. The last reviewed commit advances only
 // when nothing is left pending, so a run that could not read the whole head
 // never claims it did.
@@ -22,12 +48,8 @@ import (
 // never appear again.
 //
 // unreadable says the delta holds something no run can read, such as a hunk
-// larger than one model request. Nothing is pending in that case, because every
-// chunk answered, so the baseline would otherwise advance over code nobody read
-// and the next delta would start after it. Holding it keeps that code in every
-// later delta, exactly as a declined delta stays in one. The completed set is
-// kept for the same reason it is kept while chunks are pending: the chunks that
-// did answer must not be paid for twice.
+// larger than one model request. Holding the baseline keeps that code in every
+// later delta until the model decides it from the current pull request context.
 func concludeState(
 	state marker.State,
 	job domain.ReviewJob,

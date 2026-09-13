@@ -164,7 +164,7 @@ func (service *Service) writeFailureSummary(
 
 	logger := gklog.L(ctx)
 	prose := RenderFailureBody(progress, title, detail)
-	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State) summaryCommentContent {
+	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, _ string) summaryCommentContent {
 		return summaryCommentContent{
 			Prose: prose,
 			State: marker.State{

@@ -17,13 +17,14 @@ var ErrInvalidSignature = errors.New("invalid webhook signature")
 
 // PullRequestEvent is one supported pull request webhook delivery.
 type PullRequestEvent struct {
-	Action         string
-	DeliveryID     string
-	InstallationID int64
-	Repository     domain.Repository
-	Number         int
-	Head           domain.HeadSHA
-	Draft          bool
+	Action              string
+	DeliveryID          string
+	InstallationID      int64
+	Repository          domain.Repository
+	Number              int
+	Head                domain.HeadSHA
+	Draft               bool
+	ThreadRootCommentID int64
 	// Forced marks a delivery that asked for a fresh full review, which only a
 	// labeled event carrying a domain.ForceReviewLabelPrefix label does.
 	Forced bool
@@ -44,11 +45,12 @@ type PullRequestEvent struct {
 // Job converts the webhook event into a review job.
 func (event PullRequestEvent) Job() domain.ReviewJob {
 	return domain.ReviewJob{
-		DeliveryID:         event.DeliveryID,
-		CheckRunID:         0,
-		CheckRunStatus:     "",
-		CheckRunConclusion: "",
-		Forced:             event.Forced,
+		DeliveryID:          event.DeliveryID,
+		CheckRunID:          0,
+		CheckRunStatus:      "",
+		CheckRunConclusion:  "",
+		ThreadRootCommentID: event.ThreadRootCommentID,
+		Forced:              event.Forced,
 		// The tuning values ride on the request rather than in the payload, and
 		// are read only once the signature has verified, so nothing decoded here
 		// can set them.
@@ -127,17 +129,34 @@ func (action reviewThreadAction) supported() bool {
 	}
 }
 
+type reviewCommentAction string
+
+const (
+	actionReviewCommentCreated reviewCommentAction = "created"
+	actionReviewCommentEdited  reviewCommentAction = "edited"
+)
+
+func (action reviewCommentAction) supported() bool {
+	switch action {
+	case actionReviewCommentCreated, actionReviewCommentEdited:
+		return true
+	default:
+		return false
+	}
+}
+
 func emptyEvent() PullRequestEvent {
 	return PullRequestEvent{
-		Action:         "",
-		DeliveryID:     "",
-		InstallationID: 0,
-		Repository:     domain.Repository{Owner: "", Name: ""},
-		Number:         0,
-		Head:           "",
-		Draft:          false,
-		Forced:         false,
-		Label:          "",
+		Action:              "",
+		DeliveryID:          "",
+		InstallationID:      0,
+		Repository:          domain.Repository{Owner: "", Name: ""},
+		Number:              0,
+		Head:                "",
+		Draft:               false,
+		ThreadRootCommentID: 0,
+		Forced:              false,
+		Label:               "",
 	}
 }
 
@@ -145,8 +164,9 @@ func emptyEvent() PullRequestEvent {
 type githubEventType string
 
 const (
-	eventPullRequest  githubEventType = "pull_request"
-	eventReviewThread githubEventType = "pull_request_review_thread"
+	eventPullRequest   githubEventType = "pull_request"
+	eventReviewComment githubEventType = "pull_request_review_comment"
+	eventReviewThread  githubEventType = "pull_request_review_thread"
 )
 
 // ParseEvent parses any supported webhook delivery into a pull request event.
@@ -156,9 +176,34 @@ func ParseEvent(eventType string, deliveryID string, body []byte) (PullRequestEv
 		return ParsePullRequest(eventType, deliveryID, body)
 	case eventReviewThread:
 		return ParseReviewThread(eventType, deliveryID, body)
+	case eventReviewComment:
+		return ParseReviewComment(eventType, deliveryID, body)
 	default:
 		return emptyEvent(), false, nil
 	}
+}
+
+// ParseReviewComment accepts a reply on an inline finding so the reviewer can
+// weigh the latest discussion without waiting for another push.
+func ParseReviewComment(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
+	if githubEventType(eventType) != eventReviewComment {
+		return emptyEvent(), false, nil
+	}
+	payload, ok, err := decodePayload(deliveryID, body)
+	if !ok {
+		return emptyEvent(), false, err
+	}
+	if !reviewCommentAction(payload.Action).supported() {
+		return emptyEvent(), false, nil
+	}
+	if payload.Comment.InReplyToID == 0 || payload.PullRequest.Draft {
+		return emptyEvent(), false, nil
+	}
+	event, supported, err := eventFromPayload(deliveryID, payload, false)
+	if supported && err == nil {
+		event.ThreadRootCommentID = payload.Comment.InReplyToID
+	}
+	return event, supported, err
 }
 
 // ParsePullRequest parses a supported pull request webhook payload.
@@ -267,11 +312,12 @@ func eventFromPayload(
 			Owner: payload.Repository.Owner.Login,
 			Name:  payload.Repository.Name,
 		},
-		Number: payload.PullRequest.Number,
-		Head:   head,
-		Draft:  payload.PullRequest.Draft,
-		Forced: forced,
-		Label:  label,
+		Number:              payload.PullRequest.Number,
+		Head:                head,
+		Draft:               payload.PullRequest.Draft,
+		ThreadRootCommentID: 0,
+		Forced:              forced,
+		Label:               label,
 	}, true, nil
 }
 
@@ -298,4 +344,7 @@ type pullRequestPayload struct {
 	Label struct {
 		Name string `json:"name"`
 	} `json:"label"`
+	Comment struct {
+		InReplyToID int64 `json:"in_reply_to_id"`
+	} `json:"comment"`
 }

@@ -11,7 +11,6 @@ import (
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
-	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -21,14 +20,8 @@ import (
 // GitHub loads review threads and resolves owned findings.
 type GitHub interface {
 	ListReviewThreads(context.Context, int64, domain.Repository, int) ([]githubapp.ReviewThread, error)
+	ListChangedFiles(context.Context, int64, domain.Repository, int) ([]githubapp.ChangedFile, error)
 	GetFile(context.Context, int64, domain.Repository, string, domain.HeadSHA) ([]byte, error)
-	Compare(
-		context.Context,
-		int64,
-		domain.Repository,
-		domain.HeadSHA,
-		domain.HeadSHA,
-	) (githubapp.Comparison, error)
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
 	ResolveReviewThread(context.Context, int64, string) error
 }
@@ -99,7 +92,12 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		slog.Any("bot_threads", traceBotThreads(threads, service.botLogin)),
 	)
 
-	owned := selectOwnedThreads(threads, service.botLogin, currentHead)
+	owned := selectOwnedThreads(
+		threads,
+		service.botLogin,
+		currentHead,
+		job.ThreadRootCommentID,
+	)
 	logger.InfoContext(
 		ctx,
 		"review reconciliation selected",
@@ -108,11 +106,21 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 	if len(owned) == 0 {
 		return threads, nil
 	}
+	changedFiles, err := service.github.ListChangedFiles(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
+	if err != nil {
+		logger.ErrorContext(ctx, "list current pull request files", slog.String("err", err.Error()))
+		return nil, fmt.Errorf("list current pull request files: %w", err)
+	}
 
 	prepared := make([]preparedThread, 0, len(owned))
 	removed := make([]domain.OwnedThread, 0)
 	for _, thread := range owned {
-		contextText, state := service.loadThreadContext(ctx, job, thread, currentHead)
+		contextText, state := service.loadThreadContext(ctx, job, thread, currentHead, changedFiles)
 		switch state {
 		case threadContextRemoved:
 			removed = append(removed, thread)
@@ -134,18 +142,27 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		slog.Int("batches", len(batches)),
 		slog.Any("thread_node_ids", preparedThreadIDs(prepared)),
 	)
-	return service.reconcilePrepared(ctx, job, currentHead, threads, removed, batches, logger)
+	return service.reconcilePrepared(
+		ctx,
+		job,
+		pullRequest,
+		threads,
+		removed,
+		batches,
+		logger,
+	)
 }
 
 func (service *Service) reconcilePrepared(
 	ctx context.Context,
 	job domain.ReviewJob,
-	currentHead domain.HeadSHA,
+	pullRequest githubapp.PullRequest,
 	threads []githubapp.ReviewThread,
 	removed []domain.OwnedThread,
 	batches [][]preparedThread,
 	logger *slog.Logger,
 ) ([]githubapp.ReviewThread, error) {
+	currentHead := pullRequest.Head
 	var reconcileErrors []error
 	allResolutions := make([]domain.ThreadResolution, 0)
 	resolvedThreads := make([]resolvedThreadTrace, 0)
@@ -170,7 +187,10 @@ func (service *Service) reconcilePrepared(
 	}
 
 	for batchIndex, batch := range batches {
-		resolutions, err := service.model.Reconcile(ctx, buildBatchPrompt(batch, batchIndex+1, len(batches)))
+		resolutions, err := service.model.Reconcile(
+			ctx,
+			buildBatchPrompt(batch, batchIndex+1, len(batches), pullRequest),
+		)
 		if err != nil {
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile batch %d/%d: %w", batchIndex+1, len(batches), err))
 			continue
@@ -328,7 +348,7 @@ func preparedThreadIDs(threads []preparedThread) []string {
 
 type threadContext struct {
 	currentContent string
-	compareText    string
+	currentDiff    string
 }
 
 type threadContextState uint8
@@ -340,13 +360,14 @@ const (
 )
 
 func emptyThreadContext() threadContext {
-	return threadContext{currentContent: "", compareText: ""}
+	return threadContext{currentContent: "", currentDiff: ""}
 }
 
 func selectOwnedThreads(
 	threads []githubapp.ReviewThread,
 	botLogin string,
 	currentHead domain.HeadSHA,
+	threadRootCommentID int64,
 ) []domain.OwnedThread {
 	owned := make([]domain.OwnedThread, 0, len(threads))
 	for _, thread := range threads {
@@ -359,11 +380,14 @@ func selectOwnedThreads(
 		if strings.TrimSpace(thread.RootComment.Body) == "" {
 			continue
 		}
+		if threadRootCommentID != 0 && thread.RootComment.DatabaseID != threadRootCommentID {
+			continue
+		}
 		findingHead, finding, err := marker.DecodeFindingBody(thread.RootComment)
 		if err != nil {
 			continue
 		}
-		if findingHead == currentHead {
+		if findingHead == currentHead && threadRootCommentID == 0 {
 			continue
 		}
 		owned = append(owned, domain.OwnedThread{
@@ -389,56 +413,29 @@ func (service *Service) loadThreadContext(
 	job domain.ReviewJob,
 	thread domain.OwnedThread,
 	currentHead domain.HeadSHA,
+	changedFiles []githubapp.ChangedFile,
 ) (threadContext, threadContextState) {
 	normalizedPath, err := marker.NormalizePath(thread.Finding.Path)
 	if err != nil {
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	comparison, err := service.github.Compare(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		thread.FindingHead,
-		currentHead,
-	)
-	if err != nil {
-		gklog.L(ctx).ErrorContext(ctx, "compare finding head", slog.String("err", err.Error()))
-		return emptyThreadContext(), threadContextUnavailable
-	}
-	changedFiles := comparison.Files
-
-	// The removed file is settled before anything else, because it is the one
-	// answer divergence cannot spoil. A comparison saying this path is gone from
-	// the current commit says so whatever it measured from, and the anchor cannot
-	// survive a file that no longer exists. Refusing that answer on the grounds
-	// that the range is diverged would leave an obsolete thread open forever.
 	currentPath := normalizedPath
+	currentDiff := "This file is not changed in the latest pull request."
+	hasCurrentPatch := false
 	for _, file := range changedFiles {
-		if file.Path == normalizedPath && file.Status == "removed" {
+		if file.Path != normalizedPath && file.PreviousPath != normalizedPath {
+			continue
+		}
+		if file.Status == "removed" {
 			return emptyThreadContext(), threadContextRemoved
 		}
 		if file.PreviousPath == normalizedPath && file.Path != "" {
 			currentPath = file.Path
 		}
-	}
-
-	// Everything past here reads a window of code and asks whether the defect is
-	// still in it, and that needs coordinates the comparison can place. GitHub
-	// compares from where two commits last agreed, so once the finding commit and
-	// the current one diverge the patches describe a range the finding's
-	// coordinates were never in, and the recorded line does not identify it at
-	// the current commit either. A window drawn on it can show unrelated clean
-	// code that reads as the defect being gone, so the thread is left
-	// unreconciled and stays open for a person.
-	if comparison.MergeBase == "" || comparison.MergeBase != thread.FindingHead {
-		gklog.L(ctx).WarnContext(
-			ctx,
-			"thread context unavailable, the comparison is not measured from the finding commit",
-			slog.String("thread", thread.NodeID),
-			slog.String("merge_base", string(comparison.MergeBase)),
-		)
-		return emptyThreadContext(), threadContextUnavailable
+		currentDiff = formatCurrentDiff(file)
+		hasCurrentPatch = file.PatchPresent && strings.TrimSpace(file.Patch) != ""
+		break
 	}
 
 	fileBytes, err := service.github.GetFile(
@@ -452,64 +449,43 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	startLine, endLine := remapAnchor(comparison, normalizedPath, thread.Finding)
+	currentContent := boundedCurrentFileContext(fileBytes)
+	if hasCurrentPatch {
+		currentContent = extractAnchorWindow(
+			fileBytes,
+			thread.Finding.StartLine,
+			thread.Finding.EndLine,
+		)
+	}
 	return threadContext{
-		currentContent: extractAnchorWindow(fileBytes, startLine, endLine),
-		compareText:    formatCompareForPath(changedFiles, normalizedPath),
+		currentContent: currentContent,
+		currentDiff:    currentDiff,
 	}, threadContextPresent
-}
-
-// remapAnchor moves the finding's coordinates from the head it was written
-// against to the current head.
-//
-// A window around the stale line shows the fix only while the shift stays
-// inside the radius, and nothing bounds the shift: a commit that inserts twenty
-// lines above the anchor moves the code the reconciler needs to see out of view,
-// and the model then reads unrelated code and keeps a fixed finding open. The
-// compare patch is already loaded here and records every shift exactly, so the
-// remapping needs no extra call.
-//
-// The caller has already established that the patch is measured from the commit
-// the finding was written against; a comparison that is not gets no context at
-// all rather than a remapped or a stale window. What is left here is the case
-// where the patch simply says nothing about this file, or cannot be read, and
-// the recorded coordinates are then still the best available.
-func remapAnchor(
-	comparison githubapp.Comparison,
-	normalizedPath string,
-	finding domain.Finding,
-) (int, int) {
-	patch, ok := patchForPath(comparison.Files, normalizedPath)
-	if !ok {
-		return finding.StartLine, finding.EndLine
-	}
-	startLine, startMapped := diff.MapLineToNewSide(patch, finding.StartLine)
-	endLine, endMapped := diff.MapLineToNewSide(patch, finding.EndLine)
-	if !startMapped || !endMapped || endLine < startLine {
-		return finding.StartLine, finding.EndLine
-	}
-	return startLine, endLine
-}
-
-// patchForPath returns the compare patch for one file, under the name it had at
-// the finding head or the name it carries now.
-func patchForPath(changedFiles []githubapp.ChangedFile, normalizedPath string) (string, bool) {
-	for _, file := range changedFiles {
-		if file.Path != normalizedPath && file.PreviousPath != normalizedPath {
-			continue
-		}
-		if !file.PatchPresent || strings.TrimSpace(file.Patch) == "" {
-			return "", false
-		}
-		return file.Patch, true
-	}
-	return "", false
 }
 
 // anchorWindowRadius is the context shown on each side of the anchor. GitHub
 // reports only the original head's coordinates for outdated threads, so later
 // commits shift the anchor and an exact-line excerpt would show unrelated code.
 const anchorWindowRadius = 15
+
+const maximumCurrentFileContextBytes = config.MaximumPromptBytes / 2
+
+const currentFileMiddleOmitted = "\n\n[The middle of this file was omitted to fit the review request.]\n\n"
+
+func boundedCurrentFileContext(content []byte) string {
+	if len(content) <= maximumCurrentFileContextBytes {
+		return string(content)
+	}
+	available := maximumCurrentFileContextBytes - len(currentFileMiddleOmitted)
+	if available < 1 {
+		return ""
+	}
+	headBytes := available / 2
+	tailBytes := available - headBytes
+	head := strings.ToValidUTF8(string(content[:headBytes]), "")
+	tail := strings.ToValidUTF8(string(content[len(content)-tailBytes:]), "")
+	return head + currentFileMiddleOmitted + tail
+}
 
 // extractAnchorWindow returns the lines around the anchor, clamped to the file
 // bounds. An anchor past the end of a shortened file still yields the file's
@@ -523,17 +499,11 @@ func extractAnchorWindow(content []byte, startLine, endLine int) string {
 	return strings.Join(lines[windowStart-1:windowEnd], "\n")
 }
 
-func formatCompareForPath(changedFiles []githubapp.ChangedFile, path string) string {
-	for _, file := range changedFiles {
-		if file.Path != path && file.PreviousPath != path {
-			continue
-		}
-		if !file.PatchPresent || strings.TrimSpace(file.Patch) == "" {
-			return "No patch available."
-		}
-		return file.Patch
+func formatCurrentDiff(file githubapp.ChangedFile) string {
+	if !file.PatchPresent || strings.TrimSpace(file.Patch) == "" {
+		return "GitHub does not show a text diff for this file."
 	}
-	return "No changes in this file between finding head and current head."
+	return file.Patch
 }
 
 func formatThreadSection(
@@ -575,10 +545,10 @@ func formatThreadSection(
 			builder.WriteString(line)
 		}
 	}
-	builder.WriteString("\n\nCurrent code around the anchor (line numbers may have shifted):\n")
+	builder.WriteString("\n\nCurrent file context (the original line numbers may have shifted):\n")
 	builder.WriteString(contextText.currentContent)
-	builder.WriteString("\n\nDiff from finding head to current head:\n")
-	builder.WriteString(contextText.compareText)
+	builder.WriteString("\n\nLatest pull request diff for this file:\n")
+	builder.WriteString(contextText.currentDiff)
 	return builder.String()
 }
 
@@ -627,16 +597,23 @@ func batchPreparedThreads(threads []preparedThread, maxSize int) [][]preparedThr
 	return batches
 }
 
-func buildBatchPrompt(batch []preparedThread, index, total int) string {
+func buildBatchPrompt(
+	batch []preparedThread,
+	index int,
+	total int,
+	pullRequest githubapp.PullRequest,
+) string {
 	var builder strings.Builder
-	builder.WriteString("Reconcile bot threads after a new commit. Batch ")
+	builder.WriteString("Review unresolved inline findings against the pull request as it exists now. Batch ")
 	fmt.Fprintf(&builder, "%d/%d", index, total)
-	builder.WriteString(". Resolve a thread when the current code no longer has its defect. Keep it open only when the defect still exists. Use uncertain only when the supplied code and diff cannot decide. Author replies are context: verify their claims against the supplied code and diff, and resolve when a reply's disproof of the finding holds up there.\n")
+	builder.WriteString(". Resolve a thread when the latest pull request no longer has its defect, or when a reply correctly disproves it. Keep it open only when the finding still applies. Use uncertain only when the current pull request and discussion cannot decide.\n")
 	var body strings.Builder
-	for itemIndex, item := range batch {
-		if itemIndex > 0 {
-			body.WriteString("\n\n")
-		}
+	body.WriteString("Latest pull request title: ")
+	body.WriteString(pullRequest.Title)
+	body.WriteString("\nLatest pull request description:\n")
+	body.WriteString(pullRequest.Body)
+	for _, item := range batch {
+		body.WriteString("\n\n")
 		body.WriteString(item.text)
 	}
 	builder.WriteString(review.WrapUntrusted(body.String()))

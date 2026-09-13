@@ -61,17 +61,17 @@ func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admi
 // and the chunks the model will be asked about. Admission measures exactly
 // these chunks, so nothing later re-derives a different set from the same diff.
 type deltaWork struct {
-	Files  []diff.FileContext
-	Chunks []diff.Chunk
+	PullRequest githubapp.PullRequest
+	Files       []diff.FileContext
+	Chunks      []diff.Chunk
 }
 
-// collectAndAdmit gathers the diff and applies the admission gate before any
-// model call. base is the durable state's last reviewed commit, or empty on
-// first contact, so the collector reviews only the range since that commit
-// instead of the whole pull request again. stop reports whether the caller
-// must return err immediately: true with a nil err is a completed skip, true
-// with a non-nil err is a completed failure, and false means the work is ready
-// for the chunk loop.
+// collectAndAdmit gathers the current pull request and applies the admission
+// gate before any model call. An empty base asks the collector for the pull
+// request exactly as GitHub presents it. stop reports whether the caller must
+// return err immediately: true with a nil err is a completed skip, true with a
+// non-nil err is a completed failure, and false means the work is ready for the
+// chunk loop.
 func (service *Service) collectAndAdmit(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -82,7 +82,7 @@ func (service *Service) collectAndAdmit(
 	settings reviewSettings,
 ) (deltaWork, bool, error) {
 	logger := gklog.L(ctx)
-	empty := deltaWork{Files: nil, Chunks: nil}
+	var empty deltaWork
 	input, err := service.collector.CollectRange(ctx, job.PullRequestRef, pullRequest, base)
 	if err != nil {
 		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
@@ -93,7 +93,14 @@ func (service *Service) collectAndAdmit(
 	}
 	progress.reached("the diff")
 
-	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
+	shortfall := classifyStructuralShortfall(deltaWork{
+		PullRequest: input.PullRequest,
+		Files:       input.Files,
+		Chunks:      nil,
+	})
+	contextBytes := len(pullRequestPrompt(input.PullRequest, input.Files)) +
+		len(omissionPrompt(shortfall))
+	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes-contextBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
 		return empty, true, service.failCheck(
@@ -101,7 +108,20 @@ func (service *Service) collectAndAdmit(
 			checkFailureDiff, fmt.Errorf("chunk input: %w", err),
 		)
 	}
-	work := deltaWork{Files: input.Files, Chunks: chunks}
+	work := deltaWork{PullRequest: input.PullRequest, Files: input.Files, Chunks: chunks}
+	shortfall = classifyStructuralShortfall(work)
+	if shortfall.present() {
+		contextBytes = len(pullRequestPrompt(work.PullRequest, work.Files)) +
+			len(omissionPrompt(shortfall))
+		chunks, err = diff.ChunkInput(input, config.MaximumPromptBytes-contextBytes)
+		if err != nil {
+			return empty, true, service.failCheck(
+				ctx, job, checkRun.ID, progress.summary(service.now()),
+				checkFailureDiff, fmt.Errorf("chunk input with pull request context: %w", err),
+			)
+		}
+		work.Chunks = chunks
+	}
 
 	verdict := admitDelta(len(input.Files), len(chunks), settings.maxFiles, settings.maxChunks)
 	if !verdict.Skip {
@@ -150,7 +170,7 @@ func (service *Service) declineReview(
 	// The state is read and written in one call, so nothing this run keeps has
 	// to be carried in from an earlier read that a concurrent edit could have
 	// overtaken. It is the same reason the failure notice is written this way.
-	if err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State) summaryCommentContent {
+	if err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, _ string) summaryCommentContent {
 		return summaryCommentContent{
 			Prose: RenderSkipBody(verdict.Reason),
 			State: marker.State{

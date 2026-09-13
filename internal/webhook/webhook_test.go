@@ -175,6 +175,65 @@ func reviewThreadPayloadBody(action string, draft bool) []byte {
 	return body
 }
 
+func reviewCommentPayloadBody(action string, inReplyToID int64) []byte {
+	payload := map[string]any{
+		"action": action,
+		"installation": map[string]any{
+			"id": float64(42),
+		},
+		"repository": map[string]any{
+			"name": "repo",
+			"owner": map[string]any{
+				"login": "owner",
+			},
+		},
+		"pull_request": map[string]any{
+			"number": float64(7),
+			"draft":  false,
+			"head": map[string]any{
+				"sha": "a3c4f1cac7f595bc824704b9d2a1f1191630dc32",
+			},
+		},
+		"comment": map[string]any{
+			"in_reply_to_id": float64(inReplyToID),
+		},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+func TestParseEventAcceptsInlineFindingReplies(t *testing.T) {
+	for _, action := range []string{"created", "edited"} {
+		event, supported, err := ParseEvent(
+			"pull_request_review_comment",
+			"delivery-reply",
+			reviewCommentPayloadBody(action, 99),
+		)
+		if err != nil {
+			t.Fatalf("action %s: %v", action, err)
+		}
+		if !supported || event.ThreadRootCommentID != 99 ||
+			event.Job().ThreadRootCommentID != 99 {
+			t.Fatalf("action %s: event = %+v, want a thread reply job", action, event)
+		}
+	}
+
+	_, supported, err := ParseEvent(
+		"pull_request_review_comment",
+		"delivery-root",
+		reviewCommentPayloadBody("created", 0),
+	)
+	if err != nil {
+		t.Fatalf("root comment: %v", err)
+	}
+	if supported {
+		t.Fatal("root inline comment: want ignored")
+	}
+}
+
 func TestParseEventAcceptsResolvedAndUnresolvedThreadActions(t *testing.T) {
 	for _, action := range []string{"resolved", "unresolved"} {
 		event, supported, err := ParseEvent(

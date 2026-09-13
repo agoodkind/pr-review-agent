@@ -284,7 +284,7 @@ func (service *Service) runLocked(
 	if !job.Forced && service.checkAlreadySucceeded(ctx, checkRun) {
 		// The check is already completed and successful, so there is nothing to
 		// conclude here and the refresh failure is the whole outcome.
-		return service.refreshVerdictAtReviewedHead(ctx, job, nil, settings)
+		return service.reconcileReplyAndRefreshVerdict(ctx, job, nil, settings)
 	}
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
@@ -308,7 +308,7 @@ func (service *Service) runLocked(
 		// The check is concluded first and the refresh failure reported after.
 		// This head is reviewed either way, so the check must keep saying so
 		// whatever the refresh did.
-		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews, settings)
+		refreshErr := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
 		if err := service.succeed(
 			ctx,
 			job,
@@ -323,8 +323,8 @@ func (service *Service) runLocked(
 	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress, settings)
 }
 
-// reviewOwedWork reviews everything this head still owes: the range since the
-// last reviewed commit, plus whatever an earlier run left pending.
+// reviewOwedWork reviews the current pull request as GitHub presents it now,
+// minus identical chunks this same incomplete review already finished.
 //
 // The durable state is read here rather than at the top of the run, because
 // every exit above it returns without a delta and would only pay for an issue
@@ -380,7 +380,7 @@ func (service *Service) reviewOwedWork(
 	// commit against itself, spends no API call proving what the state already
 	// says.
 	if !fromScratch && hasState && state.LastReviewed == head && len(state.Pending) == 0 {
-		refreshErr := service.refreshVerdictAtReviewedHead(ctx, job, reviews, settings)
+		refreshErr := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
 		if err := service.succeed(
 			ctx,
 			job,
@@ -397,7 +397,7 @@ func (service *Service) reviewOwedWork(
 	// and resolves threads, so running it first would spend both on the exact
 	// delta admission exists to refuse.
 	work, stop, err := service.collectAndAdmit(
-		ctx, job, pullRequest, checkRun, deltaBase(state, hasState, fromScratch), progress, settings,
+		ctx, job, pullRequest, checkRun, "", progress, settings,
 	)
 	if stop {
 		return err
@@ -438,7 +438,7 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	logger := gklog.L(ctx)
 	analysis := pass.analysis()
 	unread := pass.unreadChunks()
-	posted, failed := pass.delivery()
+	posted, failed, _ := pass.delivery()
 	progress.applyAnalysis(analysis)
 	progress.applyPublished(pass.publishedFindings())
 	logChunkFailures(ctx, unread, len(pass.work.Chunks), pass.requestCount())
@@ -539,17 +539,6 @@ func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
 		settings.chunkTimeout = job.Settings.ChunkTimeout
 	}
 	return settings
-}
-
-// deltaBase names the commit the delta is measured from: the commit the last
-// completed run reviewed, or nothing at all on first contact and on a run
-// starting from scratch, which is asked for the whole pull request rather than
-// a range.
-func deltaBase(state marker.State, hasState bool, fromScratch bool) domain.HeadSHA {
-	if fromScratch || !hasState {
-		return domain.HeadSHA("")
-	}
-	return state.LastReviewed
 }
 
 // stateClearedByThisDelivery reports whether this forced delivery already
@@ -744,9 +733,7 @@ func logAnalysis(ctx context.Context, analysis Analysis) error {
 	return nil
 }
 
-// publish closes out a review that read every chunk it owed. It reads both
-// verdict inputs after this run's findings are on the page, and submits nothing
-// at all when the head has moved on.
+// publish closes a review after reloading its current verdict inputs.
 func (service *Service) publish(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -759,9 +746,6 @@ func (service *Service) publish(
 	progress *reviewProgress,
 	settings reviewSettings,
 ) error {
-	ctx, cancelPublication := service.publicationContext(ctx)
-	defer cancelPublication()
-
 	// Reading a commit proves it was reviewed, not that it is still the head. A
 	// verdict submitted here would judge a commit this run never read, so a
 	// moved head ends the run and leaves the work to the push that moved it.
@@ -774,11 +758,11 @@ func (service *Service) publish(
 	}
 	progress.reached("the head refresh")
 
-	// The findings already reached the pull request as their chunks answered, so
-	// the review submitted here carries the verdict and the summary alone.
+	// Findings either reached the diff or were retained for the summary, so the
+	// review submitted here carries the verdict alone.
 	analysis := pass.analysis()
 	published := pass.publishedFindings()
-	posted, failed := pass.delivery()
+	posted, failed, fallback := pass.delivery()
 	logPublishedFindings(ctx, analysis.Anchored, published, posted, failed)
 	progress.reached("finding selection")
 
@@ -787,15 +771,41 @@ func (service *Service) publish(
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureThreads, err)
 	}
 
-	// A head is fully reviewed only when every chunk it owed answered, every
-	// chunk covered its whole hunk, and every finding this run stands behind
-	// reached the page. A finding whose comment GitHub refused leaves the reader
-	// nothing to act on, so the run must not approve over it.
-	headFullyReviewed := len(state.Pending) == 0 && analysis.CoverageComplete && failed == 0
+	shortfall := pass.structuralShortfall()
+	omissionsDecided := shortfall.present() && len(state.Pending) == 0 && len(state.Unread) == 0 &&
+		pass.decidedOmissions()
+	omissionsAccepted := omissionsDecided && pass.acceptsOmissions()
+	// A head can receive a verdict when every chunk answered and any structural
+	// omission was accepted from the metadata supplied to the model. A refused
+	// inline comment still reached the reader when the summary carries it.
+	headFullyReviewed := len(state.Pending) == 0 && len(state.Unread) == 0 &&
+		(analysis.CoverageComplete || omissionsDecided) && failed == len(fallback)
+	decision := reviewerDecision(threads, service.botLogin, headFullyReviewed)
+	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed)
+	if omissionsDecided && !omissionsAccepted {
+		decision = domain.ReviewDecisionRequestChanges
+		blocking = mergeLocations(
+			blocking,
+			[]string{rejectedOmissionReason(pass)},
+		)
+	}
+	if headFullyReviewed && len(fallback) > 0 {
+		decision = domain.ReviewDecisionRequestChanges
+		blocking = mergeLocations(
+			openThreadLocations(threads, service.botLogin),
+			findingLocations(fallback),
+		)
+	}
 	summary := Summary{
-		Head:              head,
-		Decision:          reviewerDecision(threads, service.botLogin, headFullyReviewed),
-		Blocking:          blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed),
+		Head:           head,
+		Decision:       decision,
+		DecisionReason: pass.decisionReason(),
+		Report: Report{
+			Summary:       "",
+			Walkthrough:   nil,
+			VerdictReason: "",
+		},
+		Blocking:          blocking,
 		Models:            analysis.Models,
 		Duration:          service.now().Sub(startedAt),
 		FilesReviewed:     analysis.FilesReviewed,
@@ -805,24 +815,36 @@ func (service *Service) publish(
 		Observed:          analysis.Observed,
 		Eligible:          analysis.Anchored,
 		Published:         published,
+		Fallback:          fallback,
 		PriorReviews:      traceReviews(reviews, service.botLogin),
 		Threads:           traceThreads(threads, service.botLogin),
 		Reached:           "",
 		Failed:            false,
 		Forced:            job.Forced,
+		Omissions:         nil,
+		OmissionsAccepted: omissionsAccepted,
+	}
+	if omissionsDecided {
+		summary.Omissions = shortfall.Hunks
 	}
 	// A head holding something no run can read is settled first. Its shortfall
 	// outlives every later push, so the pending path's promise that the next
 	// push covers it would be false even when chunks are pending too.
-	if shortfall := pass.structuralShortfall(); shortfall.present() {
-		return service.concludeStructurallyIncomplete(
-			ctx, job, checkRun, state, shortfall, summary, progress,
+	if shortfall.present() && !omissionsDecided || len(state.Pending) > 0 {
+		if shortfall.present() && !omissionsDecided {
+			return service.concludeStructurallyIncomplete(
+				ctx, job, checkRun, currentPullRequest, threads, state, shortfall, summary, progress, pass,
+			)
+		}
+		publicationCtx, cancelPublication := service.publicationContext(ctx)
+		defer cancelPublication()
+		return service.concludeIncomplete(
+			publicationCtx, job, checkRun, state, pass, summary, progress,
 		)
 	}
-	if len(state.Pending) > 0 {
-		return service.concludeIncomplete(ctx, job, checkRun, state, pass, summary, progress)
-	}
-	return service.publishVerdict(ctx, job, checkRun, summary, state, progress)
+	return service.publishCompletedReview(
+		ctx, job, checkRun, currentPullRequest, head, threads, summary, state, progress, pass,
+	)
 }
 
 // openThreads reads the service's own threads as they stand now, which is one
@@ -869,10 +891,16 @@ func (service *Service) publishVerdict(
 	}
 	standing := latestBotVerdictAtHead(reviews, service.botLogin, summary.Head)
 	decisionState := reviewStateFor(summary.Decision)
+	verdictBody := RenderVerdictBody(summary)
 	unchanged := standing.found && !standing.withdrawn &&
 		standing.review.State == decisionState &&
 		latestBotVerdictState(reviews, service.botLogin) == decisionState
 	if unchanged {
+		if err := service.updateVerdictBody(ctx, job, standing.review, verdictBody); err != nil {
+			return service.failCheck(
+				ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePublish, err,
+			)
+		}
 		logger.InfoContext(
 			ctx,
 			"review verdict unchanged",
@@ -887,7 +915,7 @@ func (service *Service) publishVerdict(
 			job.Number,
 			githubapp.SubmitReviewRequest{
 				CommitID: summary.Head,
-				Body:     RenderVerdictBody(summary),
+				Body:     verdictBody,
 				Event:    summary.Decision,
 				Comments: nil,
 			},

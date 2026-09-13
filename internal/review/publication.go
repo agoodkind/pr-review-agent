@@ -307,6 +307,7 @@ func logPublishedFindings(
 type publicationState struct {
 	historyIDs     map[string]struct{}
 	historyAnchors map[string]struct{}
+	findings       []domain.Finding
 	// carried is what this run has already published, compared through the one
 	// shared comparison rather than on identity alone.
 	//
@@ -373,14 +374,16 @@ func (state *publicationState) suppressed(keys findingKeys) (string, duplicateMa
 // it. It is called before the comment is attempted, because two chunks
 // reporting the same defect must produce one comment whether or not the first
 // attempt succeeded.
-func (state *publicationState) remember(keys findingKeys, label string) {
+func (state *publicationState) remember(finding domain.Finding) {
+	keys := keysFor(finding)
 	if keys.id != "" {
 		state.historyIDs[keys.id] = struct{}{}
 	}
 	if keys.anchorValid {
 		state.historyAnchors[keys.anchor] = struct{}{}
 	}
-	state.carried.remember(keys.duplicate, label)
+	state.carried.remember(keys.duplicate, finding.Title)
+	state.findings = append(state.findings, finding)
 }
 
 // collectPublicationState reads what the pull request already carries, which is
@@ -421,6 +424,7 @@ func collectPublicationState(
 	return publicationState{
 		historyIDs:     historyIDs,
 		historyAnchors: historyAnchors,
+		findings:       make([]domain.Finding, 0),
 		carried:        newClaimMemory(),
 	}
 }

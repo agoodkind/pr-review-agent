@@ -74,8 +74,15 @@ func (progress *reviewProgress) applyAnalysis(analysis Analysis) {
 // summary renders the progress as the value both failure outputs report from.
 func (progress *reviewProgress) summary(now time.Time) Summary {
 	return Summary{
-		Head:     progress.head,
-		Decision: "",
+		Head:           progress.head,
+		Decision:       "",
+		DecisionReason: "",
+		Report: Report{
+			Summary:       "",
+			Walkthrough:   nil,
+			VerdictReason: "",
+		},
+		OmissionsAccepted: false,
 		// A failed run carries no verdict, so there is nothing for it to be
 		// waiting on and nothing to name.
 		Blocking:          nil,
@@ -91,6 +98,8 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		// comments on the page. Reporting none here would contradict what the
 		// reader sees on the same pull request.
 		Published:    progress.published,
+		Fallback:     nil,
+		Omissions:    nil,
 		PriorReviews: progress.priorReviews,
 		Threads:      progress.threads,
 		Reached:      progress.stage,

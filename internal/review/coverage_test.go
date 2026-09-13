@@ -295,109 +295,55 @@ func TestAnUnreadChunkIsNotRecordedAsReadSoALaterRunStillHoldsTheBaseline(t *tes
 	}
 }
 
-// A hunk larger than one model request is not a temporary shortfall. The run
-// reports every defect it found in the hunks it could read, submits no verdict
-// for anyone to dismiss, holds the merge gate, names the hunk nobody read, and
-// leaves the durable baseline exactly where the last completed run left it.
-func TestAHunkTooLargeToReadSubmitsNoVerdictAndHoldsTheBaseline(t *testing.T) {
+// A recurring omission receives a real verdict from the model's reading of the
+// current pull request. Rejecting the omission blocks with a stated reason.
+func TestAOversizedHunkReceivesAReasonedRequestChangesVerdict(t *testing.T) {
+	result := coverageFinding()
+	result.DecisionReason = "The unread change cannot be checked from the available context."
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         oversizedHunkCollector{},
 		minimumImportance: 9,
-		model:             &sequenceModel{results: []domain.ReviewResult{coverageFinding()}},
+		model:             &sequenceModel{results: []domain.ReviewResult{result}},
 	})
-	seedReviewedBaseline(fixture)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-
-	if len(fixture.state.submittedReviews) != 0 {
-		t.Fatalf("submitted reviews = %v, want none over a head nobody read whole",
-			fixture.state.submittedReviews)
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
 	}
-	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want no review object touched", fixture.state.dismissals)
-	}
-
-	// The findings from the hunks that did read are real whatever else went
-	// unread, so they still reach the pull request.
-	if len(fixture.state.streamedComments) != 1 {
-		t.Fatalf("streamed comments = %d, want the one finding from the readable hunk",
-			len(fixture.state.streamedComments))
-	}
-	if path := fmt.Sprint(fixture.state.streamedComments[0]["path"]); path != coverageReadablePath {
-		t.Fatalf("streamed comment path = %q, want %q", path, coverageReadablePath)
-	}
-
-	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "action_required" {
-		t.Fatalf("check conclusion = %v, want action_required holding the gate", conclusion)
-	}
-	output := checkOutput(t, fixture)
-	summary := fmt.Sprint(output["summary"])
-	if !strings.Contains(summary, coverageUnreadablePath) {
-		t.Fatalf("check summary = %q, want the path of the hunk nobody read", summary)
-	}
-	if !strings.Contains(summary, "split the pull request") {
-		t.Fatalf("check summary = %q, want what a person has to do about it", summary)
-	}
-	if strings.Contains(summary, nextPushSentence) {
-		t.Fatalf("check summary = %q, want no promise a later run cannot keep", summary)
-	}
-
 	body := failureSummaryComment(t, fixture)
-	if !strings.Contains(body, coverageUnreadablePath) {
-		t.Fatalf("summary comment = %q, want the path of the hunk nobody read", body)
-	}
-	if strings.Contains(body, nextPushSentence) {
-		t.Fatalf("summary comment = %q, want no promise a later run cannot keep", body)
-	}
-
-	state := decodedSummaryState(t, fixture)
-	if state.LastReviewed != domain.HeadSHA(coveragePriorHead) {
-		t.Fatalf("last reviewed = %q, want the baseline the last completed run left",
-			state.LastReviewed)
+	for _, want := range []string{coverageUnreadablePath, result.DecisionReason, "### Omissions"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary comment does not contain %q:\n%s", want, body)
+		}
 	}
 }
 
-// The same head delivered again measures the same range again. A baseline that
-// advanced would let the next run report the head as already reviewed, and the
-// hunk nobody read would be behind the checkpoint for good.
-func TestARedeliveredUnreadableHeadIsHeldAgainRatherThanReportedReviewed(t *testing.T) {
+// Accepting the same omission approves when the current pull request explains
+// the change and no actionable finding remains.
+func TestAOversizedHunkCanBeAcceptedFromCurrentContext(t *testing.T) {
+	result := domain.ReviewResult{
+		OmissionsAcceptable: true,
+		DecisionReason:      "The stated purpose and readable changes explain the unread change.",
+	}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         oversizedHunkCollector{},
 		minimumImportance: 9,
-		model:             &sequenceModel{results: []domain.ReviewResult{coverageFinding()}},
+		model:             &sequenceModel{results: []domain.ReviewResult{result}},
 	})
-	seedReviewedBaseline(fixture)
 
-	for attempt := 1; attempt <= 2; attempt++ {
-		if err := fixture.run(context.Background(), fixture.job()); err != nil {
-			t.Fatalf("Run %d: %v", attempt, err)
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
+	}
+	body := failureSummaryComment(t, fixture)
+	for _, want := range []string{coverageUnreadablePath, result.DecisionReason, "### Omissions"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary comment does not contain %q:\n%s", want, body)
 		}
-	}
-
-	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "action_required" {
-		t.Fatalf("check conclusion after the redelivery = %v, want action_required", conclusion)
-	}
-	title := fmt.Sprint(checkOutput(t, fixture)["title"])
-	if strings.Contains(title, "Already reviewed") {
-		t.Fatalf("check title = %q, want the head still held rather than reported reviewed", title)
-	}
-	if !strings.Contains(title, "cannot be reviewed") {
-		t.Fatalf("check title = %q, want the count of what nobody could read", title)
-	}
-	if len(fixture.state.submittedReviews) != 0 {
-		t.Fatalf("submitted reviews = %v, want none from either run", fixture.state.submittedReviews)
-	}
-	state := decodedSummaryState(t, fixture)
-	if state.LastReviewed != domain.HeadSHA(coveragePriorHead) {
-		t.Fatalf("last reviewed = %q, want the baseline still held after the redelivery",
-			state.LastReviewed)
-	}
-	// The chunks the first run read stay recorded, so the redelivery does not
-	// pay a second time for work this pull request already bought.
-	if len(state.Completed) == 0 {
-		t.Fatal("completed chunks = none, want the chunks the first run read")
 	}
 }
 
@@ -517,16 +463,13 @@ func (model *partiallyReadableModel) Review(
 	}, nil
 }
 
-// A chunk that answered in part is finished, and the head it left unread is
-// still unread on every later run.
+// A chunk that answered in part stays pending until the model decides whether
+// the unread remainder is acceptable in the current pull request.
 //
 // This is the half of the shortfall that in-memory bookkeeping lost. A chunk
-// whose split produced findings from one half and no answer at all from the
-// other is not owed: re-reading it would pay for the half that did answer on
-// every run forever. So it lands in the completed set, the next run subtracts
-// that set from the delta and never re-derives it, and nothing it observes for
-// itself says any part of this head went unread. Only the recorded id does, and
-// without it the second run advances the baseline over code nobody has read.
+// whose split produced findings from one half and no answer from the other must
+// remain pending. The final decision then reasons about that unread remainder,
+// and the next run retries it when the decision call also truncates.
 //
 // One run cannot show that, because the run that saw the shortfall still holds
 // the baseline on what it remembers. The second one can.
@@ -544,9 +487,13 @@ func TestAPartlyReadChunkKeepsTheBaselineHeldOnTheNextRun(t *testing.T) {
 		t.Fatalf("first Run: %v", err)
 	}
 	first := decodedSummaryState(t, fixture)
-	if len(first.Completed) == 0 {
-		t.Fatalf("completed after the first run = %v, want the chunk that answered in part recorded as read",
+	if len(first.Completed) != 0 {
+		t.Fatalf("completed after the first run = %v, want no partly read chunk recorded as complete",
 			first.Completed)
+	}
+	if len(first.Pending) != 1 {
+		t.Fatalf("pending after the first run = %v, want the partly read chunk retained",
+			first.Pending)
 	}
 	if len(first.Unread) == 0 {
 		t.Fatalf("unread after the first run = %v, want the chunk's shortfall recorded durably",
@@ -638,8 +585,8 @@ func TestAPanickingChunkReturnsItsWorkerSlot(t *testing.T) {
 	}
 }
 
-// Pending work from a later commit does not block an already reviewed head.
-func TestPendingWorkFromALaterCommitDoesNotBlockAReviewedHead(t *testing.T) {
+// An active review keeps ownership of the top-level comment and verdict until it finishes.
+func TestAnActiveReviewPreventsAVerdictRefresh(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages: [][]map[string]any{{{
 			"id":        float64(4100),
@@ -670,9 +617,9 @@ func TestPendingWorkFromALaterCommitDoesNotBlockAReviewedHead(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
-		t.Fatalf("event = %v, want the reviewed head approved once every thread is resolved",
-			fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none while a review is active",
+			fixture.state.lastSubmitReview)
 	}
 }
 
@@ -693,8 +640,8 @@ func TestAFullyUnreadChunkClearsAfterASuccessfulRetry(t *testing.T) {
 	if len(first.Pending) != 1 {
 		t.Fatalf("pending after first run = %v, want one unread chunk", first.Pending)
 	}
-	if len(first.Unread) != 0 {
-		t.Fatalf("unread after first run = %v, want the owed chunk tracked only as pending", first.Unread)
+	if len(first.Unread) != 1 {
+		t.Fatalf("unread after first run = %v, want the unread chunk recorded for the final decision", first.Unread)
 	}
 	model.truncateCalls = model.calls
 

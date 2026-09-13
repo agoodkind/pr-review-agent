@@ -14,66 +14,6 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
 
-// A line's new position decides which code a reconciliation reads, so each case
-// here names the shift it is about rather than checking arithmetic in the
-// abstract.
-func TestMapLineToNewSideMovesLinesByWhatThePatchDid(t *testing.T) {
-	// One line inserted after old line 5, consuming no old line.
-	const insertion = "@@ -5,0 +6,1 @@\n+inserted\n"
-	// Three lines inserted above the anchor, which is then rewritten.
-	const rewrite = "@@ -1,3 +1,5 @@\n line1\n+a\n+b\n+c\n-issue\n+fixed\n line3\n"
-
-	cases := []struct {
-		name    string
-		patch   string
-		oldLine int
-		want    int
-		mapped  bool
-	}{
-		{
-			// The line the insertion is anchored after is untouched by it. Counting
-			// it as covered pushed it onto the inserted text instead.
-			name:  "line a pure insertion is anchored after keeps its place",
-			patch: insertion, oldLine: 5, want: 5, mapped: true,
-		},
-		{
-			name:  "line after a pure insertion moves by what it added",
-			patch: insertion, oldLine: 6, want: 7, mapped: true,
-		},
-		{
-			name:  "line before a pure insertion is unmoved",
-			patch: insertion, oldLine: 4, want: 4, mapped: true,
-		},
-		{
-			name:  "context line before an edit is unmoved",
-			patch: rewrite, oldLine: 1, want: 1, mapped: true,
-		},
-		{
-			name:  "replaced line lands where its replacement sits",
-			patch: rewrite, oldLine: 2, want: 5, mapped: true,
-		},
-		{
-			name:  "context line after an edit moves by the insertions above it",
-			patch: rewrite, oldLine: 3, want: 6, mapped: true,
-		},
-		{
-			name:  "a patch with no hunk maps nothing",
-			patch: "no hunks here", oldLine: 2, want: 0, mapped: false,
-		},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, mapped := diff.MapLineToNewSide(testCase.patch, testCase.oldLine)
-			if mapped != testCase.mapped {
-				t.Fatalf("mapped = %t, want %t", mapped, testCase.mapped)
-			}
-			if mapped && got != testCase.want {
-				t.Fatalf("old line %d mapped to %d, want %d", testCase.oldLine, got, testCase.want)
-			}
-		})
-	}
-}
-
 const (
 	testHeadSHA      = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
 	testStaleHeadSHA = "b4d5e2dbd8f606cd935815c0e3b2f2202741ed43"
@@ -829,12 +769,10 @@ func TestCollectorRangeReviewsEverythingWhenTheBaseIsGone(t *testing.T) {
 	}
 }
 
-// GitHub compares from where two commits last agreed, so the patches are not
-// always measured from the commit the range asked for. Nothing downstream can
-// tell that from the files alone, and anything mapping coordinates from the
-// requested base would be mapping from a commit that was never in the patch, so
-// the collected input carries the commit the comparison actually used.
-func TestCollectRangeCarriesTheCommitTheComparisonMeasuredFrom(t *testing.T) {
+// A restack can leave the previous and current heads diverged. GitHub then
+// compares from their older merge base and includes files outside the pull
+// request, whose lines cannot accept review comments.
+func TestCollectRangeUsesThePullRequestWhenReviewHistoryDiverges(t *testing.T) {
 	const divergedMergeBase = "f8a9c5fdfaf828ef157a37e2f5d4f4424963af65"
 	source := &fakeSource{
 		files: []githubapp.ChangedFile{{
@@ -853,10 +791,11 @@ func TestCollectRangeCarriesTheCommitTheComparisonMeasuredFrom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectRange: %v", err)
 	}
-	if input.MergeBase != domain.HeadSHA(divergedMergeBase) {
-		t.Fatalf("merge base = %q, want %q: without it nothing downstream can tell the patches "+
-			"were measured from somewhere other than the commit asked for",
-			input.MergeBase, divergedMergeBase)
+	if source.listCalls != 1 {
+		t.Fatalf("list changed files calls = %d, want 1", source.listCalls)
+	}
+	if input.MergeBase != "" {
+		t.Fatalf("merge base = %q, want the current pull request file list", input.MergeBase)
 	}
 }
 

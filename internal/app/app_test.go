@@ -418,8 +418,8 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	_ = labeled.Body.Close()
 
 	time.Sleep(300 * time.Millisecond)
-	if calls := fixture.clydeState.requestCount(); calls != 1 {
-		t.Fatalf("clyde requests = %d, want 1: a label this service does not own reviews nothing", calls)
+	if calls := fixture.clydeState.requestCount(); calls != 2 {
+		t.Fatalf("clyde requests = %d, want 2 from the completed review: an unrelated label adds none", calls)
 	}
 	if count := fixture.githubState.submitReviewCount(); count != 1 {
 		t.Fatalf("submit review count = %d, want 1", count)
@@ -854,7 +854,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	if first.StatusCode != http.StatusAccepted {
 		t.Fatalf("first status = %d, want 202", first.StatusCode)
 	}
-	fixture.waitForClydeCalls(t, 1)
+	fixture.waitForClydeCalls(t, 2)
 
 	second := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
@@ -865,8 +865,8 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 		t.Fatalf("second status = %d, want 202", second.StatusCode)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if fixture.clydeState.requestCount() != 1 {
-		t.Fatalf("clyde requests = %d, want 1", fixture.clydeState.requestCount())
+	if fixture.clydeState.requestCount() != 2 {
+		t.Fatalf("clyde requests = %d, want 2", fixture.clydeState.requestCount())
 	}
 }
 
@@ -982,8 +982,8 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 		t.Fatalf("the pull request carries %d Review headings, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
 			headings, comment, verdict)
 	}
-	sentences := strings.Count(comment, "No severe findings.") +
-		strings.Count(verdict, "No severe findings.")
+	sentences := strings.Count(comment, "This review found no severe defects.") +
+		strings.Count(verdict, "This review found no severe defects.")
 	if sentences != 1 {
 		t.Fatalf("the pull request states the verdict sentence %d times, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
 			sentences, comment, verdict)
@@ -996,14 +996,12 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	assertVerdictBody(t, review["body"], testDefectiveHead, false)
 }
 
-// A block names what to fix in the one top level comment, and the verdict
-// review carries no prose at all.
+// A block names what to fix in the one top-level comment, while the verdict
+// review carries no visible prose.
 //
 // A block naming nothing to fix leaves no edit that could satisfy it, so the
-// reasons have to be somewhere. They belong in the comment, because that is the
-// only place this service writes above the diff; printing them again in the
-// verdict body puts a second Review box on the page saying what the first one
-// said, which is what a reader reported twice.
+// reasons have to be visible in the existing report and inline findings. The
+// verdict review only carries the decision and hidden state.
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -1034,7 +1032,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
 	}
 	comment := fixture.githubState.summaryCommentBody()
-	if !strings.Contains(comment, "Waiting on:") {
+	if !strings.Contains(comment, "This review is waiting on:") {
 		t.Fatalf("the comment names nothing to fix, so no edit can satisfy the block: %q", comment)
 	}
 	// The path is a code span wherever it is rendered, because it is
@@ -1267,8 +1265,8 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 
 	runWebhook(t, "delivery-second-app")
 	time.Sleep(200 * time.Millisecond)
-	if clydeState.requestCount() != 1 {
-		t.Fatalf("clyde requests after fresh app = %d, want 1", clydeState.requestCount())
+	if clydeState.requestCount() != 2 {
+		t.Fatalf("clyde requests after fresh app = %d, want 2", clydeState.requestCount())
 	}
 	if githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count after fresh app = %d, want 1", githubState.submitReviewCount())
@@ -1347,21 +1345,19 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	})
 	_ = sync.Body.Close()
 
-	fixture.waitForClydeCalls(t, 3)
+	fixture.waitForClydeCalls(t, 5)
 	fixture.waitForSubmitReviews(t, 2)
 	// The comment is rewritten after the review is submitted, and again at every
 	// chunk checkpoint before it, so waiting on the review or on an update count
 	// races the rewrite this test reads. Wait for the state it asserts.
 	fixture.waitForSummaryHead(t, testCorrectedHead)
-	// The second run's summary comment names the first run's head, so the
-	// second run must have asked GitHub to compare that range rather than
-	// listing the whole pull request again.
-	if fixture.githubState.comparedRanges() < 1 {
-		t.Fatalf("compare range fetches = %d, want at least 1", fixture.githubState.comparedRanges())
+	// Every new head reads the current pull request rather than narrowing its
+	// view to the commit range after the previous review.
+	if fixture.githubState.comparedRanges() != 0 {
+		t.Fatalf("compare range fetches = %d, want 0", fixture.githubState.comparedRanges())
 	}
-	if fixture.githubState.listedFilePages() != 0 {
-		t.Fatalf("full file list page fetches = %d, want 0: the second run must not list the whole pull request again",
-			fixture.githubState.listedFilePages())
+	if fixture.githubState.listedFilePages() == 0 {
+		t.Fatal("full file list page fetches = 0, want the current pull request")
 	}
 	// Every verdict review states its decision. The old behavior submitted a
 	// marker-only body once a summary review existed, and that body blocked a
@@ -3050,11 +3046,15 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	}
 
 	isReconcile := false
+	isReport := false
 	if responseFormat, ok := body["response_format"].(map[string]any); ok {
 		if jsonSchema, ok := responseFormat["json_schema"].(map[string]any); ok {
-			if name, ok := jsonSchema["name"].(string); ok && name == "thread_resolutions" {
-				isReconcile = true
-				atomic.AddInt32(&state.reconcileRequests, 1)
+			if name, ok := jsonSchema["name"].(string); ok {
+				if name == "thread_resolutions" {
+					isReconcile = true
+					atomic.AddInt32(&state.reconcileRequests, 1)
+				}
+				isReport = name == "review_report"
 			}
 		}
 	}
@@ -3072,7 +3072,9 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	// A failing endpoint serves no content, and a fixture configured with only
 	// a status has no responses to index.
 	if !failed {
-		if isReconcile {
+		if isReport {
+			content = `{"summary":"This pull request updates the reviewed behavior.","walkthrough":["The change updates the current implementation."],"verdict_reason":"The current pull request has no open actionable findings."}`
+		} else if isReconcile {
 			if len(state.reconcileResponses) == 0 {
 				content = reconcileResolvedContent("thread-owned")
 			} else {
@@ -3150,20 +3152,12 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 // the page, which is what a reader saw twice two seconds apart.
 var summaryProse = []string{
 	"## Review",
-	"No severe findings.",
-	"Severe findings are listed inline.",
+	"This review found no severe defects.",
+	"This review found severe defects and listed them inline.",
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks one verdict review body against the rule that a pull
-// request carries exactly one top level comment from this service and nothing
-// else above the diff.
-//
-// The body is the review marker and nothing visible, whatever the decision is.
-// GitHub renders the decision itself as an event, and the one comment already
-// says what the review is waiting on, so prose here is a second Review box
-// repeating the comment a few pixels above it. The marker stays because the
-// service reads it back to recognize a head it already reviewed.
+// assertVerdictBody checks that the verdict review adds no third visible comment.
 func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	t.Helper()
 	body, ok := value.(string)
@@ -3178,8 +3172,7 @@ func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 		decision = domain.ReviewDecisionRequestChanges
 	}
 	if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head), decision) {
-		t.Fatalf("verdict body carries visible prose beside the marker, so the reader sees a second Review box: %q",
-			body)
+		t.Fatalf("verdict body creates a third visible comment: %q", body)
 	}
 	// The marker records the decision because a dismissal erases GitHub's own
 	// record of it, and the withheld-block rule reads it back from here.

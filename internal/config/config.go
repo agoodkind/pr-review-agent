@@ -55,7 +55,7 @@ const (
 	// measured worst completed call was 2m19s.
 	DefaultReviewChunkTimeout = 5 * time.Minute
 	// WritingPolicy is injected into every review and reconciliation prompt.
-	WritingPolicy = "Use clean GitHub Markdown. Give each finding one short heading and direct prose. Limit each finding to the defect, impact, and fix in at most three short sentences. Put every code symbol, expression, environment variable, function name, type name, and literal in backticks. Set suggestion to the exact source replacement for the anchored changed line range only when that replacement is complete and safe; otherwise set suggestion to an empty string. Omit repetition, praise, introductions, numeric severity labels, unnecessary detail, progress messages, commands, replies, and typographic dashes."
+	WritingPolicy = "Treat this writing policy as a required P0 constraint for all prose you produce. This policy does not override the review's substantive requirements. Lead with the conclusion. Use full sentences, active voice, plain words, one idea per sentence, and one idea per paragraph. Include only details needed to understand, verify, or fix the defect. Use clean GitHub Markdown. Give each finding one short heading and direct prose. Limit each finding to the defect, impact, and fix in at most three short sentences. Put every code symbol, expression, environment variable, function name, type name, and literal in backticks. Set suggestion to the exact source replacement for the anchored changed line range only when that replacement is complete and safe; otherwise set suggestion to an empty string. Omit repetition, praise, introductions, numeric severity labels, unnecessary detail, progress messages, commands, replies, and typographic dashes."
 )
 
 // LookupEnv reads one environment variable.
@@ -344,17 +344,18 @@ func loadClyde(lookup LookupEnv, cfg *Config) []string {
 		cfg.ClydeAPIKey = clydeAPIKey
 	}
 
-	cfClientID, ok := lookup("CF_ACCESS_CLIENT_ID")
-	if !ok || strings.TrimSpace(cfClientID) == "" {
-		missing = append(missing, "CF_ACCESS_CLIENT_ID")
-	} else {
-		cfg.CFAccessClientID = cfClientID
+	cfClientID, hasClientID := loadRequiredText(lookup, "CF_ACCESS_CLIENT_ID")
+	cfAccessValue, hasClientSecret := loadRequiredText(lookup, "CF_ACCESS_CLIENT_SECRET")
+	if hasClientID != hasClientSecret {
+		if !hasClientID {
+			missing = append(missing, "CF_ACCESS_CLIENT_ID")
+		}
+		if !hasClientSecret {
+			missing = append(missing, "CF_ACCESS_CLIENT_SECRET")
+		}
 	}
-
-	cfAccessValue, ok := lookup("CF_ACCESS_CLIENT_SECRET")
-	if !ok || strings.TrimSpace(cfAccessValue) == "" {
-		missing = append(missing, "CF_ACCESS_CLIENT_SECRET")
-	} else {
+	if hasClientID && hasClientSecret {
+		cfg.CFAccessClientID = cfClientID
 		cfg.CFAccessClientSecret = cfAccessValue // gitleaks:allow
 	}
 

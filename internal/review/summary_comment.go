@@ -33,14 +33,14 @@ func (service *Service) upsertSummaryComment(
 	job domain.ReviewJob,
 	content summaryCommentContent,
 ) error {
-	return service.upsertSummaryCommentFrom(ctx, job, func(marker.State) summaryCommentContent {
+	return service.upsertSummaryCommentFrom(ctx, job, func(marker.State, string) summaryCommentContent {
 		return content
 	})
 }
 
 // announceStart records the current run without moving its checkpoint.
 func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob, head domain.HeadSHA) {
-	err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State) summaryCommentContent {
+	err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State, _ string) summaryCommentContent {
 		state.RunID = job.DeliveryID
 		state.Status = marker.StateReviewing
 		return summaryCommentContent{Prose: RenderStartedBody(head), State: state}
@@ -66,7 +66,7 @@ func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob,
 func (service *Service) upsertSummaryCommentFrom(
 	ctx context.Context,
 	job domain.ReviewJob,
-	build func(marker.State) summaryCommentContent,
+	build func(marker.State, string) summaryCommentContent,
 ) error {
 	logger := gklog.L(ctx)
 	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
@@ -81,7 +81,7 @@ func (service *Service) upsertSummaryCommentFrom(
 			job.InstallationID,
 			job.Repository,
 			existing.ID,
-			renderSummaryComment(build(existingState)),
+			renderSummaryComment(build(existingState, existing.Body)),
 		); err != nil {
 			logger.ErrorContext(ctx, "update summary comment", slog.String("err", err.Error()))
 			return fmt.Errorf("update summary comment: %w", err)
@@ -89,7 +89,13 @@ func (service *Service) upsertSummaryCommentFrom(
 		logger.InfoContext(ctx, "summary comment updated", slog.Int64("comment_id", existing.ID))
 		return nil
 	}
-	firstContent := build(marker.State{LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil})
+	firstContent := build(
+		marker.State{
+			LastReviewed: "", RunID: "", Status: "", Pending: nil,
+			Completed: nil, ForcedBy: "", Unread: nil,
+		},
+		"",
+	)
 	created, err := service.github.CreateIssueComment(
 		ctx,
 		job.InstallationID,

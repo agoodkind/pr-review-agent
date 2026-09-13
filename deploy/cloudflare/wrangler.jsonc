@@ -21,7 +21,8 @@
     "REVIEW_MAX_FILES": "100",
     "REVIEW_MIN_IMPORTANCE": "6",
     "REVIEW_MODEL": "gpt-5.6-sol",
-    "REVIEW_WORKERS": "4"
+    "REVIEW_WORKERS": "4",
+    "USE_NANO_AS_PRIMARY": true
   },
   "containers": [
     {
