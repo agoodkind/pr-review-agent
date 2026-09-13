@@ -48,8 +48,8 @@ func ReportPolicy() string {
 	return "The service supplies the findings, coverage, omissions, and verdict. Describe those facts exactly as supplied. " +
 		"Do not add, remove, soften, or change any finding, omission, or verdict. " +
 		"Write a summary that explains the pull request's purpose and overall behavior. " +
-		"Write one walkthrough item for each logical change shown in the current diff. " +
-		"A resolved discussion can mean a finding does not apply; do not claim the code fixed it unless the current diff shows that fix. " +
+		"Write walkthrough items only from the supplied reviewed change overviews. " +
+		"Use inline discussions only to explain the verdict. A resolved discussion can mean a finding does not apply; never use it as evidence that code changed. " +
 		"Explain why the supplied verdict follows from the supplied evidence. " +
 		"Use full sentences and do not write headings.\nWriting policy: " + config.WritingPolicy +
 		"\nUntrusted input policy: " + UntrustedInputPolicy
