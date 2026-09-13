@@ -268,22 +268,27 @@ func TestCollectorMissingPatchIncomplete(t *testing.T) {
 	}
 }
 
-func TestCollectorFailedContentReadIncomplete(t *testing.T) {
-	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/a.go",
-			Status:       "modified",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
-		getErr: errors.New("read failed"),
-	}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if input.Files[0].CoverageComplete {
-		t.Fatal("failed content read should be incomplete")
+func TestCollectorFailedContentReadReturnsError(t *testing.T) {
+	for _, base := range []domain.HeadSHA{"", testStaleHeadSHA} {
+		t.Run(string(base), func(t *testing.T) {
+			cause := errors.New("read failed")
+			source := &fakeSource{
+				files: []githubapp.ChangedFile{{
+					Path:         "pkg/a.go",
+					Status:       "modified",
+					Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+					PatchPresent: true,
+				}},
+				getErr: cause,
+			}
+			input, err := diff.NewCollector(source).CollectRange(context.Background(), testRef(), testPullRequest(), base)
+			if !errors.Is(err, cause) {
+				t.Fatalf("CollectRange error = %v, want the content-read failure", err)
+			}
+			if len(input.Files) != 0 {
+				t.Fatalf("files = %v, want no review input after failed collection", input.Files)
+			}
+		})
 	}
 }
 

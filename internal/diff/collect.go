@@ -219,9 +219,13 @@ func (collector *Collector) Collect(
 		return ReviewInput{}, fmt.Errorf("list changed files: %w", err)
 	}
 
+	files, err := collector.collectFiles(ctx, ref, pullRequest, changedFiles)
+	if err != nil {
+		return ReviewInput{}, err
+	}
 	return ReviewInput{
 		PullRequest: pullRequest,
-		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles),
+		Files:       files,
 		// Listing the whole pull request compares nothing, so there is no commit
 		// the patches were measured from to report.
 		MergeBase: "",
@@ -282,9 +286,13 @@ func (collector *Collector) CollectRange(
 		)
 		return collector.Collect(ctx, ref, pullRequest)
 	}
+	files, err := collector.collectFiles(ctx, ref, pullRequest, changedFiles.Files)
+	if err != nil {
+		return ReviewInput{}, err
+	}
 	return ReviewInput{
 		PullRequest: pullRequest,
-		Files:       collector.collectFiles(ctx, ref, pullRequest, changedFiles.Files),
+		Files:       files,
 		MergeBase:   changedFiles.MergeBase,
 	}, nil
 }
@@ -312,16 +320,20 @@ func (collector *Collector) collectFiles(
 	ref domain.PullRequestRef,
 	pullRequest githubapp.PullRequest,
 	changedFiles []githubapp.ChangedFile,
-) []FileContext {
+) ([]FileContext, error) {
 	sort.Slice(changedFiles, func(left, right int) bool {
 		return changedFiles[left].Path < changedFiles[right].Path
 	})
 
 	files := make([]FileContext, 0, len(changedFiles))
 	for _, changedFile := range changedFiles {
-		files = append(files, collector.collectFile(ctx, ref, pullRequest, changedFile))
+		file, err := collector.collectFile(ctx, ref, pullRequest, changedFile)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
 	}
-	return files
+	return files, nil
 }
 
 func (collector *Collector) collectFile(
@@ -329,7 +341,7 @@ func (collector *Collector) collectFile(
 	ref domain.PullRequestRef,
 	pullRequest githubapp.PullRequest,
 	changedFile githubapp.ChangedFile,
-) FileContext {
+) (FileContext, error) {
 	fileContext := FileContext{
 		Path:              changedFile.Path,
 		Status:            changedFile.Status,
@@ -343,17 +355,17 @@ func (collector *Collector) collectFile(
 
 	if isBinaryFile(changedFile) {
 		fileContext.markGap(CoverageGapBinary)
-		return fileContext
+		return fileContext, nil
 	}
 	if !changedFile.PatchPresent {
 		fileContext.markGap(CoverageGapPatchAbsent)
-		return fileContext
+		return fileContext, nil
 	}
 
 	changedLines, changedHunks, err := ChangedRightLines(changedFile.Patch)
 	if err != nil {
 		fileContext.markGap(CoverageGapPatchUnreadable)
-		return fileContext
+		return fileContext, nil
 	}
 	fileContext.ChangedRightLines = changedLines
 	fileContext.ChangedRightHunks = changedHunks
@@ -364,7 +376,7 @@ func (collector *Collector) collectFile(
 	}
 
 	if changedFile.Status == "removed" {
-		return fileContext
+		return fileContext, nil
 	}
 
 	content, err := collector.source.GetFile(
@@ -375,11 +387,15 @@ func (collector *Collector) collectFile(
 		pullRequest.Head,
 	)
 	if err != nil {
-		fileContext.markGap(contentGapFor(err))
-		return fileContext
+		gap := contentGapFor(err)
+		if !gap.Recurs() {
+			return FileContext{}, fmt.Errorf("load content for %s: %w", changedFile.Path, err)
+		}
+		fileContext.markGap(gap)
+		return fileContext, nil
 	}
 	fileContext.CurrentContent = string(content)
-	return fileContext
+	return fileContext, nil
 }
 
 func isBinaryFile(changedFile githubapp.ChangedFile) bool {

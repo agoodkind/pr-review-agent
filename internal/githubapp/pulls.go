@@ -56,8 +56,11 @@ type Comparison struct {
 }
 
 type fileContentResponse struct {
-	Content  string `json:"content"`
-	Encoding string `json:"encoding"`
+	Content         string `json:"content"`
+	Encoding        string `json:"encoding"`
+	Type            string `json:"type"`
+	SHA             string `json:"sha"`
+	SubmoduleGitURL string `json:"submodule_git_url"`
 }
 
 // GetPullRequest loads one pull request by number.
@@ -124,7 +127,7 @@ func (client *Client) ListChangedFiles(
 	return files, nil
 }
 
-// GetFile loads repository file bytes at one ref.
+// GetFile loads repository file bytes or a submodule's repository and pinned commit at one ref.
 func (client *Client) GetFile(
 	ctx context.Context,
 	installationID int64,
@@ -149,6 +152,14 @@ func (client *Client) GetFile(
 	if err := json.Unmarshal(body, &response); err != nil {
 		client.logger.ErrorContext(ctx, "decode file content", slog.String("err", err.Error()))
 		return nil, errors.New("decode file content")
+	}
+	if response.Type == "submodule" {
+		commit, err := domain.ParseHeadSHA(response.SHA)
+		if err != nil || strings.TrimSpace(response.SubmoduleGitURL) == "" ||
+			strings.ContainsAny(response.SubmoduleGitURL, "\r\n\x00") {
+			return nil, errors.New("invalid submodule metadata")
+		}
+		return []byte(fmt.Sprintf("Submodule repository: %s\nSubproject commit %s\n", response.SubmoduleGitURL, commit)), nil
 	}
 	if response.Encoding != "base64" {
 		return nil, errors.New("unsupported file encoding")

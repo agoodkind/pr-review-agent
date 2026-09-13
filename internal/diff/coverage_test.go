@@ -28,6 +28,7 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 		contents   map[string][]byte
 		wantGap    diff.CoverageGap
 		wantRecurs bool
+		wantError  bool
 	}{
 		{
 			name: "a binary file carries no reviewable patch",
@@ -35,7 +36,7 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 				Path: "image.png", Status: "binary", Patch: "", PatchPresent: false,
 			},
 			getErr: nil, contents: nil,
-			wantGap: diff.CoverageGapBinary, wantRecurs: true,
+			wantGap: diff.CoverageGapBinary, wantRecurs: true, wantError: false,
 		},
 		{
 			name: "github supplies no patch for an oversized file",
@@ -43,7 +44,7 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 				Path: "big.bin", Status: "modified", Patch: "", PatchPresent: false,
 			},
 			getErr: nil, contents: nil,
-			wantGap: diff.CoverageGapPatchAbsent, wantRecurs: true,
+			wantGap: diff.CoverageGapPatchAbsent, wantRecurs: true, wantError: false,
 		},
 		{
 			name: "a malformed hunk header cannot be read",
@@ -51,19 +52,15 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 				Path: "pkg/a.go", Status: "modified", Patch: "@@ nonsense @@\n+x\n", PatchPresent: true,
 			},
 			getErr: nil, contents: nil,
-			wantGap: diff.CoverageGapPatchUnreadable, wantRecurs: true,
+			wantGap: diff.CoverageGapPatchUnreadable, wantRecurs: true, wantError: false,
 		},
 		{
-			// A patch whose counts do not add up is a truncated patch, and a file
-			// GitHub truncates the patch for is one whose content load tends to
-			// fail too. The permanent reason has to survive the temporary one, or
-			// the run reports a file it can never read as one it will retry.
-			name: "a truncated patch keeps its reason through a failed content load",
+			name: "a truncated patch does not hide a failed content load",
 			file: githubapp.ChangedFile{
 				Path: "pkg/a.go", Status: "modified", Patch: "@@ -1,1 +1,5 @@\n line\n+added\n", PatchPresent: true,
 			},
 			getErr: errors.New("read failed"), contents: nil,
-			wantGap: diff.CoverageGapPatchUnreadable, wantRecurs: true,
+			wantGap: diff.CoverageGapNone, wantRecurs: false, wantError: true,
 		},
 		{
 			name: "a content read that got no answer is one call that went wrong",
@@ -72,7 +69,7 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 			},
 			getErr:   githubapp.APIError{StatusCode: http.StatusBadGateway, Message: "bad gateway"},
 			contents: nil,
-			wantGap:  diff.CoverageGapContentUnavailable, wantRecurs: false,
+			wantGap:  diff.CoverageGapNone, wantRecurs: false, wantError: true,
 		},
 		{
 			// GitHub answered, and it answers the same way on every later run.
@@ -84,7 +81,7 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 			},
 			getErr:   githubapp.APIError{StatusCode: http.StatusNotFound, Message: "Not Found"},
 			contents: nil,
-			wantGap:  diff.CoverageGapContentMissing, wantRecurs: true,
+			wantGap:  diff.CoverageGapContentMissing, wantRecurs: true, wantError: false,
 		},
 		{
 			// An error carrying no status this service recognizes could be
@@ -95,7 +92,7 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 				Path: "pkg/a.go", Status: "modified", Patch: goodPatch, PatchPresent: true,
 			},
 			getErr: errors.New("read failed"), contents: nil,
-			wantGap: diff.CoverageGapContentUnavailable, wantRecurs: false,
+			wantGap: diff.CoverageGapNone, wantRecurs: false, wantError: true,
 		},
 	}
 
@@ -109,6 +106,15 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 			input, err := diff.NewCollector(source).Collect(
 				context.Background(), testRef(), testPullRequest(),
 			)
+			if testCase.wantError {
+				if !errors.Is(err, testCase.getErr) {
+					t.Fatalf("Collect error = %v, want %v", err, testCase.getErr)
+				}
+				if len(input.Files) != 0 {
+					t.Fatalf("files = %v, want no review input after failed collection", input.Files)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Collect: %v", err)
 			}
