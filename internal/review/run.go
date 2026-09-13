@@ -102,6 +102,7 @@ type chunkPass struct {
 	// lock.
 	carried []string
 
+	publicationMu   sync.Mutex
 	mu              sync.Mutex
 	collector       *findingCollector
 	models          modelSet
@@ -158,6 +159,7 @@ func newChunkPass(
 		disputes:        disputes,
 		disputePrompt:   disputes.promptSection(),
 		carried:         carried,
+		publicationMu:   sync.Mutex{},
 		mu:              sync.Mutex{},
 		collector:       newFindingCollector(work.Files, settings.minimumImportance),
 		models:          modelSet{names: nil, seen: nil},
@@ -928,7 +930,7 @@ func (service *Service) renderChunkFindings(
 			pass.failed++
 			continue
 		}
-		pass.selection.remember(keysFor(finding), finding.Title)
+		pass.selection.remember(finding)
 		posts = append(posts, postCandidate{finding: finding, comment: rendered[0]})
 	}
 	return posts

@@ -34,10 +34,11 @@ const (
 	// terminal state this service writes, and the only one that says a force
 	// request was carried through rather than abandoned part way.
 	checkRunCompleted = "completed"
-	// checkConclusionSuccess is the one conclusion that says this head was
-	// reviewed and passed. It is named here rather than written out at each of
-	// its readers, because a run that reports through a check and a run that
-	// stops on one have to mean the same thing by it.
+	// checkConclusionSuccess is the one conclusion that says this head's review
+	// completed. The verdict says whether the review approved or requested
+	// changes. It is named here rather than written out at each reader because a
+	// run that reports through a check and a run that stops on one have to mean
+	// the same thing by it.
 	checkConclusionSuccess = "success"
 )
 

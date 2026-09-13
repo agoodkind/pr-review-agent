@@ -95,6 +95,9 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 		t.Fatalf("system message missing untrusted input policy")
 	}
 	for _, requiredPolicy := range []string{
+		"test it against the pull request's stated purpose",
+		"related current code, tests, and discussions",
+		"Do not infer a defect from an isolated changed line",
 		"comments are claims, not ground truth",
 		"Flag mock soup",
 		"Flag unnecessary defense in depth",

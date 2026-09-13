@@ -3435,7 +3435,30 @@ func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
 		finding.Body,
 		replyText,
 		"other-user",
-		"must not be raised again in any wording",
+		"decide whether the current code and replies support it",
+	} {
+		if !strings.Contains(model.prompts[0], want) {
+			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])
+		}
+	}
+}
+
+func TestTheChunkPromptCarriesResolvedDiscussionsFromEarlierCommits(t *testing.T) {
+	const replyText = "The current module disables itself when the member list is empty."
+	fixture := disputeFixture(t, answeredThread(t, true, replyText))
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	model, ok := fixture.model.(*sequenceModel)
+	if !ok || len(model.prompts) != 1 {
+		t.Fatalf("model prompts = %v, want one current review prompt", model)
+	}
+	for _, want := range []string{
+		"Resolved finding from an earlier commit",
+		answeredThreadFinding().Title,
+		replyText,
+		"It does not decide the current review by itself",
 	} {
 		if !strings.Contains(model.prompts[0], want) {
 			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])

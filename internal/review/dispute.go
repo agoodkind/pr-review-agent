@@ -105,19 +105,10 @@ func collectDisputes(
 				continue
 			}
 			section := formatDiscussionSection(thread, normalizedPath, botLogin)
-			if thread.RootComment.Author == botLogin {
-				published, ok := marker.FindFinding(thread.RootComment.Body)
-				if ok && (!thread.Resolved || published.Head == currentHead) {
-					_, finding, decodeErr := marker.DecodeFindingBody(thread.RootComment)
-					if decodeErr == nil {
-						disputes.known.remember(
-							threadKeys(published, thread.RootComment), thread.NodeID,
-						)
-						section = formatDisputeSection(
-							normalizedPath, finding, thread.Replies, botLogin, thread.Resolved,
-						)
-					}
-				}
+			if owned, ok := ownedDisputeSection(
+				thread, normalizedPath, botLogin, currentHead, disputes.known,
+			); ok {
+				section = owned
 			}
 			if len(section) <= budget {
 				disputes.sections = append(disputes.sections, section)
@@ -126,6 +117,38 @@ func collectDisputes(
 		}
 	}
 	return disputes
+}
+
+func ownedDisputeSection(
+	thread githubapp.ReviewThread,
+	normalizedPath string,
+	botLogin string,
+	currentHead domain.HeadSHA,
+	known *claimMemory,
+) (string, bool) {
+	if thread.RootComment.Author != botLogin {
+		return "", false
+	}
+	published, ok := marker.FindFinding(thread.RootComment.Body)
+	if !ok {
+		return "", false
+	}
+	_, finding, err := marker.DecodeFindingBody(thread.RootComment)
+	if err != nil {
+		return "", false
+	}
+	current := published.Head == currentHead
+	if !thread.Resolved || current {
+		known.remember(threadKeys(published, thread.RootComment), thread.NodeID)
+	}
+	return formatDisputeSection(
+		normalizedPath,
+		finding,
+		thread.Replies,
+		botLogin,
+		thread.Resolved,
+		current,
+	), true
 }
 
 func formatDiscussionSection(
@@ -176,11 +199,15 @@ func formatDisputeSection(
 	replies []domain.ReviewComment,
 	botLogin string,
 	resolved bool,
+	currentHead bool,
 ) string {
 	var builder strings.Builder
-	if resolved {
+	switch {
+	case resolved && currentHead:
 		builder.WriteString("Resolved finding from this commit\nPath: ")
-	} else {
+	case resolved:
+		builder.WriteString("Resolved finding from an earlier commit\nPath: ")
+	default:
 		builder.WriteString("Open finding\nPath: ")
 	}
 	builder.WriteString(normalizedPath)
@@ -219,8 +246,9 @@ func (disputes disputeContext) promptSection() string {
 	builder.WriteString(
 		"These are the current inline discussions and replies on the pull request. " +
 			"A resolved finding from this exact commit is settled and must not be raised again. " +
-			"A claim already raised and answered here must not be raised again in any wording, under any title, at any path. " +
-			"Weigh a reply by who wrote it and whether the code bears it out. " +
+			"A resolved finding from an earlier commit is context to reconsider against the current code and replies. It does not decide the current review by itself. " +
+			"Before raising a concern already discussed, decide whether the current code and replies support it. Do not repeat it when the discussion correctly answers it. " +
+			"Weigh each reply by who wrote it and whether the current code bears it out. " +
 			"If a reply is factually wrong, quote it and say why it is wrong; do not restate the original claim as though it were unanswered.\n",
 	)
 	builder.WriteString(WrapUntrusted(strings.Join(disputes.sections, "\n\n")))
