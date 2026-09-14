@@ -282,9 +282,8 @@ func (service *Service) runLocked(
 	// so this is normally not a completed check at all; the guard keeps that
 	// true if a forced job ever reaches here carrying one.
 	if !job.Forced && service.checkAlreadySucceeded(ctx, checkRun) {
-		// The check is already completed and successful, so there is nothing to
-		// conclude here and the refresh failure is the whole outcome.
-		return service.reconcileReplyAndRefreshVerdict(ctx, job, nil, settings)
+		// A prior successful check does not override a refreshed withheld verdict.
+		return service.refreshReviewedCheck(ctx, job, nil, settings)
 	}
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
@@ -305,20 +304,7 @@ func (service *Service) runLocked(
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err)
 	}
 	if reviewed {
-		// The check is concluded first and the refresh failure reported after.
-		// This head is reviewed either way, so the check must keep saying so
-		// whatever the refresh did.
-		refreshErr := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
-		if err := service.succeed(
-			ctx,
-			job,
-			checkRun.ID,
-			checkTitleAlreadyReviewed,
-			"This head already has a PR-Agent review. No duplicate review was published.",
-		); err != nil {
-			return err
-		}
-		return refreshErr
+		return service.refreshReviewedCheck(ctx, job, reviews, settings)
 	}
 	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress, settings)
 }
@@ -380,17 +366,7 @@ func (service *Service) reviewOwedWork(
 	// commit against itself, spends no API call proving what the state already
 	// says.
 	if !fromScratch && hasState && state.LastReviewed == head && len(state.Pending) == 0 {
-		refreshErr := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
-		if err := service.succeed(
-			ctx,
-			job,
-			checkRun.ID,
-			checkTitleAlreadyReviewed,
-			"The durable review state already records this head as reviewed, with no chunks pending.",
-		); err != nil {
-			return err
-		}
-		return refreshErr
+		return service.refreshReviewedCheck(ctx, job, reviews, settings)
 	}
 
 	// Admission runs before reconciliation. Reconciliation makes a model call
@@ -775,31 +751,18 @@ func (service *Service) publish(
 	omissionsDecided := shortfall.present() && len(state.Pending) == 0 && len(state.Unread) == 0 &&
 		pass.decidedOmissions()
 	omissionsAccepted := omissionsDecided && pass.acceptsOmissions()
-	// A head can receive a verdict when every chunk answered and any structural
-	// omission was accepted from the metadata supplied to the model. A refused
-	// inline comment still reached the reader when the summary carries it.
+	// Completing the read does not establish approval when omissions were
+	// refused or a finding could not reach the diff.
 	headFullyReviewed := len(state.Pending) == 0 && len(state.Unread) == 0 &&
 		(analysis.CoverageComplete || omissionsDecided) && failed == len(fallback)
-	decision := reviewerDecision(threads, service.botLogin, headFullyReviewed)
-	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef, headFullyReviewed)
-	if omissionsDecided && !omissionsAccepted {
-		decision = domain.ReviewDecisionRequestChanges
-		blocking = mergeLocations(
-			blocking,
-			[]string{rejectedOmissionReason(pass)},
-		)
-	}
-	if headFullyReviewed && len(fallback) > 0 {
-		decision = domain.ReviewDecisionRequestChanges
-		blocking = mergeLocations(
-			openThreadLocations(threads, service.botLogin),
-			findingLocations(fallback),
-		)
-	}
+	approvalAllowed := headFullyReviewed && (!omissionsDecided || omissionsAccepted) && len(fallback) == 0
+	decision := reviewerDecision(threads, service.botLogin, approvalAllowed)
+	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef)
 	summary := Summary{
-		Head:           head,
-		Decision:       decision,
-		DecisionReason: pass.decisionReason(),
+		Head:             head,
+		Decision:         decision,
+		DecisionReason:   pass.decisionReason(),
+		ApprovalWithheld: !approvalAllowed,
 		Report: Report{
 			Summary:       "",
 			Walkthrough:   nil,
@@ -879,14 +842,13 @@ func (service *Service) publishVerdict(
 	checkRun githubapp.CheckRun,
 	summary Summary,
 	state marker.State,
-	progress *reviewProgress,
 ) error {
 	logger := gklog.L(ctx)
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.ErrorContext(ctx, "refresh reviews for the verdict", slog.String("err", err.Error()))
 		return service.failCheck(
-			ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err,
+			ctx, job, checkRun.ID, summary, checkFailureReviews, err,
 		)
 	}
 	standing := latestBotVerdictAtHead(reviews, service.botLogin, summary.Head)
@@ -896,9 +858,14 @@ func (service *Service) publishVerdict(
 		standing.review.State == decisionState &&
 		latestBotVerdictState(reviews, service.botLogin) == decisionState
 	if unchanged {
+		if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
+			return service.failCheck(
+				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
+			)
+		}
 		if err := service.updateVerdictBody(ctx, job, standing.review, verdictBody); err != nil {
 			return service.failCheck(
-				ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePublish, err,
+				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
 			)
 		}
 		logger.InfoContext(
@@ -908,21 +875,10 @@ func (service *Service) publishVerdict(
 			slog.String("event", string(summary.Decision)),
 		)
 	} else {
-		publishedReview, err := service.github.SubmitReview(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			job.Number,
-			githubapp.SubmitReviewRequest{
-				CommitID: summary.Head,
-				Body:     verdictBody,
-				Event:    summary.Decision,
-				Comments: nil,
-			},
-		)
+		publishedReview, err := service.submitInlineBackedVerdict(ctx, job, summary)
 		if err != nil {
 			return service.failCheck(
-				ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePublish, err,
+				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
 			)
 		}
 		logger.InfoContext(
@@ -942,9 +898,12 @@ func (service *Service) publishVerdict(
 		Prose: RenderBody(summary),
 		State: state,
 	}); err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
+		return service.failCheck(ctx, job, checkRun.ID, summary, checkFailureSummary, err)
 	}
 
+	if summary.Decision == domain.ReviewDecisionComment {
+		return service.completeCheckRun(ctx, job.InstallationID, job.Repository, checkRun.ID, checkConclusionDeclined, summary.Title(), RenderDetails(summary))
+	}
 	if err := service.succeed(ctx, job, checkRun.ID, summary.Title(), RenderDetails(summary)); err != nil {
 		return err
 	}

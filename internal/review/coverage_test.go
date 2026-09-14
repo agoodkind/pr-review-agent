@@ -295,8 +295,7 @@ func TestAnUnreadChunkIsNotRecordedAsReadSoALaterRunStillHoldsTheBaseline(t *tes
 	}
 }
 
-// A recurring omission receives a real verdict from the model's reading of the
-// current pull request. Rejecting the omission blocks with a stated reason.
+// A placed actionable finding still blocks when the run also rejects an omission.
 func TestAOversizedHunkReceivesAReasonedRequestChangesVerdict(t *testing.T) {
 	result := coverageFinding()
 	result.DecisionReason = "The unread change cannot be checked from the available context."
@@ -311,6 +310,13 @@ func TestAOversizedHunkReceivesAReasonedRequestChangesVerdict(t *testing.T) {
 	}
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	}
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("inline comments = %v, want the actionable finding", fixture.state.streamedComments)
+	}
+	comment := fixture.state.streamedComments[0]
+	if comment["path"] != coverageReadablePath || comment["line"] != float64(2) {
+		t.Fatalf("inline comment = %v, want the finding on %s:2", comment, coverageReadablePath)
 	}
 	body := failureSummaryComment(t, fixture)
 	for _, want := range []string{coverageUnreadablePath, result.DecisionReason, "### Omissions"} {

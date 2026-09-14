@@ -11,6 +11,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -31,7 +32,7 @@ func (service *Service) reconcileReplyAndRefreshVerdict(
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
 	settings reviewSettings,
-) error {
+) (bool, error) {
 	logger := gklog.L(ctx)
 	var threads []githubapp.ReviewThread
 	if job.ThreadRootCommentID != 0 {
@@ -39,7 +40,7 @@ func (service *Service) reconcileReplyAndRefreshVerdict(
 		threads, err = service.reconciler.Reconcile(ctx, job)
 		if err != nil {
 			logger.ErrorContext(ctx, "reconcile replied thread", slog.String("err", err.Error()))
-			return fmt.Errorf("reconcile replied thread: %w", err)
+			return false, fmt.Errorf("reconcile replied thread: %w", err)
 		}
 	}
 	return service.refreshVerdictAtReviewedHead(ctx, job, reviews, threads, settings)
@@ -56,8 +57,8 @@ func (service *Service) reconcileReplyAndRefreshVerdict(
 // Returning it does not by itself retry anything: the webhook is acknowledged
 // before this runs, and the dispatcher logs a failed job rather than replaying
 // it. What this buys is that the failure is attributed to the run and carries
-// its cause. The caller completes the visible check before returning this, so
-// the head still reads as reviewed.
+// its cause. The caller keeps withheld approval nonpassing and reports a failed
+// refresh on the check without changing earlier review objects.
 //
 // reviews is the review list the caller already loaded, or nil when the run
 // exited before loading one.
@@ -67,14 +68,14 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	reviews []githubapp.Review,
 	threads []githubapp.ReviewThread,
 	settings reviewSettings,
-) error {
+) (bool, error) {
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
 	logger := gklog.L(ctx)
 
 	inputs, err := service.loadVerdictRefreshInputs(ctx, job, reviews, threads)
 	if err != nil || !inputs.found {
-		return err
+		return false, err
 	}
 	state, hasState, err := service.readState(ctx, job)
 	if err != nil {
@@ -83,7 +84,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 			"read durable state before the verdict refresh",
 			slog.String("err", err.Error()),
 		)
-		return fmt.Errorf("read durable state before the verdict refresh: %w", err)
+		return false, fmt.Errorf("read durable state before the verdict refresh: %w", err)
 	}
 	if hasState && state.Status == marker.StateReviewing {
 		logger.InfoContext(
@@ -91,7 +92,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 			"verdict refresh skipped",
 			slog.String("reason", "review_not_complete"),
 		)
-		return nil
+		return true, nil
 	}
 	// How much of the head was reviewed is recovered from the review that named
 	// this head, because that is the run that knew. What the pull request
@@ -106,7 +107,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// gate over code nobody covered.
 	headFullyReviewed, err := service.headReadWhole(ctx, job, inputs.verdict.Body)
 	if err != nil {
-		return err
+		return false, err
 	}
 	// Only a dismissed block is withheld from. Dismissing a block and dismissing
 	// an approval are opposite requests, and the review's own state no longer
@@ -117,17 +118,19 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	if accepted, found := decodeOmissionDecisionMarker(inputs.verdict.Body); found {
 		omissionsAccepted = accepted
 	}
-	decision := reviewerDecision(inputs.threads, service.botLogin, headFullyReviewed)
 	decisionReason := decodeDecisionReasonMarker(inputs.verdict.Body)
 	if len(omissions) > 0 && !omissionsAccepted {
-		decision = domain.ReviewDecisionRequestChanges
 		if decisionReason == "" {
 			decisionReason = "The unread changes listed below need review before approval."
 		}
 	}
-	return service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
+	approvalAllowed := headFullyReviewed && (len(omissions) == 0 || omissionsAccepted) &&
+		!strings.Contains(inputs.verdict.Body, approvalWithheldMarker)
+	decision := reviewerDecision(inputs.threads, service.botLogin, approvalAllowed)
+	err = service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
 		decision:          decision,
 		decisionReason:    decisionReason,
+		approvalWithheld:  !approvalAllowed,
 		standingState:     inputs.standingState,
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
@@ -136,6 +139,29 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		omissions:         omissions,
 		omissionsAccepted: omissionsAccepted,
 	})
+	return decision == domain.ReviewDecisionComment, err
+}
+
+func (service *Service) refreshReviewedCheck(
+	ctx context.Context,
+	job domain.ReviewJob,
+	reviews []githubapp.Review,
+	settings reviewSettings,
+) error {
+	logger := gklog.L(ctx)
+	withheld, err := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
+	if err != nil {
+		logger.ErrorContext(ctx, "refresh reviewed check", slog.String("err", err.Error()))
+		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
+			"failure", "Review refresh failed", "The review could not verify the current inline findings. The previous verdict was not replaced.")
+		return errors.Join(err, completionErr)
+	}
+	if withheld {
+		return service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
+			checkConclusionDeclined, "Review needs attention", "Approval remains withheld. The review summary explains what needs attention.")
+	}
+	return service.succeed(ctx, job, job.CheckRunID, checkTitleAlreadyReviewed,
+		"This head already has a PR-Agent review. No duplicate review was published.")
 }
 
 // headReadWhole reports whether any completed run read this whole head.
@@ -217,6 +243,13 @@ func (service *Service) loadVerdictRefreshInputs(
 		reviews = listed
 	}
 	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
+	withheld, found, err := service.withheldSummaryVerdict(ctx, job)
+	if err != nil {
+		return missing, err
+	}
+	if found {
+		verdict = headVerdict{review: withheld, withdrawn: verdict.withdrawn, found: true}
+	}
 	if !verdict.found {
 		return missing, nil
 	}
@@ -237,8 +270,29 @@ func (service *Service) loadVerdictRefreshInputs(
 	}, nil
 }
 
+// A failed verdict write can leave the summary as the only durable record
+// that the completed read did not establish approval.
+func (service *Service) withheldSummaryVerdict(
+	ctx context.Context,
+	job domain.ReviewJob,
+) (githubapp.Review, bool, error) {
+	logger := gklog.L(ctx)
+	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		logger.ErrorContext(ctx, "read withheld summary verdict", slog.String("err", err.Error()))
+		return emptyReview(), false, fmt.Errorf("read withheld summary verdict: %w", err)
+	}
+	comment, found := findSummaryComment(comments, service.botLogin)
+	head, marked := marker.FindReview(comment.Body)
+	if !found || !marked || head != job.Head || !strings.Contains(comment.Body, approvalWithheldMarker) {
+		return emptyReview(), false, nil
+	}
+	return githubapp.Review{ID: 0, CommitID: head, Author: service.botLogin, Body: comment.Body, State: "COMMENTED"}, true, nil
+}
+
 // refreshedVerdict is what one refresh computed from current thread state.
 type refreshedVerdict struct {
+	approvalWithheld  bool
 	decision          domain.ReviewDecision
 	decisionReason    string
 	standingState     string
@@ -325,15 +379,13 @@ func (service *Service) applyRefreshedVerdict(
 	}
 
 	blocking := blockingReasons(
-		refreshed.threads, service.botLogin, job.PullRequestRef, refreshed.headFullyReviewed,
+		refreshed.threads, service.botLogin, job.PullRequestRef,
 	)
-	if len(refreshed.omissions) > 0 && !refreshed.omissionsAccepted {
-		blocking = mergeLocations(blocking, []string{refreshed.decisionReason})
-	}
 	summary := Summary{
-		Head:           job.Head,
-		Decision:       refreshed.decision,
-		DecisionReason: refreshed.decisionReason,
+		Head:             job.Head,
+		Decision:         refreshed.decision,
+		DecisionReason:   refreshed.decisionReason,
+		ApprovalWithheld: refreshed.approvalWithheld,
 		Report: Report{
 			Summary:       "",
 			Walkthrough:   nil,
@@ -359,6 +411,11 @@ func (service *Service) applyRefreshedVerdict(
 		// A refresh runs only at a head some earlier run already reviewed, which
 		// is a gate a forced run never reaches.
 		Forced: false,
+	}
+	if !refreshed.mayPublish() && !refreshed.blockWithdrawn {
+		if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
+			return err
+		}
 	}
 	if refreshed.mayPublish() {
 		if err := service.submitRefreshedVerdict(ctx, job, summary); err != nil {
@@ -400,6 +457,9 @@ func refreshedVerdictReason(refreshed refreshedVerdict) string {
 	if refreshed.decision == domain.ReviewDecisionRequestChanges {
 		return "The open inline review comments listed below still require action."
 	}
+	if refreshed.decision == domain.ReviewDecisionComment {
+		return "This review cannot approve the change. It has no open actionable inline findings to support requesting changes."
+	}
 	return "The current pull request has no open actionable findings."
 }
 
@@ -410,18 +470,7 @@ func (service *Service) submitRefreshedVerdict(
 	summary Summary,
 ) error {
 	logger := gklog.L(ctx)
-	submitted, err := service.github.SubmitReview(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-		githubapp.SubmitReviewRequest{
-			CommitID: job.Head,
-			Body:     RenderVerdictBody(summary),
-			Event:    summary.Decision,
-			Comments: nil,
-		},
-	)
+	submitted, err := service.submitInlineBackedVerdict(ctx, job, summary)
 	if err != nil {
 		logger.ErrorContext(ctx, "submit refreshed verdict", slog.String("err", err.Error()))
 		return fmt.Errorf("submit refreshed verdict: %w", err)

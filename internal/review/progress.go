@@ -74,9 +74,10 @@ func (progress *reviewProgress) applyAnalysis(analysis Analysis) {
 // summary renders the progress as the value both failure outputs report from.
 func (progress *reviewProgress) summary(now time.Time) Summary {
 	return Summary{
-		Head:           progress.head,
-		Decision:       "",
-		DecisionReason: "",
+		Head:             progress.head,
+		Decision:         "",
+		DecisionReason:   "",
+		ApprovalWithheld: true,
 		Report: Report{
 			Summary:       "",
 			Walkthrough:   nil,
