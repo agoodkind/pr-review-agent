@@ -65,7 +65,7 @@ func TestInlineVerdictSummaryFallbackStillBlocksForExistingActionableThread(t *t
 		t.Fatalf("posted inline comments = %v, want none after GitHub refused publication", fixture.state.streamedComments)
 	}
 	body := failureSummaryComment(t, fixture)
-	for _, expected := range []string{"GitHub could not place the finding inline", "Severe defect", "`main.go`:5"} {
+	for _, expected := range []string{"GitHub could not place the finding inline", "Severe defect", "Resolve the open inline findings.", "| Bot thread IDs | `existing-actionable-thread` |", "| Bot threads open | `1` |"} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("summary omitted %q:\n%s", expected, body)
 		}
@@ -86,9 +86,8 @@ func (model *resolveInlineDuringReportModel) Report(context.Context, string) (re
 		thread["isResolved"] = true
 	}
 	return review.ReportCompletion{Model: testReviewModel, Report: review.Report{
-		Summary:       "The review examined the current change.",
-		Walkthrough:   []string{"The changed line preserves the expected behavior."},
-		VerdictReason: "The previous inline finding requires action.",
+		Summary:     "The review examined the current change.",
+		Walkthrough: []string{"The changed line preserves the expected behavior."},
 	}}, nil
 }
 

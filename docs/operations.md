@@ -8,7 +8,7 @@ The service accepts `opened`, `reopened`, `ready_for_review`, and `synchronize` 
 
 The unit of work is the delta: everything changed between the last commit the service reviewed and the current head. On first contact that is the whole pull request. No commit range is ever reviewed twice, so a push costs a review proportional to the push rather than to the pull request.
 
-The service owns one top level comment per pull request, created once and edited in place forever. It posts no other issue comment, and no progress message, reply, or command. The comment is the service's memory as well as its face. A reader sees the verdict, what that verdict is waiting on, and a collapsed table of review details: the model that answered, how long the review took, the head, the files and diff chunks read, and the finding and thread counts behind the decision. The check run renders the same table from the same values, so the two can never report different numbers.
+The service owns one top level comment per pull request, created once and edited in place forever. It posts no other issue comment, and no progress message, reply, or command. The visible comment states the pull request purpose, its distinct changes, and the verdict once. Findings stay in their inline comments. The collapsed review details carry the models, duration, token usage, estimated cost, head, coverage, finding counts, and thread identifiers. The check run renders the same details from the same values, so the two cannot report different numbers.
 
 Below the prose, hidden from the reader, the comment carries a state marker. It records the commit last reviewed, the chunks still owed, the chunks already read since that commit, the run identifier, and the run's status. That marker is what the next run resumes from, so it neither repeats a chunk that answered nor skips one that did not. Every write to the comment carries it, failure and skip notices included, because a body written without it makes the next run miss the comment and open a second one.
 
@@ -22,7 +22,7 @@ A model stops mid answer when it reaches its completion token budget, which reas
 
 Findings appear as inline comments on the changed lines they object to. A finding is published when it anchors to a changed line and meets the configured importance threshold, and every finding that does is published. The only thing that withholds one is a stable identity matching a finding the pull request already carries, so the same defect is raised once rather than once per push. Before publishing new findings, the service re-reads its own open threads and silently resolves the ones the new code fixed.
 
-The verdict is recomputed from scratch on every run, and its input is the service's own review threads. One of them still open requests changes. None open on a fully read head approves. No decision carries over from an earlier run, so a block never outlives the finding behind it. A reply or thread state change starts a refresh without a push and publishes a dedicated in-progress check while the verdict changes. When the verdict requests changes, the comment names each open thread holding it, linked to the comment it objects to, so a reader can go straight to the thing to act on.
+The verdict is recomputed from scratch on every run, and its input is the service's own review threads. One of them still open requests changes. None open on a fully read head approves. No decision carries over from an earlier run, so a block never outlives the finding behind it. A reply or thread state change starts a refresh without a push and publishes a dedicated in-progress check while the verdict changes. A requested changes verdict directs the reader to the open inline findings. GitHub connects the review to those comments, and the collapsed details carry their thread identifiers and current counts.
 
 Both inputs to that verdict are read after this run's findings are on the page. Threads read earlier would omit the ones the same run just opened, and a run would approve over defects it had raised minutes before. A head that moved while the run was working ends the run with no verdict at all, and the push that moved it gets the review.
 
@@ -60,6 +60,7 @@ No variable bounds a whole review. Admission bounds what one run accepts, and th
 | `REVIEW_MAX_FILES` | Files in one delta above which the review is skipped | `100` |
 | `REVIEW_MAX_CHUNKS` | Diff chunks in one delta above which the review is skipped | `60` |
 | `REVIEW_CHUNK_TIMEOUT` | Maximum duration for one model call, such as `5m` | `5m` |
+| `REVIEW_MODEL_PRICING` | JSON map from model names or prefixes to input, cached input, and output rates per million tokens | Unset; cost is unavailable |
 
 Keep every credential in the deployment secret store. Do not place values in source, commands, logs, or evidence.
 

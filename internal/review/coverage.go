@@ -449,7 +449,6 @@ func (service *Service) concludeStructurallyIncomplete(
 	job domain.ReviewJob,
 	checkRun githubapp.CheckRun,
 	pullRequest githubapp.PullRequest,
-	threads []githubapp.ReviewThread,
 	state marker.State,
 	shortfall structuralShortfall,
 	summary Summary,
@@ -465,10 +464,11 @@ func (service *Service) concludeStructurallyIncomplete(
 		"The unread changes listed above need review before a verdict.",
 	)
 	report, reportCalled := service.generateReport(
-		ctx, pullRequest, pass.work.Files, threads, summary, pass,
+		ctx, pullRequest, pass,
 	)
 	summary.Report = report
 	summary.Models = pass.analysis().Models
+	summary.Usage = UsageFromContext(ctx)
 	if reportCalled {
 		current, err := service.github.GetPullRequest(
 			ctx, job.InstallationID, job.Repository, job.Number,
@@ -657,26 +657,14 @@ func RenderUnreadableBody(summary Summary, notice string) string {
 	parts := []string{
 		"## Review",
 		"### Summary\n\n" + renderReportSummary(summary.Report),
-		"### Walkthrough\n\n" + renderWalkthrough(summary.Report),
-		"### Coverage\n\n" + renderCoverage(summary),
+		"### Changes\n\n" + renderWalkthrough(summary.Report),
 		"### Omissions\n\n" + notice,
 		verdictSectionStart,
 		"### Verdict",
 		"This review did not submit a verdict because the unread changes listed above prevent a complete review.",
 	}
-	if reason := sanitizeReportText(summary.Report.VerdictReason); reason != "" {
-		parts = append(parts, reason)
-	} else if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
-		parts = append(parts, reason)
-	}
-	if len(summary.Published) > 0 {
-		parts = append(parts, "The actionable findings are in inline review comments.")
-	}
 	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
 		parts = append(parts, fallback)
-	}
-	if blocking := renderBlocking(summary.Blocking); blocking != "" {
-		parts = append(parts, blocking)
 	}
 	parts = append(parts, verdictSectionEnd, RenderDetails(summary))
 	return strings.Join(parts, "\n\n")

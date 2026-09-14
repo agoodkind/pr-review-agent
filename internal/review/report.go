@@ -9,7 +9,6 @@ import (
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
-	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -58,17 +57,17 @@ func (service *Service) publishCompletedReview(
 	checkRun githubapp.CheckRun,
 	pullRequest githubapp.PullRequest,
 	head domain.HeadSHA,
-	threads []githubapp.ReviewThread,
 	summary Summary,
 	state marker.State,
 	progress *reviewProgress,
 	pass *chunkPass,
 ) error {
 	report, reportCalled := service.generateReport(
-		ctx, pullRequest, pass.work.Files, threads, summary, pass,
+		ctx, pullRequest, pass,
 	)
 	summary.Report = report
 	summary.Models = pass.analysis().Models
+	summary.Usage = UsageFromContext(ctx)
 	if reportCalled {
 		current, err := service.github.GetPullRequest(
 			ctx, job.InstallationID, job.Repository, job.Number,
@@ -110,12 +109,9 @@ func (service *Service) updateVerdictBody(
 func (service *Service) generateReport(
 	ctx context.Context,
 	pullRequest githubapp.PullRequest,
-	files []diff.FileContext,
-	threads []githubapp.ReviewThread,
-	summary Summary,
 	pass *chunkPass,
 ) (Report, bool) {
-	fallback := fallbackReport(summary, pass.overviews())
+	fallback := SanitizeReport(fallbackReport(pass.overviews()))
 	reporter, ok := service.model.(Reporter)
 	if !ok {
 		return fallback, false
@@ -124,79 +120,35 @@ func (service *Service) generateReport(
 	defer cancel()
 	completion, err := reporter.Report(
 		reportCtx,
-		reportPrompt(pullRequest, files, threads, summary, pass.overviews(), service.botLogin),
+		reportPrompt(pullRequest, pass.overviews()),
 	)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "write final review report", slog.String("err", err.Error()))
 		return fallback, true
 	}
 	pass.recordReportModel(completion.Model)
-	return completion.Report, true
+	report := SanitizeReport(completion.Report)
+	if err := report.Validate(); err != nil {
+		gklog.L(ctx).ErrorContext(ctx, "validate final review report", slog.String("err", err.Error()))
+		return fallback, true
+	}
+	return report, true
 }
 
 func reportPrompt(
 	pullRequest githubapp.PullRequest,
-	files []diff.FileContext,
-	threads []githubapp.ReviewThread,
-	summary Summary,
 	overviews []string,
-	botLogin string,
 ) string {
 	const instruction = "Write the final report for the single top-level review comment. " +
-		"Use the supplied verdict exactly. Do not repeat actionable finding details because they are in inline review comments. " +
-		"Explain the pull request's purpose, the important behavior changes, and why the verdict follows. " +
-		"Explain which earlier concerns still apply and which no longer apply after considering the current code and replies.\n"
-	verdict := string(summary.Decision)
-	if summary.Decision == domain.ReviewDecisionComment && len(summary.Omissions) > 0 {
-		verdict = "No verdict was submitted because the unread changes prevent a complete review."
-	}
+		"Write at most two short summary sentences that state why the pull request exists and its resulting behavior. " +
+		"Write at most four walkthrough items. Each item must state one distinct behavior that the summary does not already state. " +
+		"Do not repeat the verdict, findings, coverage, omissions, file list, or inline discussions. " +
+		"Use plain language before code names. Each sentence must name its subject and make sense without another sentence.\n"
 	var body strings.Builder
-	fmt.Fprintf(
-		&body,
-		"Current title: %s\nCurrent description: %s\nVerdict: %s\nChanged files:",
-		pullRequest.Title,
-		pullRequest.Body,
-		verdict,
-	)
-	for _, file := range files {
-		fmt.Fprintf(&body, "\n- %s (%s)", file.Path, file.Status)
-	}
-	body.WriteString("\n\nReviewed change overviews:")
+	fmt.Fprintf(&body, "Current title: %s\nCurrent description: %s\n\nReviewed change overviews:", pullRequest.Title, pullRequest.Body)
 	for _, overview := range overviews {
 		body.WriteString("\n- ")
 		body.WriteString(overview)
-	}
-	body.WriteString("\n\nActionable findings published as inline review comments:")
-	for _, finding := range summary.Published {
-		fmt.Fprintf(&body, "\n- %s:%d: %s", finding.Path, finding.EndLine, finding.Title)
-	}
-	if len(summary.Published) == 0 {
-		body.WriteString(" none.")
-	}
-	body.WriteString("\n\nCurrent blocking locations:")
-	for _, reason := range summary.Blocking {
-		body.WriteString("\n- ")
-		body.WriteString(reason)
-	}
-	if len(summary.Blocking) == 0 {
-		body.WriteString(" none.")
-	}
-	body.WriteString("\n\nUnread changes:")
-	for _, hunk := range summary.Omissions {
-		body.WriteString("\n- ")
-		body.WriteString(describeUnreadHunk(hunk))
-	}
-	if len(summary.Omissions) == 0 {
-		body.WriteString(" none.")
-	}
-	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
-		body.WriteString("\nOmission decision explanation: ")
-		body.WriteString(reason)
-	}
-	discussions := collectDisputes(threads, botLogin, summary.Head)
-	if len(discussions.sections) > 0 {
-		body.WriteString("\n\nCurrent inline discussions:\n")
-		body.WriteString(strings.Join(discussions.sections, "\n\n"))
 	}
 	input := strings.ReplaceAll(body.String(), promptInputBegin, "<UNTRUSTED_INPUT>")
 	input = strings.ReplaceAll(input, promptInputEnd, "<END_UNTRUSTED_INPUT>")
@@ -205,7 +157,7 @@ func reportPrompt(
 	return instruction + WrapUntrusted(truncateUTF8(input, maximumInput))
 }
 
-func fallbackReport(summary Summary, overviews []string) Report {
+func fallbackReport(overviews []string) Report {
 	walkthrough := make([]string, 0, len(overviews))
 	for _, overview := range overviews {
 		if value := sanitizeReportText(overview); value != "" {
@@ -215,32 +167,8 @@ func fallbackReport(summary Summary, overviews []string) Report {
 	if len(walkthrough) == 0 {
 		walkthrough = append(walkthrough, "The review examined the changed files and their current diff.")
 	}
-	reason := "The current pull request has no open actionable findings."
-	if summary.Decision == domain.ReviewDecisionComment {
-		reason = "Approval is withheld. This review has no actionable inline findings to support requesting changes."
-	}
-	if summary.Decision == domain.ReviewDecisionComment && len(summary.Omissions) > 0 {
-		reason = "The unread changes prevent a complete review, so no verdict was submitted."
-	}
-	if len(summary.Omissions) > 0 {
-		if omissionReason := sanitizeDecisionReason(summary.DecisionReason); omissionReason != "" {
-			reason = omissionReason
-		}
-	}
-	if summary.Decision == domain.ReviewDecisionRequestChanges {
-		if len(summary.Omissions) == 0 || reason == "" {
-			reason = "The reasons listed below still require action."
-		}
-		if len(summary.Published) > 0 {
-			reason += " The open inline review comments listed below still require action."
-		}
-		if len(summary.Fallback) > 0 {
-			reason += " The findings below still require action."
-		}
-	}
 	return Report{
-		Summary:       "This review checked the current pull request against its stated purpose and current changes.",
-		Walkthrough:   walkthrough,
-		VerdictReason: reason,
+		Summary:     "This review checked the current pull request against its stated purpose and current changes.",
+		Walkthrough: walkthrough,
 	}
 }

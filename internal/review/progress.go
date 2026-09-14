@@ -22,6 +22,7 @@ type reviewProgress struct {
 	published         []domain.Finding
 	priorReviews      []reviewTrace
 	threads           []threadTrace
+	usage             *UsageRecorder
 	// forced records that a label asked for this run, so every summary rendered
 	// from this progress reports the same trigger the successful one does.
 	forced bool
@@ -46,6 +47,7 @@ func newReviewProgress(
 		published:         nil,
 		priorReviews:      nil,
 		threads:           nil,
+		usage:             nil,
 		forced:            forced,
 	}
 }
@@ -79,15 +81,15 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		DecisionReason:   "",
 		ApprovalWithheld: true,
 		Report: Report{
-			Summary:       "",
-			Walkthrough:   nil,
-			VerdictReason: "",
+			Summary:     "",
+			Walkthrough: nil,
 		},
 		OmissionsAccepted: false,
 		// A failed run carries no verdict, so there is nothing for it to be
 		// waiting on and nothing to name.
 		Blocking:          nil,
 		Models:            progress.models,
+		Usage:             progress.usage.Summary(),
 		Duration:          now.Sub(progress.startedAt),
 		FilesReviewed:     progress.filesReviewed,
 		Chunks:            progress.chunks,

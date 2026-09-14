@@ -45,12 +45,10 @@ func ReconciliationPolicy() string {
 
 // ReportPolicy tells the model to explain the review without changing its facts.
 func ReportPolicy() string {
-	return "The service supplies the findings, coverage, omissions, and verdict. Describe those facts exactly as supplied. " +
-		"Do not add, remove, soften, or change any finding, omission, or verdict. " +
-		"Write a summary that explains the pull request's purpose and overall behavior. " +
-		"Write walkthrough items only from the supplied reviewed change overviews. " +
-		"Use inline discussions only to explain the verdict. A resolved discussion can mean a finding does not apply; never use it as evidence that code changed. " +
-		"Explain why the supplied verdict follows from the supplied evidence. " +
+	return "Write only the Summary and Changes prose. " +
+		"The service renders the verdict, findings, coverage, omissions, and discussions separately; do not describe them. " +
+		"Write at most two short summary sentences explaining the pull request's purpose and resulting behavior. " +
+		"Write at most four distinct walkthrough items from the reviewed change overviews, without repeating the summary. " +
 		"Use full sentences and do not write headings.\nWriting policy: " + config.WritingPolicy +
 		"\nUntrusted input policy: " + UntrustedInputPolicy
 }
@@ -193,9 +191,8 @@ type Completion struct {
 // Report is the model-written explanation of one completed review.
 // Deterministic service state still owns findings, coverage, omissions, and the verdict.
 type Report struct {
-	Summary       string   `json:"summary"`
-	Walkthrough   []string `json:"walkthrough"`
-	VerdictReason string   `json:"verdict_reason"`
+	Summary     string   `json:"summary"`
+	Walkthrough []string `json:"walkthrough"`
 }
 
 // Validate rejects incomplete prose that cannot form the final review report.
@@ -211,19 +208,46 @@ func (report Report) Validate() error {
 			return err
 		}
 	}
-	return validateFullSentence("report verdict reason", report.VerdictReason)
+	return nil
 }
 
 // SanitizeReport makes model prose safe to place inside the top-level review comment.
 func SanitizeReport(report Report) Report {
-	report.Summary = sanitizeReportProse(report.Summary)
-	walkthrough := make([]string, len(report.Walkthrough))
-	for index, item := range report.Walkthrough {
-		walkthrough[index] = sanitizeReportProse(item)
+	report.Summary = firstReportSentences(sanitizeReportProse(report.Summary), 2)
+	walkthrough := make([]string, 0, min(len(report.Walkthrough), 4))
+	seen := make(map[string]bool)
+	for _, item := range report.Walkthrough {
+		item = sanitizeReportProse(item)
+		key := strings.ToLower(item)
+		if item == "" || seen[key] || strings.Contains(strings.ToLower(report.Summary), key) {
+			continue
+		}
+		seen[key] = true
+		walkthrough = append(walkthrough, item)
+		if len(walkthrough) == 4 {
+			break
+		}
 	}
 	report.Walkthrough = walkthrough
-	report.VerdictReason = sanitizeReportProse(report.VerdictReason)
 	return report
+}
+
+func firstReportSentences(value string, maximum int) string {
+	count := 0
+	for index, character := range value {
+		if character != '.' && character != '!' && character != '?' {
+			continue
+		}
+		end := index + 1
+		if end < len(value) && value[end] != ' ' {
+			continue
+		}
+		count++
+		if count == maximum {
+			return value[:end]
+		}
+	}
+	return value
 }
 
 func sanitizeReportProse(value string) string {

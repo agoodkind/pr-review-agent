@@ -54,13 +54,11 @@ no prompt outgrows the model's context.
    one. A repository relying on this service should require that check, or
    enable stale approval dismissal, or both. The verdict expresses the
    reviewer's opinion; the check is what actually holds the gate.
-6. **A block always says what is holding it.** When the verdict requests
-   changes, the top level comment names the open threads it is waiting on. A
-   run that finds nothing new still blocks while an earlier thread is
-   unresolved, and without that line it reads as a silent repeat. Live
-   evidence: tack 156 carries three blocking reviews, two of them empty, and
-   no reader can tell from any of them that one unresolved thread is the only
-   cause.
+6. **A block always gives one actionable direction.** When the verdict requests
+   changes, the top level comment directs the reader to the open inline
+   findings. GitHub connects the review to those comments. The collapsed
+   details carry their thread identifiers and current counts, so the visible
+   verdict does not duplicate locations that already appear inline.
 7. **A failed run never touches review state.** It turns the check red with
    the cause and writes the cause into the top level comment. What reaches the
    comment is a stable sanitized message, never the provider's raw error, which
@@ -83,7 +81,7 @@ no prompt outgrows the model's context.
 
 | Object | Carries | Lifecycle |
 | --- | --- | --- |
-| One top level comment | HTML marker with `last_reviewed_commit`, the pending chunk list, run identifier, status, and the short human summary | Created once, found by marker, edited in place forever |
+| One top level comment | Short summary, verdict prose, collapsed run details, and an HTML marker with `last_reviewed_commit`, the pending chunk list, run identifier, and status | Created once, found by marker, edited in place forever |
 | Inline threads | One finding each, with its stable identity | Opened by a run, resolved when the code fixes it |
 | Verdict review | `APPROVE` or `REQUEST_CHANGES`, nothing else | Replaced by every run's recomputation |
 | Check run | Not started, running, finished, or failed, plus the run identifier | One per head |
@@ -204,8 +202,9 @@ queue.
 8. A delta over budget is never attempted: the comment says skipped and why,
    no review state changes, and the check does not reach a passing conclusion,
    so unreviewed code cannot merge on the strength of having been declined.
-9. Every blocking verdict is explained: whenever the run requests changes, the
-   top level comment names the open threads holding it.
+9. Every blocking verdict gives one actionable direction to the open inline
+   findings, while the collapsed details carry the thread identifiers and
+   counts.
 10. No run approves over its own fresh findings, and none approves a commit it
     did not analyze: the threads and the head that decide the verdict are both
     read after publication.

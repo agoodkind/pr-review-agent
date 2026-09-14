@@ -41,8 +41,10 @@ package review_test
 //     TestADeclinedDeltaKeepsItsBaselineSoALaterPushCannotBypassTheBudget,
 //     TestARedeliveryOfADeclinedHeadIsDeclinedAgain, and
 //     TestADeclinedDeltaKeepsTheWorkAnEarlierRunRecorded in review_test.go.
-//  9. Every blocking verdict names the open threads holding it. Proven by
-//     TestABlockingVerdictNamesTheOpenThreadsHoldingIt in review_test.go.
+//  9. Every blocking verdict directs the reader to the inline findings, and
+//     the folded details identify the bot threads holding it. Proven by
+//     TestABlockingVerdictDirectsToInlineFindingsAndFoldsThreadDetails in
+//     review_test.go.
 //  10. No run approves over its own fresh findings, and none approves a commit
 //     it did not analyze. The first clause is proven by
 //     TestARunThatPostsANewFindingDoesNotApprove in review_test.go. The second
