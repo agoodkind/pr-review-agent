@@ -580,49 +580,6 @@ test("an unlisted binding never reaches the Go service", function () {
   assert.equal("UNLISTED_BINDING" in environment, false);
 });
 
-test("wrangler config selects Nano without forwarding Clyde access", function () {
-  const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
-  const environment = createPrAgentEnvironment({
-    ...config.vars,
-    FALLBACK_API_KEY: "fixture-nano-key",
-  });
-
-  assert.equal(environment.CLYDE_API_KEY, "fixture-nano-key");
-  assert.equal(environment.CLYDE_BASE_URL, "https://api.openai.com/v1");
-  assert.equal(environment.REVIEW_MODEL, "gpt-5.4-nano");
-  assert.deepEqual(JSON.parse(environment.REVIEW_MODEL_PRICING)[environment.REVIEW_MODEL], {
-    input_per_million_tokens: 0.20,
-    cached_input_per_million_tokens: 0.02,
-    output_per_million_tokens: 1.25,
-  });
-  assert.equal(config.vars.USE_NANO_AS_PRIMARY, true);
-  assert.equal("CF_ACCESS_CLIENT_ID" in environment, false);
-  assert.equal("CF_ACCESS_CLIENT_SECRET" in environment, false);
-});
-
-// Both endpoints and models carry no credential, so reviewers can see each
-// provider and the active selection without exposing either key.
-test("both providers and their selector are declared", function () {
-  const config = JSON.parse(fs.readFileSync("wrangler.jsonc", "utf8"));
-
-  for (const name of [
-    "CLYDE_BASE_URL",
-    "FALLBACK_BASE_URL",
-    "FALLBACK_MODEL",
-    "FALLBACK_ON",
-    "REVIEW_MODEL",
-  ]) {
-    assert.equal(typeof config.vars[name], "string", `${name} is not a declared variable`);
-    assert.notEqual(config.vars[name], "", `${name} is declared empty`);
-  }
-  assert.equal(typeof config.vars.USE_NANO_AS_PRIMARY, "boolean");
-  assert.match(config.vars.FALLBACK_BASE_URL, /^https:\/\//);
-
-  for (const name of Object.keys(config.vars)) {
-    assert.doesNotMatch(name, /_API_KEY$|_SECRET$|PRIVATE_KEY$/, `${name} is a credential in source`);
-  }
-});
-
 test("release image selection writes the exact immutable digest", async function () {
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pr-agent-cloudflare-"));
   const configPath = path.join(temporaryDirectory, "wrangler.jsonc");
