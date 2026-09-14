@@ -4,9 +4,11 @@ package config
 import (
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strconv"
@@ -61,11 +63,19 @@ const (
 // LookupEnv reads one environment variable.
 type LookupEnv func(string) (string, bool)
 
+// ModelPricing holds estimated US dollar rates per million tokens.
+type ModelPricing struct {
+	InputPerMillionTokens       float64 `json:"input_per_million_tokens"`
+	CachedInputPerMillionTokens float64 `json:"cached_input_per_million_tokens"`
+	OutputPerMillionTokens      float64 `json:"output_per_million_tokens"`
+}
+
 // Config holds validated service configuration.
 type Config struct {
-	Port          string
-	ReviewWorkers int
-	ReviewModel   string
+	Port               string
+	ReviewWorkers      int
+	ReviewModel        string
+	ReviewModelPricing map[string]ModelPricing
 	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
 	// timer, is what keeps a review finishable, so these are the only limits
 	// on how much work one invocation accepts.
@@ -103,6 +113,28 @@ func (cfg Config) HasFallback() bool {
 	return cfg.FallbackBaseURL != nil && cfg.FallbackModel != "" && cfg.FallbackAPIKey != ""
 }
 
+// PricingForModel returns the exact or longest prefix pricing match for a model.
+func (cfg Config) PricingForModel(model string) (ModelPricing, bool) {
+	return FindModelPricing(cfg.ReviewModelPricing, model)
+}
+
+// FindModelPricing returns the exact or longest dashed prefix match for a model.
+func FindModelPricing(pricingByModel map[string]ModelPricing, model string) (ModelPricing, bool) {
+	if pricing, ok := pricingByModel[model]; ok {
+		return pricing, true
+	}
+	matchedPrefix := ""
+	var matchedPricing ModelPricing
+	for prefix, pricing := range pricingByModel {
+		if !strings.HasPrefix(model, prefix+"-") || len(prefix) <= len(matchedPrefix) {
+			continue
+		}
+		matchedPrefix = prefix
+		matchedPricing = pricing
+	}
+	return matchedPricing, matchedPrefix != ""
+}
+
 // FromEnvironment loads configuration from process environment variables.
 func FromEnvironment() (Config, error) {
 	return Load(os.LookupEnv)
@@ -114,6 +146,11 @@ func Load(lookup LookupEnv) (Config, error) {
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
+	pricing, err := loadModelPricing(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ReviewModelPricing = pricing
 
 	apiBaseURL, err := url.Parse("https://api.github.com")
 	if err != nil {
@@ -127,6 +164,34 @@ func Load(lookup LookupEnv) (Config, error) {
 	cfg.GitHubGraphQLURL = graphqlURL
 
 	return cfg, nil
+}
+
+func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
+	value, ok := lookup("REVIEW_MODEL_PRICING")
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	pricing := make(map[string]ModelPricing)
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&pricing); err != nil {
+		return nil, errors.New("REVIEW_MODEL_PRICING must be a JSON object of token rates")
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, errors.New("REVIEW_MODEL_PRICING must contain one JSON object")
+	}
+	for model, rates := range pricing {
+		if strings.TrimSpace(model) == "" {
+			return nil, errors.New("REVIEW_MODEL_PRICING model keys must not be empty")
+		}
+		if rates.InputPerMillionTokens < 0 ||
+			rates.CachedInputPerMillionTokens < 0 ||
+			rates.OutputPerMillionTokens < 0 {
+			return nil, errors.New("REVIEW_MODEL_PRICING token rates must not be negative")
+		}
+	}
+	return pricing, nil
 }
 
 func loadBase(lookup LookupEnv) (Config, []string) {

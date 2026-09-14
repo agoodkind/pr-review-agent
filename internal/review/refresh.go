@@ -387,12 +387,12 @@ func (service *Service) applyRefreshedVerdict(
 		DecisionReason:   refreshed.decisionReason,
 		ApprovalWithheld: refreshed.approvalWithheld,
 		Report: Report{
-			Summary:       "",
-			Walkthrough:   nil,
-			VerdictReason: refreshedVerdictReason(refreshed),
+			Summary:     "",
+			Walkthrough: nil,
 		},
 		Blocking:          blocking,
 		Models:            nil,
+		Usage:             UsageFromContext(ctx),
 		Duration:          0,
 		FilesReviewed:     0,
 		Chunks:            0,
@@ -448,19 +448,6 @@ func (service *Service) applyRefreshedVerdict(
 		return fmt.Errorf("update summary after verdict refresh: %w", err)
 	}
 	return nil
-}
-
-func refreshedVerdictReason(refreshed refreshedVerdict) string {
-	if len(refreshed.omissions) > 0 && !refreshed.omissionsAccepted {
-		return refreshed.decisionReason
-	}
-	if refreshed.decision == domain.ReviewDecisionRequestChanges {
-		return "The open inline review comments listed below still require action."
-	}
-	if refreshed.decision == domain.ReviewDecisionComment {
-		return "This review cannot approve the change. It has no open actionable inline findings to support requesting changes."
-	}
-	return "The current pull request has no open actionable findings."
 }
 
 // submitRefreshedVerdict publishes a fresh verdict review at the reviewed head.

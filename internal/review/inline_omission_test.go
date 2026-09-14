@@ -60,7 +60,7 @@ func TestARejectedOmissionRefreshPreservesABlockWithAnOpenInlineFinding(t *testi
 	if len(fixture.state.dismissals) != 0 {
 		t.Fatalf("dismissals = %v, want the block on the open finding retained", fixture.state.dismissals)
 	}
-	if body := failureSummaryComment(t, fixture); !strings.Contains(body, "requests changes") {
+	if body := failureSummaryComment(t, fixture); !strings.Contains(body, "Resolve the open inline findings.") {
 		t.Fatalf("summary = %q, want the retained requested-changes verdict", body)
 	}
 }

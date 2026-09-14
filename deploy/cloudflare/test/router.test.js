@@ -536,6 +536,7 @@ test("production configuration reaches the Go service", function () {
     ["REVIEW_MAX_FILES", "100"],
     ["REVIEW_MIN_IMPORTANCE", "8"],
     ["REVIEW_MODEL", "fixture-review-model"],
+    ["REVIEW_MODEL_PRICING", '{"fixture-review-model":{"input_per_million_tokens":2,"cached_input_per_million_tokens":0.5,"output_per_million_tokens":8}}'],
     ["REVIEW_WORKERS", "5"],
     ["USE_NANO_AS_PRIMARY", false],
   ]);
@@ -589,6 +590,11 @@ test("wrangler config selects Nano without forwarding Clyde access", function ()
   assert.equal(environment.CLYDE_API_KEY, "fixture-nano-key");
   assert.equal(environment.CLYDE_BASE_URL, "https://api.openai.com/v1");
   assert.equal(environment.REVIEW_MODEL, "gpt-5.4-nano");
+  assert.deepEqual(JSON.parse(environment.REVIEW_MODEL_PRICING)[environment.REVIEW_MODEL], {
+    input_per_million_tokens: 0.20,
+    cached_input_per_million_tokens: 0.02,
+    output_per_million_tokens: 1.25,
+  });
   assert.equal(config.vars.USE_NANO_AS_PRIMARY, true);
   assert.equal("CF_ACCESS_CLIENT_ID" in environment, false);
   assert.equal("CF_ACCESS_CLIENT_SECRET" in environment, false);

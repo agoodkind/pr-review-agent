@@ -55,6 +55,8 @@ Expect:
 - exactly one top level comment, created once, carrying the summary, the
   detail table, the run identifier, and the state marker with `last_reviewed`
   at the head and `status=done`
+- the detail table carries duration, every reported token category, estimated
+  cost, and the current thread identifiers and counts
 - one verdict review that states its decision in prose. An empty verdict
   blocked a live pull request once: the review's whole body was one HTML
   marker, so it named nothing to fix and no edit could satisfy it
@@ -91,8 +93,10 @@ then completes with the verdict recomputed from current thread state.
 ## 4. Requested changes require an actionable inline finding
 
 On a pull request where the run posts a new finding, expect the same run to
-request changes, naming the thread it just opened under "Waiting on". The
-verdict reads its threads after publication precisely so it cannot approve
+request changes with `Resolve the open inline findings.` The visible verdict
+does not repeat their locations. GitHub connects the review to the inline
+comments, and the collapsed details carry their thread identifiers and counts.
+The verdict reads its threads after publication precisely so it cannot approve
 over a defect it raised minutes earlier.
 
 Make GitHub refuse the inline comment, or reject an omission without finding

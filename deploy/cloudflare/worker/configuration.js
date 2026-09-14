@@ -142,6 +142,7 @@ export function createPrAgentEnvironment(bindings) {
     REVIEW_MAX_FILES,
     REVIEW_MIN_IMPORTANCE,
     REVIEW_MODEL,
+    REVIEW_MODEL_PRICING,
     REVIEW_WORKERS,
     USE_NANO_AS_PRIMARY,
   } = bindings;
@@ -172,6 +173,7 @@ export function createPrAgentEnvironment(bindings) {
     REVIEW_MAX_CHUNKS,
     REVIEW_MAX_FILES,
     REVIEW_MIN_IMPORTANCE,
+    REVIEW_MODEL_PRICING,
     REVIEW_WORKERS,
   };
 }

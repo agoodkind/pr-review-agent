@@ -380,11 +380,8 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 		t.Fatalf("compare range fetches = %d, want 0: a forced run reviews the whole pull request", ranges)
 	}
 	summary := fixture.githubState.summaryCommentBody()
-	if !strings.Contains(summary, "Triggered by a `"+domain.ForceReviewLabelPrefix+"` label") {
-		t.Fatalf("summary comment does not say the label triggered the run: %q", summary)
-	}
-	if !strings.Contains(summary, "reviewed the whole pull request") {
-		t.Fatalf("summary comment does not say the run covered the whole pull request: %q", summary)
+	if !strings.Contains(summary, "| Forced run | yes |") {
+		t.Fatalf("review details do not identify the forced run: %q", summary)
 	}
 }
 
@@ -1036,13 +1033,15 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
 	}
 	comment := fixture.githubState.summaryCommentBody()
-	if !strings.Contains(comment, "This review is waiting on:") {
-		t.Fatalf("the comment names nothing to fix, so no edit can satisfy the block: %q", comment)
+	visible, details, found := strings.Cut(comment, "<details>")
+	if !found || !strings.Contains(visible, "Resolve the open inline findings.") {
+		t.Fatalf("the comment does not direct the reader to the inline finding: %q", comment)
 	}
-	// The path is a code span wherever it is rendered, because it is
-	// repository-controlled text in a comment carrying this service's identity.
-	if !strings.Contains(comment, "`"+testFindingPath+"`:3") {
-		t.Fatalf("the comment does not name the thread holding the block: %q", comment)
+	if !strings.Contains(details, "| Bot thread IDs | `thread-owned` |") {
+		t.Fatalf("review details do not identify the blocking thread: %q", comment)
+	}
+	if strings.Contains(visible, testFindingPath) {
+		t.Fatalf("the visible verdict duplicates the inline finding location: %q", comment)
 	}
 	assertVerdictBody(t, review["body"], testDefectiveHead, true)
 }

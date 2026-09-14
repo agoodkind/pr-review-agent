@@ -50,6 +50,11 @@ func formatThreadTraceIDs(threads []threadTrace) string {
 	return strings.Join(ids, ", ")
 }
 
+// countOpenThreadTraces counts the bot threads still unresolved.
+func countOpenThreadTraces(threads []threadTrace) int {
+	return len(threads) - countResolvedThreadTraces(threads)
+}
+
 // countResolvedThreadTraces counts the bot threads already resolved.
 func countResolvedThreadTraces(threads []threadTrace) int {
 	count := 0

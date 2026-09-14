@@ -145,7 +145,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			decision:  domain.ReviewDecisionRequestChanges,
 			published: []domain.Finding{testPublishedFinding()},
 			blocking:  []string{"[main.go:1](https://github.com/owner/repo/pull/7#discussion_r1)"},
-			verdict:   "This review found severe defects and listed them inline.",
+			verdict:   "Resolve the open inline findings.",
 		},
 	}
 	for _, test := range tests {
@@ -158,7 +158,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			body := review.RenderBody(summary)
 			previous := -1
 			for _, section := range []string{
-				"### Summary", "### Walkthrough", "### Coverage", "### Omissions",
+				"### Summary", "### Changes",
 				"### Verdict", "<summary>Review details</summary>",
 			} {
 				index := strings.Index(body, section)
@@ -170,44 +170,13 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			if !strings.Contains(body, test.verdict) {
 				t.Fatalf("body does not state verdict %q:\n%s", test.verdict, body)
 			}
-			if len(test.blocking) > 0 &&
-				!strings.Contains(body, "This review is waiting on:\n- "+strings.Join(test.blocking, "\n- ")) {
-				t.Fatalf("body does not name what blocks the review:\n%s", body)
+			visible := strings.Split(body, "<details>")[0]
+			for _, unwanted := range []string{"This review is waiting on:", "discussion_r", "### Omissions", "Coverage", "The review read"} {
+				if strings.Contains(visible, unwanted) {
+					t.Fatalf("visible review contains redundant detail %q:\n%s", unwanted, body)
+				}
 			}
 		})
-	}
-}
-
-// A block the reader cannot act on is the defect this proves gone. On
-// mlx-swift-lm 9 at head 24e6e0e, run f465b240-a4d9-11f1-805b-98a2bfccbda0, the
-// summary comment opened with "Severe findings are listed inline." while its own
-// detail table read "Findings published inline `0`". The only thing holding that
-// block was an unread head, so the sentence sent the reader hunting for inline
-// comments that were never posted.
-//
-// The sentence is chosen from what this run actually published, not from the
-// decision alone, and the empty case points at the Waiting on list that names
-// the real cause.
-func TestABlockingSummaryWithNothingInlineDoesNotClaimInlineFindings(t *testing.T) {
-	summary := testSummary()
-	summary.Decision = domain.ReviewDecisionRequestChanges
-	summary.Published = nil
-	summary.Blocking = []string{testUnreviewedHeadReason}
-
-	body := review.RenderBody(summary)
-
-	if strings.Contains(body, "listed inline") {
-		t.Fatalf("summary claims findings are inline while it published none:\n%s", body)
-	}
-	if !strings.Contains(body, "This review requests changes for the reasons listed below.") {
-		t.Fatalf("summary does not point at the reasons holding the block:\n%s", body)
-	}
-	// The reasons the sentence points at have to be under it, or it names nothing.
-	if !strings.Contains(body, "This review is waiting on:\n- "+testUnreviewedHeadReason) {
-		t.Fatalf("summary points below at a list it does not carry:\n%s", body)
-	}
-	if !strings.Contains(body, "| Findings published inline | `0` |") {
-		t.Fatalf("summary prose and detail table disagree about what was published:\n%s", body)
 	}
 }
 
@@ -3398,11 +3367,10 @@ func TestASeparateDefectOnAnAnsweredFileStillPublishes(t *testing.T) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES while the answered thread is open",
 			fixture.state.lastSubmitReview["event"])
 	}
-	// What the block waits on is named in the one top level comment, which is
-	// the only place this service writes prose above the diff.
+	// The summary directs the reader to the existing inline findings.
 	comment, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || !strings.Contains(comment, "`main.go`:1") {
-		t.Fatalf("comment = %v, want the surviving open thread named",
+	if !ok || !strings.Contains(comment, "Resolve the open inline findings.") {
+		t.Fatalf("comment = %v, want the inline finding instruction",
 			fixture.state.issueComments[0]["body"])
 	}
 }
@@ -4134,11 +4102,8 @@ func TestFormatRepliesBoundsEvenATinyBudget(t *testing.T) {
 	}
 }
 
-// Resolving one of several blocking threads leaves the verdict where it was, so
-// the refresh submits no review. The summary still has to be rewritten, because
-// its blocking list names one entry per open thread and would otherwise keep
-// naming a thread that is already closed.
-func TestARefreshUpdatesTheBlockingListWhenTheVerdictDoesNotMove(t *testing.T) {
+// A refresh updates the folded thread counts even when the verdict stays unchanged.
+func TestARefreshUpdatesThreadDetailsWhenTheVerdictDoesNotMove(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages: blockingVerdictReviewPage(head, true),
@@ -4163,12 +4128,13 @@ func TestARefreshUpdatesTheBlockingListWhenTheVerdictDoesNotMove(t *testing.T) {
 			fixture.state.lastSubmitReview)
 	}
 	body := fixture.state.issueComments[0]["body"].(string)
-	if !strings.Contains(body, "`main.go`:5") {
-		t.Fatalf("summary comment = %q, want the thread still open named", body)
+	for _, want := range []string{"Resolve the open inline findings.", "| Bot thread IDs | `thread-fixed`, `thread-open` |", "| Bot threads open | `1` |", "| Bot threads resolved | `1` |"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("summary omits %q:\n%s", want, body)
+		}
 	}
-	if strings.Contains(body, "`main.go`:2") {
-		t.Fatalf("summary comment still names the thread that was resolved, so a reader "+
-			"goes looking for something already dealt with:\n%s", body)
+	if strings.Contains(strings.Split(body, "<details>")[0], "main.go") {
+		t.Fatalf("summary duplicates inline finding locations:\n%s", body)
 	}
 }
 
@@ -5615,7 +5581,7 @@ func TestARunThatPostsANewFindingDoesNotApprove(t *testing.T) {
 // and with nothing said about it the review reads as a silent repeat. One live
 // pull request carried three blocking reviews, two of them empty, and no
 // reader could tell that one unresolved thread was the whole cause.
-func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
+func TestABlockingVerdictDirectsToInlineFindingsAndFoldsThreadDetails(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model: &sequenceModel{
@@ -5647,9 +5613,9 @@ func TestABlockingVerdictNamesTheOpenThreadsHoldingIt(t *testing.T) {
 		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
 	}
 	for _, want := range []string{
-		"This review is waiting on:",
-		"`main.go`:2",
-		"https://github.com/owner/repo/pull/7#discussion_r4242",
+		"Resolve the open inline findings.",
+		"| Bot thread IDs | `open-thread` |",
+		"| Bot threads open | `1` |",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary comment missing %q:\n%s", want, body)

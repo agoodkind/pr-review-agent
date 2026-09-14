@@ -415,6 +415,43 @@ func TestLoadErrorsDoNotContainSecretValues(t *testing.T) {
 	}
 }
 
+func TestLoadModelPricingMatchesExactAndLongestModelPrefix(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{
+		"REVIEW_MODEL_PRICING": `{
+			"gpt-5": {"input_per_million_tokens": 1, "cached_input_per_million_tokens": 0.1, "output_per_million_tokens": 2},
+			"gpt-5-mini": {"input_per_million_tokens": 3, "cached_input_per_million_tokens": 0.3, "output_per_million_tokens": 4},
+			"gpt-5-mini-2026-09-13": {"input_per_million_tokens": 5, "cached_input_per_million_tokens": 0.5, "output_per_million_tokens": 6}
+		}`,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	exact, found := cfg.PricingForModel("gpt-5-mini-2026-09-13")
+	if !found || exact.InputPerMillionTokens != 5 {
+		t.Fatalf("exact pricing = %+v, %v, want exact model rates", exact, found)
+	}
+	prefix, found := cfg.PricingForModel("gpt-5-mini-2026-10-01")
+	if !found || prefix.InputPerMillionTokens != 3 {
+		t.Fatalf("prefix pricing = %+v, %v, want longest model prefix rates", prefix, found)
+	}
+	if _, found := cfg.PricingForModel("gpt-50"); found {
+		t.Fatal("gpt prefix matched gpt-50 without a model boundary")
+	}
+}
+
+func TestLoadRejectsInvalidModelPricing(t *testing.T) {
+	for _, value := range []string{
+		`{"gpt-5":{"input_per_million_tokens":1}} {}`,
+		`{"gpt-5":{"unknown_rate":1}}`,
+		`{"gpt-5":{"output_per_million_tokens":-1}}`,
+	} {
+		_, err := loadWithOverrides(map[string]string{"REVIEW_MODEL_PRICING": value})
+		if err == nil || !strings.Contains(err.Error(), "REVIEW_MODEL_PRICING") {
+			t.Fatalf("Load pricing %q: err = %v, want REVIEW_MODEL_PRICING", value, err)
+		}
+	}
+}
+
 func loadWithKey(privateKey string) (Config, error) {
 	return loadWithOverrides(map[string]string{
 		"GITHUB_PRIVATE_KEY": privateKey,

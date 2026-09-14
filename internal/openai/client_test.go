@@ -823,6 +823,80 @@ func TestReviewDoesNotRetryATruncatedAnswer(t *testing.T) {
 	}
 }
 
+func TestReviewRecordsDetailedStreamUsageAndEstimatedCost(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.streamResponse = func(writer http.ResponseWriter) {
+		usageChunk := map[string]any{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion.chunk",
+			"created": 0,
+			"model":   testPrimaryModel + "-2026-09-13",
+			"choices": []map[string]any{},
+			"usage": map[string]any{
+				"prompt_tokens":     1000,
+				"completion_tokens": 200,
+				"total_tokens":      1200,
+				"prompt_tokens_details": map[string]any{
+					"cached_tokens": 400,
+					"audio_tokens":  3,
+				},
+				"completion_tokens_details": map[string]any{
+					"reasoning_tokens":           40,
+					"audio_tokens":               5,
+					"accepted_prediction_tokens": 6,
+					"rejected_prediction_tokens": 7,
+				},
+			},
+		}
+		writeStreamFrames(writer, []map[string]any{
+			completionStreamChunk(validReviewContent(), "stop"),
+			usageChunk,
+		}, true)
+	}
+
+	ctx, recorder := review.WithUsageRecorder(context.Background())
+	if _, err := client.Review(ctx, "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	streamOptions, ok := state.lastRequestBody["stream_options"].(map[string]any)
+	if !ok || streamOptions["include_usage"] != true {
+		t.Fatalf("stream_options = %v, want include_usage true", state.lastRequestBody["stream_options"])
+	}
+	usage := recorder.Summary()
+	if usage.Requests != 1 || usage.ReportedRequests != 1 || usage.InputTokens != 1000 || usage.CachedInputTokens != 400 ||
+		usage.AudioInputTokens != 3 || usage.OutputTokens != 200 || usage.ReasoningTokens != 40 ||
+		usage.AudioOutputTokens != 5 || usage.AcceptedPredictionTokens != 6 ||
+		usage.RejectedPredictionTokens != 7 || usage.TotalTokens != 1200 {
+		t.Fatalf("usage = %+v, want every streamed token field", usage)
+	}
+	if usage.EstimatedInputCostUSD != 0.0006 || usage.EstimatedCachedInputCostUSD != 0.0001 ||
+		usage.EstimatedOutputCostUSD != 0.0004 || usage.EstimatedCostUSD != 0.0011 {
+		t.Fatalf("estimated costs = %+v, want input 0.0006, cached input 0.0001, output 0.0004, total 0.0011", usage)
+	}
+	if usage.PricedRequests != 1 || len(usage.Models) != 1 || !usage.Models[0].Priced ||
+		usage.Models[0].RequestedModel != testPrimaryModel ||
+		usage.Models[0].Model != testPrimaryModel+"-2026-09-13" {
+		t.Fatalf("models = %+v, want priced requested and reported models", usage.Models)
+	}
+}
+
+func TestReviewRecordsSuccessfulRequestWithoutReportedUsage(t *testing.T) {
+	client, server, _ := newTestClient(t)
+	defer server.Close()
+
+	ctx, recorder := review.WithUsageRecorder(context.Background())
+	if _, err := client.Review(ctx, "prompt"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	usage := recorder.Summary()
+	if usage.Requests != 1 || usage.ReportedRequests != 0 || usage.PricedRequests != 0 ||
+		usage.TotalTokens != 0 || usage.EstimatedCostUSD != 0 || len(usage.Models) != 1 || usage.Models[0].Priced {
+		t.Fatalf("usage = %+v, want one successful request without reported tokens", usage)
+	}
+}
+
 type testServerState struct {
 	requestCount      int32
 	lastRequest       *http.Request
@@ -840,8 +914,15 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 	state := &testServerState{completionContent: validReviewContent()}
 	server := newProviderServer(state)
 	cfg := config.Config{
-		MinimumImportance:    7,
-		ReviewModel:          testPrimaryModel,
+		MinimumImportance: 7,
+		ReviewModel:       testPrimaryModel,
+		ReviewModelPricing: map[string]config.ModelPricing{
+			testPrimaryModel: {
+				InputPerMillionTokens:       1,
+				CachedInputPerMillionTokens: 0.25,
+				OutputPerMillionTokens:      2,
+			},
+		},
 		ClydeBaseURL:         mustParseURL(t, server.URL),
 		ClydeAPIKey:          testAPIKeyValue(),
 		CFAccessClientID:     testCFClientIDValue(),

@@ -22,8 +22,9 @@ import (
 
 // provider is one model endpoint the client can send a completion to.
 type provider struct {
-	sdk   openaigo.Client
-	model shared.ChatModel
+	sdk            openaigo.Client
+	model          shared.ChatModel
+	pricingByModel map[string]config.ModelPricing
 }
 
 // Client performs structured OpenAI chat completion requests.
@@ -49,7 +50,8 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				cfg.CFAccessClientID,
 				cfg.CFAccessClientSecret,
 			),
-			model: cfg.ReviewModel,
+			model:          cfg.ReviewModel,
+			pricingByModel: cfg.ReviewModelPricing,
 		},
 		fallback:                nil,
 		fallbackOnUsageExceeded: false,
@@ -64,7 +66,8 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				cfg.FallbackCFAccessClientID,
 				cfg.FallbackCFAccessClientSecret,
 			),
-			model: cfg.FallbackModel,
+			model:          cfg.FallbackModel,
+			pricingByModel: cfg.ReviewModelPricing,
 		}
 		client.fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
 	}
@@ -274,6 +277,9 @@ func completeWith(
 		Model:               target.model,
 		ReasoningEffort:     shared.ReasoningEffort(config.ReasoningEffort),
 		MaxCompletionTokens: openaigo.Int(int64(config.MaximumOutputTokens)),
+		StreamOptions: openaigo.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openaigo.Bool(true),
+		},
 		Messages: []openaigo.ChatCompletionMessageParamUnion{
 			openaigo.SystemMessage(structuredOutputPrompt(policy, schemaName, schema)),
 			openaigo.UserMessage(prompt),
@@ -294,8 +300,18 @@ func completeWith(
 
 	var content strings.Builder
 	finishReason := ""
+	responseModel := target.model
+	usage := openaigo.CompletionUsage{}
+	hasUsage := false
 	for stream.Next() {
 		chunk := stream.Current()
+		if chunk.Model != "" {
+			responseModel = chunk.Model
+		}
+		if chunk.JSON.Usage.Valid() {
+			usage = chunk.Usage
+			hasUsage = true
+		}
 		for _, choice := range chunk.Choices {
 			if choice.Index != 0 {
 				continue
@@ -309,6 +325,7 @@ func completeWith(
 	if err := stream.Err(); err != nil {
 		return "", modelProviderError(target.model, err)
 	}
+	review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
 	if finishReason == "" {
 		return "", errors.New("openai response ended without a finish reason")
 	}
@@ -323,6 +340,46 @@ func completeWith(
 		return "", errors.New("openai response missing message content")
 	}
 	return result, nil
+}
+
+func modelUsage(model string, usage openaigo.CompletionUsage, usageReported bool, target provider) review.ModelUsage {
+	reportedRequests := 0
+	if usageReported {
+		reportedRequests = 1
+	}
+	estimatedInputCost := float64(0)
+	estimatedCachedInputCost := float64(0)
+	estimatedOutputCost := float64(0)
+	pricing, pricingFound := config.FindModelPricing(target.pricingByModel, model)
+	priced := usageReported && pricingFound
+	if priced {
+		cachedTokens := usage.PromptTokensDetails.CachedTokens
+		uncachedTokens := max(usage.PromptTokens-cachedTokens, 0)
+		estimatedInputCost = float64(uncachedTokens) * pricing.InputPerMillionTokens / 1_000_000
+		estimatedCachedInputCost = float64(cachedTokens) * pricing.CachedInputPerMillionTokens / 1_000_000
+		estimatedOutputCost = float64(usage.CompletionTokens) * pricing.OutputPerMillionTokens / 1_000_000
+	}
+	estimatedCost := estimatedInputCost + estimatedCachedInputCost + estimatedOutputCost
+	return review.ModelUsage{
+		RequestedModel:              target.model,
+		Model:                       model,
+		Priced:                      priced,
+		Requests:                    1,
+		ReportedRequests:            reportedRequests,
+		InputTokens:                 usage.PromptTokens,
+		CachedInputTokens:           usage.PromptTokensDetails.CachedTokens,
+		AudioInputTokens:            usage.PromptTokensDetails.AudioTokens,
+		OutputTokens:                usage.CompletionTokens,
+		ReasoningTokens:             usage.CompletionTokensDetails.ReasoningTokens,
+		AudioOutputTokens:           usage.CompletionTokensDetails.AudioTokens,
+		AcceptedPredictionTokens:    usage.CompletionTokensDetails.AcceptedPredictionTokens,
+		RejectedPredictionTokens:    usage.CompletionTokensDetails.RejectedPredictionTokens,
+		TotalTokens:                 usage.TotalTokens,
+		EstimatedInputCostUSD:       estimatedInputCost,
+		EstimatedCachedInputCostUSD: estimatedCachedInputCost,
+		EstimatedOutputCostUSD:      estimatedOutputCost,
+		EstimatedCostUSD:            estimatedCost,
+	}
 }
 
 func modelProviderError(model shared.ChatModel, err error) error {

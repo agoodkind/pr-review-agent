@@ -265,10 +265,12 @@ func (service *Service) runLocked(
 	checkRun githubapp.CheckRun,
 	settings reviewSettings,
 ) (runErr error) {
+	ctx, usage := WithUsageRecorder(ctx)
 	logger := gklog.L(ctx)
 	head := job.Head
 	startedAt := service.now()
 	progress := service.newProgress(job, settings, startedAt)
+	progress.usage = usage
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -774,12 +776,12 @@ func (service *Service) publish(
 		DecisionReason:   pass.decisionReason(),
 		ApprovalWithheld: !approvalAllowed,
 		Report: Report{
-			Summary:       "",
-			Walkthrough:   nil,
-			VerdictReason: "",
+			Summary:     "",
+			Walkthrough: nil,
 		},
 		Blocking:          blocking,
 		Models:            analysis.Models,
+		Usage:             UsageFromContext(ctx),
 		Duration:          service.now().Sub(startedAt),
 		FilesReviewed:     analysis.FilesReviewed,
 		Chunks:            analysis.Chunks,
@@ -806,7 +808,7 @@ func (service *Service) publish(
 	if shortfall.present() && !omissionsDecided || len(state.Pending) > 0 {
 		if shortfall.present() && !omissionsDecided {
 			return service.concludeStructurallyIncomplete(
-				ctx, job, checkRun, currentPullRequest, threads, state, shortfall, summary, progress, pass,
+				ctx, job, checkRun, currentPullRequest, state, shortfall, summary, progress, pass,
 			)
 		}
 		publicationCtx, cancelPublication := service.publicationContext(ctx)
@@ -816,7 +818,7 @@ func (service *Service) publish(
 		)
 	}
 	return service.publishCompletedReview(
-		ctx, job, checkRun, currentPullRequest, head, threads, summary, state, progress, pass,
+		ctx, job, checkRun, currentPullRequest, head, summary, state, progress, pass,
 	)
 }
 
