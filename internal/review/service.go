@@ -239,14 +239,24 @@ func (service *Service) Admit(
 	return job, true, nil
 }
 
-// Reject completes an admitted check when background work cannot accept it.
+// Reject cancels an admitted check when background work cannot accept it. The
+// cancelled conclusion keeps a redelivery resumable after queue capacity
+// returns.
 func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cause error) error {
 	if job.CheckRunID == 0 || job.CheckRunStatus == "completed" {
 		return nil
 	}
 	now := service.now()
 	progress := service.newProgress(job, service.settingsFor(job), now).summary(now)
-	return service.failCheck(parent, job, job.CheckRunID, progress, checkSummaryFailure, cause)
+	return service.reportFailedCheck(
+		parent,
+		job,
+		job.CheckRunID,
+		progress,
+		checkSummaryFailure,
+		checkConclusionCancelled,
+		cause,
+	)
 }
 
 func (service *Service) runLocked(

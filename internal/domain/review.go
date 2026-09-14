@@ -241,6 +241,10 @@ type ReviewJob struct {
 	// ThreadRootCommentID asks an already reviewed head to reconsider the
 	// inline finding that received this reply.
 	ThreadRootCommentID int64
+	// RefreshVerdict marks a delivery caused by review discussion or thread
+	// state. Admission creates a dedicated check that stays in progress until
+	// this delivery finishes its verdict refresh.
+	RefreshVerdict bool
 	// Forced marks a run a ForceReviewLabelPrefix label asked for. Such a run
 	// reviews the whole pull request from scratch: it ignores the commit the
 	// last completed run reviewed, the chunks earlier runs read, and every gate

@@ -269,6 +269,9 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	if resolved.StatusCode != http.StatusAccepted {
 		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
 	}
+	if count := fixture.githubState.checkStartCount(); count != 2 {
+		t.Fatalf("check starts = %d, want the verdict refresh visible before background work", count)
+	}
 
 	fixture.waitForSubmitReviews(t, 2)
 	approval := fixture.githubState.lastSubmitReview()
@@ -278,6 +281,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	if commit := approval["commit_id"]; commit != testDefectiveHead {
 		t.Fatalf("refreshed commit = %v, want the reviewed head", commit)
 	}
+	fixture.waitForCheckCompletions(t, 2)
 	if fixture.githubState.lastCheckConclusion() != "success" {
 		t.Fatalf("conclusion = %q, want success kept", fixture.githubState.lastCheckConclusion())
 	}
@@ -2221,6 +2225,7 @@ type githubServerState struct {
 	// so a test that waits on the value can read the earlier run's result and
 	// assert against a run that has not finished.
 	checkCompletions int32
+	checkStarts      int32
 }
 
 func newGitHubServerState(head string) *githubServerState {
@@ -2473,6 +2478,10 @@ func (state *githubServerState) lastCheckStatus() string {
 	return status
 }
 
+func (state *githubServerState) checkStartCount() int32 {
+	return atomic.LoadInt32(&state.checkStarts)
+}
+
 func (state *githubServerState) listedFilePages() int32 {
 	return atomic.LoadInt32(&state.filePageFetches)
 }
@@ -2716,6 +2725,9 @@ func (state *githubServerState) handleUpdateCheckRun(writer http.ResponseWriter,
 		updatedID, _ = item["id"].(float64)
 		if status, ok := body["status"].(string); ok && status != "" {
 			item["status"] = status
+			if status == "in_progress" {
+				atomic.AddInt32(&state.checkStarts, 1)
+			}
 		}
 		if conclusion, ok := body["conclusion"].(string); ok {
 			item["conclusion"] = conclusion
