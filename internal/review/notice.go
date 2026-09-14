@@ -34,6 +34,20 @@ func (service *Service) failCheck(
 	stage string,
 	cause error,
 ) error {
+	return service.reportFailedCheck(ctx, job, checkRunID, progress, stage, "failure", cause)
+}
+
+// reportFailedCheck publishes a failed attempt with the conclusion that
+// describes whether a redelivery may resume it.
+func (service *Service) reportFailedCheck(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRunID int64,
+	progress Summary,
+	stage string,
+	conclusion string,
+	cause error,
+) error {
 	logger := gklog.L(ctx)
 	progress.Failed = true
 	title := failureTitle(stage, cause)
@@ -45,7 +59,7 @@ func (service *Service) failCheck(
 			job.InstallationID,
 			job.Repository,
 			checkRunID,
-			"failure",
+			conclusion,
 			title,
 			checkSummary,
 		)

@@ -25,6 +25,7 @@ type PullRequestEvent struct {
 	Head                domain.HeadSHA
 	Draft               bool
 	ThreadRootCommentID int64
+	RefreshVerdict      bool
 	// Forced marks a delivery that asked for a fresh full review, which only a
 	// labeled event carrying a domain.ForceReviewLabelPrefix label does.
 	Forced bool
@@ -50,6 +51,7 @@ func (event PullRequestEvent) Job() domain.ReviewJob {
 		CheckRunStatus:      "",
 		CheckRunConclusion:  "",
 		ThreadRootCommentID: event.ThreadRootCommentID,
+		RefreshVerdict:      event.RefreshVerdict,
 		Forced:              event.Forced,
 		// The tuning values ride on the request rather than in the payload, and
 		// are read only once the signature has verified, so nothing decoded here
@@ -155,6 +157,7 @@ func emptyEvent() PullRequestEvent {
 		Head:                "",
 		Draft:               false,
 		ThreadRootCommentID: 0,
+		RefreshVerdict:      false,
 		Forced:              false,
 		Label:               "",
 	}
@@ -202,6 +205,7 @@ func ParseReviewComment(eventType string, deliveryID string, body []byte) (PullR
 	event, supported, err := eventFromPayload(deliveryID, payload, false)
 	if supported && err == nil {
 		event.ThreadRootCommentID = payload.Comment.InReplyToID
+		event.RefreshVerdict = true
 	}
 	return event, supported, err
 }
@@ -260,7 +264,11 @@ func ParseReviewThread(eventType string, deliveryID string, body []byte) (PullRe
 	if payload.PullRequest.Draft {
 		return emptyEvent(), false, nil
 	}
-	return eventFromPayload(deliveryID, payload, false)
+	event, supported, err := eventFromPayload(deliveryID, payload, false)
+	if supported && err == nil {
+		event.RefreshVerdict = true
+	}
+	return event, supported, err
 }
 
 func decodePayload(deliveryID string, body []byte) (pullRequestPayload, bool, error) {
@@ -316,6 +324,7 @@ func eventFromPayload(
 		Head:                head,
 		Draft:               payload.PullRequest.Draft,
 		ThreadRootCommentID: 0,
+		RefreshVerdict:      false,
 		Forced:              forced,
 		Label:               label,
 	}, true, nil

@@ -2,6 +2,7 @@
 
 | Date | Branch | Class | Reviewer | Verdict | Catches | Escapes | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-09-13 | `codex/reconcile-resolved-verdict` | User-visible verdict refresh lifecycle | Codex, strongest adversarial review | Merge ready | 2 | 0 | Reproduced queued refresh overlap, queue rejection redelivery, and an older retry behind a newer success. The final hostile sequence kept every active refresh visible and suppressed completed redeliveries. |
 | 2026-09-10 | `rules/review-quality` | Model review policy | Codex, high | Merge ready | 0 | 0 | The policy test failed without the new instructions and passed after restoration. Full tests, checks, fresh signed build, signature verification, and the live merge tree passed. |
 | 2026-09-10 | detached `6b2ef89` | User-visible review lifecycle | Codex, high | Merge ready | 0 | 0 | Reproduced both prior failures against the old source, ran all tests and checks, built and ran a fresh signed binary, and added no new tests. |
 | 2026-08-14 | `codex/review-lifecycle-final` | User visible behavior and lifecycle | `gpt-5.6-sol`, high | Merge ready | 0 | 0 | Reproduced normal tests, race tests, `make check`, fresh `make build`, red-state history and cap failures, and a clean merge tree. |

@@ -215,8 +215,8 @@ func TestParseEventAcceptsInlineFindingReplies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("action %s: %v", action, err)
 		}
-		if !supported || event.ThreadRootCommentID != 99 ||
-			event.Job().ThreadRootCommentID != 99 {
+		if !supported || event.ThreadRootCommentID != 99 || !event.RefreshVerdict ||
+			event.Job().ThreadRootCommentID != 99 || !event.Job().RefreshVerdict {
 			t.Fatalf("action %s: event = %+v, want a thread reply job", action, event)
 		}
 	}
@@ -251,7 +251,8 @@ func TestParseEventAcceptsResolvedAndUnresolvedThreadActions(t *testing.T) {
 			t.Fatalf("head = %q, want the payload head sha", event.Head)
 		}
 		job := event.Job()
-		if job.Number != 7 || job.InstallationID != 42 || job.Repository.Owner != "owner" {
+		if job.Number != 7 || job.InstallationID != 42 || job.Repository.Owner != "owner" ||
+			!job.RefreshVerdict {
 			t.Fatalf("job = %+v, want the same job shape as a pull request event", job)
 		}
 	}

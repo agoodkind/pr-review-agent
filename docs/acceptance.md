@@ -84,8 +84,9 @@ Expect:
 - the second run reviews only the delta: the log shows a compare fetch, never
   a second full file listing
 
-Resolving threads without pushing triggers nothing: runs start only on
-pull request webhooks. The next push is what recomputes.
+Replying to or changing a thread triggers a verdict refresh without a push.
+A new required check enters progress before the asynchronous refresh starts,
+then completes with the verdict recomputed from current thread state.
 
 ## 4. Requested changes require an actionable inline finding
 
