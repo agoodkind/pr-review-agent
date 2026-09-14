@@ -1028,6 +1028,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForSummaryHead(t, testDefectiveHead)
 	review := fixture.githubState.lastSubmitReview()
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
