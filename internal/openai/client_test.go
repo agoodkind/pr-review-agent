@@ -593,6 +593,43 @@ func TestFallbackAnswersWhenThePrimaryReportsExhaustedUsage(t *testing.T) {
 	}
 }
 
+func TestFallbackAnswersOpenAIQuotaFailureAndReturnsToPrimaryAfterRecovery(t *testing.T) {
+	fixture := newFallbackTestClient(t, true)
+	fixture.primary.statusSequence = []int{http.StatusTooManyRequests}
+	fixture.primary.errorPayload = map[string]any{
+		"message": "You exceeded your current quota, please check your plan and billing details.",
+		"type":    "insufficient_quota",
+		"code":    "insufficient_quota",
+	}
+	ctx, recorder := review.WithUsageRecorder(context.Background())
+
+	completion, err := fixture.client.Review(ctx, "prompt")
+	if err != nil {
+		t.Fatalf("quota Review: %v", err)
+	}
+	if completion.Model != testFallbackModel {
+		t.Fatalf("quota model = %q, want %q", completion.Model, testFallbackModel)
+	}
+	if fixture.fallback.lastRequest.Header.Get("Cf-Access-Client-Id") != testCFClientIDValue() {
+		t.Fatal("fallback did not receive its configured Access credentials")
+	}
+
+	completion, err = fixture.client.Review(ctx, "prompt")
+	if err != nil {
+		t.Fatalf("recovered Review: %v", err)
+	}
+	if completion.Model != testPrimaryModel {
+		t.Fatalf("recovered model = %q, want %q", completion.Model, testPrimaryModel)
+	}
+	if fixture.primary.requestCount != 2 || fixture.fallback.requestCount != 1 {
+		t.Fatalf("requests = primary %d, fallback %d, want 2 and 1",
+			fixture.primary.requestCount, fixture.fallback.requestCount)
+	}
+	if recorder.Summary().Requests != 3 {
+		t.Fatalf("recorded requests = %d, want 3 including the quota refusal", recorder.Summary().Requests)
+	}
+}
+
 func TestFallbackSendsAccessHeadersOnlyWhenConfigured(t *testing.T) {
 	fixture := newFallbackTestClient(t, true)
 	fixture.primary.statusSequence = []int{http.StatusBadRequest}

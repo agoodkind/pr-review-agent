@@ -548,12 +548,8 @@ test("production configuration reaches the Go service", function () {
   assert.equal(environment.CF_ACCESS_CLIENT_ID, bindings.CF_ACCESS_CLIENT_ID);
   assert.equal(environment.CF_ACCESS_CLIENT_SECRET, bindings.CF_ACCESS_CLIENT_SECRET);
   const omittedBindings = new Set([
-    "FALLBACK_API_KEY",
-    "FALLBACK_BASE_URL",
     "FALLBACK_CF_ACCESS_CLIENT_ID",
     "FALLBACK_CF_ACCESS_CLIENT_SECRET",
-    "FALLBACK_MODEL",
-    "FALLBACK_ON",
     "OPENAI_KEY",
     "USE_NANO_AS_PRIMARY",
   ]);
@@ -572,6 +568,34 @@ test("production configuration reaches the Go service", function () {
     }
     assert.equal(environment[name], bindings[name], `${name} did not reach the service`);
   }
+});
+
+test("Nano primary retains Clyde Luna as its quota fallback", function () {
+  const bindings = {
+    USE_NANO_AS_PRIMARY: true,
+    FALLBACK_API_KEY: "fixture-nano-key",
+    FALLBACK_BASE_URL: "https://api.openai.com/v1",
+    FALLBACK_MODEL: "gpt-5.4-nano",
+    FALLBACK_ON: "usage_exceeded",
+    OPENAI_KEY: "fixture-clyde-key",
+    CLYDE_BASE_URL: "https://clyde.example/v1",
+    REVIEW_MODEL: "gpt-5.6-luna",
+    CF_ACCESS_CLIENT_ID: "fixture-access-id",
+    CF_ACCESS_CLIENT_SECRET: "fixture-access-secret", // gitleaks:allow
+  };
+  const environment = createPrAgentEnvironment(bindings);
+
+  assert.equal(environment.REVIEW_MODEL, bindings.FALLBACK_MODEL);
+  assert.equal(environment.CLYDE_BASE_URL, bindings.FALLBACK_BASE_URL);
+  assert.equal(environment.CLYDE_API_KEY, bindings.FALLBACK_API_KEY);
+  assert.equal("CF_ACCESS_CLIENT_ID" in environment, false);
+  assert.equal("CF_ACCESS_CLIENT_SECRET" in environment, false);
+  assert.equal(environment.FALLBACK_MODEL, bindings.REVIEW_MODEL);
+  assert.equal(environment.FALLBACK_BASE_URL, bindings.CLYDE_BASE_URL);
+  assert.equal(environment.FALLBACK_API_KEY, bindings.OPENAI_KEY);
+  assert.equal(environment.FALLBACK_CF_ACCESS_CLIENT_ID, bindings.CF_ACCESS_CLIENT_ID);
+  assert.equal(environment.FALLBACK_CF_ACCESS_CLIENT_SECRET, bindings.CF_ACCESS_CLIENT_SECRET);
+  assert.equal(environment.FALLBACK_ON, "usage_exceeded");
 });
 
 test("an unlisted binding never reaches the Go service", function () {
