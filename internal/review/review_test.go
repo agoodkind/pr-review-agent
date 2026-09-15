@@ -110,8 +110,7 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 // testUnreviewedHeadReason is the blocking reason a run leaves when it could
 // not read the whole head. It is the service's own wording, repeated here
 // because these tests read the rendered surface from outside the package.
-const testUnreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet. " +
-	"The next push reviews what this run could not."
+const testUnreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet."
 
 // testPublishedFinding is one finding that reached the pull request inline.
 func testPublishedFinding() domain.Finding {
@@ -6387,7 +6386,7 @@ func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
 	if progress == "" {
 		t.Fatalf("no progress body was written: %v", fixture.state.issueCommentBodies)
 	}
-	if !strings.Contains(progress, "This review is waiting on:") {
+	if !strings.Contains(progress, "Resolve these inline findings:") {
 		t.Fatalf("the progress comment names nothing to act on yet: %q", progress)
 	}
 	// The path is a code span, because it is whatever the pull request named a

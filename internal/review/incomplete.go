@@ -63,7 +63,7 @@ func (service *Service) concludeIncomplete(
 		job.Repository,
 		checkRun.ID,
 		checkConclusionDeclined,
-		incompleteCheckTitle(pending, reason),
+		incompleteCheckTitle(pending),
 		incompleteCheckDetail(unread, summary, job),
 	); err != nil {
 		return err
@@ -100,11 +100,8 @@ func incompleteCheckDetail(failures []chunkFailure, summary Summary, job domain.
 }
 
 // incompleteCheckTitle is the one line a reader sees before opening anything on
-// a run that could not finish: how much went unread, and what happens next.
-func incompleteCheckTitle(pending int, reason string) string {
-	if reason == checkFailureUnavailable {
-		return reason
-	}
-	return fmt.Sprintf("%s could not be reviewed. The next push reviews %s.",
-		chunkCount(pending), chunkPronoun(pending))
+// a run that could not finish: how much went unread, and how to retry it.
+func incompleteCheckTitle(pending int) string {
+	return fmt.Sprintf("%s could not be reviewed. Apply `%s` to retry.",
+		chunkCount(pending), domain.RerunReviewLabel)
 }

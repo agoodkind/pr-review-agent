@@ -897,6 +897,24 @@ func TestReviewRecordsSuccessfulRequestWithoutReportedUsage(t *testing.T) {
 	}
 }
 
+func TestReviewRecordsFailedRequestWithoutReportedUsage(t *testing.T) {
+	client, server, state := newTestClient(t)
+	defer server.Close()
+
+	state.statusSequence = []int{http.StatusBadRequest}
+	ctx, recorder := review.WithUsageRecorder(context.Background())
+	if _, err := client.Review(ctx, "prompt"); err == nil {
+		t.Fatal("Review: want provider error")
+	}
+	usage := recorder.Summary()
+	if usage.Requests != 1 || usage.ReportedRequests != 0 || usage.PricedRequests != 0 ||
+		usage.TotalTokens != 0 || usage.EstimatedCostUSD != 0 || len(usage.Models) != 1 ||
+		usage.Models[0].RequestedModel != testPrimaryModel || usage.Models[0].Model != testPrimaryModel ||
+		usage.Models[0].Priced {
+		t.Fatalf("usage = %+v, want one failed request without reported tokens", usage)
+	}
+}
+
 type testServerState struct {
 	requestCount      int32
 	lastRequest       *http.Request

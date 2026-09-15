@@ -67,6 +67,9 @@ func ParseHeadSHA(value string) (HeadSHA, error) {
 // on the next delivery without anything being replaced.
 const ForceReviewLabelPrefix = "test-review-agent-"
 
+// RerunReviewLabel is the stable label shown when a review can retry the same head.
+const RerunReviewLabel = ForceReviewLabelPrefix + "rerun"
+
 // ForcesReview reports whether a label name asks for a fresh full review.
 func ForcesReview(labelName string) bool {
 	return strings.HasPrefix(labelName, ForceReviewLabelPrefix)

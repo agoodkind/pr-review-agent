@@ -303,6 +303,9 @@ func completeWith(
 	responseModel := target.model
 	usage := openaigo.CompletionUsage{}
 	hasUsage := false
+	defer func() {
+		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
+	}()
 	for stream.Next() {
 		chunk := stream.Current()
 		if chunk.Model != "" {
@@ -325,7 +328,6 @@ func completeWith(
 	if err := stream.Err(); err != nil {
 		return "", modelProviderError(target.model, err)
 	}
-	review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
 	if finishReason == "" {
 		return "", errors.New("openai response ended without a finish reason")
 	}
