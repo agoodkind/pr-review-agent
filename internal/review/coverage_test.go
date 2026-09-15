@@ -4,8 +4,8 @@ package review_test
 // one model request, which no later run will fare any better on.
 //
 // The transient case has the opposite ending and is covered here too, because
-// the two are one sentence apart on the pull request and it is the promise of a
-// next push that separates them.
+// the two are one sentence apart on the pull request and it is the available
+// same-head retry that separates them.
 
 import (
 	"context"
@@ -37,9 +37,9 @@ const (
 	// coveragePriorHead is a commit an earlier run reviewed, so the tests can
 	// tell a baseline that was held from one that was never set.
 	coveragePriorHead = "1111111111111111111111111111111111111111"
-	// nextPushSentence is the promise the transient ending makes and the
+	// rerunInstruction is the action the transient ending offers and the
 	// structural ending must never make.
-	nextPushSentence = "The next push reviews"
+	rerunInstruction = "Apply `test-review-agent-rerun`"
 	// unreviewedHeadSentence is the one reason a head used to be blocked by when
 	// the model answered coverage blind.
 	unreviewedHeadSentence = "This head was not fully reviewed"
@@ -353,9 +353,9 @@ func TestAOversizedHunkCanBeAcceptedFromCurrentContext(t *testing.T) {
 	}
 }
 
-// A chunk whose model call failed is the other kind of shortfall. It stays
-// pending and keeps its promise, because the next push really does finish it.
-func TestAFailedChunkKeepsTheNextPushPromise(t *testing.T) {
+// A chunk whose model call failed stays pending and gives the reader a retry
+// that does not require changing the commit.
+func TestAFailedChunkOffersASameHeadRetry(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
 		model:             &sequenceModel{err: errors.New("the provider did not answer")},
@@ -366,8 +366,8 @@ func TestAFailedChunkKeepsTheNextPushPromise(t *testing.T) {
 	}
 
 	title := fmt.Sprint(checkOutput(t, fixture)["title"])
-	if !strings.Contains(title, nextPushSentence) {
-		t.Fatalf("check title = %q, want the promise the next push can keep", title)
+	if !strings.Contains(title, rerunInstruction) {
+		t.Fatalf("check title = %q, want the same-head retry action", title)
 	}
 	state := decodedSummaryState(t, fixture)
 	if len(state.Pending) != 1 {

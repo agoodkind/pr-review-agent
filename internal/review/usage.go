@@ -5,7 +5,7 @@ import (
 	"sync"
 )
 
-// ModelUsage records the tokens and estimated cost of successful model requests.
+// ModelUsage records one model request and any usage the provider reported.
 // The same shape represents one request and one model's aggregate.
 type ModelUsage struct {
 	RequestedModel              string
@@ -28,7 +28,7 @@ type ModelUsage struct {
 	EstimatedCostUSD            float64
 }
 
-// UsageSummary aggregates every successful model request in one review run.
+// UsageSummary aggregates every attempted model request in one review run.
 type UsageSummary struct {
 	Requests                    int
 	ReportedRequests            int
@@ -77,7 +77,7 @@ func WithUsageRecorder(ctx context.Context) (context.Context, *UsageRecorder) {
 	return context.WithValue(ctx, usageRecorderContextKey{}, recorder), recorder
 }
 
-// RecordModelUsage adds one successful model request to the context recorder.
+// RecordModelUsage adds one attempted model request to the context recorder.
 // It does nothing when the caller did not attach a recorder.
 func RecordModelUsage(ctx context.Context, usage ModelUsage) {
 	recorder, ok := ctx.Value(usageRecorderContextKey{}).(*UsageRecorder)

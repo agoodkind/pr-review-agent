@@ -90,11 +90,8 @@ func blockingReasons(
 	return reasons
 }
 
-// unreviewedHeadReason recognizes incomplete reviews written by older releases.
-const unreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet. " +
-	"The next push reviews what this run could not."
-
-const unreviewedProviderReason = "The model provider must recover before the next push can review what remains."
+// unreviewedHeadReason also recognizes older reasons that continue this sentence.
+const unreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet."
 
 // describeOpenThread names one open thread the way a reader can act on it: the
 // place in the code it objects to, linked to the comment itself.

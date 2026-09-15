@@ -3,6 +3,7 @@ package review
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -335,14 +336,13 @@ func refreshThreadDetails(body string, summary Summary) string {
 	return strings.Join(lines, "\n")
 }
 
-// renderBlocking lists what a blocking verdict is waiting on, so a reader can
-// go straight to the thing holding the pull request.
+// renderBlocking links the inline findings that a reader must resolve.
 func renderBlocking(reasons []string) string {
 	if len(reasons) == 0 {
 		return ""
 	}
 	lines := make([]string, 0, len(reasons)+1)
-	lines = append(lines, "This review is waiting on:")
+	lines = append(lines, "Resolve these inline findings:")
 	for _, reason := range reasons {
 		lines = append(lines, "- "+reason)
 	}
@@ -541,7 +541,7 @@ func codeSpan(text string) string {
 // RenderIncompleteBody renders the visible comment for a pass that could not
 // read every chunk it owed.
 //
-// It states what is left and that the next push covers it, and it carries no
+// It states what is left and how to retry this head, and it carries no
 // review marker for the same reason the progress body carries none. reason is
 // this service's own wording for what went wrong; the provider's own sentence
 // never reaches here, because a pull request comment is public and permanent.
@@ -551,24 +551,16 @@ func codeSpan(text string) string {
 // read is exactly what the coverage row is for.
 func RenderIncompleteBody(summary Summary, pending int, reason string, detail string) string {
 	lead := fmt.Sprintf(
-		"%s could not be reviewed on `%s`. The next push reviews %s.",
+		"%s could not be reviewed on `%s`. Apply the `%s` label to retry this head.",
 		chunkCount(pending),
 		shortHead(summary.Head),
-		chunkPronoun(pending),
+		domain.RerunReviewLabel,
 	)
-	blocking := summary.Blocking
+	blocking := removeBlockingReasons(
+		summary.Blocking,
+		unreviewedHeadReason,
+	)
 	coverageReason := unreviewedHeadReason
-	if reason == checkFailureUnavailable {
-		lead = fmt.Sprintf(
-			"%s could not be reviewed on `%s`. %s",
-			chunkCount(pending),
-			shortHead(summary.Head),
-			reason,
-		)
-		blocking = replaceBlockingReason(blocking, unreviewedHeadReason, unreviewedProviderReason)
-		coverageReason = unreviewedProviderReason
-		reason = ""
-	}
 	parts := []string{
 		"## Review",
 		lead,
@@ -580,6 +572,16 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 	}
 	parts = append(parts, RenderDetails(summary))
 	return strings.Join(parts, "\n\n")
+}
+
+func removeBlockingReasons(reasons []string, removed ...string) []string {
+	kept := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		if !slices.Contains(removed, reason) {
+			kept = append(kept, reason)
+		}
+	}
+	return kept
 }
 
 func replaceBlockingReason(reasons []string, oldReason string, newReason string) []string {

@@ -11,7 +11,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/openai"
 )
 
-func TestProviderUnavailableIsReportedWithoutRetryAdvice(t *testing.T) {
+func TestProviderUnavailableIsReportedWithRecoveryAndRetryAdvice(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
@@ -65,14 +65,13 @@ func assertProviderUnavailable(t *testing.T, providerError error) {
 	if !strings.Contains(body, want) {
 		t.Fatalf("summary comment = %q, want %q", body, want)
 	}
-	recovery := "The model provider must recover before the next push can review what remains."
-	if !strings.Contains(body, recovery) {
-		t.Fatalf("summary comment = %q, want %q", body, recovery)
+	if !strings.Contains(body, "Apply the `test-review-agent-rerun` label to retry this head.") {
+		t.Fatalf("summary comment has no same-head retry action: %q", body)
 	}
 
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
-	if !ok || !strings.Contains(fmt.Sprint(output["title"]), want) {
-		t.Fatalf("check title = %v, want %q", output["title"], want)
+	if !ok || !strings.Contains(fmt.Sprint(output["title"]), "Apply `test-review-agent-rerun` to retry.") {
+		t.Fatalf("check title = %v, want the same-head retry action", output["title"])
 	}
 	if model.calls != 1 {
 		t.Fatalf("model calls = %d, want 1 without retry", model.calls)
