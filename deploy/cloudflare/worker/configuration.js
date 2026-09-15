@@ -130,6 +130,7 @@ export function createPrAgentEnvironment(bindings) {
     FALLBACK_API_KEY,
     FALLBACK_BASE_URL,
     FALLBACK_MODEL,
+    FALLBACK_ON,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
@@ -160,9 +161,18 @@ export function createPrAgentEnvironment(bindings) {
     REVIEW_MODEL: FALLBACK_MODEL,
   };
   const provider = USE_NANO_AS_PRIMARY ? nano : clyde;
+  const fallback = USE_NANO_AS_PRIMARY ? clyde : nano;
 
   return {
     ...provider,
+    FALLBACK_API_KEY: fallback.CLYDE_API_KEY,
+    FALLBACK_BASE_URL: fallback.CLYDE_BASE_URL,
+    ...(USE_NANO_AS_PRIMARY ? {
+      FALLBACK_CF_ACCESS_CLIENT_ID: fallback.CF_ACCESS_CLIENT_ID,
+      FALLBACK_CF_ACCESS_CLIENT_SECRET: fallback.CF_ACCESS_CLIENT_SECRET, // gitleaks:allow
+    } : {}),
+    FALLBACK_MODEL: fallback.REVIEW_MODEL,
+    FALLBACK_ON,
     GITHUB_APP_ID,
     GITHUB_BOT_LOGIN,
     GITHUB_PRIVATE_KEY,
