@@ -25,19 +25,24 @@ permission. The account OAuth token that `wrangler` stores does not carry it, an
 `wrangler` has no historical log command at all, so both return an authentication
 error numbered 10000.
 
-Mint a scoped token from the account token kept at `~/Desktop/cftoken/token.txt`.
-It carries one permission group, Workers Observability Read, because that is all
-the queries below use. It also expires on its own after a day, so a skipped or
-failed revocation cannot leave an account wide credential alive indefinitely.
+Mint a scoped token from a Cloudflare account token that can create API tokens.
+The operator supplies that account token; set `ACCOUNT_TOKEN_FILE` to the path
+they give you. The scoped token carries one permission group, Workers
+Observability Read, because that is all the queries below use. It also expires
+on its own after a day, so a skipped or failed revocation cannot leave an
+account wide credential alive indefinitely.
 
-A bearer token passed with `-H` is visible in the process arguments to every
-other user on the host, so pass it through a curl config file instead. Write
-the config with `umask 077` so only you can read it.
+Keep every minted value in a private temporary directory, never beside the
+account token. A bearer token passed with `-H` is visible in the process
+arguments to every other user on the host, so pass it through a curl config
+file instead. Write the config with `umask 077` so only you can read it.
 
 ```bash
-cd ~/Desktop/cftoken
+WORK_DIR=$(mktemp -d)
+chmod 700 "$WORK_DIR"
+cd "$WORK_DIR"
 umask 077
-printf 'header = "Authorization: Bearer %s"\n' "$(<token.txt)" > account.conf
+printf 'header = "Authorization: Bearer %s"\n' "$(tr -d '[:space:]' < "$ACCOUNT_TOKEN_FILE")" > account.conf
 # date -v is BSD only and date -d is GNU only, so try each.
 EXPIRES=$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ)
 curl -sS --fail-with-body --config account.conf \
@@ -64,22 +69,25 @@ rm created.json
 chmod 600 observability.txt observability.id observability.conf account.conf
 ```
 
-The value now sits in `~/Desktop/cftoken/observability.txt`, and every command
-below reads it through `observability.conf`. Never print either one.
+The value now sits in `$WORK_DIR/observability.txt`, and every command below
+reads it through `$WORK_DIR/observability.conf`. Never print either one.
 
 Revoke it when you are done, using the identifier you saved. Check the result:
-a silently failed revocation leaves a privileged non expiring token alive.
+a silently failed revocation leaves a privileged token alive until it expires.
+Delete the working directory only after revocation succeeds.
 
 ```bash
-cd ~/Desktop/cftoken
+cd "$WORK_DIR"
 curl -sS --fail-with-body --config account.conf \
     -X DELETE \
     "https://api.cloudflare.com/client/v4/user/tokens/$(<observability.id)" > revoked.json
-jq -e '.success == true' revoked.json > /dev/null && rm -f observability.txt observability.id observability.conf revoked.json || {
-    echo "revocation failed, the token is still live:" >&2
+if jq -e '.success == true' revoked.json > /dev/null; then
+    cd /
+    rm -rf "$WORK_DIR"
+else
+    echo "revocation failed, token $(<observability.id) is still live:" >&2
     jq '.errors' revoked.json >&2
-}
-rm -f account.conf
+fi
 ```
 
 ## Dump one page
@@ -94,7 +102,7 @@ would least notice: the query still succeeds and just returns less.
 ```bash
 NOW_MS=$(( $(date +%s) * 1000 ))
 jq -n --argjson to "$NOW_MS" '{queryId:"dump",timeframe:{from:0,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > req.json
-curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+curl -sS --fail-with-body --config "$WORK_DIR/observability.conf" \
     -X POST \
     -H "Content-Type: application/json" \
     --data @req.json \
@@ -143,7 +151,7 @@ while true; do
         exit 1
     fi
     jq -n --argjson to "$TO" '{queryId:"page",timeframe:{from:0,to:$to},parameters:{datasets:["cloudflare-workers"]},limit:2000,view:"events"}' > "$DUMP/req.json"
-    if ! curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+    if ! curl -sS --fail-with-body --config "$WORK_DIR/observability.conf" \
         -X POST -H "Content-Type: application/json" --data @"$DUMP/req.json" "$URL" > "$DUMP/page-$i.json"; then
         echo "page $i request failed, the dump is incomplete" >&2
         exit 1
@@ -237,7 +245,7 @@ Add a filter when the full dump is more than you want. `operation` accepts
 NOW_MS=$(( $(date +%s) * 1000 ))
 DAY_AGO_MS=$(( NOW_MS - 86400000 ))
 jq -n --argjson from "$DAY_AGO_MS" --argjson to "$NOW_MS" '{queryId:"errors",timeframe:{from:$from,to:$to},parameters:{datasets:["cloudflare-workers"],filters:[{key:"$metadata.message",operation:"includes",value:"chunk request failed",type:"string"}]},limit:200,view:"events"}' > req.json
-curl -sS --fail-with-body --config ~/Desktop/cftoken/observability.conf \
+curl -sS --fail-with-body --config "$WORK_DIR/observability.conf" \
     -X POST -H "Content-Type: application/json" --data @req.json \
     "https://api.cloudflare.com/client/v4/accounts/ee7d7ca7d611ef8c2a07885e8362de0c/workers/observability/telemetry/query"
 ```
