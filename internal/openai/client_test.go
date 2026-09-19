@@ -107,6 +107,29 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 			t.Fatalf("system message missing code review policy %q", requiredPolicy)
 		}
 	}
+	for _, requiredWritingPolicy := range []string{
+		"Review changed documentation and changed source comments",
+		"Assign importance 10 to every verified writing defect",
+		"State the problem or decision before supporting detail",
+		"State causes directly",
+		"Explain behavior before implementation",
+		"Use one complete idea per sentence and paragraph",
+		"Do not report personal style preferences",
+	} {
+		if !strings.Contains(systemContent, requiredWritingPolicy) {
+			t.Fatalf("system message missing review writing policy %q", requiredWritingPolicy)
+		}
+	}
+	for _, excludedWritingPolicy := range []string{
+		"Ask the user",
+		"document placement",
+		"local editing",
+		"rewrite verification",
+	} {
+		if strings.Contains(systemContent, excludedWritingPolicy) {
+			t.Fatalf("system message contains local workflow rule %q", excludedWritingPolicy)
+		}
+	}
 	if !strings.Contains(systemContent, "importance 7 or higher") {
 		t.Fatalf("system message missing configured importance")
 	}

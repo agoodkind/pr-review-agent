@@ -1083,6 +1083,127 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 	}
 }
 
+func TestEndToEndChangedDocumentationWritingFindingBlocks(t *testing.T) {
+	withIntegrationLock(t)
+	finding := domain.Finding{
+		Path:       "docs/review.md",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "State the problem first",
+		Body:       "The sentence starts with implementation detail before naming the problem.",
+		Evidence:   "The service now caches every request.",
+		Importance: 10,
+	}
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(finding)},
+	})
+	defer fixture.close()
+	fixture.githubState.setChangedFiles(writingChangedFile(finding.Path, finding.Evidence))
+	fixture.githubState.setFileContent(base64.StdEncoding.EncodeToString([]byte(finding.Evidence + "\n")))
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-writing-doc",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
+	}
+	comments := fixture.githubState.streamedCommentBodies()
+	if len(comments) != 1 {
+		t.Fatalf("streamed comments = %d, want one inline comment", len(comments))
+	}
+	if comments[0]["path"] != finding.Path {
+		t.Fatalf("comment path = %v, want %q", comments[0]["path"], finding.Path)
+	}
+}
+
+func TestEndToEndChangedSourceCommentWritingFindingBlocks(t *testing.T) {
+	withIntegrationLock(t)
+	finding := domain.Finding{
+		Path:       "internal/app/handler.go",
+		StartLine:  2,
+		EndLine:    2,
+		Title:      "State the problem first",
+		Body:       "The comment starts with implementation detail before naming the problem.",
+		Evidence:   "// The handler now caches every request.",
+		Importance: 10,
+	}
+	if !strings.HasPrefix(finding.Evidence, "//") {
+		t.Fatalf("source comment evidence = %q, want a Go comment", finding.Evidence)
+	}
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{defectiveReviewContent(finding)},
+	})
+	defer fixture.close()
+	fixture.githubState.setChangedFiles(writingChangedFile(finding.Path, finding.Evidence))
+	fixture.githubState.setFileContent(base64.StdEncoding.EncodeToString([]byte(finding.Evidence + "\n")))
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-writing-comment",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
+		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
+	}
+	comments := fixture.githubState.streamedCommentBodies()
+	if len(comments) != 1 {
+		t.Fatalf("streamed comments = %d, want one inline comment", len(comments))
+	}
+	if comments[0]["path"] != finding.Path {
+		t.Fatalf("comment path = %v, want %q", comments[0]["path"], finding.Path)
+	}
+}
+
+func TestEndToEndClearWritingHasNoWritingFinding(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+	fixture.githubState.setChangedFiles(writingChangedFile(
+		"docs/review.md",
+		"The existing problem appears before the implementation detail.",
+	))
+	fixture.githubState.setFileContent(base64.StdEncoding.EncodeToString([]byte(
+		"The existing problem appears before the implementation detail.\n",
+	)))
+
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-writing-clear",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+
+	fixture.waitForSubmitReviews(t, 1)
+	review := fixture.githubState.lastSubmitReview()
+	if review["event"] != string(domain.ReviewDecisionApprove) {
+		t.Fatalf("event = %v, want APPROVE", review["event"])
+	}
+	if comments := fixture.githubState.streamedCommentBodies(); len(comments) != 0 {
+		t.Fatalf("streamed comments = %d, want none", len(comments))
+	}
+}
+
 func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 	withIntegrationLock(t)
 	finding := domain.Finding{
@@ -2159,6 +2280,19 @@ func defectiveChangedFiles() []map[string]any {
 	}, "\n")
 	return []map[string]any{{
 		"filename": testFindingPath,
+		"status":   "modified",
+		"patch":    patch,
+	}}
+}
+
+func writingChangedFile(path string, evidence string) []map[string]any {
+	patch := strings.Join([]string{
+		"@@ -1,1 +1,2 @@",
+		" existing prose",
+		"+" + evidence,
+	}, "\n")
+	return []map[string]any{{
+		"filename": path,
 		"status":   "modified",
 		"patch":    patch,
 	}}
