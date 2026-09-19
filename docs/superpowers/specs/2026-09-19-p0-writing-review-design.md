@@ -1,35 +1,26 @@
-# Block pull requests with poor writing
+# Block poor documentation and source comments
 
 ## Problem
 
-The reviewer does not enforce the writing rules on pull request content. Its
-current writing policy controls only the prose the model produces. The model
-may notice inaccurate documentation or a misleading source comment as a code
-defect, but it has no instruction to review writing consistently.
-
-Pull request prose cannot produce an actionable finding. Every finding must
-name a changed file and line, while the pull request title and description have
-neither. Attaching a description problem to an unrelated source line would
-misstate the evidence. The service also ignores pull request `edited` events,
-so correcting a title or description would not rerun the review.
+The reviewer does not enforce the writing rules on changed documentation or source
+comments. Its current writing policy controls only the prose the model produces, so
+unclear or misleading changed prose can pass without a finding.
 
 ## Scope
 
-The writing gate reviews these surfaces:
+The writing gate reviews:
 
-- changed documentation;
-- changed source comments;
-- the current pull request title; and
-- the current pull request description.
+- changed documentation; and
+- changed source comments.
 
-Human review comments and replies remain evidence about the change. The gate
-does not judge their writing.
+Every verified writing violation has importance `10`. It therefore exceeds every
+valid `REVIEW_MIN_IMPORTANCE` value and blocks through the existing inline finding
+lifecycle.
 
-A verified violation has importance `10`. The finding therefore exceeds every
-valid `REVIEW_MIN_IMPORTANCE` value and blocks the pull request.
+## Policy
 
-The embedded policy contains only rules a reviewer can judge from the current
-pull request. It requires:
+The embedded policy contains only rules a reviewer can verify from changed prose. It
+requires:
 
 - the problem or decision before supporting detail;
 - direct statements of cause;
@@ -37,98 +28,40 @@ pull request. It requires:
 - plain, complete, active sentences;
 - one idea per sentence and paragraph;
 - specific names and verbs;
-- claims supported by the current code and configuration;
+- claims supported by current code and configuration;
 - one purpose per documentation page;
 - one durable home for each fact;
 - headings and procedures that match the reader's task; and
 - only details that affect understanding, verification, decisions, or action.
 
-The policy excludes instructions about local tools, editing workflow, agent
-questions, document placement choices, repository restructuring, and rewrite
-verification. A reviewer cannot establish whether an author followed those
-processes from the pull request result.
+The policy excludes local tools, editing workflow, agent questions, document placement
+choices, repository restructuring, and rewrite verification.
 
-Minor style preferences do not become findings. A finding must identify a
-specific rule violation that makes the text inaccurate, indirect, ambiguous,
-misleading, needlessly difficult to understand, or unsuitable for its stated
-purpose. The finding must quote the exact text that proves the violation and
-state a concrete correction.
+A finding must identify a specific violation that makes the changed prose inaccurate,
+indirect, ambiguous, misleading, needlessly difficult to understand, or unsuitable for
+its stated purpose. Personal style preferences do not qualify. The finding must quote
+the changed text, state its impact, and give a concrete correction.
 
-## Review model
+## Review behavior
 
-The embedded review policy becomes a separate input policy. The existing
-writing policy continues to control the model's own output.
+Changed documentation and source comments use the existing finding schema and inline
+publication path. The model anchors each writing finding to the changed prose and
+assigns importance `10`.
 
-Changed documentation and source comments use the existing inline finding
-schema. The model anchors each finding to the changed prose that violates the
-policy. Ordinary code remains subject to the existing code review rules.
-
-The title and description receive one separate analysis per review run. The
-analysis uses the existing finding schema with reserved paths for `title` and
-`description`. The service removes those findings before changed-line
-validation and treats them as pull request findings. No new model schema is
-needed.
-
-The separate analysis prevents every diff chunk from reporting the same pull
-request prose defect.
-
-## Publication and durable state
-
-The service keeps its single top level issue comment. Current title and
-description findings appear in a `Pull request writing` section of that
-comment. Changed documentation and source comment findings remain inline.
-
-The hidden state marker records the current title and description findings. A
-completed run replaces that set. The marker lets a restarted container and a
-discussion-triggered verdict refresh preserve the block until a later review
-proves the prose is corrected.
-
-The verdict requests changes when either condition is true:
-
-- one of the service's actionable inline threads remains open; or
-- one current title or description finding remains in the marker.
-
-The blocking section names both sources. Inline reasons link to their review
-threads. Pull request prose reasons name `title` or `description` and appear in
-the maintained top level comment.
-
-## Pull request edits
-
-The webhook accepts a non-draft pull request `edited` event when the title or
-description changed. It sends that event through the existing forced-review
-path for the current head. The service rereads the full pull request instead
-of adding a second review lifecycle for prose-only changes. This costs more
-model work on an edit, but it keeps admission, failure, checkpoint, and verdict
-behavior on the paths the service already uses.
-
-The forced run replaces the stored title and description findings and
-recomputes the verdict from those findings plus the current inline threads.
-Correcting the last prose finding therefore removes the writing block without
-a source commit. A failed run changes no review state under the existing
-failure contract.
+The existing threshold, location validation, evidence grounding, deduplication,
+publication, thread reconciliation, and verdict logic remain unchanged. No new marker
+state, webhook action, model schema, model call, or review lifecycle is needed.
 
 ## Tests
 
-End-to-end application tests will enter through signed webhook requests and
-exercise the real review, publication, marker, and verdict paths through local
-HTTP servers for GitHub and the model provider.
+Tests will prove:
 
-The tests will prove:
+1. The review prompt contains the relevant embedded rules.
+2. The prompt assigns importance `10` to verified documentation and source comment
+   violations.
+3. The prompt excludes local editing and agent workflow instructions.
+4. A grounded importance `10` writing finding uses the existing inline blocking path.
+5. Clear changed prose produces no writing finding when the model reports none.
 
-1. An indirect or misleading changed documentation sentence produces an
-   importance `10` inline finding and a requested-changes verdict.
-2. A poor changed source comment produces the same blocking result.
-3. A change with clear documentation and source comments produces no writing
-   finding.
-4. A poor pull request description appears in the maintained top level comment
-   and blocks without inventing a source location.
-5. An `edited` event with a corrected description removes that finding and
-   permits approval when no inline thread remains.
-6. A failed edit-triggered review preserves the previous findings and verdict.
-7. The model prompt contains the review-relevant embedded rules and excludes
-   local editing and agent workflow instructions.
-8. Every writing finding has importance `10`, regardless of the configured
-   publication threshold.
-
-The operations guide will describe the writing gate, the `edited` event, and
-the two finding locations.
+The operations guide will state that verified writing defects in changed documentation
+and source comments are P0 inline findings.
