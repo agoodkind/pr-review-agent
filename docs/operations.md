@@ -22,6 +22,8 @@ A model stops mid answer when it reaches its completion token budget, which reas
 
 Findings appear as inline comments on the changed lines they object to. A finding is published when it anchors to a changed line and meets the configured importance threshold, and every finding that does is published. The only thing that withholds one is a stable identity matching a finding the pull request already carries, so the same defect is raised once rather than once per push. Before publishing new findings, the service re-reads its own open threads and silently resolves the ones the new code fixed.
 
+The review treats verified writing defects in changed documentation and changed source comments as importance `10`. These findings use the existing inline comment and requested-changes lifecycle.
+
 The verdict is recomputed from scratch on every run, and its input is the service's own review threads. One of them still open requests changes. None open on a fully read head approves. No decision carries over from an earlier run, so a block never outlives the finding behind it. A reply or thread state change starts a refresh without a push and publishes a dedicated in-progress check while the verdict changes. A requested changes verdict directs the reader to the open inline findings. GitHub connects the review to those comments, and the collapsed details carry their thread identifiers and current counts.
 
 Both inputs to that verdict are read after this run's findings are on the page. Threads read earlier would omit the ones the same run just opened, and a run would approve over defects it had raised minutes before. A head that moved while the run was working ends the run with no verdict at all, and the push that moved it gets the review.

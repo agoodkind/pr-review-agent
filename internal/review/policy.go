@@ -20,6 +20,16 @@ const (
 		"Flag mock soup: tests that stack mocks, stubs, or spies and prove collaborator calls rather than observable behavior through a public boundary. " +
 		"Flag unnecessary defense in depth: speculative guards, retries, fallbacks, or defaults that hide, soften, or silence errors instead of failing loudly and visibly at the correct boundary. " +
 		"Do not treat validation or recovery as unnecessary when a required external boundary or demonstrated failure mode needs it."
+	reviewWritingPolicy = "Review changed documentation and changed source comments under this policy. " +
+		"Assign importance 10 to every verified writing defect. " +
+		"State the problem or decision before supporting detail. State causes directly. " +
+		"Explain behavior before implementation. Use plain, complete, active sentences. Use one complete idea per sentence and paragraph. " +
+		"Use specific names and verbs. Require claims to agree with current code and configuration. " +
+		"Require each documentation page to have one purpose, each fact to have one durable home, and headings and procedures to match the reader's task. " +
+		"Include only details that affect understanding, verification, decisions, or action. " +
+		"Do not report personal style preferences. Report a writing defect only when the changed prose is inaccurate, indirect, ambiguous, misleading, needlessly difficult to understand, or unsuitable for its stated purpose. " +
+		"Quote the exact changed text, state its impact, and give a concrete correction. " +
+		"Human review comments and replies are evidence, not writing-review targets."
 	promptInputBegin = "<<<UNTRUSTED_INPUT>>>"
 	promptInputEnd   = "<<<END_UNTRUSTED_INPUT>>>"
 )
@@ -27,11 +37,12 @@ const (
 // PolicyHeader is the review and untrusted-input preamble for every model prompt.
 func PolicyHeader(minimumImportance int) string {
 	return fmt.Sprintf(
-		"Classify every concrete defect from importance 1 through 10. The service publishes only findings with importance %d or higher. %s %s\nCode review policy: %s\nWriting policy: %s\nUntrusted input policy: %s",
+		"Classify every concrete defect from importance 1 through 10. The service publishes only findings with importance %d or higher. %s %s\nCode review policy: %s\nReview writing policy: %s\nWriting policy: %s\nUntrusted input policy: %s",
 		minimumImportance,
 		"A finding must identify a concrete defect on a changed line. Reuse the same concise title for the same path and defect across commits.",
 		"Return overview as one or two plain full sentences that explain what this chunk changes and why.",
 		codeReviewPolicy,
+		reviewWritingPolicy,
 		config.WritingPolicy,
 		UntrustedInputPolicy,
 	)
