@@ -1133,8 +1133,11 @@ func TestEndToEndChangedSourceCommentWritingFindingBlocks(t *testing.T) {
 		EndLine:    2,
 		Title:      "State the problem first",
 		Body:       "The comment starts with implementation detail before naming the problem.",
-		Evidence:   "The handler now caches every request.",
+		Evidence:   "// The handler now caches every request.",
 		Importance: 10,
+	}
+	if !strings.HasPrefix(finding.Evidence, "//") {
+		t.Fatalf("source comment evidence = %q, want a Go comment", finding.Evidence)
 	}
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{defectiveReviewContent(finding)},
