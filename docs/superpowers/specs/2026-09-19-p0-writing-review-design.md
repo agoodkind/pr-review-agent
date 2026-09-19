@@ -63,15 +63,14 @@ Changed documentation and source comments use the existing inline finding
 schema. The model anchors each finding to the changed prose that violates the
 policy. Ordinary code remains subject to the existing code review rules.
 
-The title and description receive one separate analysis per review run. This
-analysis returns pull request findings with a subject of `title` or
-`description`, a concise heading, direct explanation, quoted evidence, stable
-claim, and importance. It cannot return a file path or line range because
-those locations do not exist.
+The title and description receive one separate analysis per review run. The
+analysis uses the existing finding schema with reserved paths for `title` and
+`description`. The service removes those findings before changed-line
+validation and treats them as pull request findings. No new model schema is
+needed.
 
 The separate analysis prevents every diff chunk from reporting the same pull
-request prose defect. It also permits a prose-only review when the title or
-description changes without a new commit.
+request prose defect.
 
 ## Publication and durable state
 
@@ -79,9 +78,9 @@ The service keeps its single top level issue comment. Current title and
 description findings appear in a `Pull request writing` section of that
 comment. Changed documentation and source comment findings remain inline.
 
-The hidden state marker records the current title and description findings
-with a digest of the prose they evaluated. A completed run replaces that set.
-The marker lets a restarted container preserve the block until a later review
+The hidden state marker records the current title and description findings. A
+completed run replaces that set. The marker lets a restarted container and a
+discussion-triggered verdict refresh preserve the block until a later review
 proves the prose is corrected.
 
 The verdict requests changes when either condition is true:
@@ -96,18 +95,17 @@ the maintained top level comment.
 ## Pull request edits
 
 The webhook accepts a non-draft pull request `edited` event when the title or
-description changed. That event starts a prose-only review for the current
-head. It does not reread unchanged diff chunks or move the last reviewed
-commit.
+description changed. It sends that event through the existing forced-review
+path for the current head. The service rereads the full pull request instead
+of adding a second review lifecycle for prose-only changes. This costs more
+model work on an edit, but it keeps admission, failure, checkpoint, and verdict
+behavior on the paths the service already uses.
 
-The prose-only run replaces the stored title and description findings and
+The forced run replaces the stored title and description findings and
 recomputes the verdict from those findings plus the current inline threads.
 Correcting the last prose finding therefore removes the writing block without
-a source commit.
-
-A failed prose analysis changes no review state. Its check reports the failed
-run, while the previous verdict and stored findings remain intact because the
-service has no new result that can justify changing them.
+a source commit. A failed run changes no review state under the existing
+failure contract.
 
 ## Tests
 
@@ -126,7 +124,7 @@ The tests will prove:
    and blocks without inventing a source location.
 5. An `edited` event with a corrected description removes that finding and
    permits approval when no inline thread remains.
-6. A failed prose-only review preserves the previous findings and verdict.
+6. A failed edit-triggered review preserves the previous findings and verdict.
 7. The model prompt contains the review-relevant embedded rules and excludes
    local editing and agent workflow instructions.
 8. Every writing finding has importance `10`, regardless of the configured
