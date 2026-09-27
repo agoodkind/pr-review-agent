@@ -31,19 +31,25 @@ func renderUsageDetails(usage UsageSummary) string {
 	for _, row := range rows {
 		fmt.Fprintf(&builder, "| %s | `%d` |\n", row.name, row.value)
 	}
-	fmt.Fprintf(&builder, "| Estimated input cost | $%.8f |\n", usage.EstimatedInputCostUSD)
-	fmt.Fprintf(&builder, "| Estimated cached input cost | $%.8f |\n", usage.EstimatedCachedInputCostUSD)
-	fmt.Fprintf(&builder, "| Estimated output cost | $%.8f |\n", usage.EstimatedOutputCostUSD)
-	fmt.Fprintf(&builder, "| Estimated total cost | $%.8f |\n", usage.EstimatedCostUSD)
-	fmt.Fprintf(&builder, "| Requests with known pricing | `%d` of `%d` |\n", usage.PricedRequests, usage.Requests)
-	if usage.PricedRequests < usage.Requests {
-		builder.WriteString("\nSome requests have no known pricing. The estimate excludes their cost.\n")
+	if usage.PricedRequests == 0 {
+		builder.WriteString("| Estimated input cost | unknown |\n| Estimated cached input cost | unknown |\n| Estimated output cost | unknown |\n| Estimated total cost | unknown |\n")
+	} else {
+		fmt.Fprintf(&builder, "| Estimated input cost | $%.8f |\n", usage.EstimatedInputCostUSD)
+		fmt.Fprintf(&builder, "| Estimated cached input cost | $%.8f |\n", usage.EstimatedCachedInputCostUSD)
+		fmt.Fprintf(&builder, "| Estimated output cost | $%.8f |\n", usage.EstimatedOutputCostUSD)
+		fmt.Fprintf(&builder, "| Estimated total cost | $%.8f |\n", usage.EstimatedCostUSD)
+	}
+	fmt.Fprintf(&builder, "| Requests with priced usage | `%d` of `%d` |\n", usage.PricedRequests, usage.ReportedRequests)
+	if usage.PricedRequests < usage.ReportedRequests {
+		builder.WriteString("\nSome reported token usage has no configured price. The estimate excludes its cost.\n")
 	}
 	if len(usage.Models) > 0 {
 		builder.WriteString("\n| Requested model | Reported model | Requests | Input | Cached input | Output | Total | Estimated cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 		for _, model := range usage.Models {
 			cost := "unknown"
-			if model.Priced {
+			if model.ReportedRequests == 0 {
+				cost = "usage unavailable"
+			} else if model.Priced {
 				cost = fmt.Sprintf("$%.8f", model.EstimatedCostUSD)
 			}
 			fmt.Fprintf(&builder, "| %s | %s | %d | %d | %d | %d | %d | %s |\n",
