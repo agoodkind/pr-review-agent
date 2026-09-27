@@ -14,6 +14,10 @@ export class PrAgentContainer extends Container {
   sleepAfter = runtime.CONTAINER_SLEEP_AFTER;
   envVars = createPrAgentEnvironment(env);
 
+  async interruptForRecoveryTest() {
+    await this.destroy();
+  }
+
   onStart() {
     console.log(containerLifecycleEvent("container started"));
   }

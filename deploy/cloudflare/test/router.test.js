@@ -286,11 +286,6 @@ function labeledWebhookRequest(action, labelName, signature) {
   });
 }
 
-// This worker decides nothing about a delivery, so a forcing label reaches the
-// container exactly as every other delivery does. Nothing here inspects the
-// label, and nothing restarts anything: a restart takes down whatever reviews
-// are in flight, and the label asks for a full review rather than for other
-// people's work to be killed.
 test("a forcing label is forwarded like any other delivery", async function () {
   const cases = [
     ["labeled", "test-review-agent-rerun"],

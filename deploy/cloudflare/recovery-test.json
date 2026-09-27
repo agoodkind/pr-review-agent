@@ -1,0 +1,6 @@
+{
+  "repository": "agoodkind/goodkind.io",
+  "pullRequest": 326,
+  "forceLabel": "test-review-agent-recovery",
+  "interruptLabel": "pr-agent-live-interrupt"
+}
