@@ -38,7 +38,7 @@ A run that stopped early carries the same detail table as one that finished, fil
 
 ## Configure the service
 
-Edit [runtime.json](../runtime.json) to change public service settings. The release packages the file into the Go container and Worker. The Go service reads it at startup. The Worker signs review limits on each webhook. Updated Worker configuration applies those limits to the next review without waiting for a container restart.
+Edit [runtime.json](../runtime.json) to set the models, publication threshold, review limits, and service port. Merge the change to deploy it. The release packages the file into the Go container and Worker. The Go service reads it at startup. The Worker signs the review limits on each webhook. A new limit applies to the next review without restarting the container.
 
 | Setting | Value |
 | --- | --- |
@@ -52,19 +52,17 @@ Edit [runtime.json](../runtime.json) to change public service settings. The rele
 | `REVIEW_MODEL_PRICING` | Estimated dollars per million input, cached input, and output tokens by model |
 | `PORT`, `LOG_FORWARD_URL` | Service port and log destination |
 
-The pricing values use the published rates for [GPT-6 Luna](https://developers.openai.com/api/docs/changelog). Clyde authenticates through a Codex subscription. Its estimated cost is an API equivalent rather than a billed charge. The OpenAI fallback uses an API key and may incur a billed charge. The usage report marks an unpriced model as unknown.
+The pricing values use the published rates for [GPT-6 Luna](https://developers.openai.com/api/docs/changelog). The usage report estimates what Clyde's tokens would cost at those API rates. Clyde uses a Codex subscription. The OpenAI fallback uses an API key and may incur a billed charge. The usage report marks an unpriced model as unknown.
 
 Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_KEY`, `FALLBACK_API_KEY`, and the optional `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` pair in Cloudflare secret bindings. The Worker passes those credentials to the container. The Go service rejects secret keys in the runtime file.
 
 ## Configure a fallback provider
 
-The service requests `gpt-6-luna` from Clyde. It requests the same model from OpenAI only after Clyde reports exhausted usage.
-
-Set `FALLBACK_BASE_URL` and `FALLBACK_MODEL` together in the runtime file. Store `FALLBACK_API_KEY` as a secret binding. The service rejects incomplete fallback settings at startup.
+Set `FALLBACK_BASE_URL` to the OpenAI API endpoint and `FALLBACK_MODEL` to `gpt-6-luna` in the runtime file. Set `FALLBACK_ON` to `usage_exceeded`. Store `FALLBACK_API_KEY` as a secret binding. The service rejects incomplete fallback settings at startup.
 
 A fallback behind Cloudflare Access also requires both `FALLBACK_CF_ACCESS_CLIENT_ID` and `FALLBACK_CF_ACCESS_CLIENT_SECRET` as secret bindings. Public endpoints require neither value.
 
-The runtime file defines both providers and the fallback trigger. Credential changes use Cloudflare secret bindings.
+Change credentials through Cloudflare secret bindings.
 
 The release packages the runtime file with the container image and Worker source from the same commit. Secrets persist across deployment. The Go service validates the runtime file and available credentials at startup. The release checks routed service readiness after deployment.
 

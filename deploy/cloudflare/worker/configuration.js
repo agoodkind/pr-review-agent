@@ -1,6 +1,5 @@
-// REVIEW_SETTINGS_HEADER carries the review tuning values on each forwarded
-// delivery, so a corrected value governs the next review rather than waiting for
-// the process to be replaced.
+// The Worker writes review limits to REVIEW_SETTINGS_HEADER on each forwarded request.
+// Updated limits apply to the next review without a container restart.
 import runtime from "../../../runtime.json" with { type: "json" };
 
 export const REVIEW_SETTINGS_HEADER = "X-Pr-Agent-Review-Settings";

@@ -167,7 +167,7 @@ func FromEnvironment() (Config, error) {
 	return LoadRuntime(data, os.LookupEnv)
 }
 
-// LoadRuntime validates public file values with the same parser used for credentials.
+// LoadRuntime parses public JSON settings and reads credentials from lookup.
 func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 	var rawValues map[string]json.RawMessage
 	if err := json.Unmarshal(data, &rawValues); err != nil || rawValues == nil {
