@@ -1368,6 +1368,16 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	})
 	_ = response.Body.Close()
 	fixture.waitForClydeCalls(t, 1)
+	queuedRequest := webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-shutdown-queued",
+		body:       openedPayload(testDefectiveHead),
+	}
+	queued := fixture.postWebhook(t, queuedRequest)
+	if state := queued.Header.Get(deliveryStateHeader); state != deliveryStatePending {
+		t.Fatalf("The queued delivery reported state %q before shutdown", state)
+	}
+	_ = queued.Body.Close()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1408,6 +1418,18 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 		t.Fatalf("The completed review reported delivery state %q", state)
 	}
 	_ = settled.Body.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		replayedQueued := resumed.postWebhook(t, queuedRequest)
+		state := replayedQueued.Header.Get(deliveryStateHeader)
+		_ = replayedQueued.Body.Close()
+		if state == deliveryStateSettled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("The queued delivery did not settle after replay")
 }
 
 func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {

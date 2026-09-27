@@ -447,9 +447,8 @@ test("an inbound settings header is stripped whether or not the worker sends its
   }
 });
 
-// A worker holding no signing key cannot authenticate what it sends, and an
-// unauthenticated value here is one anybody could have chosen, so it sends none.
-test("a worker with no signing key attaches no settings", async function () {
+// A worker with no webhook secret cannot verify the GitHub signature.
+test("a worker with no signing key rejects signed webhooks", async function () {
   const events = [];
   let forwarded = null;
   const environment = createForwardingEnvironment(events, []);
@@ -467,14 +466,11 @@ test("a worker with no signing key attaches no settings", async function () {
     },
   };
 
-  const response = await routeRequest(new Request("https://reviewer.example/api/v1/github_webhooks", {
-    body: "{}",
-    method: "POST",
-  }), environment);
+  const response = await routeRequest(signedWebhookRequest(), environment);
 
-  assert.equal(response.status, 202);
-  assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings"), null);
-  assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null);
+  assert.equal(response.status, 401);
+  assert.equal(forwarded, null);
+  assert.deepEqual(events, []);
 });
 
 // A worker with nothing configured must send nothing, because the service reads
