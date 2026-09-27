@@ -102,11 +102,13 @@ The Worker stores each signed GitHub delivery before forwarding the delivery to 
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
 
-To verify interruption recovery:
+The live recovery test sends `SIGKILL` to the single production container. Any other active reviews also stop and depend on delivery replay. Run the test when that interruption is acceptable.
 
-1. Admit a signed delivery for a test pull request and keep that pull request open.
-2. Restart the named container while the review is active.
-3. Confirm that the delivery produces a completed `PR-Agent Review` check after the replacement starts.
+1. Keep the configured test pull request open. Set the repository, pull request number, and label names in [recovery-test.json](../deploy/cloudflare/recovery-test.json) if the test pull request changes.
+2. Authenticate `gh` and Wrangler. Run `npm ci` in `deploy/cloudflare`.
+3. Run `go run ./cmd/pragent-live-recovery` from the repository root.
+
+The command starts a forced review, interrupts the container after GitHub marks the new check in progress, and requires the original check to complete successfully. It also requires live Worker logs to record the interruption and the resumed delivery. The command removes both labels from the pull request after the test.
 
 Verify release archives and the container attestation against this repository:
 

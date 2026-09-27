@@ -5,6 +5,7 @@ import {
   signReviewSettings,
 } from "./configuration.js";
 import { deliverySettled, entryFromDelivery, forwardFailed } from "./replaylogic.js";
+import { isRecoveryTestEvent } from "./recovery-test.js";
 import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
 
 export async function routeRequest(request, env) {
@@ -26,6 +27,13 @@ export async function routeRequest(request, env) {
     const signature = request.headers.get("x-hub-signature-256") ?? "";
     if (!(await verifyServiceLogSignature(env.GITHUB_WEBHOOK_SECRET, body, signature))) {
       return new Response("invalid signature", { status: 401 });
+    }
+    if (isRecoveryTestEvent(metadata.eventType, body)) {
+      const container = env.PR_AGENT.getByName("github-app");
+      console.log(JSON.stringify({ message: "live interruption requested", deliveryId: metadata.deliveryId }));
+      await container.interruptForRecoveryTest();
+      console.log(JSON.stringify({ message: "live interruption completed", deliveryId: metadata.deliveryId }));
+      return Response.json({ status: "interrupted for recovery test" });
     }
     replayQueue = env.REPLAY_QUEUE.getByName("webhook-replays");
     try {
