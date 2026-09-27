@@ -69,6 +69,7 @@ const runtimeConfigPath = "/runtime.json"
 
 var runtimeConfigKeys = map[string]struct{}{
 	"CLYDE_BASE_URL":        {},
+	"CONTAINER_SLEEP_AFTER": {},
 	"FALLBACK_BASE_URL":     {},
 	"FALLBACK_MODEL":        {},
 	"FALLBACK_ON":           {},

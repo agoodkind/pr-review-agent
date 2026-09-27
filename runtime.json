@@ -1,5 +1,6 @@
 {
   "CLYDE_BASE_URL": "https://clyde-suburban.goodkind.io/v1",
+  "CONTAINER_SLEEP_AFTER": "11m",
   "FALLBACK_BASE_URL": "https://api.openai.com/v1",
   "FALLBACK_MODEL": "gpt-6-luna",
   "FALLBACK_ON": "usage_exceeded",
