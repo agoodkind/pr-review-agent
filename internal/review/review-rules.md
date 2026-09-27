@@ -46,6 +46,14 @@ Report speculative guards, retries, fallbacks, and defaults that hide, soften, o
 
 Do not report necessary validation or recovery as excessive defense. Preserve validation required by an external boundary. Preserve recovery required by a demonstrated failure mode.
 
+## Reject speculative failure claims
+
+Reject nil, null, zero-value, missing-field, and panic findings unless current code proves that a supported caller can produce the state and the affected operation fails in that state. Trace the value through type constraints, constructors, validation, and callers. Inspect the called method or library implementation.
+
+In Go, a method call on a nil pointer receiver does not itself panic. Check whether the method handles nil before requesting a guard.
+
+Never request defensive checks for states that type rules, validated boundaries, or library contracts exclude. An optional type, a missing guard, or an imagined caller does not prove a defect. Omit the finding when the failure path is unproven.
+
 ## Block poor changed documentation and source comments
 
 Apply this writing review to changed documentation and changed source comments. Assign importance 10 to every verified writing defect.
