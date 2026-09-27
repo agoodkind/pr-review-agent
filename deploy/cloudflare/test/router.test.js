@@ -259,6 +259,7 @@ function createForwardingEnvironment(events, queued) {
         return {
           async fetch(request) {
             (queued ?? []).push(await request.json());
+            events.push("enqueue");
             return Response.json({ queued: true });
           },
         };
@@ -309,7 +310,7 @@ test("a forcing label is forwarded like any other delivery", async function () {
     );
 
     assert.equal(response.status, 202, `${action} ${labelName}`);
-    assert.deepEqual(events, ["forward"], `${action} ${labelName} did not reach the container`);
+    assert.deepEqual(events, ["enqueue", "forward"]);
     assert.equal(queued.length, 1, `${action} ${labelName} was not stored before forwarding`);
   }
 });
@@ -347,7 +348,7 @@ test("every forwarded delivery carries the review tuning values and no secret", 
   const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
 
   assert.equal(response.status, 202);
-  assert.deepEqual(events, ["forward"]);
+  assert.deepEqual(events, ["enqueue", "forward"]);
   const settings = JSON.parse(forwarded.headers.get("X-Pr-Agent-Review-Settings"));
   assert.deepEqual(settings, {
     minimum_importance: 6,
@@ -540,7 +541,7 @@ test("a label name that is not a string reaches the log as a string", async func
 
     const where = `label ${JSON.stringify(labelName)}`;
     assert.equal(response.status, 202, where);
-    assert.deepEqual(events, ["forward"], where);
+    assert.deepEqual(events, ["enqueue", "forward"], where);
     const forwarding = logged.find(function (line) {
       return line.includes('"message":"webhook forwarding"');
     });
