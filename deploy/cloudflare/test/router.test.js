@@ -324,7 +324,8 @@ test("a forcing label is forwarded like any other delivery", async function () {
 test("every forwarded delivery carries the review tuning values and no secret", async function () {
   const events = [];
   let forwarded = null;
-  const environment = createForwardingEnvironment(events, []);
+  const queued = [];
+  const environment = createForwardingEnvironment(events, queued);
   environment.REVIEW_MIN_IMPORTANCE = "6";
   environment.REVIEW_MAX_FILES = "120";
   environment.REVIEW_MAX_CHUNKS = "70";
@@ -368,6 +369,8 @@ test("every forwarded delivery carries the review tuning values and no secret", 
     await forwarded.clone().text(),
   );
   assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), expected);
+  assert.equal(queued[0].headers["X-Pr-Agent-Review-Settings"], forwarded.headers.get("X-Pr-Agent-Review-Settings"));
+  assert.equal(queued[0].headers["X-Pr-Agent-Review-Settings-Signature"], expected);
 });
 
 // A binding this worker cannot use is left out rather than forwarded. It would

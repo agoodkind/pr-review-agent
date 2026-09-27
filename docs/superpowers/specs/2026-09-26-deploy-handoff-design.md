@@ -8,7 +8,7 @@ Cloudflare starts the replacement for a named container after the old instance e
 
 ## Durable admission
 
-The Worker verifies the GitHub signature and stores the signed request body, path, and replay headers in a Durable Object before forwarding the request. The delivery identifier is the storage key. Repeated admission with that identifier preserves the original record. The Worker returns HTTP 503 when storage fails and does not forward the request. The Worker returns HTTP 202 after a container transport failure because the Durable Object has accepted the request.
+The Worker verifies the GitHub signature and stores the signed request body, path, and replay headers in a Durable Object before forwarding the request. The replay headers include the signed review settings for that delivery. The delivery identifier is the storage key. Repeated admission with that identifier preserves the original record. The Worker returns HTTP 503 when storage fails and does not forward the request. The Worker returns HTTP 202 after a container transport failure because the Durable Object has accepted the request.
 
 The Go service returns `X-Pr-Agent-Delivery-State: pending` when the review is queued or running. It returns `settled` after a terminal result or when the event requires no review. The Worker deletes the durable record only for `settled` or a terminal client error. The Durable Object retains the record when the response omits the header. An older service version omits the header during a rollout.
 

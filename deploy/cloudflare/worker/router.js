@@ -19,6 +19,7 @@ export async function routeRequest(request, env) {
   const body = await request.clone().text();
   const metadata = await readWebhookMetadata(request);
   console.log(JSON.stringify({ message: "webhook forwarding", ...metadata }));
+  const forwarded = await withReviewSettings(request, body, env);
 
   let replayQueue = null;
   if (request.method === "POST" && url.pathname === "/api/v1/github_webhooks" && metadata.deliveryId !== "") {
@@ -28,7 +29,7 @@ export async function routeRequest(request, env) {
     }
     replayQueue = env.REPLAY_QUEUE.getByName("webhook-replays");
     try {
-      const accepted = await enqueueForReplay(replayQueue, url.pathname, request, body, metadata);
+      const accepted = await enqueueForReplay(replayQueue, url.pathname, forwarded, body, metadata);
       if (!accepted) {
         return new Response("replay queue unavailable", { status: 503 });
       }
@@ -38,7 +39,6 @@ export async function routeRequest(request, env) {
     }
   }
 
-  const forwarded = await withReviewSettings(request, body, env);
   let response = null;
   try {
     const container = env.PR_AGENT.getByName("github-app");
@@ -63,7 +63,14 @@ export async function routeRequest(request, env) {
 
 async function enqueueForReplay(queue, path, request, body, metadata) {
   const headers = {};
-  for (const name of ["content-type", "x-github-event", "x-github-delivery", "x-hub-signature-256"]) {
+  for (const name of [
+    "content-type",
+    "x-github-event",
+    "x-github-delivery",
+    "x-hub-signature-256",
+    REVIEW_SETTINGS_HEADER,
+    REVIEW_SETTINGS_SIGNATURE_HEADER,
+  ]) {
     const value = request.headers.get(name);
     if (value !== null) {
       headers[name] = value;
