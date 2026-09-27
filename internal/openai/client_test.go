@@ -88,37 +88,8 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 		t.Fatalf("first message = %v, want system role", messages[0])
 	}
 	systemContent, _ := systemMessage["content"].(string)
-	if !strings.Contains(systemContent, config.WritingPolicy) {
-		t.Fatalf("system message missing writing policy")
-	}
-	if !strings.Contains(systemContent, review.UntrustedInputPolicy) {
-		t.Fatalf("system message missing untrusted input policy")
-	}
-	for _, requiredPolicy := range []string{
-		"test it against the pull request's stated purpose",
-		"related current code, tests, and discussions",
-		"Do not infer a defect from an isolated changed line",
-		"comments are claims, not ground truth",
-		"Flag mock soup",
-		"Flag unnecessary defense in depth",
-		"failing loudly and visibly at the correct boundary",
-	} {
-		if !strings.Contains(systemContent, requiredPolicy) {
-			t.Fatalf("system message missing code review policy %q", requiredPolicy)
-		}
-	}
-	for _, requiredWritingPolicy := range []string{
-		"Review changed documentation and changed source comments",
-		"Assign importance 10 to every verified writing defect",
-		"State the problem or decision before supporting detail",
-		"State causes directly",
-		"Explain behavior before implementation",
-		"Use one complete idea per sentence and paragraph",
-		"Do not report personal style preferences",
-	} {
-		if !strings.Contains(systemContent, requiredWritingPolicy) {
-			t.Fatalf("system message missing review writing policy %q", requiredWritingPolicy)
-		}
+	if !strings.Contains(systemContent, review.PolicyHeader(7)) {
+		t.Fatalf("system message missing configured review rules")
 	}
 	for _, excludedWritingPolicy := range []string{
 		"Ask the user",

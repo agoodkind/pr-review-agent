@@ -22,7 +22,7 @@ A model stops mid answer when it reaches its completion token budget, which reas
 
 Findings appear as inline comments on the changed lines they object to. A finding is published when it anchors to a changed line and meets the configured importance threshold, and every finding that does is published. The only thing that withholds one is a stable identity matching a finding the pull request already carries, so the same defect is raised once rather than once per push. Before publishing new findings, the service re-reads its own open threads and silently resolves the ones the new code fixed.
 
-The review treats verified writing defects in changed documentation and changed source comments as importance `10`. These findings use the existing inline comment and requested-changes lifecycle.
+The review treats verified writing defects in changed prose as importance `10`. This includes documentation, comments, strings, test names, and messages. These findings use the existing inline comment and requested-changes lifecycle.
 
 The verdict is recomputed from scratch on every run, and its input is the service's own review threads. One of them still open requests changes. None open on a fully read head approves. No decision carries over from an earlier run, so a block never outlives the finding behind it. A reply or thread state change starts a refresh without a push and publishes a dedicated in-progress check while the verdict changes. A requested changes verdict directs the reader to the open inline findings. GitHub connects the review to those comments, and the collapsed details carry their thread identifiers and current counts.
 
@@ -96,6 +96,25 @@ A deployment replaces its declared variables with the ones in source while secre
 Deploy `ghcr.io/agoodkind/pr-review-agent` by digest. The image runs as user `65532:65532`, contains no shell, and listens on port `3000`.
 
 Use `GET /health` for container readiness. Use `GET /` for the routed service status. Neither endpoint calls GitHub or Clyde.
+
+## Change review rules
+
+Edit [review-rules.md](../internal/review/review-rules.md). Its opening paragraph resolves scope and importance conflicts. Each heading introduces one review rule. The service includes the whole file in the model's review instructions. The Go build includes this file in the binary, so rule edits require a new release.
+
+Run `go test ./internal/review ./internal/openai` and `make check`. Merge the change into `main`. The Release workflow builds an immutable image, deploys the Cloudflare Worker with that image, and checks the routed service. Inspect the Release run before claiming the new rules are live. Do not deploy the committed Cloudflare configuration directly: it contains an invalid image placeholder. For a manual deployment, set `PR_REVIEW_AGENT_IMAGE` to the verified image digest and run `npm run deploy` from `deploy/cloudflare`.
+
+## Resume reviews
+
+The GitHub App installation controls webhook delivery. A suspended installation cannot start new reviews. Set `GITHUB_APP_KEY_FILE` to the matching private key path, `GITHUB_APP_ID` to the deployed App ID, and `GITHUB_APP_INSTALLATION_ID` to the account's installation ID. After a successful release, run:
+
+```bash
+python3 scripts/resume-github-app.py \
+    --key-file "$GITHUB_APP_KEY_FILE" \
+    --app-id "$GITHUB_APP_ID" \
+    --installation-id "$GITHUB_APP_INSTALLATION_ID"
+```
+
+The script requires Python 3 and OpenSSL. Add `--status` to inspect the installation without changing it. Without that flag, the script resumes a suspended installation and confirms that GitHub reports it active. Existing failed checks do not rerun automatically. Add a temporary `test-review-agent-` label to a suitable pull request when a same-head review is required, then remove the label after checking the completed `PR-Agent Review` result.
 
 ## Verify a release
 
