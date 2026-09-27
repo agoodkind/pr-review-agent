@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 
 let routeRequest;
 let createPrAgentEnvironment;
+let createReviewSettingsHeader;
 let signReviewSettings;
 const execFileAsync = promisify(execFile);
 
@@ -19,7 +20,7 @@ try {
 } catch {}
 
 try {
-  ({ createPrAgentEnvironment, signReviewSettings } = await import("../worker/configuration.js"));
+  ({ createPrAgentEnvironment, createReviewSettingsHeader, signReviewSettings } = await import("../worker/configuration.js"));
 } catch {}
 
 function createEnvironment(forwardedRequests) {
@@ -327,10 +328,6 @@ test("every forwarded delivery carries the review tuning values and no secret", 
   let forwarded = null;
   const queued = [];
   const environment = createForwardingEnvironment(events, queued);
-  environment.REVIEW_MIN_IMPORTANCE = "6";
-  environment.REVIEW_MAX_FILES = "120";
-  environment.REVIEW_MAX_CHUNKS = "70";
-  environment.REVIEW_CHUNK_TIMEOUT = "4m";
   environment.GITHUB_PRIVATE_KEY = "a private key nobody may forward";
   environment.OPENAI_KEY = "a model key nobody may forward";
   environment.PR_AGENT = {
@@ -351,10 +348,10 @@ test("every forwarded delivery carries the review tuning values and no secret", 
   assert.deepEqual(events, ["enqueue", "forward"]);
   const settings = JSON.parse(forwarded.headers.get("X-Pr-Agent-Review-Settings"));
   assert.deepEqual(settings, {
-    minimum_importance: 6,
-    max_files: 120,
-    max_chunks: 70,
-    chunk_timeout: "4m",
+    minimum_importance: 8,
+    max_files: 100,
+    max_chunks: 60,
+    chunk_timeout: "5m",
   });
 
   const headerText = JSON.stringify([...forwarded.headers]);
@@ -380,25 +377,8 @@ test("every forwarded delivery carries the review tuning values and no secret", 
 // configuration standing, which is the answer a misconfigured binding deserves.
 test("a chunk timeout binding that is not a positive duration is not forwarded", async function () {
   for (const value of ["", "soon", "0s", "0m0s", "0h0m0s", "-5m", "5", "5 m"]) {
-    const environment = createForwardingEnvironment([], []);
-    environment.REVIEW_CHUNK_TIMEOUT = value;
-    let forwarded = null;
-    environment.PR_AGENT = {
-      getByName() {
-        return {
-          async fetch(request) {
-            forwarded = request;
-            return new Response("proxied", { status: 202 });
-          },
-        };
-      },
-    };
-
-    const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
-    assert.equal(response.status, 202);
-
-    const header = forwarded.headers.get("X-Pr-Agent-Review-Settings");
-    const settings = header === null ? {} : JSON.parse(header);
+    const header = createReviewSettingsHeader({ REVIEW_CHUNK_TIMEOUT: value });
+    const settings = header === "" ? {} : JSON.parse(header);
     assert.equal(
       "chunk_timeout" in settings,
       false,
@@ -411,7 +391,7 @@ test("a chunk timeout binding that is not a positive duration is not forwarded",
 // that has none of its own. Both headers are stripped on every path, including
 // the one where this worker sends nothing, so the only way in is the one that
 // gets signed.
-test("an inbound settings header is stripped whether or not the worker sends its own", async function () {
+test("an inbound settings header is replaced by signed configuration", async function () {
   for (const configured of [true, false]) {
     const events = [];
     let forwarded = null;
@@ -441,10 +421,8 @@ test("an inbound settings header is stripped whether or not the worker sends its
     assert.equal(response.status, 202, where);
     const settings = forwarded.headers.get("X-Pr-Agent-Review-Settings");
     assert.doesNotMatch(String(settings), /1ms/, `${where}: the caller's values survived`);
-    if (!configured) {
-      assert.equal(settings, null, where);
-      assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null, where);
-    }
+    assert.equal(JSON.parse(settings).minimum_importance, 8, where);
+    assert.notEqual(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null, where);
   }
 });
 
@@ -481,7 +459,7 @@ test("a worker with no signing key rejects signed webhooks", async function () {
 // A binding that is not a whole number above zero counts as nothing configured.
 // A zero or a negative would disable a budget, and leaving it out says so before
 // the service has to refuse it.
-test("a worker with no usable tuning values attaches no header", async function () {
+test("invalid runtime tuning values produce no header", function () {
   for (const bindings of [
     {},
     { REVIEW_MAX_CHUNKS: "0" },
@@ -489,27 +467,8 @@ test("a worker with no usable tuning values attaches no header", async function 
     { REVIEW_MAX_FILES: "not a number" },
     { REVIEW_CHUNK_TIMEOUT: "" },
   ]) {
-    const events = [];
-    let forwarded = null;
-    const environment = createForwardingEnvironment(events, []);
-    Object.assign(environment, bindings);
-    environment.PR_AGENT = {
-      getByName() {
-        return {
-          async fetch(request) {
-            forwarded = request;
-            events.push("forward");
-            return new Response("proxied", { status: 202 });
-          },
-        };
-      },
-    };
-
-    const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
-
     const where = JSON.stringify(bindings);
-    assert.equal(response.status, 202, where);
-    assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings"), null, where);
+    assert.equal(createReviewSettingsHeader(bindings), "", where);
   }
 });
 
@@ -581,33 +540,19 @@ test("production configuration reaches the Go service", function () {
   const bindings = Object.fromEntries([
     ["CF_ACCESS_CLIENT_ID", "fixture-a"],
     ["CF_ACCESS_CLIENT_SECRET", "fixture-b"],
-    ["CLYDE_BASE_URL", "https://model.example/v1"],
     ["FALLBACK_API_KEY", "fixture-g"],
-    ["FALLBACK_BASE_URL", "https://fallback.example/v1"],
-    ["FALLBACK_CF_ACCESS_CLIENT_ID", "fixture-h"],
-    ["FALLBACK_CF_ACCESS_CLIENT_SECRET", "fixture-i"],
-    ["FALLBACK_MODEL", "fixture-fallback-model"],
-    ["FALLBACK_ON", "usage_exceeded"],
-    ["GITHUB_APP_ID", "fixture-c"],
-    ["GITHUB_BOT_LOGIN", "fixture-bot[bot]"],
     ["GITHUB_PRIVATE_KEY", "fixture-d"],
     ["GITHUB_WEBHOOK_SECRET", "fixture-e"],
     ["OPENAI_KEY", "fixture-f"],
-    ["PORT", "3000"],
-    ["REVIEW_CHUNK_TIMEOUT", "5m"],
-    ["REVIEW_MAX_CHUNKS", "60"],
-    ["REVIEW_MAX_FILES", "100"],
-    ["REVIEW_MIN_IMPORTANCE", "8"],
-    ["REVIEW_MODEL", "fixture-review-model"],
-    ["REVIEW_MODEL_PRICING", '{"fixture-review-model":{"input_per_million_tokens":2,"cached_input_per_million_tokens":0.5,"output_per_million_tokens":8}}'],
-    ["REVIEW_WORKERS", "5"],
-    ["USE_NANO_AS_PRIMARY", false],
+    ["REVIEW_MODEL", "ignored-binding-model"],
   ]);
   const environment = createPrAgentEnvironment(bindings);
 
   assert.equal(environment.CLYDE_API_KEY, bindings.OPENAI_KEY);
-  assert.equal(environment.CLYDE_BASE_URL, bindings.CLYDE_BASE_URL);
-  assert.equal(environment.REVIEW_MODEL, bindings.REVIEW_MODEL);
+  assert.equal(environment.CLYDE_BASE_URL, "https://clyde-suburban.goodkind.io/v1");
+  assert.equal(environment.REVIEW_MODEL, "gpt-6-luna");
+  assert.equal(environment.REVIEW_MIN_IMPORTANCE, "8");
+  assert.equal(JSON.parse(environment.REVIEW_MODEL_PRICING)["gpt-6-luna"].input_per_million_tokens, 0.10);
   assert.equal(environment.CF_ACCESS_CLIENT_ID, bindings.CF_ACCESS_CLIENT_ID);
   assert.equal(environment.CF_ACCESS_CLIENT_SECRET, bindings.CF_ACCESS_CLIENT_SECRET);
   const omittedBindings = new Set([
@@ -633,31 +578,25 @@ test("production configuration reaches the Go service", function () {
   }
 });
 
-test("Nano primary retains Clyde Luna as its quota fallback", function () {
+test("Clyde Luna uses OpenAI Luna as its quota fallback", function () {
   const bindings = {
-    USE_NANO_AS_PRIMARY: true,
-    FALLBACK_API_KEY: "fixture-nano-key",
-    FALLBACK_BASE_URL: "https://api.openai.com/v1",
-    FALLBACK_MODEL: "gpt-5.4-nano",
-    FALLBACK_ON: "usage_exceeded",
+    FALLBACK_API_KEY: "fixture-openai-key",
     OPENAI_KEY: "fixture-clyde-key",
-    CLYDE_BASE_URL: "https://clyde.example/v1",
-    REVIEW_MODEL: "gpt-5.6-luna",
     CF_ACCESS_CLIENT_ID: "fixture-access-id",
     CF_ACCESS_CLIENT_SECRET: "fixture-access-secret", // gitleaks:allow
   };
   const environment = createPrAgentEnvironment(bindings);
 
-  assert.equal(environment.REVIEW_MODEL, bindings.FALLBACK_MODEL);
-  assert.equal(environment.CLYDE_BASE_URL, bindings.FALLBACK_BASE_URL);
-  assert.equal(environment.CLYDE_API_KEY, bindings.FALLBACK_API_KEY);
-  assert.equal("CF_ACCESS_CLIENT_ID" in environment, false);
-  assert.equal("CF_ACCESS_CLIENT_SECRET" in environment, false);
-  assert.equal(environment.FALLBACK_MODEL, bindings.REVIEW_MODEL);
-  assert.equal(environment.FALLBACK_BASE_URL, bindings.CLYDE_BASE_URL);
-  assert.equal(environment.FALLBACK_API_KEY, bindings.OPENAI_KEY);
-  assert.equal(environment.FALLBACK_CF_ACCESS_CLIENT_ID, bindings.CF_ACCESS_CLIENT_ID);
-  assert.equal(environment.FALLBACK_CF_ACCESS_CLIENT_SECRET, bindings.CF_ACCESS_CLIENT_SECRET);
+  assert.equal(environment.REVIEW_MODEL, "gpt-6-luna");
+  assert.equal(environment.CLYDE_BASE_URL, "https://clyde-suburban.goodkind.io/v1");
+  assert.equal(environment.CLYDE_API_KEY, bindings.OPENAI_KEY);
+  assert.equal(environment.CF_ACCESS_CLIENT_ID, bindings.CF_ACCESS_CLIENT_ID);
+  assert.equal(environment.CF_ACCESS_CLIENT_SECRET, bindings.CF_ACCESS_CLIENT_SECRET);
+  assert.equal(environment.FALLBACK_MODEL, "gpt-6-luna");
+  assert.equal(environment.FALLBACK_BASE_URL, "https://api.openai.com/v1");
+  assert.equal(environment.FALLBACK_API_KEY, bindings.FALLBACK_API_KEY);
+  assert.equal("FALLBACK_CF_ACCESS_CLIENT_ID" in environment, false);
+  assert.equal("FALLBACK_CF_ACCESS_CLIENT_SECRET" in environment, false);
   assert.equal(environment.FALLBACK_ON, "usage_exceeded");
 });
 

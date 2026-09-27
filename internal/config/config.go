@@ -1,4 +1,4 @@
-// Package config loads strict runtime configuration from the environment.
+// Package config loads public runtime settings from a file and credentials from the environment.
 package config
 
 import (
@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -62,6 +63,26 @@ const (
 
 // LookupEnv reads one environment variable.
 type LookupEnv func(string) (string, bool)
+
+const runtimeConfigPath = "/runtime.json"
+
+var runtimeConfigKeys = map[string]struct{}{
+	"CLYDE_BASE_URL":        {},
+	"FALLBACK_BASE_URL":     {},
+	"FALLBACK_MODEL":        {},
+	"FALLBACK_ON":           {},
+	"GITHUB_APP_ID":         {},
+	"GITHUB_BOT_LOGIN":      {},
+	"LOG_FORWARD_URL":       {},
+	"PORT":                  {},
+	"REVIEW_CHUNK_TIMEOUT":  {},
+	"REVIEW_MAX_CHUNKS":     {},
+	"REVIEW_MAX_FILES":      {},
+	"REVIEW_MIN_IMPORTANCE": {},
+	"REVIEW_MODEL":          {},
+	"REVIEW_MODEL_PRICING":  {},
+	"REVIEW_WORKERS":        {},
+}
 
 // ModelPricing holds estimated US dollar rates per million tokens.
 type ModelPricing struct {
@@ -135,9 +156,44 @@ func FindModelPricing(pricingByModel map[string]ModelPricing, model string) (Mod
 	return matchedPricing, matchedPrefix != ""
 }
 
-// FromEnvironment loads configuration from process environment variables.
+// FromEnvironment loads public settings from the deployed file and secrets from the environment.
 func FromEnvironment() (Config, error) {
-	return Load(os.LookupEnv)
+	data, err := os.ReadFile(runtimeConfigPath)
+	if err != nil {
+		slog.Error("read runtime configuration", "error", err)
+		return Config{}, fmt.Errorf("read runtime configuration: %w", err)
+	}
+	return LoadRuntime(data, os.LookupEnv)
+}
+
+// LoadRuntime validates public file values with the same parser used for credentials.
+func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
+	var rawValues map[string]json.RawMessage
+	if err := json.Unmarshal(data, &rawValues); err != nil || rawValues == nil {
+		return Config{}, errors.New("runtime configuration must be a JSON object")
+	}
+	values := make(map[string]string, len(rawValues))
+	for name, raw := range rawValues {
+		if _, ok := runtimeConfigKeys[name]; !ok {
+			return Config{}, fmt.Errorf("unknown runtime configuration key %q", name)
+		}
+		if name == "REVIEW_MODEL_PRICING" {
+			values[name] = string(raw)
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return Config{}, fmt.Errorf("runtime configuration key %q must be a string", name)
+		}
+		values[name] = value
+	}
+	return Load(func(name string) (string, bool) {
+		if _, ok := runtimeConfigKeys[name]; ok {
+			value, found := values[name]
+			return value, found
+		}
+		return lookup(name)
+	})
 }
 
 // Load validates configuration loaded through lookup.

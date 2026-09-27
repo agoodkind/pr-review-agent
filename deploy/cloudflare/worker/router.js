@@ -103,7 +103,7 @@ async function withReviewSettings(request, body, env) {
   forwarded.headers.delete(REVIEW_SETTINGS_HEADER);
   forwarded.headers.delete(REVIEW_SETTINGS_SIGNATURE_HEADER);
 
-  const settings = createReviewSettingsHeader(env);
+  const settings = createReviewSettingsHeader();
   if (settings === "" || !env.GITHUB_WEBHOOK_SECRET) {
     return forwarded;
   }
