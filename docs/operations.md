@@ -104,6 +104,8 @@ The Worker stores each signed GitHub delivery before forwarding the delivery to 
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
 
+To test discussion webhooks against the deployed service, keep the pull request in [recovery-test.json](../deploy/cloudflare/recovery-test.json) open with at least one unresolved review thread started by the PR Agent. Authenticate `gh`, then run `go run ./cmd/pragent-live-webhooks` from the repository root. The command first confirms that an untagged comment starts no review. It then posts a tagged comment, replies to a bot finding, resolves its thread, and restores the thread. Each accepted event must create a distinct successful check on the unchanged head. The tagged comment must produce a complete forced review. The command deletes its test comments and verifies the original thread state, including after a failed assertion. Completed check runs remain in GitHub history.
+
 The live recovery test sends `SIGKILL` to the single production container. Any other active reviews also stop and depend on delivery replay. Run the test when that interruption is acceptable.
 
 1. Keep the configured test pull request open. Set the repository, pull request number, and label names in [recovery-test.json](../deploy/cloudflare/recovery-test.json) if the test pull request changes.
