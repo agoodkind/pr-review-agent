@@ -438,8 +438,10 @@ func awaitCheck(ctx context.Context, target config, head string, afterID int64) 
 		case <-time.After(pollInterval):
 		}
 	}
-	slog.Error("review check did not complete", "after_id", afterID, "err", wait.Err())
-	return checkRun{}, fmt.Errorf("no completed review check after %d: %w", afterID, wait.Err())
+	if ctx.Err() != nil {
+		return checkRun{}, ctx.Err()
+	}
+	return checkRun{}, fmt.Errorf("review check after %d did not complete within %s", afterID, checkTimeout)
 }
 
 func gh(ctx context.Context, args ...string) ([]byte, error) {
