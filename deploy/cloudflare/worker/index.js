@@ -1,5 +1,6 @@
 import { Container } from "@cloudflare/containers";
 import { env } from "cloudflare:workers";
+import runtime from "../../../runtime.json" with { type: "json" };
 
 import { createPrAgentEnvironment } from "./configuration.js";
 import { containerLifecycleEvent, containerStoppedEvent } from "./lifecycle.js";
@@ -9,8 +10,8 @@ import { routeRequest } from "./router.js";
 export { WebhookReplayQueue };
 
 export class PrAgentContainer extends Container {
-  defaultPort = 3000;
-  sleepAfter = "11m";
+  defaultPort = Number(runtime.PORT);
+  sleepAfter = runtime.CONTAINER_SLEEP_AFTER;
   envVars = createPrAgentEnvironment(env);
 
   onStart() {

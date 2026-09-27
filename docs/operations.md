@@ -50,7 +50,9 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
 | `REVIEW_CHUNK_TIMEOUT` | Timeout for one model request |
 | `REVIEW_MODEL_PRICING` | Estimated dollars per million input, cached input, and output tokens by model |
-| `PORT`, `LOG_FORWARD_URL` | Service port and log destination |
+| `PORT` | Sets the container listener port and the Worker connection port |
+| `CONTAINER_SLEEP_AFTER` | Container idle duration |
+| `LOG_FORWARD_URL` | Service log destination |
 
 The pricing values use the published rates for [GPT-6 Luna](https://developers.openai.com/api/docs/changelog). The usage report estimates what Clyde's tokens would cost at those API rates. Clyde uses a Codex subscription. The OpenAI fallback uses an API key and may incur a billed charge. The usage report marks an unpriced model as unknown.
 
@@ -68,7 +70,7 @@ The release packages the runtime file with the container image and Worker source
 
 ## Run the container
 
-Deploy `ghcr.io/agoodkind/pr-review-agent` by digest. The image runs as user `65532:65532`, contains no shell, and listens on port `3000`.
+Deploy `ghcr.io/agoodkind/pr-review-agent` by digest. The image runs as user `65532:65532` and contains no shell.
 
 Use `GET /health` for container readiness. Use `GET /` for the routed service status. Neither endpoint calls GitHub or Clyde.
 
