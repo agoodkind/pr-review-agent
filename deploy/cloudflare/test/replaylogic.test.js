@@ -45,7 +45,7 @@ test("an entry is flagged as overdue after one day", function () {
   assert.equal(isOverdue(entry, 1_000 + overdueAfterMs), true);
 });
 
-test("admission remains pending until the service confirms completion", function () {
+test("admission remains pending until the service returns a terminal response", function () {
   assert.equal(deliverySettled(null), false);
   assert.equal(deliverySettled(new Response("", { status: 202 })), false);
   assert.equal(deliverySettled(new Response("", { status: 202, headers: { "X-Pr-Agent-Delivery-State": "pending" } })), false);
