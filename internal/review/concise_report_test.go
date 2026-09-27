@@ -72,7 +72,7 @@ func TestCompletedReviewKeepsProseConciseAndFoldsActualUsage(t *testing.T) {
 		"| Output tokens | `40` |", "| Reasoning tokens | `4` |", "| Total tokens | `340` |",
 		"| Estimated input cost | $0.00100000 |", "| Estimated cached input cost | $0.00010000 |",
 		"| Estimated output cost | $0.00200000 |", "| Estimated total cost | $0.00310000 |",
-		"| Requests with known pricing | `1` of `2` |", "The estimate excludes their cost.",
+		"| Requests with priced usage | `1` of `2` |", "The estimate excludes its cost.",
 		"`review-alias`", "`review-model`", "`report-alias`", "`unpriced-report-model`", "| unknown |",
 		"| Coverage complete | yes |",
 	} {
@@ -118,19 +118,30 @@ func TestCompletedReviewRefreshUpdatesFoldedThreadsAndPreservesUsage(t *testing.
 func TestReviewDetailsContainCraftedModelNames(t *testing.T) {
 	summary := review.Summary{
 		Usage: review.UsageSummary{
-			Requests:         1,
+			Requests:         2,
 			ReportedRequests: 1,
-			Models: []review.ModelUsage{{
-				RequestedModel: "alias`\n| forged",
-				Model:          "model|\n## Forged heading",
-				Requests:       1,
-			}},
+			Models: []review.ModelUsage{
+				{
+					RequestedModel:   "alias`\n| forged",
+					Model:            "model|\n## Forged heading",
+					Requests:         1,
+					ReportedRequests: 1,
+				},
+				{
+					RequestedModel: "no-usage-model",
+					Model:          "no-usage-model",
+					Requests:       1,
+				},
+			},
 		},
 	}
 	details := review.RenderDetails(summary)
 	for _, want := range []string{
 		"`aliasˋ &#124; forged`",
 		"`model&#124; ## Forged heading`",
+		"| Estimated total cost | unknown |",
+		"| Requests with priced usage | `0` of `1` |",
+		"| usage unavailable |",
 	} {
 		if !strings.Contains(details, want) {
 			t.Fatalf("review details omit contained model name %q: %s", want, details)
