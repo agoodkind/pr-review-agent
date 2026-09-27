@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -222,6 +223,47 @@ func TestUnsupportedEventReturns202(t *testing.T) {
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
 	}
+	if state := response.Header.Get(deliveryStateHeader); state != deliveryStateSettled {
+		t.Fatalf("delivery state = %q, want settled", state)
+	}
+}
+
+func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+	request := webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-replay-completion",
+		body:       openedPayload(testDefectiveHead),
+	}
+
+	accepted := fixture.postWebhook(t, request)
+	if accepted.StatusCode != http.StatusAccepted {
+		t.Fatalf("first status = %d, want 202", accepted.StatusCode)
+	}
+	if state := accepted.Header.Get(deliveryStateHeader); state != deliveryStatePending {
+		t.Fatalf("first delivery state = %q, want pending", state)
+	}
+	_ = accepted.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		replay := fixture.postWebhook(t, request)
+		state := replay.Header.Get(deliveryStateHeader)
+		_ = replay.Body.Close()
+		if state == deliveryStateSettled {
+			if starts := atomic.LoadInt32(&fixture.githubState.checkStarts); starts != 1 {
+				t.Fatalf("check starts = %d, want 1 after replay", starts)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("replayed delivery never reported a settled review")
 }
 
 // A resolved review thread must move the verdict with no push: the
@@ -1312,7 +1354,7 @@ func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
 }
 
-func TestShutdownCancelsActiveReviewAndCompletesCheck(t *testing.T) {
+func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeBlockUntilCanceled: true,
@@ -1326,26 +1368,68 @@ func TestShutdownCancelsActiveReviewAndCompletesCheck(t *testing.T) {
 	})
 	_ = response.Body.Close()
 	fixture.waitForClydeCalls(t, 1)
-	fixture.githubState.setHead(testCorrectedHead)
-	queued := fixture.postWebhook(t, webhookRequestOptions{
+	queuedRequest := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown-queued",
-		body:       synchronizePayload(testCorrectedHead),
-	})
+		body:       openedPayload(testDefectiveHead),
+	}
+	queued := fixture.postWebhook(t, queuedRequest)
+	if state := queued.Header.Get(deliveryStateHeader); state != deliveryStatePending {
+		t.Fatalf("The queued delivery reported state %q before shutdown", state)
+	}
 	_ = queued.Body.Close()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := fixture.application.Shutdown(shutdownCtx); err != nil {
-		t.Fatalf("Shutdown: %v", err)
+	if err := fixture.application.Shutdown(shutdownCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown returned %v while the active review required a deadline error", err)
 	}
 	fixture.application = nil
-	if fixture.githubState.lastCheckConclusion() != "failure" {
-		t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
+	if fixture.githubState.terminalCheckCount() != 0 {
+		t.Fatalf("The interrupted review completed %d checks before replay", fixture.githubState.terminalCheckCount())
 	}
-	if fixture.githubState.terminalCheckCount() != 2 {
-		t.Fatalf("terminal checks = %d, want 2", fixture.githubState.terminalCheckCount())
+
+	resumedState := newClydeServerState(appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	resumedServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		resumedState.handle(writer, request)
+	}))
+	defer resumedServer.Close()
+	resumed := newAppFixtureOnServers(t, fixture.github, resumedServer, fixture.githubState, resumedState)
+	defer resumed.close()
+
+	replay := resumed.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-shutdown",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if state := replay.Header.Get(deliveryStateHeader); state != deliveryStatePending {
+		t.Fatalf("The replayed delivery reported state %q before the review completed", state)
 	}
+	_ = replay.Body.Close()
+	resumed.waitForCheckConclusion(t, "success")
+	settled := resumed.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-shutdown",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if state := settled.Header.Get(deliveryStateHeader); state != deliveryStateSettled {
+		t.Fatalf("The completed review reported delivery state %q", state)
+	}
+	_ = settled.Body.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		replayedQueued := resumed.postWebhook(t, queuedRequest)
+		state := replayedQueued.Header.Get(deliveryStateHeader)
+		_ = replayedQueued.Body.Close()
+		if state == deliveryStateSettled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("The queued delivery did not settle after replay")
 }
 
 func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {

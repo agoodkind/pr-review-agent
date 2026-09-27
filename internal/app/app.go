@@ -76,7 +76,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 	dispatcher := queue.NewDispatcher(
 		config.QueueCapacity,
 		cfg.ReviewWorkers,
-		reviewRunner{service: reviewService},
+		reviewRunner{service: reviewService, cache: cache},
 		logger,
 	)
 	httpHandler := newHandler(cfg, cache, dispatcher, reviewService, logger)
@@ -131,24 +131,27 @@ func (application *App) Shutdown(ctx context.Context) error {
 			shutdownErr = fmt.Errorf("shutdown http server: %w", err)
 		}
 	}
-	if application.runCancel != nil {
-		application.runCancel()
-	}
 	if err := application.dispatcher.Shutdown(ctx); err != nil && shutdownErr == nil {
 		shutdownErr = fmt.Errorf("shutdown dispatcher: %w", err)
+	}
+	if application.runCancel != nil {
+		application.runCancel()
 	}
 	return shutdownErr
 }
 
 type reviewRunner struct {
 	service *review.Service
+	cache   *queue.DeliveryCache
 }
 
 func (runner reviewRunner) Run(ctx context.Context, job domain.ReviewJob) error {
 	logger := gklog.L(ctx)
 	if err := runner.service.Run(ctx, job); err != nil {
+		runner.cache.Release(job.DeliveryID)
 		logger.ErrorContext(ctx, "review job", slog.String("err", err.Error()))
 		return fmt.Errorf("review job: %w", err)
 	}
+	runner.cache.Settle(job.DeliveryID)
 	return nil
 }

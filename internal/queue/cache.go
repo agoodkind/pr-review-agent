@@ -11,6 +11,7 @@ type Clock func() time.Time
 
 type cacheEntry struct {
 	expiresAt time.Time
+	settled   bool
 }
 
 // DeliveryCache tracks claimed webhook delivery identifiers.
@@ -54,9 +55,30 @@ func (cache *DeliveryCache) Claim(deliveryID string) bool {
 	}
 
 	now := cache.clock()
-	cache.entries[deliveryID] = cacheEntry{expiresAt: now.Add(cache.ttl)}
+	cache.entries[deliveryID] = cacheEntry{expiresAt: now.Add(cache.ttl), settled: false}
 	cache.order = append(cache.order, deliveryID)
 	return true
+}
+
+// Settled reports the terminal state recorded for this delivery in this process.
+func (cache *DeliveryCache) Settled(deliveryID string) bool {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.evictExpiredLocked()
+	entry, ok := cache.entries[deliveryID]
+	return ok && entry.settled
+}
+
+// Settle marks a terminal outcome or an admission that needs no new review.
+func (cache *DeliveryCache) Settle(deliveryID string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	entry, ok := cache.entries[deliveryID]
+	if !ok {
+		return
+	}
+	entry.settled = true
+	cache.entries[deliveryID] = entry
 }
 
 // Release drops a delivery claim without waiting for expiry.

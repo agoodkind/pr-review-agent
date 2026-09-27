@@ -202,9 +202,9 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 // Admit creates or resumes the visible check before background review work
 // starts, and reports whether this delivery was admitted at all.
 //
-// A delivery this service has already admitted is not admitted again. The
-// caller enqueues nothing for it, because everything it asked for is already
-// running or already done.
+// A completed dedicated check suppresses redelivery of its forced review or
+// verdict refresh. An unfinished check is admitted again for replay. The
+// handler's delivery cache suppresses duplicates while a review runs here.
 func (service *Service) Admit(
 	parent context.Context,
 	job domain.ReviewJob,

@@ -423,9 +423,7 @@ func buildAcrossChunkConsolidationPrompt(
 	}
 	contextBudget := config.MaximumPromptBytes - minimumLength
 	contextText := formatAcrossChunkContext(work, chunkText, disputes, carried)
-	if len(contextText) > contextBudget {
-		return "", false
-	}
+	contextText = truncateUTF8(contextText, contextBudget)
 	input := contextText + "\n\n" + findings
 	input = strings.ReplaceAll(input, promptInputBegin, "<UNTRUSTED_INPUT>")
 	input = strings.ReplaceAll(input, promptInputEnd, "<END_UNTRUSTED_INPUT>")

@@ -118,6 +118,19 @@ The script requires Python 3 and OpenSSL. Add `--status` to inspect the installa
 
 ## Verify a release
 
+The Worker stores each signed GitHub delivery before forwarding the delivery to the container. The Durable Object retains the delivery until the service confirms that the review has finished or the event requires no review. A container rollout can interrupt a review. The replay alarm retries pending deliveries at intervals of at most five minutes after the old container exits.
+
+1. Confirm that the routed service answers `GET /health`.
+2. Compare the deployed Worker version and container image digest with the release record.
+3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
+4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
+
+To verify interruption recovery:
+
+1. Admit a signed delivery for a test pull request and keep that pull request open.
+2. Restart the named container while the review is active.
+3. Confirm that the delivery produces a completed `PR-Agent Review` check after the replacement starts.
+
 Verify release archives and the container attestation against this repository:
 
 ```bash
@@ -138,3 +151,5 @@ Require only `linux/amd64`. Record the digest and current Worker version before 
 ## Recover a failed deployment
 
 Restore the recorded Worker version and image digest when readiness, routing, startup, or log checks fail. Do not continue live lifecycle testing after rollback.
+
+If the container is unavailable, restore its recorded image digest and verify `GET /health`. The Durable Object retains accepted deliveries during the outage. After recovery, confirm that the replay queue has settled each accepted delivery. For events requiring review, inspect the affected pull request for a completed `PR-Agent Review` check. If a check remains in progress after the next retry interval, inspect the Worker log by delivery identifier and the service log by run identifier before requesting another review.

@@ -310,6 +310,38 @@ func TestDispatcherShutdownDrainsAcceptedJobs(t *testing.T) {
 	}
 }
 
+func TestDispatcherShutdownRejectsConcurrentEnqueueAndDrainsAcceptedJobs(t *testing.T) {
+	for range 50 {
+		runner := &recordingRunner{}
+		dispatcher := NewDispatcher(32, 1, runner, slog.Default())
+		dispatcher.Start(context.Background())
+
+		var accepted atomic.Int32
+		var waitGroup sync.WaitGroup
+		for range 16 {
+			waitGroup.Go(func() {
+				if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "concurrent"}) {
+					accepted.Add(1)
+				}
+			})
+		}
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := dispatcher.Shutdown(shutdownCtx); err != nil {
+			cancel()
+			t.Fatalf("Shutdown: %v", err)
+		}
+		cancel()
+		waitGroup.Wait()
+		if got := len(runner.snapshot()); got != int(accepted.Load()) {
+			t.Fatalf("processed = %d, accepted = %d", got, accepted.Load())
+		}
+		if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "late"}) {
+			t.Fatal("enqueue accepted after shutdown")
+		}
+	}
+}
+
 func TestDispatcherKeepsClaimAfterRunnerFailure(t *testing.T) {
 	cache := NewDeliveryCache(10, time.Hour, time.Now)
 	if !cache.Claim("delivery-1") {

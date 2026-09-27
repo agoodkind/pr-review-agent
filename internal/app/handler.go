@@ -30,6 +30,12 @@ const reviewSettingsHeader = "X-Pr-Agent-Review-Settings"
 // body is no authority over a header travelling beside it. These carry their own.
 const reviewSettingsSignatureHeader = "X-Pr-Agent-Review-Settings-Signature"
 
+const (
+	deliveryStateHeader  = "X-Pr-Agent-Delivery-State"
+	deliveryStatePending = "pending"
+	deliveryStateSettled = "settled"
+)
+
 // reviewSettingsSigningInput is what the settings signature covers: the values
 // and the body they arrived with.
 //
@@ -212,6 +218,7 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		return
 	}
 	if !supported {
+		writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -236,6 +243,11 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 
 	if !handler.cache.Claim(deliveryID) {
 		logger.InfoContext(ctx, "webhook delivery suppressed", slog.String("reason", "duplicate_delivery"))
+		if handler.cache.Settled(deliveryID) {
+			writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
+		} else {
+			writer.Header().Set(deliveryStateHeader, deliveryStatePending)
+		}
 		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -256,11 +268,12 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		http.Error(writer, "review admission failed", http.StatusBadGateway)
 		return
 	}
-	// This delivery was already admitted, on GitHub, by an earlier arrival of
-	// itself. The claim is kept rather than released, because a redelivery is a
-	// duplicate and not something to try again.
+	// Admit declines only a forced review or verdict refresh with a completed
+	// dedicated check. An unfinished check is admitted again for replay.
 	if !admitted {
 		logger.InfoContext(ctx, "webhook delivery suppressed", slog.String("reason", "already_admitted"))
+		handler.cache.Settle(deliveryID)
+		writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		writer.WriteHeader(http.StatusAccepted)
 		return
 	}
@@ -276,6 +289,7 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	}
 	logger.InfoContext(ctx, "webhook delivery accepted")
 
+	writer.Header().Set(deliveryStateHeader, deliveryStatePending)
 	writer.WriteHeader(http.StatusAccepted)
 }
 

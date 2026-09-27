@@ -156,14 +156,24 @@ test("a delivery answered 500 is queued, because the Go service never returns 50
   assert.equal(queued.length, 1);
 });
 
-test("a service answer that is not 500 passes through untouched and queues nothing", async function () {
-  const queued = [];
-  const environment = createFailingEnvironment("throw", queued);
+test("a durable queue failure prevents review admission", async function () {
+  let forwarded = false;
+  const environment = createFailingEnvironment("throw", []);
+  environment.REPLAY_QUEUE = {
+    getByName() {
+      return {
+        async fetch() {
+          return new Response("unavailable", { status: 503 });
+        },
+      };
+    },
+  };
   environment.PR_AGENT = {
     getByName() {
       return {
         async fetch() {
-          return new Response("invalid signature", { status: 401 });
+          forwarded = true;
+          return new Response("accepted", { status: 202 });
         },
       };
     },
@@ -171,8 +181,58 @@ test("a service answer that is not 500 passes through untouched and queues nothi
 
   const response = await routeRequest(signedWebhookRequest(), environment);
 
-  assert.equal(response.status, 401);
-  assert.equal(queued.length, 0);
+  assert.equal(response.status, 503);
+  assert.equal(forwarded, false);
+});
+
+test("another webhook request settles a queued delivery after service completion", async function () {
+  const deliveries = new Map();
+  const environment = createFailingEnvironment("throw", []);
+  environment.REPLAY_QUEUE = {
+    getByName() {
+      return {
+        async fetch(request) {
+          const entry = await request.json();
+          if (new URL(request.url).pathname === "/enqueue") {
+            if (!deliveries.has(entry.id)) {
+              deliveries.set(entry.id, entry);
+            }
+          } else {
+            deliveries.delete(entry.id);
+          }
+          return Response.json({ id: entry.id });
+        },
+      };
+    },
+  };
+  let reviewComplete = false;
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async fetch() {
+          if (reviewComplete) {
+            return new Response("accepted", {
+              status: 202,
+              headers: { "X-Pr-Agent-Delivery-State": "settled" },
+            });
+          }
+          return new Response("accepted", {
+            status: 202,
+            headers: { "X-Pr-Agent-Delivery-State": "pending" },
+          });
+        },
+      };
+    },
+  };
+
+  const pending = await routeRequest(signedWebhookRequest(), environment);
+  assert.equal(pending.status, 202);
+  assert.equal(deliveries.get("delivery-lost-1")?.body.includes("opened"), true);
+
+  reviewComplete = true;
+  const settled = await routeRequest(signedWebhookRequest(), environment);
+  assert.equal(settled.status, 202);
+  assert.equal(deliveries.has("delivery-lost-1"), false);
 });
 
 // createForwardingEnvironment answers every forward and records that it
@@ -199,6 +259,7 @@ function createForwardingEnvironment(events, queued) {
         return {
           async fetch(request) {
             (queued ?? []).push(await request.json());
+            events.push("enqueue");
             return Response.json({ queued: true });
           },
         };
@@ -249,8 +310,8 @@ test("a forcing label is forwarded like any other delivery", async function () {
     );
 
     assert.equal(response.status, 202, `${action} ${labelName}`);
-    assert.deepEqual(events, ["forward"], `${action} ${labelName} did not reach the container`);
-    assert.equal(queued.length, 0, `${action} ${labelName} was queued`);
+    assert.deepEqual(events, ["enqueue", "forward"]);
+    assert.equal(queued.length, 1, `${action} ${labelName} was not stored before forwarding`);
   }
 });
 
@@ -264,7 +325,8 @@ test("a forcing label is forwarded like any other delivery", async function () {
 test("every forwarded delivery carries the review tuning values and no secret", async function () {
   const events = [];
   let forwarded = null;
-  const environment = createForwardingEnvironment(events, []);
+  const queued = [];
+  const environment = createForwardingEnvironment(events, queued);
   environment.REVIEW_MIN_IMPORTANCE = "6";
   environment.REVIEW_MAX_FILES = "120";
   environment.REVIEW_MAX_CHUNKS = "70";
@@ -286,7 +348,7 @@ test("every forwarded delivery carries the review tuning values and no secret", 
   const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
 
   assert.equal(response.status, 202);
-  assert.deepEqual(events, ["forward"]);
+  assert.deepEqual(events, ["enqueue", "forward"]);
   const settings = JSON.parse(forwarded.headers.get("X-Pr-Agent-Review-Settings"));
   assert.deepEqual(settings, {
     minimum_importance: 6,
@@ -308,6 +370,8 @@ test("every forwarded delivery carries the review tuning values and no secret", 
     await forwarded.clone().text(),
   );
   assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), expected);
+  assert.equal(queued[0].headers["X-Pr-Agent-Review-Settings"], forwarded.headers.get("X-Pr-Agent-Review-Settings"));
+  assert.equal(queued[0].headers["X-Pr-Agent-Review-Settings-Signature"], expected);
 });
 
 // A binding this worker cannot use is left out rather than forwarded. It would
@@ -384,9 +448,8 @@ test("an inbound settings header is stripped whether or not the worker sends its
   }
 });
 
-// A worker holding no signing key cannot authenticate what it sends, and an
-// unauthenticated value here is one anybody could have chosen, so it sends none.
-test("a worker with no signing key attaches no settings", async function () {
+// A worker with no webhook secret cannot verify the GitHub signature.
+test("a worker with no signing key rejects signed webhooks", async function () {
   const events = [];
   let forwarded = null;
   const environment = createForwardingEnvironment(events, []);
@@ -404,11 +467,11 @@ test("a worker with no signing key attaches no settings", async function () {
     },
   };
 
-  const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
+  const response = await routeRequest(signedWebhookRequest(), environment);
 
-  assert.equal(response.status, 202);
-  assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings"), null);
-  assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null);
+  assert.equal(response.status, 401);
+  assert.equal(forwarded, null);
+  assert.deepEqual(events, []);
 });
 
 // A worker with nothing configured must send nothing, because the service reads
@@ -478,7 +541,7 @@ test("a label name that is not a string reaches the log as a string", async func
 
     const where = `label ${JSON.stringify(labelName)}`;
     assert.equal(response.status, 202, where);
-    assert.deepEqual(events, ["forward"], where);
+    assert.deepEqual(events, ["enqueue", "forward"], where);
     const forwarding = logged.find(function (line) {
       return line.includes('"message":"webhook forwarding"');
     });

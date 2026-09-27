@@ -2,7 +2,7 @@ package queue
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -23,6 +23,7 @@ type Dispatcher struct {
 	jobs      chan domain.ReviewJob
 	completed chan string
 	started   bool
+	closed    bool
 	queued    int
 	mu        sync.Mutex
 	wg        sync.WaitGroup
@@ -38,6 +39,7 @@ func NewDispatcher(capacity int, workers int, runner Runner, logger *slog.Logger
 		jobs:      make(chan domain.ReviewJob, capacity),
 		completed: make(chan string, workers),
 		started:   false,
+		closed:    false,
 		queued:    0,
 		mu:        sync.Mutex{},
 		wg:        sync.WaitGroup{},
@@ -47,16 +49,15 @@ func NewDispatcher(capacity int, workers int, runner Runner, logger *slog.Logger
 // Start launches the keyed scheduler.
 func (dispatcher *Dispatcher) Start(ctx context.Context) {
 	dispatcher.mu.Lock()
-	if dispatcher.started {
+	if dispatcher.started || dispatcher.closed {
 		dispatcher.mu.Unlock()
 		return
 	}
 	dispatcher.started = true
-	dispatcher.mu.Unlock()
-
 	dispatcher.wg.Go(func() {
 		dispatcher.schedule(ctx)
 	})
+	dispatcher.mu.Unlock()
 }
 
 func (dispatcher *Dispatcher) schedule(ctx context.Context) {
@@ -144,27 +145,28 @@ func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) 
 // Enqueue adds a job without blocking. It returns false when the queue is full.
 func (dispatcher *Dispatcher) Enqueue(job domain.ReviewJob) bool {
 	dispatcher.mu.Lock()
-	if dispatcher.queued >= dispatcher.capacity {
-		dispatcher.mu.Unlock()
+	defer dispatcher.mu.Unlock()
+	if dispatcher.closed || dispatcher.queued >= dispatcher.capacity {
 		return false
 	}
-	dispatcher.queued++
-	dispatcher.mu.Unlock()
 
 	select {
 	case dispatcher.jobs <- job:
+		dispatcher.queued++
 		return true
 	default:
-		dispatcher.mu.Lock()
-		dispatcher.queued--
-		dispatcher.mu.Unlock()
 		return false
 	}
 }
 
 // Shutdown waits for accepted jobs to finish or until the context is cancelled.
 func (dispatcher *Dispatcher) Shutdown(ctx context.Context) error {
-	close(dispatcher.jobs)
+	dispatcher.mu.Lock()
+	if !dispatcher.closed {
+		dispatcher.closed = true
+		close(dispatcher.jobs)
+	}
+	dispatcher.mu.Unlock()
 
 	done := make(chan struct{})
 	go func() {
@@ -186,6 +188,6 @@ func (dispatcher *Dispatcher) Shutdown(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return errors.New(ctx.Err().Error())
+		return fmt.Errorf("dispatcher shutdown: %w", ctx.Err())
 	}
 }
