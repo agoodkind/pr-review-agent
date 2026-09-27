@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
@@ -176,6 +177,9 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 	for name, raw := range rawValues {
 		if _, ok := runtimeConfigKeys[name]; !ok {
 			return Config{}, fmt.Errorf("unknown runtime configuration key %q", name)
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
 		if name == "REVIEW_MODEL_PRICING" {
 			values[name] = string(raw)

@@ -503,6 +503,13 @@ func TestLoadRuntimeRejectsUnlistedSettings(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeRejectsNullSetting(t *testing.T) {
+	_, err := LoadRuntime([]byte(`{"REVIEW_MAX_FILES":null}`), nil)
+	if err == nil || !strings.Contains(err.Error(), `"REVIEW_MAX_FILES" must not be null`) {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+}
+
 func loadWithOverrides(overrides map[string]string) (Config, error) {
 	lookup, err := lookupWithOverrides(overrides)
 	if err != nil {

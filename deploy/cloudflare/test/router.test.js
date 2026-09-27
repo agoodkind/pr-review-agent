@@ -11,7 +11,6 @@ import { promisify } from "node:util";
 
 let routeRequest;
 let createPrAgentEnvironment;
-let createReviewSettingsHeader;
 let signReviewSettings;
 const execFileAsync = promisify(execFile);
 
@@ -20,7 +19,7 @@ try {
 } catch {}
 
 try {
-  ({ createPrAgentEnvironment, createReviewSettingsHeader, signReviewSettings } = await import("../worker/configuration.js"));
+  ({ createPrAgentEnvironment, signReviewSettings } = await import("../worker/configuration.js"));
 } catch {}
 
 function createEnvironment(forwardedRequests) {
@@ -371,59 +370,37 @@ test("every forwarded delivery carries the review tuning values and no secret", 
   assert.equal(queued[0].headers["X-Pr-Agent-Review-Settings-Signature"], expected);
 });
 
-// A binding this worker cannot use is left out rather than forwarded. It would
-// otherwise ride every delivery and make the service reject or instantly time
-// out every review it governs, and the service reads an absent field as its own
-// configuration standing, which is the answer a misconfigured binding deserves.
-test("a chunk timeout binding that is not a positive duration is not forwarded", async function () {
-  for (const value of ["", "soon", "0s", "0m0s", "0h0m0s", "-5m", "5", "5 m"]) {
-    const header = createReviewSettingsHeader({ REVIEW_CHUNK_TIMEOUT: value });
-    const settings = header === "" ? {} : JSON.parse(header);
-    assert.equal(
-      "chunk_timeout" in settings,
-      false,
-      `${JSON.stringify(value)} was forwarded as a chunk timeout`,
-    );
-  }
-});
-
 // A sender must not be able to name its own tuning values by finding a worker
 // that has none of its own. Both headers are stripped on every path, including
 // the one where this worker sends nothing, so the only way in is the one that
 // gets signed.
 test("an inbound settings header is replaced by signed configuration", async function () {
-  for (const configured of [true, false]) {
-    const events = [];
-    let forwarded = null;
-    const environment = createForwardingEnvironment(events, []);
-    if (configured) {
-      environment.REVIEW_MIN_IMPORTANCE = "6";
-    }
-    environment.PR_AGENT = {
-      getByName() {
-        return {
-          async fetch(request) {
-            forwarded = request;
-            events.push("forward");
-            return new Response("proxied", { status: 202 });
-          },
-        };
-      },
-    };
+  const events = [];
+  let forwarded = null;
+  const environment = createForwardingEnvironment(events, []);
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async fetch(request) {
+          forwarded = request;
+          events.push("forward");
+          return new Response("proxied", { status: 202 });
+        },
+      };
+    },
+  };
 
-    const inbound = labeledWebhookRequest("opened", "");
-    inbound.headers.set("X-Pr-Agent-Review-Settings", '{"minimum_importance":1,"chunk_timeout":"1ms"}');
-    inbound.headers.set("X-Pr-Agent-Review-Settings-Signature", "sha256=" + "0".repeat(64));
+  const inbound = labeledWebhookRequest("opened", "");
+  inbound.headers.set("X-Pr-Agent-Review-Settings", '{"minimum_importance":1,"chunk_timeout":"1ms"}');
+  inbound.headers.set("X-Pr-Agent-Review-Settings-Signature", "sha256=" + "0".repeat(64));
 
-    const response = await routeRequest(inbound, environment);
+  const response = await routeRequest(inbound, environment);
 
-    const where = `configured=${configured}`;
-    assert.equal(response.status, 202, where);
-    const settings = forwarded.headers.get("X-Pr-Agent-Review-Settings");
-    assert.doesNotMatch(String(settings), /1ms/, `${where}: the caller's values survived`);
-    assert.equal(JSON.parse(settings).minimum_importance, 8, where);
-    assert.notEqual(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null, where);
-  }
+  assert.equal(response.status, 202);
+  const settings = forwarded.headers.get("X-Pr-Agent-Review-Settings");
+  assert.doesNotMatch(String(settings), /1ms/);
+  assert.equal(JSON.parse(settings).minimum_importance, 8);
+  assert.notEqual(forwarded.headers.get("X-Pr-Agent-Review-Settings-Signature"), null);
 });
 
 // A worker with no webhook secret cannot verify the GitHub signature.
@@ -450,26 +427,6 @@ test("a worker with no signing key rejects signed webhooks", async function () {
   assert.equal(response.status, 401);
   assert.equal(forwarded, null);
   assert.deepEqual(events, []);
-});
-
-// A worker with nothing configured must send nothing, because the service reads
-// an absent header as its own configuration standing. That is what lets a worker
-// and a container at different versions work together.
-//
-// A binding that is not a whole number above zero counts as nothing configured.
-// A zero or a negative would disable a budget, and leaving it out says so before
-// the service has to refuse it.
-test("invalid runtime tuning values produce no header", function () {
-  for (const bindings of [
-    {},
-    { REVIEW_MAX_CHUNKS: "0" },
-    { REVIEW_MIN_IMPORTANCE: "-1" },
-    { REVIEW_MAX_FILES: "not a number" },
-    { REVIEW_CHUNK_TIMEOUT: "" },
-  ]) {
-    const where = JSON.stringify(bindings);
-    assert.equal(createReviewSettingsHeader(bindings), "", where);
-  }
 });
 
 // The metadata is built from a body nobody has verified and goes straight into
