@@ -14,10 +14,9 @@ const CONTAINER_ABSENT_STATUS = 500;
 // answer about the delivery rather than a refusal to take it.
 const QUEUE_FULL_STATUS = 503;
 
-// abandonAfterMs bounds how long a delivery is retried. A day covers any
-// realistic outage; past it the entry is dropped loudly rather than replayed
-// into a pull request nobody remembers.
-export const abandonAfterMs = 24 * 60 * 60 * 1000;
+// An overdue delivery remains in durable storage until the review service
+// confirms a terminal result. An outage must not erase an accepted review.
+export const overdueAfterMs = 24 * 60 * 60 * 1000;
 
 // firstDelayMs is the first retry delay. A crash looping container needs
 // minutes, not milliseconds, but the common cold start recovers in seconds.
@@ -35,15 +34,30 @@ export function forwardFailed(response) {
   return response.status === CONTAINER_ABSENT_STATUS || response.status === QUEUE_FULL_STATUS;
 }
 
+export const DELIVERY_STATE_HEADER = "X-Pr-Agent-Delivery-State";
+
+// A 202 confirms admission only. The review service sets "settled" after the
+// check finishes, or when the event needs no review. During a mixed-version
+// rollout, an older container sends no state header and the record stays.
+export function deliverySettled(response) {
+  if (response === null || forwardFailed(response)) {
+    return false;
+  }
+  if (response.status >= 400 && response.status < 500) {
+    return true;
+  }
+  return response.headers.get(DELIVERY_STATE_HEADER) === "settled";
+}
+
 // replayDelayMs returns the backoff before the next attempt.
 export function replayDelayMs(attempts) {
   const delay = firstDelayMs * 2 ** attempts;
   return Math.min(delay, maxDelayMs);
 }
 
-// shouldAbandon reports whether an entry has been owed longer than the window.
-export function shouldAbandon(entry, now) {
-  return now - entry.firstSeen >= abandonAfterMs;
+// isOverdue reports when an unsettled delivery needs an operator-visible log.
+export function isOverdue(entry, now) {
+  return now - entry.firstSeen >= overdueAfterMs;
 }
 
 // dueEntries returns the entries whose backoff has elapsed.

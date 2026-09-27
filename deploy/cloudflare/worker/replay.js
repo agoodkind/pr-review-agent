@@ -1,40 +1,45 @@
 import { DurableObject } from "cloudflare:workers";
 
-import {
-  dueEntries,
-  entryFromDelivery,
-  nextWakeAt,
-  replayDelayMs,
-  shouldAbandon,
-} from "./replaylogic.js";
+import { deliverySettled, dueEntries, isOverdue, nextWakeAt, replayDelayMs } from "./replaylogic.js";
 
-// WebhookReplayQueue holds webhook deliveries the container could not take and
-// replays them until it can.
-//
-// A webhook GitHub delivers is delivered once: GitHub marks a failed delivery
-// and does not send it again. When the container is unavailable, dropping the
-// delivery means the pull request never gets its check, which blocks it with
-// nothing a person can point at. The queue accepts the delivery on the
-// container's behalf and replays it with backoff once the container answers.
-// Replaying a delivery the container did process is safe, because the service
-// suppresses duplicate delivery identifiers and already reviewed heads.
+const KEY_PREFIX = "delivery:";
+
+function entryKey(id) {
+  return KEY_PREFIX + id;
+}
+
 export class WebhookReplayQueue extends DurableObject {
   async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method !== "POST" || url.pathname !== "/enqueue") {
+    const path = new URL(request.url).pathname;
+    if (request.method !== "POST") {
       return new Response("not found", { status: 404 });
     }
-    const entry = await request.json();
-    await this.ctx.storage.put(entryKey(entry.id), entry);
-    console.log(
-      JSON.stringify({
-        message: "webhook queued for replay",
-        deliveryId: entry.id,
-        notBefore: entry.notBefore,
-      }),
-    );
-    await this.armAlarm();
-    return Response.json({ queued: entry.id });
+
+    if (path === "/enqueue") {
+      const entry = await request.json();
+      if (typeof entry.id !== "string" || entry.id === "") {
+        return new Response("invalid delivery", { status: 400 });
+      }
+      await this.ctx.storage.transaction(async (transaction) => {
+        const key = entryKey(entry.id);
+        if ((await transaction.get(key)) === undefined) {
+          await transaction.put(key, entry);
+        }
+      });
+      await this.armAlarm();
+      return Response.json({ queued: entry.id });
+    }
+
+    if (path === "/settle") {
+      const { id } = await request.json();
+      if (typeof id !== "string" || id === "") {
+        return new Response("invalid delivery", { status: 400 });
+      }
+      await this.ctx.storage.delete(entryKey(id));
+      return Response.json({ settled: id });
+    }
+
+    return new Response("not found", { status: 404 });
   }
 
   async alarm() {
@@ -47,75 +52,49 @@ export class WebhookReplayQueue extends DurableObject {
   }
 
   async replayOne(entry, now) {
-    if (shouldAbandon(entry, now)) {
-      console.error(
-        JSON.stringify({
-          message: "webhook replay abandoned",
-          deliveryId: entry.id,
-          attempts: entry.attempts,
-          firstSeen: entry.firstSeen,
-        }),
-      );
-      await this.ctx.storage.delete(entryKey(entry.id));
-      return;
+    if (isOverdue(entry, now) && !entry.overdueLogged) {
+      console.error(JSON.stringify({ message: "webhook review overdue", deliveryId: entry.id, firstSeen: entry.firstSeen }));
+      entry.overdueLogged = true;
     }
 
-    let status = 0;
+    let response = null;
     try {
       const container = this.env.PR_AGENT.getByName("github-app");
-      const response = await container.fetch(
-        new Request(`https://replay${entry.path}`, {
-          method: "POST",
-          headers: entry.headers,
-          body: entry.body,
-        }),
-      );
-      status = response.status;
+      response = await container.fetch(new Request(`https://replay${entry.path}`, {
+        method: "POST",
+        headers: entry.headers,
+        body: entry.body,
+      }));
     } catch (error) {
-      console.error(
-        JSON.stringify({
-          message: "webhook replay attempt failed",
-          deliveryId: entry.id,
-          attempts: entry.attempts,
-          error: String(error),
-        }),
-      );
+      console.error(JSON.stringify({ message: "webhook replay failed", deliveryId: entry.id, error: String(error) }));
     }
 
-    // The Go service never answers 500, so 500 is the container library
-    // answering for a container that was not there. Anything else means the
-    // service itself spoke, and the delivery is done whether it was accepted
-    // or refused.
-    if (status !== 0 && status !== 500) {
-      console.log(
-        JSON.stringify({
-          message: "webhook replayed",
-          deliveryId: entry.id,
-          attempts: entry.attempts,
-          status,
-        }),
-      );
+    if (deliverySettled(response)) {
       await this.ctx.storage.delete(entryKey(entry.id));
+      console.log(JSON.stringify({ message: "webhook review settled", deliveryId: entry.id, status: response.status }));
       return;
     }
 
-    entry.attempts += 1;
-    entry.notBefore = now + replayDelayMs(entry.attempts);
-    await this.ctx.storage.put(entryKey(entry.id), entry);
+    await this.ctx.storage.transaction(async (transaction) => {
+      const key = entryKey(entry.id);
+      const current = await transaction.get(key);
+      if (current === undefined) {
+        return;
+      }
+      current.attempts += 1;
+      current.notBefore = now + replayDelayMs(current.attempts);
+      current.overdueLogged = entry.overdueLogged;
+      await transaction.put(key, current);
+    });
   }
 
   async armAlarm() {
     const entries = [...(await this.ctx.storage.list({ prefix: KEY_PREFIX })).values()];
     const wakeAt = nextWakeAt(entries);
     if (wakeAt === null) {
+      await this.ctx.storage.deleteAlarm();
       return;
     }
     await this.ctx.storage.setAlarm(Math.max(wakeAt, Date.now() + 1000));
   }
-}
-
-const KEY_PREFIX = "delivery:";
-
-function entryKey(id) {
-  return KEY_PREFIX + id;
 }

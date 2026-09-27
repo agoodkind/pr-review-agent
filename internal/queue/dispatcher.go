@@ -2,7 +2,7 @@ package queue
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -26,6 +26,7 @@ type Dispatcher struct {
 	queued    int
 	mu        sync.Mutex
 	wg        sync.WaitGroup
+	closeOnce sync.Once
 }
 
 // NewDispatcher creates a bounded worker pool.
@@ -41,6 +42,7 @@ func NewDispatcher(capacity int, workers int, runner Runner, logger *slog.Logger
 		queued:    0,
 		mu:        sync.Mutex{},
 		wg:        sync.WaitGroup{},
+		closeOnce: sync.Once{},
 	}
 }
 
@@ -164,7 +166,7 @@ func (dispatcher *Dispatcher) Enqueue(job domain.ReviewJob) bool {
 
 // Shutdown waits for accepted jobs to finish or until the context is cancelled.
 func (dispatcher *Dispatcher) Shutdown(ctx context.Context) error {
-	close(dispatcher.jobs)
+	dispatcher.closeOnce.Do(func() { close(dispatcher.jobs) })
 
 	done := make(chan struct{})
 	go func() {
@@ -186,6 +188,6 @@ func (dispatcher *Dispatcher) Shutdown(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return errors.New(ctx.Err().Error())
+		return fmt.Errorf("dispatcher shutdown: %w", ctx.Err())
 	}
 }

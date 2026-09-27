@@ -24,7 +24,8 @@ import (
 const (
 	githubHTTPTimeout = 30 * time.Second
 	openaiHTTPTimeout = 610 * time.Second
-	shutdownTimeout   = 30 * time.Second
+	// Cloudflare sends SIGKILL 15 minutes after a rollout's SIGTERM.
+	shutdownTimeout   = 14 * time.Minute
 )
 
 func main() {

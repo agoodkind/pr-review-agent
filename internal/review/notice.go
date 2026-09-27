@@ -34,6 +34,10 @@ func (service *Service) failCheck(
 	stage string,
 	cause error,
 ) error {
+	if errors.Is(cause, context.Canceled) && ctx.Err() != nil {
+		gklog.L(ctx).InfoContext(ctx, "review interrupted", slog.String("err", cause.Error()))
+		return cause
+	}
 	return service.reportFailedCheck(ctx, job, checkRunID, progress, stage, "failure", cause)
 }
 

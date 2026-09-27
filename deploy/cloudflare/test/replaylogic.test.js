@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  abandonAfterMs,
+  overdueAfterMs,
+  deliverySettled,
   dueEntries,
   entryFromDelivery,
   firstDelayMs,
@@ -10,7 +11,7 @@ import {
   maxDelayMs,
   nextWakeAt,
   replayDelayMs,
-  shouldAbandon,
+  isOverdue,
 } from "../worker/replaylogic.js";
 
 test("a thrown forward and a 500 both count as the container never seeing it", function () {
@@ -38,10 +39,19 @@ test("the backoff doubles from its floor and stops at its cap", function () {
   assert.equal(replayDelayMs(20), maxDelayMs);
 });
 
-test("an entry is abandoned only after the window", function () {
+test("an entry is flagged as overdue after one day", function () {
   const entry = entryFromDelivery("d1", "/p", {}, "{}", 1_000);
-  assert.equal(shouldAbandon(entry, 1_000 + abandonAfterMs - 1), false);
-  assert.equal(shouldAbandon(entry, 1_000 + abandonAfterMs), true);
+  assert.equal(isOverdue(entry, 1_000 + overdueAfterMs - 1), false);
+  assert.equal(isOverdue(entry, 1_000 + overdueAfterMs), true);
+});
+
+test("admission remains pending until the service confirms completion", function () {
+  assert.equal(deliverySettled(null), false);
+  assert.equal(deliverySettled(new Response("", { status: 202 })), false);
+  assert.equal(deliverySettled(new Response("", { status: 202, headers: { "X-Pr-Agent-Delivery-State": "pending" } })), false);
+  assert.equal(deliverySettled(new Response("", { status: 202, headers: { "X-Pr-Agent-Delivery-State": "settled" } })), true);
+  assert.equal(deliverySettled(new Response("", { status: 503 })), false);
+  assert.equal(deliverySettled(new Response("", { status: 401 })), true);
 });
 
 test("only entries whose backoff elapsed are due, and the alarm targets the earliest", function () {

@@ -156,7 +156,59 @@ test("a delivery answered 500 is queued, because the Go service never returns 50
   assert.equal(queued.length, 1);
 });
 
-test("a service answer that is not 500 passes through untouched and queues nothing", async function () {
+test("a durable queue failure prevents review admission", async function () {
+  let forwarded = false;
+  const environment = createFailingEnvironment("throw", []);
+  environment.REPLAY_QUEUE = {
+    getByName() {
+      return {
+        async fetch() {
+          return new Response("unavailable", { status: 503 });
+        },
+      };
+    },
+  };
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async fetch() {
+          forwarded = true;
+          return new Response("accepted", { status: 202 });
+        },
+      };
+    },
+  };
+
+  const response = await routeRequest(signedWebhookRequest(), environment);
+
+  assert.equal(response.status, 503);
+  assert.equal(forwarded, false);
+});
+
+test("a pending review stays durable after the container responds", async function () {
+  const queued = [];
+  const environment = createFailingEnvironment("throw", queued);
+  environment.PR_AGENT = {
+    getByName() {
+      return {
+        async fetch() {
+          return new Response("accepted", {
+            status: 202,
+            headers: { "X-Pr-Agent-Delivery-State": "pending" },
+          });
+        },
+      };
+    },
+  };
+
+  const response = await routeRequest(signedWebhookRequest(), environment);
+
+  assert.equal(response.status, 202);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].id, "delivery-lost-1");
+});
+
+test("a terminal service answer removes the durable delivery", async function () {
   const queued = [];
   const environment = createFailingEnvironment("throw", queued);
   environment.PR_AGENT = {
@@ -172,7 +224,9 @@ test("a service answer that is not 500 passes through untouched and queues nothi
   const response = await routeRequest(signedWebhookRequest(), environment);
 
   assert.equal(response.status, 401);
-  assert.equal(queued.length, 0);
+  assert.equal(queued.length, 2);
+  assert.equal(queued[0].id, "delivery-lost-1");
+  assert.equal(queued[1].id, "delivery-lost-1");
 });
 
 // createForwardingEnvironment answers every forward and records that it
@@ -250,7 +304,7 @@ test("a forcing label is forwarded like any other delivery", async function () {
 
     assert.equal(response.status, 202, `${action} ${labelName}`);
     assert.deepEqual(events, ["forward"], `${action} ${labelName} did not reach the container`);
-    assert.equal(queued.length, 0, `${action} ${labelName} was queued`);
+    assert.equal(queued.length, 1, `${action} ${labelName} was not stored before forwarding`);
   }
 });
 
@@ -404,7 +458,10 @@ test("a worker with no signing key attaches no settings", async function () {
     },
   };
 
-  const response = await routeRequest(labeledWebhookRequest("opened", ""), environment);
+  const response = await routeRequest(new Request("https://reviewer.example/api/v1/github_webhooks", {
+    body: "{}",
+    method: "POST",
+  }), environment);
 
   assert.equal(response.status, 202);
   assert.equal(forwarded.headers.get("X-Pr-Agent-Review-Settings"), null);

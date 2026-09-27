@@ -118,6 +118,12 @@ The script requires Python 3 and OpenSSL. Add `--status` to inspect the installa
 
 ## Verify a release
 
+The Worker stores each signed GitHub delivery before forwarding it to the container. The durable record remains until the service confirms that the review has finished or the event requires no review. A container rollout can interrupt a review; the replay alarm retries pending deliveries after the old container exits. The retry delay grows to at most five minutes.
+
+During a release, confirm that the routed service answers `GET /health` and that a newly admitted delivery produces a completed `PR-Agent Review` check. Compare the deployed Worker version and container image digest with the release record. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. The delivery identifier in that log identifies the durable record and the GitHub webhook.
+
+To verify interruption recovery, admit a signed delivery for a test pull request, restart the named container during its review, and inspect the final check for that delivery. Keep the test pull request open until the check finishes. A completed check proves that the replacement resumed or settled the review. A routed health response proves only that the container is available.
+
 Verify release archives and the container attestation against this repository:
 
 ```bash
@@ -138,3 +144,5 @@ Require only `linux/amd64`. Record the digest and current Worker version before 
 ## Recover a failed deployment
 
 Restore the recorded Worker version and image digest when readiness, routing, startup, or log checks fail. Do not continue live lifecycle testing after rollback.
+
+If the container is unavailable, restore its recorded image digest and verify `GET /health`. The Durable Object retains accepted deliveries during the outage. After recovery, inspect each affected pull request for a completed `PR-Agent Review` check. If a check remains in progress after the next retry interval, inspect the Worker log by delivery identifier and the service log by run identifier before requesting another review.
