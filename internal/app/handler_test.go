@@ -30,6 +30,7 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 		cache,
 		dispatcher,
 		passThroughAdmitter{},
+		nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	server := httptest.NewServer(handler)

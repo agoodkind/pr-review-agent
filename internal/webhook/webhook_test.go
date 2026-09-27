@@ -291,3 +291,57 @@ func TestParseReviewThreadRejectsMissingRequiredFields(t *testing.T) {
 		t.Fatal("missing fields: want error")
 	}
 }
+
+func TestMentionedPullRequestCommentRequestsFullReview(t *testing.T) {
+	body := []byte(`{
+		"action":"created",
+		"installation":{"id":42},
+		"repository":{"name":"repo","owner":{"login":"owner"}},
+		"issue":{"number":7,"pull_request":{"url":"https://api.github.com/repos/owner/repo/pulls/7"}},
+		"comment":{"body":"@review-agent please review this change","user":{"login":"author"}}
+	}`)
+	event, supported, err := ParseMentionedIssueComment("delivery-mention", body, "review-agent[bot]")
+	if err != nil {
+		t.Fatalf("ParseMentionedIssueComment: %v", err)
+	}
+	if !supported || !event.Forced || event.Number != 7 || event.InstallationID != 42 {
+		t.Fatalf("event = %+v, want a forced review for pull request 7", event)
+	}
+}
+
+func TestMentionedIssueCommentIgnoresOtherTextAndIssues(t *testing.T) {
+	cases := []struct {
+		name   string
+		body   string
+		action string
+		issue  string
+		author string
+	}{
+		{"unrelated", "please review", "created", `{"url":"pull"}`, "author"},
+		{"longer login", "@review-agent-copy", "created", `{"url":"pull"}`, "author"},
+		{"email", "person@review-agent", "created", `{"url":"pull"}`, "author"},
+		{"email underscore", "person_@review-agent", "created", `{"url":"pull"}`, "author"},
+		{"edited", "@review-agent", "edited", `{"url":"pull"}`, "author"},
+		{"issue", "@review-agent", "created", `null`, "author"},
+		{"bot comment", "@review-agent", "created", `{"url":"pull"}`, "review-agent[bot]"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := map[string]any{
+				"action":       testCase.action,
+				"installation": map[string]any{"id": 42},
+				"repository":   map[string]any{"name": "repo", "owner": map[string]any{"login": "owner"}},
+				"issue":        map[string]any{"number": 7, "pull_request": json.RawMessage(testCase.issue)},
+				"comment":      map[string]any{"body": testCase.body, "user": map[string]any{"login": testCase.author}},
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			_, supported, err := ParseMentionedIssueComment("delivery-ignored", body, "review-agent[bot]")
+			if err != nil || supported {
+				t.Fatalf("supported = %v, err = %v, want ignored", supported, err)
+			}
+		})
+	}
+}

@@ -3458,3 +3458,36 @@ func copyThreadNodes(nodes []map[string]any) []map[string]any {
 	}
 	return copied
 }
+
+func TestMentionedPullRequestCommentReviewsTheCurrentHead(t *testing.T) {
+	withIntegrationLock(t)
+	fixture := newAppFixture(t, appFixtureOptions{
+		clydeResponses: []string{approveReviewContent()},
+	})
+	defer fixture.close()
+
+	body := []byte(fmt.Sprintf(`{
+		"action":"created",
+		"installation":{"id":%d},
+		"repository":{"name":%q,"owner":{"login":%q}},
+		"issue":{"number":%d,"pull_request":{"url":"pull"}},
+		"comment":{"body":"@test-review-agent please review","user":{"login":"author"}}
+	}`, testInstallation, testRepoName, testRepoOwner, testPRNumber))
+	response := fixture.postWebhook(t, webhookRequestOptions{
+		eventType:  "issue_comment",
+		deliveryID: "delivery-mention",
+		body:       body,
+	})
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", response.StatusCode)
+	}
+	_ = response.Body.Close()
+	fixture.waitForCheckCompletions(t, 1)
+	fixture.waitForSummaryHead(t, testDefectiveHead)
+	if fixture.githubState.lastCheckConclusion() != "success" {
+		t.Fatalf("check conclusion = %q, want success", fixture.githubState.lastCheckConclusion())
+	}
+	if summary := fixture.githubState.summaryCommentBody(); !strings.Contains(summary, "| Forced run | yes |") {
+		t.Fatalf("summary omits forced review: %q", summary)
+	}
+}

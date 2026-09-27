@@ -4,9 +4,11 @@ The service reviews the commits pushed since the commit it last reviewed, and re
 
 ## Review lifecycle
 
-The service accepts `opened`, `reopened`, `ready_for_review`, and `synchronize` pull request events. It ignores draft pull requests until they become ready. Each head receives one `PR-Agent Review` check.
+The service accepts `opened`, `reopened`, `ready_for_review`, and `synchronize` pull request events. It ignores draft pull requests until they become ready. Each accepted review request receives a `PR-Agent Review` check.
 
-The unit of work is the delta: everything changed between the last commit the service reviewed and the current head. On first contact that is the whole pull request. No commit range is ever reviewed twice, so a push costs a review proportional to the push rather than to the pull request.
+Mention `@goodkind-io-pr-agent` in a new top level pull request comment to request a full review of the current head. The service also processes replies to its inline findings and changes to review thread resolution. These discussion events refresh the existing verdict without a push. The GitHub App must subscribe to `issue_comment`, `pull_request_review_comment`, and `pull_request_review_thread` in addition to `pull_request`.
+
+Ordinary push reviews examine everything changed between the last reviewed commit and the current head. The first review examines the whole pull request. A tagged comment or review label requests another full review of the current head.
 
 The service owns one top level comment per pull request, created once and edited in place forever. It posts no other issue comment, and no progress message, reply, or command. The visible comment states the pull request purpose, its distinct changes, and the verdict once. Findings stay in their inline comments. The collapsed review details carry the models, duration, token usage, estimated cost, head, coverage, finding counts, and thread identifiers. The check run renders the same details from the same values, so the two cannot report different numbers.
 
