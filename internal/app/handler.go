@@ -268,9 +268,8 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		http.Error(writer, "review admission failed", http.StatusBadGateway)
 		return
 	}
-	// This delivery was already admitted, on GitHub, by an earlier arrival of
-	// itself. The claim is kept rather than released, because a redelivery is a
-	// duplicate and not something to try again.
+	// Admit declines only a forced review or verdict refresh with a completed
+	// dedicated check. An unfinished check is admitted again for replay.
 	if !admitted {
 		logger.InfoContext(ctx, "webhook delivery suppressed", slog.String("reason", "already_admitted"))
 		handler.cache.Settle(deliveryID)
