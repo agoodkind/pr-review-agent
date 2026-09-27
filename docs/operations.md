@@ -38,58 +38,33 @@ A run that stopped early carries the same detail table as one that finished, fil
 
 ## Configure the service
 
-Set these required environment variables:
+Edit [runtime.json](../runtime.json) to set the models, publication threshold, review limits, and service port. Merge the change to deploy it. The release packages the file into the Go container and Worker. The Go service reads it at startup. The Worker signs the review limits on each webhook. A new limit applies to the next review without restarting the container.
 
-| Variable | Value |
+| Setting | Value |
 | --- | --- |
-| `GITHUB_APP_ID` | Existing GitHub App numeric identifier |
-| `GITHUB_PRIVATE_KEY` | Existing GitHub App RSA private key |
-| `GITHUB_WEBHOOK_SECRET` | Existing webhook signing secret |
-| `GITHUB_BOT_LOGIN` | Exact GitHub App bot login, including the `[bot]` suffix |
-| `CLYDE_BASE_URL` | HTTPS endpoint for model requests |
-| `CLYDE_API_KEY` | Clyde API credential |
-| `CF_ACCESS_CLIENT_ID` | Cloudflare Access service token identifier |
-| `CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token secret |
+| `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
+| `CLYDE_BASE_URL`, `REVIEW_MODEL` | Primary model endpoint and model |
+| `FALLBACK_BASE_URL`, `FALLBACK_MODEL`, `FALLBACK_ON` | Quota fallback endpoint, model, and trigger |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
-| `REVIEW_MODEL` | Model the primary provider serves, such as `gpt-5.6-sol` |
+| `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
+| `REVIEW_CHUNK_TIMEOUT` | Timeout for one model request |
+| `REVIEW_MODEL_PRICING` | Estimated dollars per million input, cached input, and output tokens by model |
+| `PORT`, `LOG_FORWARD_URL` | Service port and log destination |
 
-No variable bounds a whole review. Admission bounds what one run accepts, and the only clock is the one around a single model call, so a review can never run out of time part way through and discard what it already read.
+The pricing values use the published rates for [GPT-6 Luna](https://developers.openai.com/api/docs/changelog). The usage report estimates what Clyde's tokens would cost at those API rates. Clyde uses a Codex subscription. The OpenAI fallback uses an API key and may incur a billed charge. The usage report marks an unpriced model as unknown.
 
-| Variable | Value | Default |
-| --- | --- | --- |
-| `PORT` | Port the container listens on | `3000` |
-| `REVIEW_MAX_FILES` | Files in one delta above which the review is skipped | `100` |
-| `REVIEW_MAX_CHUNKS` | Diff chunks in one delta above which the review is skipped | `60` |
-| `REVIEW_CHUNK_TIMEOUT` | Maximum duration for one model call, such as `5m` | `5m` |
-| `REVIEW_MODEL_PRICING` | JSON map from model names or prefixes to input, cached input, and output rates per million tokens | Unset; cost is unavailable |
-
-Keep every credential in the deployment secret store. Do not place values in source, commands, logs, or evidence.
+Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_KEY`, `FALLBACK_API_KEY`, and the optional `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` pair in Cloudflare secret bindings. The Worker passes those credentials to the container. The Go service rejects secret keys in the runtime file.
 
 ## Configure a fallback provider
 
-When the primary provider reports that it has no remaining usage, the service repeats the same request against a second endpoint. A review that succeeds there is published exactly as it would be otherwise, and the review details name the fallback model that answered.
+Set `FALLBACK_BASE_URL` to the OpenAI API endpoint and `FALLBACK_MODEL` to `gpt-6-luna` in the runtime file. Set `FALLBACK_ON` to `usage_exceeded`. Store `FALLBACK_API_KEY` as a secret binding. The service rejects incomplete fallback settings at startup.
 
-The service tries the primary provider on every request and remembers nothing, so it returns to the primary as soon as that provider has usage again.
+A fallback behind Cloudflare Access also requires both `FALLBACK_CF_ACCESS_CLIENT_ID` and `FALLBACK_CF_ACCESS_CLIENT_SECRET` as secret bindings. Public endpoints require neither value.
 
-Leaving every fallback variable unset keeps the service on one provider and changes nothing.
+Change credentials through Cloudflare secret bindings.
 
-| Variable | Value |
-| --- | --- |
-| `FALLBACK_BASE_URL` | HTTPS endpoint for the fallback provider |
-| `FALLBACK_MODEL` | Model the fallback provider serves |
-| `FALLBACK_API_KEY` | Fallback provider credential |
-| `FALLBACK_CF_ACCESS_CLIENT_ID` | Cloudflare Access service token identifier, only for a fallback behind Access |
-| `FALLBACK_CF_ACCESS_CLIENT_SECRET` | Cloudflare Access service token secret, paired with the identifier |
-| `FALLBACK_ON` | Condition that sends a request to the fallback. Only `usage_exceeded` is supported, and that is the default |
-
-Set `FALLBACK_BASE_URL`, `FALLBACK_MODEL`, and `FALLBACK_API_KEY` together. Setting one without the others stops the service from starting, so a half-configured fallback fails at deployment rather than during a review.
-
-The Cloudflare Access pair is optional and also all-or-nothing. Leave both unset for a public endpoint, which then receives no Access headers.
-
-The endpoint, the model, and the trigger are declared variables, beside the primary endpoint and model they mirror. Only the credential is a deployment secret. A reviewer can therefore read which provider answers when the primary is spent, and a change to any of them arrives as a diff rather than as a command somebody ran.
-
-A deployment replaces its declared variables with the ones in source while secrets persist, so deploying a revision predating those variables would leave the credential alone and the pair missing. The service refuses to start on that, and the release workflow requests the routed service status through the container after deploying, so a deployment carrying it fails rather than the first review.
+The release packages the runtime file with the container image and Worker source from the same commit. Secrets persist across deployment. The Go service validates the runtime file and available credentials at startup. The release checks routed service readiness after deployment.
 
 ## Run the container
 

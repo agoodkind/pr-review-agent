@@ -1,6 +1,7 @@
-// REVIEW_SETTINGS_HEADER carries the review tuning values on each forwarded
-// delivery, so a corrected value governs the next review rather than waiting for
-// the process to be replaced.
+// The Worker writes review limits to REVIEW_SETTINGS_HEADER on each forwarded request.
+// Updated limits apply to the next review without a container restart.
+import runtime from "../../../runtime.json" with { type: "json" };
+
 export const REVIEW_SETTINGS_HEADER = "X-Pr-Agent-Review-Settings";
 
 // REVIEW_SETTINGS_SIGNATURE_HEADER authenticates those values.
@@ -47,7 +48,7 @@ export async function signReviewSettings(signingKey, settings, body) {
 // A value this worker does not have is left out rather than sent empty, because
 // the service reads an absent field as its own configuration standing. That is
 // what lets a worker and a container at different versions work together.
-export function createReviewSettingsHeader(bindings) {
+export function createReviewSettingsHeader(bindings = runtime) {
   const settings = {};
   const minimumImportance = readPositiveInteger(bindings.REVIEW_MIN_IMPORTANCE);
   if (minimumImportance !== null) {
@@ -119,71 +120,57 @@ function readPositiveDuration(value) {
   return value;
 }
 
-// The container receives only the bindings named here. A binding that is not
-// destructured and re-emitted never reaches the service, so a new variable must
-// be added in both places.
-export function createPrAgentEnvironment(bindings) {
+const publicSettings = [
+  "CLYDE_BASE_URL",
+  "FALLBACK_BASE_URL",
+  "FALLBACK_MODEL",
+  "FALLBACK_ON",
+  "GITHUB_APP_ID",
+  "GITHUB_BOT_LOGIN",
+  "LOG_FORWARD_URL",
+  "PORT",
+  "REVIEW_CHUNK_TIMEOUT",
+  "REVIEW_MAX_CHUNKS",
+  "REVIEW_MAX_FILES",
+  "REVIEW_MIN_IMPORTANCE",
+  "REVIEW_MODEL",
+  "REVIEW_MODEL_PRICING",
+  "REVIEW_WORKERS",
+];
+
+export function createPrAgentEnvironment(bindings, configuration = runtime) {
   const {
     CF_ACCESS_CLIENT_ID,
     CF_ACCESS_CLIENT_SECRET,
-    CLYDE_BASE_URL,
     FALLBACK_API_KEY,
-    FALLBACK_BASE_URL,
-    FALLBACK_MODEL,
-    FALLBACK_ON,
-    GITHUB_APP_ID,
-    GITHUB_BOT_LOGIN,
+    FALLBACK_CF_ACCESS_CLIENT_ID,
+    FALLBACK_CF_ACCESS_CLIENT_SECRET,
     GITHUB_PRIVATE_KEY,
     GITHUB_WEBHOOK_SECRET,
-    LOG_FORWARD_URL,
     OPENAI_KEY,
-    PORT,
-    REVIEW_CHUNK_TIMEOUT,
-    REVIEW_MAX_CHUNKS,
-    REVIEW_MAX_FILES,
-    REVIEW_MIN_IMPORTANCE,
-    REVIEW_MODEL,
-    REVIEW_MODEL_PRICING,
-    REVIEW_WORKERS,
-    USE_NANO_AS_PRIMARY,
   } = bindings;
 
-  const clyde = {
+  const environment = {};
+  for (const name of publicSettings) {
+    if (configuration[name] === undefined) {
+      continue;
+    }
+    if (name === "REVIEW_MODEL_PRICING") {
+      environment[name] = JSON.stringify(configuration[name]);
+      continue;
+    }
+    environment[name] = configuration[name];
+  }
+
+  return {
+    ...environment,
     CF_ACCESS_CLIENT_ID,
     CF_ACCESS_CLIENT_SECRET,
     CLYDE_API_KEY: OPENAI_KEY,
-    CLYDE_BASE_URL,
-    REVIEW_MODEL,
-  };
-  const nano = {
-    CLYDE_API_KEY: FALLBACK_API_KEY,
-    CLYDE_BASE_URL: FALLBACK_BASE_URL,
-    REVIEW_MODEL: FALLBACK_MODEL,
-  };
-  const provider = USE_NANO_AS_PRIMARY ? nano : clyde;
-  const fallback = USE_NANO_AS_PRIMARY ? clyde : nano;
-
-  return {
-    ...provider,
-    FALLBACK_API_KEY: fallback.CLYDE_API_KEY,
-    FALLBACK_BASE_URL: fallback.CLYDE_BASE_URL,
-    ...(USE_NANO_AS_PRIMARY ? {
-      FALLBACK_CF_ACCESS_CLIENT_ID: fallback.CF_ACCESS_CLIENT_ID,
-      FALLBACK_CF_ACCESS_CLIENT_SECRET: fallback.CF_ACCESS_CLIENT_SECRET, // gitleaks:allow
-    } : {}),
-    FALLBACK_MODEL: fallback.REVIEW_MODEL,
-    FALLBACK_ON,
-    GITHUB_APP_ID,
-    GITHUB_BOT_LOGIN,
+    FALLBACK_API_KEY,
+    ...(FALLBACK_CF_ACCESS_CLIENT_ID ? { FALLBACK_CF_ACCESS_CLIENT_ID } : {}),
+    ...(FALLBACK_CF_ACCESS_CLIENT_SECRET ? { FALLBACK_CF_ACCESS_CLIENT_SECRET } : {}),
     GITHUB_PRIVATE_KEY,
     GITHUB_WEBHOOK_SECRET,
-    LOG_FORWARD_URL,
-    PORT,
-    REVIEW_CHUNK_TIMEOUT,
-    REVIEW_MAX_CHUNKS,
-    REVIEW_MAX_FILES,
-    REVIEW_MIN_IMPORTANCE,
-    REVIEW_MODEL_PRICING,
-    REVIEW_WORKERS,
   };
 }

@@ -11,6 +11,7 @@ LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
 LABEL org.opencontainers.image.version="${VERSION}"
 
 COPY dist/pr-review-agent_linux_${TARGETARCH}/pr-review-agent /pr-review-agent
+COPY runtime.json /runtime.json
 
 USER 65532:65532
 

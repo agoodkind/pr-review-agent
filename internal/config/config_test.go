@@ -458,10 +458,70 @@ func loadWithKey(privateKey string) (Config, error) {
 	})
 }
 
+func TestLoadRuntimeUsesFileSettingsAndEnvironmentSecrets(t *testing.T) {
+	lookup, err := lookupWithOverrides(map[string]string{
+		"REVIEW_MODEL": "ignored-environment-model",
+	})
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	data := []byte(`{
+		"GITHUB_APP_ID": "12345",
+		"GITHUB_BOT_LOGIN": "fixture-bot[bot]",
+		"CLYDE_BASE_URL": "https://clyde.example/v1",
+		"REVIEW_MIN_IMPORTANCE": "8",
+		"REVIEW_WORKERS": "4",
+		"REVIEW_MODEL": "gpt-6-luna",
+		"REVIEW_MODEL_PRICING": {
+			"gpt-6-luna": {
+				"input_per_million_tokens": 0.10,
+				"cached_input_per_million_tokens": 0.01,
+				"output_per_million_tokens": 0.50
+			}
+		}
+	}`)
+	cfg, err := LoadRuntime(data, lookup)
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if cfg.ReviewModel != "gpt-6-luna" || cfg.MinimumImportance != 8 {
+		t.Fatalf("review settings = %q, %d", cfg.ReviewModel, cfg.MinimumImportance)
+	}
+	if cfg.ClydeAPIKey == "" || cfg.GitHubPrivateKey == nil || len(cfg.GitHubWebhookSecret) == 0 {
+		t.Fatal("environment credentials were not loaded")
+	}
+	pricing, ok := cfg.PricingForModel("gpt-6-luna-2026-09-22")
+	if !ok || pricing.OutputPerMillionTokens != 0.50 {
+		t.Fatalf("pricing = %+v, %t", pricing, ok)
+	}
+}
+
+func TestLoadRuntimeRejectsUnlistedSettings(t *testing.T) {
+	_, err := LoadRuntime([]byte(`{"GITHUB_PRIVATE_KEY":"not-a-secret"}`), nil)
+	if err == nil || !strings.Contains(err.Error(), "unknown runtime configuration key") {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+}
+
+func TestLoadRuntimeRejectsNullSetting(t *testing.T) {
+	_, err := LoadRuntime([]byte(`{"REVIEW_MAX_FILES":null}`), nil)
+	if err == nil || !strings.Contains(err.Error(), `"REVIEW_MAX_FILES" must not be null`) {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+}
+
 func loadWithOverrides(overrides map[string]string) (Config, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	lookup, err := lookupWithOverrides(overrides)
 	if err != nil {
 		return Config{}, err
+	}
+	return Load(lookup)
+}
+
+func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
 	}
 	defaultKey := string(pem.EncodeToMemory(&pem.Block{
 		Type:  "RSA PRIVATE KEY",
@@ -485,11 +545,11 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 		values[key] = value
 	}
 
-	return Load(func(key string) (string, bool) {
+	return func(key string) (string, bool) {
 		value, ok := values[key]
 		if !ok {
 			return "", false
 		}
 		return value, true
-	})
+	}, nil
 }
