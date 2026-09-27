@@ -228,7 +228,7 @@ func TestUnsupportedEventReturns202(t *testing.T) {
 	}
 }
 
-func TestWebhookReplaySettlesAfterReviewCompletes(t *testing.T) {
+func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{approveReviewContent()},
