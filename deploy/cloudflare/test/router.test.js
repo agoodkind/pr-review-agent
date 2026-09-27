@@ -185,7 +185,7 @@ test("a durable queue failure prevents review admission", async function () {
   assert.equal(forwarded, false);
 });
 
-test("a pending delivery remains replayable until the service confirms completion", async function () {
+test("another webhook request settles a queued delivery after service completion", async function () {
   const deliveries = new Map();
   const environment = createFailingEnvironment("throw", []);
   environment.REPLAY_QUEUE = {
