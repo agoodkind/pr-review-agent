@@ -26,8 +26,7 @@ type PullRequestEvent struct {
 	Draft               bool
 	ThreadRootCommentID int64
 	RefreshVerdict      bool
-	// Forced marks a delivery that asked for a fresh full review, which only a
-	// labeled event carrying a domain.ForceReviewLabelPrefix label does.
+	// Forced marks a delivery that asked for a fresh full review.
 	Forced bool
 	// Label is the full name of the label that forced this delivery, and it is
 	// an opaque identifier. Nothing reads the text after the prefix. It never
@@ -184,6 +183,70 @@ func ParseEvent(eventType string, deliveryID string, body []byte) (PullRequestEv
 	default:
 		return emptyEvent(), false, nil
 	}
+}
+
+// ParseMentionedIssueComment accepts a new pull request comment that tags the app.
+// The caller loads the current pull request before admitting the returned event.
+func ParseMentionedIssueComment(deliveryID string, body []byte, botLogin string) (PullRequestEvent, bool, error) {
+	payload, ok, err := decodePayload(deliveryID, body)
+	if !ok {
+		return emptyEvent(), false, err
+	}
+	if payload.Action != "created" || len(payload.Issue.PullRequest) == 0 ||
+		string(payload.Issue.PullRequest) == "null" ||
+		strings.EqualFold(payload.Comment.User.Login, botLogin) ||
+		!mentionsBot(payload.Comment.Body, botLogin) {
+		return emptyEvent(), false, nil
+	}
+	if payload.Installation.ID == 0 || payload.Repository.Owner.Login == "" ||
+		payload.Repository.Name == "" || payload.Issue.Number == 0 {
+		return emptyEvent(), false, errors.New("missing pull request comment fields")
+	}
+	return PullRequestEvent{
+		Action:         payload.Action,
+		DeliveryID:     deliveryID,
+		InstallationID: payload.Installation.ID,
+		Repository: domain.Repository{
+			Owner: payload.Repository.Owner.Login,
+			Name:  payload.Repository.Name,
+		},
+		Number:              payload.Issue.Number,
+		Head:                "",
+		Draft:               false,
+		ThreadRootCommentID: 0,
+		RefreshVerdict:      false,
+		Forced:              true,
+		Label:               "",
+	}, true, nil
+}
+
+func mentionsBot(body string, botLogin string) bool {
+	login := strings.TrimSuffix(strings.ToLower(botLogin), "[bot]")
+	if login == "" {
+		return false
+	}
+	text := strings.ToLower(body)
+	mention := "@" + login
+	for offset := 0; offset < len(text); {
+		index := strings.Index(text[offset:], mention)
+		if index < 0 {
+			return false
+		}
+		index += offset
+		end := index + len(mention)
+		beforeValid := index == 0 || !isLoginCharacter(text[index-1])
+		afterValid := end == len(text) || !isLoginCharacter(text[end])
+		if beforeValid && afterValid {
+			return true
+		}
+		offset = end
+	}
+	return false
+}
+
+func isLoginCharacter(character byte) bool {
+	return character >= 'a' && character <= 'z' ||
+		character >= '0' && character <= '9' || character == '-' || character == '_'
 }
 
 // ParseReviewComment accepts a reply on an inline finding so the reviewer can
@@ -348,12 +411,20 @@ type pullRequestPayload struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
 	} `json:"pull_request"`
+	Issue struct {
+		Number      int             `json:"number"`
+		PullRequest json.RawMessage `json:"pull_request"`
+	} `json:"issue"`
 	// Label carries the label a labeled delivery added. It is absent on every
 	// other action, which decodes as an empty name and matches no prefix.
 	Label struct {
 		Name string `json:"name"`
 	} `json:"label"`
 	Comment struct {
-		InReplyToID int64 `json:"in_reply_to_id"`
+		InReplyToID int64  `json:"in_reply_to_id"`
+		Body        string `json:"body"`
+		User        struct {
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"comment"`
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,11 +14,15 @@ import (
 	"goodkind.io/gklog/correlation"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
 
-var errReviewQueueFull = errors.New("review queue full")
+var (
+	errReviewQueueFull              = errors.New("review queue full")
+	errTaggedPullRequestUnavailable = errors.New("load tagged pull request failed")
+)
 
 // reviewSettingsHeader carries the review tuning values the worker attached to
 // this delivery, so a corrected value governs the next review rather than
@@ -121,6 +126,10 @@ type reviewAdmitter interface {
 	Reject(context.Context, domain.ReviewJob, error) error
 }
 
+type pullRequestReader interface {
+	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
+}
+
 type routePath string
 
 const (
@@ -131,6 +140,8 @@ const (
 
 type handler struct {
 	webhookHMACKey []byte
+	botLogin       string
+	pullRequests   pullRequestReader
 	cache          *queue.DeliveryCache
 	dispatcher     *queue.Dispatcher
 	admitter       reviewAdmitter
@@ -142,10 +153,13 @@ func newHandler(
 	cache *queue.DeliveryCache,
 	dispatcher *queue.Dispatcher,
 	admitter reviewAdmitter,
+	pullRequests pullRequestReader,
 	logger *slog.Logger,
 ) *handler {
 	return &handler{
 		webhookHMACKey: cfg.GitHubWebhookSecret, // gitleaks:allow
+		botLogin:       cfg.GitHubBotLogin,
+		pullRequests:   pullRequests,
 		cache:          cache,
 		dispatcher:     dispatcher,
 		admitter:       admitter,
@@ -212,9 +226,9 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		return
 	}
 
-	event, supported, err := webhook.ParseEvent(eventType, deliveryID, body)
+	event, supported, err := handler.parseReviewEvent(request.Context(), eventType, deliveryID, body)
 	if err != nil {
-		http.Error(writer, "malformed payload", http.StatusBadRequest)
+		writeReviewEventError(writer, err)
 		return
 	}
 	if !supported {
@@ -291,6 +305,48 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 
 	writer.Header().Set(deliveryStateHeader, deliveryStatePending)
 	writer.WriteHeader(http.StatusAccepted)
+}
+
+func (handler *handler) parseReviewEvent(
+	ctx context.Context,
+	eventType string,
+	deliveryID string,
+	body []byte,
+) (webhook.PullRequestEvent, bool, error) {
+	if eventType != "issue_comment" {
+		event, supported, err := webhook.ParseEvent(eventType, deliveryID, body)
+		if err != nil {
+			return event, supported, fmt.Errorf("parse webhook event: %w", err)
+		}
+		return event, supported, nil
+	}
+	event, supported, err := webhook.ParseMentionedIssueComment(deliveryID, body, handler.botLogin)
+	if err != nil {
+		return event, supported, fmt.Errorf("parse tagged comment: %w", err)
+	}
+	if !supported {
+		return event, false, nil
+	}
+	pullRequest, err := handler.pullRequests.GetPullRequest(
+		ctx, event.InstallationID, event.Repository, event.Number,
+	)
+	if err != nil {
+		handler.logger.ErrorContext(ctx, "load tagged pull request", slog.String("err", err.Error()))
+		return webhook.PullRequestEvent{}, false, errTaggedPullRequestUnavailable
+	}
+	if pullRequest.Draft {
+		return event, false, nil
+	}
+	event.Head = pullRequest.Head
+	return event, true, nil
+}
+
+func writeReviewEventError(writer http.ResponseWriter, err error) {
+	if errors.Is(err, errTaggedPullRequestUnavailable) {
+		http.Error(writer, "load pull request failed", http.StatusBadGateway)
+		return
+	}
+	http.Error(writer, "malformed payload", http.StatusBadRequest)
 }
 
 func writeStatusOK(writer http.ResponseWriter) {

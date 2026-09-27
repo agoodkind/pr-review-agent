@@ -79,7 +79,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		reviewRunner{service: reviewService, cache: cache},
 		logger,
 	)
-	httpHandler := newHandler(cfg, cache, dispatcher, reviewService, logger)
+	httpHandler := newHandler(cfg, cache, dispatcher, reviewService, githubClient, logger)
 
 	return &App{
 		cfg:        cfg,
