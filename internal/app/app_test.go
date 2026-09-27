@@ -1368,22 +1368,15 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	})
 	_ = response.Body.Close()
 	fixture.waitForClydeCalls(t, 1)
-	fixture.githubState.setHead(testCorrectedHead)
-	queued := fixture.postWebhook(t, webhookRequestOptions{
-		eventType:  "pull_request",
-		deliveryID: "delivery-shutdown-queued",
-		body:       synchronizePayload(testCorrectedHead),
-	})
-	_ = queued.Body.Close()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := fixture.application.Shutdown(shutdownCtx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Shutdown = %v, want deadline exceeded while the review is active", err)
+		t.Fatalf("Shutdown returned %v while the active review required a deadline error", err)
 	}
 	fixture.application = nil
 	if fixture.githubState.terminalCheckCount() != 0 {
-		t.Fatalf("terminal checks = %d, want 0 until replay completes the review", fixture.githubState.terminalCheckCount())
+		t.Fatalf("The interrupted review completed %d checks before replay", fixture.githubState.terminalCheckCount())
 	}
 
 	resumedState := newClydeServerState(appFixtureOptions{
@@ -1398,14 +1391,23 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 
 	replay := resumed.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
-		deliveryID: "delivery-shutdown-queued",
-		body:       synchronizePayload(testCorrectedHead),
+		deliveryID: "delivery-shutdown",
+		body:       openedPayload(testDefectiveHead),
 	})
 	if state := replay.Header.Get(deliveryStateHeader); state != deliveryStatePending {
-		t.Fatalf("replayed delivery state = %q, want pending", state)
+		t.Fatalf("The replayed delivery reported state %q before the review completed", state)
 	}
 	_ = replay.Body.Close()
 	resumed.waitForCheckConclusion(t, "success")
+	settled := resumed.postWebhook(t, webhookRequestOptions{
+		eventType:  "pull_request",
+		deliveryID: "delivery-shutdown",
+		body:       openedPayload(testDefectiveHead),
+	})
+	if state := settled.Header.Get(deliveryStateHeader); state != deliveryStateSettled {
+		t.Fatalf("The completed review reported delivery state %q", state)
+	}
+	_ = settled.Body.Close()
 }
 
 func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {

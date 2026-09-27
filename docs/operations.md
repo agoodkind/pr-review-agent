@@ -118,11 +118,18 @@ The script requires Python 3 and OpenSSL. Add `--status` to inspect the installa
 
 ## Verify a release
 
-The Worker stores each signed GitHub delivery before forwarding it to the container. The durable record remains until the service confirms that the review has finished or the event requires no review. A container rollout can interrupt a review; the replay alarm retries pending deliveries after the old container exits. The retry delay grows to at most five minutes.
+The Worker stores each signed GitHub delivery before forwarding the delivery to the container. The Durable Object retains the delivery until the service confirms that the review has finished or the event requires no review. A container rollout can interrupt a review. The replay alarm retries pending deliveries at intervals of at most five minutes after the old container exits.
 
-During a release, confirm that the routed service answers `GET /health` and that a newly admitted delivery produces a completed `PR-Agent Review` check. Compare the deployed Worker version and container image digest with the release record. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. The delivery identifier in that log identifies the durable record and the GitHub webhook.
+1. Confirm that the routed service answers `GET /health`.
+2. Compare the deployed Worker version and container image digest with the release record.
+3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
+4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
 
-To verify interruption recovery, admit a signed delivery for a test pull request, restart the named container during its review, and inspect the final check for that delivery. Keep the test pull request open until the check finishes. A completed check proves that the replacement resumed or settled the review. A routed health response proves only that the container is available.
+To verify interruption recovery:
+
+1. Admit a signed delivery for a test pull request and keep that pull request open.
+2. Restart the named container while the review is active.
+3. Confirm that the delivery produces a completed `PR-Agent Review` check after the replacement starts.
 
 Verify release archives and the container attestation against this repository:
 

@@ -60,7 +60,7 @@ func (cache *DeliveryCache) Claim(deliveryID string) bool {
 	return true
 }
 
-// Settled reports whether a claimed delivery finished its review.
+// Settled reports the terminal state recorded for this delivery in this process.
 func (cache *DeliveryCache) Settled(deliveryID string) bool {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
@@ -69,7 +69,7 @@ func (cache *DeliveryCache) Settled(deliveryID string) bool {
 	return ok && entry.settled
 }
 
-// Settle records a completed review until the delivery claim expires.
+// Settle marks a terminal outcome or an admission that needs no new review.
 func (cache *DeliveryCache) Settle(deliveryID string) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()

@@ -185,13 +185,37 @@ test("a durable queue failure prevents review admission", async function () {
   assert.equal(forwarded, false);
 });
 
-test("a pending review stays durable after the container responds", async function () {
-  const queued = [];
-  const environment = createFailingEnvironment("throw", queued);
+test("a pending delivery remains replayable until the service confirms completion", async function () {
+  const deliveries = new Map();
+  const environment = createFailingEnvironment("throw", []);
+  environment.REPLAY_QUEUE = {
+    getByName() {
+      return {
+        async fetch(request) {
+          const entry = await request.json();
+          if (new URL(request.url).pathname === "/enqueue") {
+            if (!deliveries.has(entry.id)) {
+              deliveries.set(entry.id, entry);
+            }
+          } else {
+            deliveries.delete(entry.id);
+          }
+          return Response.json({ id: entry.id });
+        },
+      };
+    },
+  };
+  let reviewComplete = false;
   environment.PR_AGENT = {
     getByName() {
       return {
         async fetch() {
+          if (reviewComplete) {
+            return new Response("accepted", {
+              status: 202,
+              headers: { "X-Pr-Agent-Delivery-State": "settled" },
+            });
+          }
           return new Response("accepted", {
             status: 202,
             headers: { "X-Pr-Agent-Delivery-State": "pending" },
@@ -201,32 +225,14 @@ test("a pending review stays durable after the container responds", async functi
     },
   };
 
-  const response = await routeRequest(signedWebhookRequest(), environment);
+  const pending = await routeRequest(signedWebhookRequest(), environment);
+  assert.equal(pending.status, 202);
+  assert.equal(deliveries.get("delivery-lost-1")?.body.includes("opened"), true);
 
-  assert.equal(response.status, 202);
-  assert.equal(queued.length, 1);
-  assert.equal(queued[0].id, "delivery-lost-1");
-});
-
-test("a terminal service answer removes the durable delivery", async function () {
-  const queued = [];
-  const environment = createFailingEnvironment("throw", queued);
-  environment.PR_AGENT = {
-    getByName() {
-      return {
-        async fetch() {
-          return new Response("invalid signature", { status: 401 });
-        },
-      };
-    },
-  };
-
-  const response = await routeRequest(signedWebhookRequest(), environment);
-
-  assert.equal(response.status, 401);
-  assert.equal(queued.length, 2);
-  assert.equal(queued[0].id, "delivery-lost-1");
-  assert.equal(queued[1].id, "delivery-lost-1");
+  reviewComplete = true;
+  const settled = await routeRequest(signedWebhookRequest(), environment);
+  assert.equal(settled.status, 202);
+  assert.equal(deliveries.has("delivery-lost-1"), false);
 });
 
 // createForwardingEnvironment answers every forward and records that it

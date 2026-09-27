@@ -14,8 +14,7 @@ const CONTAINER_ABSENT_STATUS = 500;
 // answer about the delivery rather than a refusal to take it.
 const QUEUE_FULL_STATUS = 503;
 
-// An overdue delivery remains in durable storage until the review service
-// confirms a terminal result. An outage must not erase an accepted review.
+// Log after one day without imposing an expiry on accepted deliveries.
 export const overdueAfterMs = 24 * 60 * 60 * 1000;
 
 // firstDelayMs is the first retry delay. A crash looping container needs
@@ -36,9 +35,8 @@ export function forwardFailed(response) {
 
 export const DELIVERY_STATE_HEADER = "X-Pr-Agent-Delivery-State";
 
-// A 202 confirms admission only. The review service sets "settled" after the
-// check finishes, or when the event needs no review. During a mixed-version
-// rollout, an older container sends no state header and the record stays.
+// A 202 confirms admission only. During a mixed-version rollout, an older
+// container omits the state header, and durable storage retains the delivery.
 export function deliverySettled(response) {
   if (response === null || forwardFailed(response)) {
     return false;
