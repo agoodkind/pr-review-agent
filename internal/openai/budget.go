@@ -47,7 +47,7 @@ func (client *Client) reserveBudget(
 		return &budgetAdmissionError{providerID: target.id, cause: errors.New("budget service is not configured")}
 	}
 	systemPrompt := structuredOutputPrompt(policy, schemaName, schema)
-	reservation := int64(len(systemPrompt) + len(prompt) + config.MaximumOutputTokens + reservationOverheadTokens)
+	reservation := int64(len(systemPrompt) + len(prompt) + len(schemaName) + len(schema) + config.MaximumOutputTokens + reservationOverheadTokens)
 	body, err := json.Marshal(struct {
 		ProviderID string `json:"provider_id"`
 		Tokens     int64  `json:"tokens"`
