@@ -1,34 +1,7 @@
 # Prove the durable review works
 
-The tests prove the design holds in isolation. This page proves it holds
-against the real service, which is the only evidence that counts before
-trusting it on your own pull requests. Run it once after each deploy of a
-review behavior change. Each proof below exists because the behavior it checks
-failed live at least once; the failure it guards against is named so a
-regression is recognizable on sight.
-
-Merging to the trunk deploys: the release workflow builds the container image,
-rewrites the deploy configuration to that exact digest, and deploys the Worker.
-The proofs below are the deliberate part.
-
-## Never deploy by hand with wrangler alone
-
-The committed configuration carries an unbuildable image placeholder on
-purpose, so a raw `wrangler deploy` fails before it can touch production. It
-once shipped a fourteen day old digest, because only the release workflow
-rewrites the digest at deploy time, and the stale image crash looped on its
-next cold start while 33 webhook deliveries died. When a manual deploy is
-genuinely needed, name the digest explicitly:
-
-```bash
-cd deploy/cloudflare
-PR_REVIEW_AGENT_IMAGE=ghcr.io/agoodkind/pr-review-agent@sha256:<digest> npm run deploy
-```
-
-A deploy restarts the Worker and kills every review in flight, so check the
-log for a running review before deploying. Confirm the image you expect is the
-one live before reading anything below, or you will be testing the previous
-build.
+Run these live checks after a release changes review behavior. Confirm the
+deployed image digest before testing.
 
 ## Watch what happens
 
@@ -191,8 +164,8 @@ commenter mark code reviewed.
 
 Kill the container mid run on a multi chunk pull request.
 
-Expect the marker to keep every checkpointed chunk in `completed`, the next
-triggering event to review only what is owed, and no finding to post twice.
+Expect the marker to keep every checkpointed chunk in `completed`. The replayed
+delivery reviews only pending chunks and posts no duplicate findings.
 The pre-redesign service lost the whole run: 31 logged timeouts came from one
 shared ten minute clock over a 173 chunk diff, and death kept no progress at
 all.

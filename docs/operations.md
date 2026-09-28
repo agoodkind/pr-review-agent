@@ -56,25 +56,23 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
 
-The configured order selects OpenAI's direct API with `gpt-5.6-luna` first. Clyde uses `gpt-6-luna` when OpenAI reports exhausted usage. The usage report estimates API cost from the rates in the runtime file. Eligible OpenAI API traffic may qualify for [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The estimate does not subtract complimentary tokens. The usage report marks an unpriced model as unknown.
+The usage estimate does not subtract [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown.
 
-Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_KEY`, `FALLBACK_API_KEY`, and the optional `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` pair in Cloudflare secret bindings. The existing `FALLBACK_API_KEY` binding authenticates OpenAI. The existing `OPENAI_KEY` binding authenticates Clyde. Each provider selects its bindings in the runtime file. The Go service rejects secret values in the runtime file.
+Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials in Cloudflare secret bindings. Set each provider's binding names in the runtime configuration. The Go service rejects secret values in that file.
 
-## Configure a fallback provider
+## Configure provider order
 
 List every configured provider ID once in `PROVIDER_PRIORITY`. Put the preferred provider first. The service tries the next provider only when the previous provider reports exhausted API usage. The service rejects incomplete providers and invalid priority lists at startup. Exhausting the complimentary data-sharing quota does not activate the fallback. OpenAI bills requests outside that quota at normal API rates.
 
 Set both `cf_access_client_id_binding` and `cf_access_client_secret_binding` for a provider behind Cloudflare Access. Omit both fields for public endpoints.
 
-Change credentials through Cloudflare secret bindings.
-
-The release packages the runtime file with the container image and Worker source from the same commit. Secrets persist across deployment. The Go service validates the runtime file and available credentials at startup. The release checks routed service readiness after deployment.
+Change credentials through Cloudflare secret bindings. The Go service validates the runtime configuration and available credentials at startup.
 
 ## Run the container
 
 Deploy `ghcr.io/agoodkind/pr-review-agent` by digest. The image runs as user `65532:65532` and contains no shell.
 
-Use `GET /health` for container readiness. Use `GET /` for the routed service status. Neither endpoint calls GitHub or Clyde.
+Use `GET /health` for container readiness. Use `GET /` for the routed service status. Neither endpoint sends a model request.
 
 ## Change review rules
 
