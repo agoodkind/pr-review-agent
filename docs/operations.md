@@ -47,6 +47,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
 | `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
+| `PROVIDERS[].daily_token_limit` | Maximum tokens reserved for one provider per UTC day; omit or set `0` for no limit |
+| `PROVIDER_BUDGET_URL` | Worker endpoint that records token reservations before model requests |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
@@ -56,17 +58,19 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
 
-The usage estimate does not subtract [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown.
+The usage estimate does not subtract [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown. The token limit applies to the provider's requests from this service. Set the limit below the account's complimentary allowance to include a margin for request framing and model usage differences.
 
 Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials in Cloudflare secret bindings. Set each provider's binding names in the runtime configuration. The Go service rejects secret values in that file.
 
 ## Configure provider order
 
-List every configured provider ID once in `PROVIDER_PRIORITY`. Put the preferred provider first. The service tries the next provider only when the previous provider reports exhausted API usage. The service rejects incomplete providers and invalid priority lists at startup. Exhausting the complimentary data-sharing quota does not activate the fallback. OpenAI bills requests outside that quota at normal API rates.
+List every configured provider ID once in `PROVIDER_PRIORITY`. Put the preferred provider first. The service tries the next provider when the previous provider reports exhausted API usage or its configured daily token limit rejects a reservation. The service rejects incomplete providers and invalid priority lists at startup. OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
+
+Set `daily_token_limit` on each provider that needs a daily cap. The Worker records an atomic reservation before each model request and resets the count at 00:00 UTC. A request that exceeds the remaining limit is never sent to that provider. The reservation includes the request text, the configured maximum output, and extra framing allowance. Failed requests retain their reservation. The cap can therefore stop requests before the complimentary allowance is exhausted. If the Worker cannot record a reservation, the service skips that provider. Keep the Worker URL and the `PROVIDER_BUDGET` Durable Object binding configured when any provider has a cap.
 
 Set both `cf_access_client_id_binding` and `cf_access_client_secret_binding` for a provider behind Cloudflare Access. Omit both fields for public endpoints.
 
-Change credentials through Cloudflare secret bindings. The Go service validates the runtime configuration and available credentials at startup.
+Change credentials through Cloudflare secret bindings. Create a dedicated API key for each OpenAI organization, set its provider's `api_key_binding`, and deploy the Worker secret before merging the runtime configuration. The Go service validates the runtime configuration and available credentials at startup.
 
 ## Run the container
 

@@ -75,6 +75,7 @@ var runtimeConfigKeys = map[string]struct{}{
 	"FALLBACK_ON":           {},
 	"PROVIDERS":             {},
 	"PROVIDER_PRIORITY":     {},
+	"PROVIDER_BUDGET_URL":   {},
 	"GITHUB_APP_ID":         {},
 	"GITHUB_BOT_LOGIN":      {},
 	"LOG_FORWARD_URL":       {},
@@ -102,6 +103,7 @@ type Config struct {
 	ReviewModel        string
 	ReviewModelPricing map[string]ModelPricing
 	Providers          []ProviderConfig
+	ProviderBudgetURL  *url.URL
 	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
 	// timer, is what keeps a review finishable, so these are the only limits
 	// on how much work one invocation accepts.
@@ -221,6 +223,20 @@ func Load(lookup LookupEnv) (Config, error) {
 			return Config{}, err
 		}
 		cfg.Providers = providers
+		for _, provider := range providers {
+			if provider.DailyTokenLimit == 0 {
+				continue
+			}
+			budgetURL, ok := loadRequiredText(lookup, "PROVIDER_BUDGET_URL")
+			if !ok {
+				return Config{}, errors.New("PROVIDER_BUDGET_URL is required for capped providers")
+			}
+			cfg.ProviderBudgetURL, err = parseRequiredHTTPSURL("PROVIDER_BUDGET_URL", budgetURL)
+			if err != nil {
+				return Config{}, err
+			}
+			break
+		}
 	}
 
 	apiBaseURL, err := url.Parse("https://api.github.com")

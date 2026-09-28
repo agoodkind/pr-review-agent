@@ -22,9 +22,11 @@ import (
 
 // provider is one model endpoint the client can send a completion to.
 type provider struct {
-	sdk            openaigo.Client
-	model          shared.ChatModel
-	pricingByModel map[string]config.ModelPricing
+	id              string
+	sdk             openaigo.Client
+	model           shared.ChatModel
+	dailyTokenLimit int64
+	pricingByModel  map[string]config.ModelPricing
 }
 
 // Client performs structured OpenAI chat completion requests.
@@ -32,6 +34,9 @@ type Client struct {
 	providers               []provider
 	fallbackOnUsageExceeded bool
 	minimumImportance       int
+	budgetURL               string
+	budgetSigningKey        []byte
+	httpClient              *http.Client
 }
 
 // NewClient constructs an SDK client for each configured provider.
@@ -47,6 +52,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			BaseURL:              cfg.ClydeBaseURL,
 			APIKey:               cfg.ClydeAPIKey,
 			Model:                cfg.ReviewModel,
+			DailyTokenLimit:      0,
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 		}}
@@ -56,6 +62,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				BaseURL:              cfg.FallbackBaseURL,
 				APIKey:               cfg.FallbackAPIKey,
 				Model:                cfg.FallbackModel,
+				DailyTokenLimit:      0,
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
@@ -66,12 +73,20 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		providers:               make([]provider, 0, len(configuredProviders)),
 		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
 		minimumImportance:       cfg.MinimumImportance,
+		budgetURL:               "",
+		budgetSigningKey:        cfg.GitHubWebhookSecret,
+		httpClient:              httpClient,
+	}
+	if cfg.ProviderBudgetURL != nil {
+		client.budgetURL = cfg.ProviderBudgetURL.String()
 	}
 	for _, configured := range configuredProviders {
 		client.providers = append(client.providers, provider{
-			sdk:            newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
-			model:          configured.Model,
-			pricingByModel: cfg.ReviewModelPricing,
+			id:              configured.ID,
+			sdk:             newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
+			model:           configured.Model,
+			dailyTokenLimit: configured.DailyTokenLimit,
+			pricingByModel:  cfg.ReviewModelPricing,
 		})
 	}
 	return client
@@ -219,7 +234,11 @@ func (client *Client) complete(
 ) (string, string, error) {
 	var failures []error
 	for index, target := range client.providers {
-		content, err := completeWith(ctx, target, prompt, policy, schemaName, schema)
+		err := client.reserveBudget(ctx, target, prompt, policy, schemaName, schema)
+		content := ""
+		if err == nil {
+			content, err = completeWith(ctx, target, prompt, policy, schemaName, schema)
+		}
 		if err == nil {
 			return content, target.model, nil
 		}
@@ -242,6 +261,10 @@ func (client *Client) complete(
 func (client *Client) shouldUseFallback(err error) bool {
 	if !client.fallbackOnUsageExceeded {
 		return false
+	}
+	var budgetError *budgetAdmissionError
+	if errors.As(err, &budgetError) {
+		return true
 	}
 	var providerError *ProviderError
 	if !errors.As(err, &providerError) {

@@ -18,6 +18,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/telemetry"
 )
 
 const (
@@ -587,6 +588,63 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 		if state.requestCount != 1 {
 			t.Fatalf("provider %d request count = %d, want 1", index, state.requestCount)
 		}
+	}
+}
+
+func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
+	primaryState := &testServerState{completionContent: validReviewContent()}
+	primaryServer := newProviderServer(primaryState)
+	t.Cleanup(primaryServer.Close)
+	secondaryState := &testServerState{completionContent: validReviewContent()}
+	secondaryServer := newProviderServer(secondaryState)
+	t.Cleanup(secondaryServer.Close)
+
+	signingKey := []byte("fixture-budget-signing-key")
+	reservationCount := 0
+	budgetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Errorf("read reservation: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if request.Header.Get("X-Pr-Agent-Budget-Signature") != telemetry.Sign(signingKey, body) {
+			t.Error("budget request has an invalid signature")
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var reservation struct {
+			ProviderID string `json:"provider_id"`
+			Tokens     int64  `json:"tokens"`
+		}
+		if err := json.Unmarshal(body, &reservation); err != nil {
+			t.Errorf("decode reservation: %v", err)
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if reservation.ProviderID != "capped" || reservation.Tokens < config.MaximumOutputTokens {
+			t.Errorf("reservation = %+v", reservation)
+		}
+		reservationCount++
+		writeJSON(writer, http.StatusOK, map[string]bool{"allowed": false})
+	}))
+	t.Cleanup(budgetServer.Close)
+
+	client := openai.NewClient(config.Config{
+		MinimumImportance:   7,
+		GitHubWebhookSecret: signingKey, // gitleaks:allow
+		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
+		Providers: []config.ProviderConfig{
+			{ID: "capped", BaseURL: mustParseURL(t, primaryServer.URL), Model: testPrimaryModel, APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000},
+			{ID: "uncapped", BaseURL: mustParseURL(t, secondaryServer.URL), Model: testFallbackModel, APIKey: testFallbackAPIKeyValue()}, // gitleaks:allow
+		},
+	}, budgetServer.Client())
+	completion, err := client.Review(context.Background(), "prompt")
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if completion.Model != testFallbackModel || primaryState.requestCount != 0 || secondaryState.requestCount != 1 || reservationCount != 1 {
+		t.Fatalf("model = %q, primary requests = %d, secondary requests = %d, reservations = %d", completion.Model, primaryState.requestCount, secondaryState.requestCount, reservationCount)
 	}
 }
 
