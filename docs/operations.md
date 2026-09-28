@@ -56,7 +56,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
 
-The configured order selects Clyde with `gpt-6-luna` first. OpenAI's direct API uses `gpt-5.6-luna` when Clyde reports exhausted usage. The usage report estimates API cost from the rates in the runtime file. Eligible OpenAI API traffic may qualify for [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The estimate does not subtract complimentary tokens. The usage report marks an unpriced model as unknown.
+The configured order selects OpenAI's direct API with `gpt-5.6-luna` first. Clyde uses `gpt-6-luna` when OpenAI reports exhausted usage. The usage report estimates API cost from the rates in the runtime file. Eligible OpenAI API traffic may qualify for [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The estimate does not subtract complimentary tokens. The usage report marks an unpriced model as unknown.
 
 Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_KEY`, `FALLBACK_API_KEY`, and the optional `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` pair in Cloudflare secret bindings. The existing `FALLBACK_API_KEY` binding authenticates OpenAI. The existing `OPENAI_KEY` binding authenticates Clyde. Each provider selects its bindings in the runtime file. The Go service rejects secret values in the runtime file.
 
