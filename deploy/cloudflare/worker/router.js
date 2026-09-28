@@ -4,7 +4,6 @@ import {
   createReviewSettingsHeader,
   signReviewSettings,
 } from "./configuration.js";
-import runtime from "../../../runtime.json" with { type: "json" };
 import { BUDGET_PATH, handleProviderBudget } from "./budget.js";
 import { deliverySettled, entryFromDelivery, forwardFailed } from "./replaylogic.js";
 import { isRecoveryTestEvent } from "./recovery-test.js";
@@ -19,7 +18,7 @@ export async function routeRequest(request, env) {
     return handleServiceLogs(request, env.GITHUB_WEBHOOK_SECRET);
   }
   if (url.pathname === BUDGET_PATH) {
-    return handleProviderBudget(request, env, runtime.PROVIDERS, verifyServiceLogSignature);
+    return handleProviderBudget(request, env, verifyServiceLogSignature);
   }
 
   const body = await request.clone().text();

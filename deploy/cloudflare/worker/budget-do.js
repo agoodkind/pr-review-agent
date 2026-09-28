@@ -6,7 +6,7 @@ export class ProviderBudget extends DurableObject {
       return new Response("not found", { status: 404 });
     }
     const reservation = await request.json();
-    const { providerId, tokens, limit } = reservation;
+    const { provider_id: providerId, tokens, limit } = reservation;
     if (typeof providerId !== "string" || !/^[a-z][a-z0-9_]*$/.test(providerId) ||
         !Number.isSafeInteger(tokens) || tokens <= 0 ||
         !Number.isSafeInteger(limit) || limit <= 0) {

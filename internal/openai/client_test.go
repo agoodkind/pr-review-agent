@@ -616,13 +616,14 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 		var reservation struct {
 			ProviderID string `json:"provider_id"`
 			Tokens     int64  `json:"tokens"`
+			Limit      int64  `json:"limit"`
 		}
 		if err := json.Unmarshal(body, &reservation); err != nil {
 			t.Errorf("decode reservation: %v", err)
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if reservation.ProviderID != "capped" || reservation.Tokens < config.MaximumOutputTokens {
+		if reservation.ProviderID != "capped" || reservation.Tokens < config.MaximumOutputTokens || reservation.Limit != 2_000_000 {
 			t.Errorf("reservation = %+v", reservation)
 		}
 		reservationCount++

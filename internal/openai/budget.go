@@ -51,7 +51,8 @@ func (client *Client) reserveBudget(
 	body, err := json.Marshal(struct {
 		ProviderID string `json:"provider_id"`
 		Tokens     int64  `json:"tokens"`
-	}{ProviderID: target.id, Tokens: reservation})
+		Limit      int64  `json:"limit"`
+	}{ProviderID: target.id, Tokens: reservation, Limit: target.dailyTokenLimit})
 	if err != nil {
 		return &budgetAdmissionError{providerID: target.id, cause: err}
 	}

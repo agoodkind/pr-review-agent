@@ -62,7 +62,7 @@ async function stopRuntime(child) {
 }
 
 async function reserve(port, providerId, tokens) {
-  const body = JSON.stringify({ provider_id: providerId, tokens });
+  const body = JSON.stringify({ provider_id: providerId, tokens, limit: 2_000_000 });
   const signature = "sha256=" + createHmac("sha256", signingKey).update(body).digest("hex");
   const response = await fetch(`http://127.0.0.1:${port}/internal/v1/provider_budget`, {
     method: "POST",
