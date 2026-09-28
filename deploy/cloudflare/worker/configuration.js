@@ -121,10 +121,8 @@ function readPositiveDuration(value) {
 }
 
 const publicSettings = [
-  "CLYDE_BASE_URL",
-  "FALLBACK_BASE_URL",
-  "FALLBACK_MODEL",
-  "FALLBACK_ON",
+  "PROVIDERS",
+  "PROVIDER_PRIORITY",
   "GITHUB_APP_ID",
   "GITHUB_BOT_LOGIN",
   "LOG_FORWARD_URL",
@@ -133,21 +131,14 @@ const publicSettings = [
   "REVIEW_MAX_CHUNKS",
   "REVIEW_MAX_FILES",
   "REVIEW_MIN_IMPORTANCE",
-  "REVIEW_MODEL",
   "REVIEW_MODEL_PRICING",
   "REVIEW_WORKERS",
 ];
 
 export function createPrAgentEnvironment(bindings, configuration = runtime) {
   const {
-    CF_ACCESS_CLIENT_ID,
-    CF_ACCESS_CLIENT_SECRET,
-    FALLBACK_API_KEY,
-    FALLBACK_CF_ACCESS_CLIENT_ID,
-    FALLBACK_CF_ACCESS_CLIENT_SECRET,
     GITHUB_PRIVATE_KEY,
     GITHUB_WEBHOOK_SECRET,
-    OPENAI_KEY,
   } = bindings;
 
   const environment = {};
@@ -155,21 +146,26 @@ export function createPrAgentEnvironment(bindings, configuration = runtime) {
     if (configuration[name] === undefined) {
       continue;
     }
-    if (name === "REVIEW_MODEL_PRICING") {
+    if (name === "REVIEW_MODEL_PRICING" || name === "PROVIDERS" || name === "PROVIDER_PRIORITY") {
       environment[name] = JSON.stringify(configuration[name]);
       continue;
     }
     environment[name] = configuration[name];
   }
 
+  for (const provider of configuration.PROVIDERS) {
+    const prefix = `PROVIDER_${provider.id.toUpperCase()}`;
+    environment[`${prefix}_API_KEY`] = bindings[provider.api_key_binding];
+    if (provider.cf_access_client_id_binding) {
+      environment[`${prefix}_CF_ACCESS_CLIENT_ID`] = bindings[provider.cf_access_client_id_binding];
+    }
+    if (provider.cf_access_client_secret_binding) {
+      environment[`${prefix}_CF_ACCESS_CLIENT_SECRET`] = bindings[provider.cf_access_client_secret_binding];
+    }
+  }
+
   return {
     ...environment,
-    CF_ACCESS_CLIENT_ID,
-    CF_ACCESS_CLIENT_SECRET,
-    CLYDE_API_KEY: OPENAI_KEY,
-    FALLBACK_API_KEY,
-    ...(FALLBACK_CF_ACCESS_CLIENT_ID ? { FALLBACK_CF_ACCESS_CLIENT_ID } : {}),
-    ...(FALLBACK_CF_ACCESS_CLIENT_SECRET ? { FALLBACK_CF_ACCESS_CLIENT_SECRET } : {}),
     GITHUB_PRIVATE_KEY,
     GITHUB_WEBHOOK_SECRET,
   };

@@ -553,3 +553,34 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 		return value, true
 	}, nil
 }
+
+func TestLoadRuntimeOrdersProvidersAndReadsSecretsFromEnvironment(t *testing.T) {
+	lookup, err := lookupWithOverrides(map[string]string{
+		"PROVIDER_FIRST_API_KEY":  "first-key",
+		"PROVIDER_SECOND_API_KEY": "second-key",
+	})
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	data := []byte(`{
+		"GITHUB_APP_ID":"12345",
+		"GITHUB_BOT_LOGIN":"fixture-bot[bot]",
+		"REVIEW_MIN_IMPORTANCE":"9",
+		"REVIEW_WORKERS":"4",
+		"PROVIDERS":[
+			{"id":"first","base_url":"https://first.example/v1","model":"first-model","api_key_binding":"FIRST_KEY"},
+			{"id":"second","base_url":"https://second.example/v1","model":"second-model","api_key_binding":"SECOND_KEY"}
+		],
+		"PROVIDER_PRIORITY":["second","first"]
+	}`)
+	cfg, err := LoadRuntime(data, lookup)
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if len(cfg.Providers) != 2 || cfg.Providers[0].ID != "second" || cfg.Providers[1].ID != "first" {
+		t.Fatalf("provider order = %+v", cfg.Providers)
+	}
+	if cfg.Providers[0].APIKey != "second-key" || cfg.Providers[1].APIKey != "first-key" {
+		t.Fatal("provider credentials do not match their IDs")
+	}
+}

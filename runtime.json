@@ -1,9 +1,22 @@
 {
-  "CLYDE_BASE_URL": "https://clyde-suburban.goodkind.io/v1",
   "CONTAINER_SLEEP_AFTER": "11m",
-  "FALLBACK_BASE_URL": "https://api.openai.com/v1",
-  "FALLBACK_MODEL": "gpt-6-luna",
-  "FALLBACK_ON": "usage_exceeded",
+  "PROVIDERS": [
+    {
+      "id": "openai",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.6-luna",
+      "api_key_binding": "FALLBACK_API_KEY"
+    },
+    {
+      "id": "clyde",
+      "base_url": "https://clyde-suburban.goodkind.io/v1",
+      "model": "gpt-5.6-luna",
+      "api_key_binding": "OPENAI_KEY",
+      "cf_access_client_id_binding": "CF_ACCESS_CLIENT_ID",
+      "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET"
+    }
+  ],
+  "PROVIDER_PRIORITY": ["openai", "clyde"],
   "GITHUB_APP_ID": "4571682",
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
   "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",
@@ -12,7 +25,6 @@
   "REVIEW_MAX_CHUNKS": "60",
   "REVIEW_MAX_FILES": "100",
   "REVIEW_MIN_IMPORTANCE": "9",
-  "REVIEW_MODEL": "gpt-6-luna",
   "REVIEW_MODEL_PRICING": {
     "gpt-5.4-nano": {
       "input_per_million_tokens": 0.20,
