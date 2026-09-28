@@ -3,11 +3,13 @@ import { env } from "cloudflare:workers";
 import runtime from "../../../runtime.json" with { type: "json" };
 
 import { createPrAgentEnvironment } from "./configuration.js";
+import { ProviderBudget } from "./budget-do.js";
 import { containerLifecycleEvent, containerStoppedEvent } from "./lifecycle.js";
 import { WebhookReplayQueue } from "./replay.js";
 import { routeRequest } from "./router.js";
 
 export { WebhookReplayQueue };
+export { ProviderBudget };
 
 export class PrAgentContainer extends Container {
   defaultPort = Number(runtime.PORT);

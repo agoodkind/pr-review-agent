@@ -1,0 +1,16 @@
+{
+  "name": "pr-agent-budget-test",
+  "main": "budget-fixture.js",
+  "compatibility_date": "2026-08-12",
+  "durable_objects": {
+    "bindings": [
+      { "name": "PROVIDER_BUDGET", "class_name": "ProviderBudget" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ProviderBudget"] }
+  ],
+  "vars": {
+    "GITHUB_WEBHOOK_SECRET": "test-review-budget-secret"
+  }
+}

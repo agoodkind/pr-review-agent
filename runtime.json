@@ -2,10 +2,18 @@
   "CONTAINER_SLEEP_AFTER": "11m",
   "PROVIDERS": [
     {
-      "id": "openai",
+      "id": "openai_goodkind_io",
       "base_url": "https://api.openai.com/v1",
       "model": "gpt-5.6-luna",
-      "api_key_binding": "FALLBACK_API_KEY"
+      "api_key_binding": "OPENAI_GOODKIND_IO_API_KEY",
+      "daily_token_limit": 2000000
+    },
+    {
+      "id": "openai_goodkindalex",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5.6-luna",
+      "api_key_binding": "OPENAI_GOODKINDALEX_API_KEY",
+      "daily_token_limit": 2000000
     },
     {
       "id": "clyde",
@@ -16,7 +24,8 @@
       "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET"
     }
   ],
-  "PROVIDER_PRIORITY": ["openai", "clyde"],
+  "PROVIDER_PRIORITY": ["openai_goodkind_io", "openai_goodkindalex", "clyde"],
+  "PROVIDER_BUDGET_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/provider_budget",
   "GITHUB_APP_ID": "4571682",
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
   "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",

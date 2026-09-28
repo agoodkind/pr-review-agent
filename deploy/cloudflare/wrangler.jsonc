@@ -28,6 +28,10 @@
       {
         "name": "REPLAY_QUEUE",
         "class_name": "WebhookReplayQueue"
+      },
+      {
+        "name": "PROVIDER_BUDGET",
+        "class_name": "ProviderBudget"
       }
     ]
   },
@@ -39,6 +43,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["WebhookReplayQueue"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["ProviderBudget"]
     }
   ]
 }

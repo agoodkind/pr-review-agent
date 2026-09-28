@@ -123,6 +123,7 @@ function readPositiveDuration(value) {
 const publicSettings = [
   "PROVIDERS",
   "PROVIDER_PRIORITY",
+  "PROVIDER_BUDGET_URL",
   "GITHUB_APP_ID",
   "GITHUB_BOT_LOGIN",
   "LOG_FORWARD_URL",

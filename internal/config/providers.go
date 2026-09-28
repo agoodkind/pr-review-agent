@@ -16,6 +16,7 @@ type ProviderConfig struct {
 	BaseURL              *url.URL
 	Model                string
 	APIKey               string
+	DailyTokenLimit      int64
 	CFAccessClientID     string
 	CFAccessClientSecret string
 }
@@ -25,6 +26,7 @@ type providerDefinition struct {
 	BaseURL                     string `json:"base_url"`
 	Model                       string `json:"model"`
 	APIKeyBinding               string `json:"api_key_binding"`
+	DailyTokenLimit             int64  `json:"daily_token_limit,omitempty"`
 	CFAccessClientIDBinding     string `json:"cf_access_client_id_binding,omitempty"`
 	CFAccessClientSecretBinding string `json:"cf_access_client_secret_binding,omitempty"`
 }
@@ -50,6 +52,9 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		if !providerIDPattern.MatchString(definition.ID) || strings.TrimSpace(definition.Model) == "" || strings.TrimSpace(definition.APIKeyBinding) == "" {
 			return nil, errors.New("each provider requires an id, model, and api_key_binding")
 		}
+		if definition.DailyTokenLimit < 0 {
+			return nil, fmt.Errorf("provider %q daily_token_limit must not be negative", definition.ID)
+		}
 		if _, exists := configured[definition.ID]; exists {
 			return nil, fmt.Errorf("duplicate provider %q", definition.ID)
 		}
@@ -74,6 +79,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			BaseURL:              baseURL,
 			Model:                definition.Model,
 			APIKey:               apiKey,
+			DailyTokenLimit:      definition.DailyTokenLimit,
 			CFAccessClientID:     clientID,
 			CFAccessClientSecret: clientSecret, // gitleaks:allow
 		}
