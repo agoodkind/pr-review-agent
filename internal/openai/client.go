@@ -34,51 +34,45 @@ type Client struct {
 	minimumImportance       int
 }
 
-// NewClient constructs an OpenAI SDK client from service config. It builds a
-// second provider when the configuration names a fallback endpoint.
+// NewClient constructs an SDK client for each configured provider.
 func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	client := &Client{
-		providers: []provider{{
-			sdk: newProviderSDK(
-				httpClient,
-				cfg.ClydeBaseURL,
-				cfg.ClydeAPIKey,
-				cfg.CFAccessClientID,
-				cfg.CFAccessClientSecret,
-			),
-			model:          cfg.ReviewModel,
-			pricingByModel: cfg.ReviewModelPricing,
-		}},
-		fallbackOnUsageExceeded: false,
-		minimumImportance:       cfg.MinimumImportance,
-	}
-	if cfg.HasFallback() {
-		client.providers = append(client.providers, provider{
-			sdk: newProviderSDK(
-				httpClient,
-				cfg.FallbackBaseURL,
-				cfg.FallbackAPIKey,
-				cfg.FallbackCFAccessClientID,
-				cfg.FallbackCFAccessClientSecret,
-			),
-			model:          cfg.FallbackModel,
-			pricingByModel: cfg.ReviewModelPricing,
-		})
-		client.fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
-	}
-	if len(cfg.Providers) > 0 {
-		client.providers = make([]provider, 0, len(cfg.Providers))
-		for _, configured := range cfg.Providers {
-			client.providers = append(client.providers, provider{
-				sdk:            newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
-				model:          configured.Model,
-				pricingByModel: cfg.ReviewModelPricing,
+	configuredProviders := cfg.Providers
+	fallbackOnUsageExceeded := true
+	if len(configuredProviders) == 0 {
+		configuredProviders = []config.ProviderConfig{{
+			ID:                   "primary",
+			BaseURL:              cfg.ClydeBaseURL,
+			APIKey:               cfg.ClydeAPIKey,
+			Model:                cfg.ReviewModel,
+			CFAccessClientID:     cfg.CFAccessClientID,
+			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
+		}}
+		if cfg.HasFallback() {
+			configuredProviders = append(configuredProviders, config.ProviderConfig{
+				ID:                   "fallback",
+				BaseURL:              cfg.FallbackBaseURL,
+				APIKey:               cfg.FallbackAPIKey,
+				Model:                cfg.FallbackModel,
+				CFAccessClientID:     cfg.FallbackCFAccessClientID,
+				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
 		}
-		client.fallbackOnUsageExceeded = true
+		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
+	}
+	client := &Client{
+		providers:               make([]provider, 0, len(configuredProviders)),
+		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
+		minimumImportance:       cfg.MinimumImportance,
+	}
+	for _, configured := range configuredProviders {
+		client.providers = append(client.providers, provider{
+			sdk:            newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
+			model:          configured.Model,
+			pricingByModel: cfg.ReviewModelPricing,
+		})
 	}
 	return client
 }
