@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -555,6 +556,37 @@ func TestFallbackStaysUnusedWhenThePrimaryAnswers(t *testing.T) {
 	}
 	if fixture.fallback.requestCount != 0 {
 		t.Fatalf("fallback request count = %d, want 0", fixture.fallback.requestCount)
+	}
+}
+
+func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
+	states := []*testServerState{
+		{completionContent: validReviewContent(), statusSequence: []int{http.StatusBadRequest}, errorPayload: gatewayUsageExceededPayload()},
+		{completionContent: validReviewContent(), statusSequence: []int{http.StatusBadRequest}, errorPayload: gatewayUsageExceededPayload()},
+		{completionContent: validReviewContent()},
+	}
+	providers := make([]config.ProviderConfig, 0, len(states))
+	for index, state := range states {
+		server := newProviderServer(state)
+		t.Cleanup(server.Close)
+		providers = append(providers, config.ProviderConfig{
+			BaseURL: mustParseURL(t, server.URL),
+			Model:   "model-" + strconv.Itoa(index),
+			APIKey:  testAPIKeyValue(),
+		})
+	}
+	client := openai.NewClient(config.Config{Providers: providers, MinimumImportance: 7}, nil)
+	completion, err := client.Review(context.Background(), "prompt")
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if completion.Model != "model-2" {
+		t.Fatalf("model = %q, want model-2", completion.Model)
+	}
+	for index, state := range states {
+		if state.requestCount != 1 {
+			t.Fatalf("provider %d request count = %d, want 1", index, state.requestCount)
+		}
 	}
 }
 

@@ -45,8 +45,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | Setting | Value |
 | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
-| `CLYDE_BASE_URL`, `REVIEW_MODEL` | Primary model endpoint and model |
-| `FALLBACK_BASE_URL`, `FALLBACK_MODEL`, `FALLBACK_ON` | Quota fallback endpoint, model, and trigger |
+| `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
+| `PROVIDER_PRIORITY` | Provider IDs in request order |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
@@ -56,15 +56,15 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
 
-The pricing values use the published rates for [GPT-6 Luna](https://developers.openai.com/api/docs/changelog). The usage report estimates what Clyde's tokens would cost at those API rates. Clyde uses a Codex subscription. The OpenAI fallback uses an API key and may incur a billed charge. The usage report marks an unpriced model as unknown.
+The configured order selects Clyde with `gpt-6-luna` first. OpenAI's direct API uses `gpt-5.6-luna` when Clyde reports exhausted usage. The usage report estimates API cost from the rates in the runtime file. Eligible OpenAI API traffic may qualify for [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The estimate does not subtract complimentary tokens. The usage report marks an unpriced model as unknown.
 
-Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_KEY`, `FALLBACK_API_KEY`, and the optional `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` pair in Cloudflare secret bindings. The Worker passes those credentials to the container. The Go service rejects secret keys in the runtime file.
+Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `OPENAI_KEY`, `FALLBACK_API_KEY`, and the optional `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` pair in Cloudflare secret bindings. The existing `FALLBACK_API_KEY` binding authenticates OpenAI. The existing `OPENAI_KEY` binding authenticates Clyde. Each provider selects its bindings in the runtime file. The Go service rejects secret values in the runtime file.
 
 ## Configure a fallback provider
 
-Set `FALLBACK_BASE_URL` to the OpenAI API endpoint and `FALLBACK_MODEL` to `gpt-6-luna` in the runtime file. Set `FALLBACK_ON` to `usage_exceeded`. Store `FALLBACK_API_KEY` as a secret binding. The service rejects incomplete fallback settings at startup.
+List every configured provider ID once in `PROVIDER_PRIORITY`. Put the preferred provider first. The service tries the next provider only when the previous provider reports exhausted API usage. The service rejects incomplete providers and invalid priority lists at startup. Exhausting the complimentary data-sharing quota does not activate the fallback. OpenAI bills requests outside that quota at normal API rates.
 
-A fallback behind Cloudflare Access also requires both `FALLBACK_CF_ACCESS_CLIENT_ID` and `FALLBACK_CF_ACCESS_CLIENT_SECRET` as secret bindings. Public endpoints require neither value.
+Set both `cf_access_client_id_binding` and `cf_access_client_secret_binding` for a provider behind Cloudflare Access. Omit both fields for public endpoints.
 
 Change credentials through Cloudflare secret bindings.
 

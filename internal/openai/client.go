@@ -29,47 +29,50 @@ type provider struct {
 
 // Client performs structured OpenAI chat completion requests.
 type Client struct {
-	primary                 provider
-	fallback                *provider
+	providers               []provider
 	fallbackOnUsageExceeded bool
 	minimumImportance       int
 }
 
-// NewClient constructs an OpenAI SDK client from service config. It builds a
-// second provider when the configuration names a fallback endpoint.
+// NewClient constructs an SDK client for each configured provider.
 func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	configuredProviders := cfg.Providers
+	fallbackOnUsageExceeded := true
+	if len(configuredProviders) == 0 {
+		configuredProviders = []config.ProviderConfig{{
+			ID:                   "primary",
+			BaseURL:              cfg.ClydeBaseURL,
+			APIKey:               cfg.ClydeAPIKey,
+			Model:                cfg.ReviewModel,
+			CFAccessClientID:     cfg.CFAccessClientID,
+			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
+		}}
+		if cfg.HasFallback() {
+			configuredProviders = append(configuredProviders, config.ProviderConfig{
+				ID:                   "fallback",
+				BaseURL:              cfg.FallbackBaseURL,
+				APIKey:               cfg.FallbackAPIKey,
+				Model:                cfg.FallbackModel,
+				CFAccessClientID:     cfg.FallbackCFAccessClientID,
+				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
+			})
+		}
+		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
+	}
 	client := &Client{
-		primary: provider{
-			sdk: newProviderSDK(
-				httpClient,
-				cfg.ClydeBaseURL,
-				cfg.ClydeAPIKey,
-				cfg.CFAccessClientID,
-				cfg.CFAccessClientSecret,
-			),
-			model:          cfg.ReviewModel,
-			pricingByModel: cfg.ReviewModelPricing,
-		},
-		fallback:                nil,
-		fallbackOnUsageExceeded: false,
+		providers:               make([]provider, 0, len(configuredProviders)),
+		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
 		minimumImportance:       cfg.MinimumImportance,
 	}
-	if cfg.HasFallback() {
-		client.fallback = &provider{
-			sdk: newProviderSDK(
-				httpClient,
-				cfg.FallbackBaseURL,
-				cfg.FallbackAPIKey,
-				cfg.FallbackCFAccessClientID,
-				cfg.FallbackCFAccessClientSecret,
-			),
-			model:          cfg.FallbackModel,
+	for _, configured := range configuredProviders {
+		client.providers = append(client.providers, provider{
+			sdk:            newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
+			model:          configured.Model,
 			pricingByModel: cfg.ReviewModelPricing,
-		}
-		client.fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
+		})
 	}
 	return client
 }
@@ -214,47 +217,29 @@ func (client *Client) complete(
 	schemaName string,
 	schema json.RawMessage,
 ) (string, string, error) {
-	content, primaryErr := completeWith(
-		ctx,
-		client.primary,
-		prompt,
-		policy,
-		schemaName,
-		schema,
-	)
-	if primaryErr == nil {
-		return content, client.primary.model, nil
+	var failures []error
+	for index, target := range client.providers {
+		content, err := completeWith(ctx, target, prompt, policy, schemaName, schema)
+		if err == nil {
+			return content, target.model, nil
+		}
+		failures = append(failures, err)
+		if index == len(client.providers)-1 || !client.shouldUseFallback(err) {
+			if len(failures) == 1 {
+				return "", "", err
+			}
+			combined := errors.Join(failures...)
+			gklog.L(ctx).WarnContext(ctx, "model providers failed", slog.String("error", combined.Error()))
+			return "", "", combined
+		}
+		gklog.L(ctx).WarnContext(ctx, "model provider fallback engaged", slog.String("err", err.Error()))
 	}
-	if !client.shouldUseFallback(primaryErr) {
-		return "", "", primaryErr
-	}
-
-	logger := gklog.L(ctx)
-	logger.WarnContext(
-		ctx,
-		"model provider fallback engaged",
-		slog.String("err", primaryErr.Error()),
-	)
-	content, fallbackErr := completeWith(
-		ctx,
-		*client.fallback,
-		prompt,
-		policy,
-		schemaName,
-		schema,
-	)
-	if fallbackErr != nil {
-		return "", "", errors.Join(primaryErr, fallbackErr)
-	}
-	return content, client.fallback.model, nil
+	return "", "", errors.New("no model providers configured")
 }
 
 // shouldUseFallback reports whether this failure is the declared condition for
 // sending the request to the fallback provider.
 func (client *Client) shouldUseFallback(err error) bool {
-	if client.fallback == nil {
-		return false
-	}
 	if !client.fallbackOnUsageExceeded {
 		return false
 	}

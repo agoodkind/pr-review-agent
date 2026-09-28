@@ -73,6 +73,8 @@ var runtimeConfigKeys = map[string]struct{}{
 	"FALLBACK_BASE_URL":     {},
 	"FALLBACK_MODEL":        {},
 	"FALLBACK_ON":           {},
+	"PROVIDERS":             {},
+	"PROVIDER_PRIORITY":     {},
 	"GITHUB_APP_ID":         {},
 	"GITHUB_BOT_LOGIN":      {},
 	"LOG_FORWARD_URL":       {},
@@ -99,6 +101,7 @@ type Config struct {
 	ReviewWorkers      int
 	ReviewModel        string
 	ReviewModelPricing map[string]ModelPricing
+	Providers          []ProviderConfig
 	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
 	// timer, is what keeps a review finishable, so these are the only limits
 	// on how much work one invocation accepts.
@@ -182,7 +185,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
-		if name == "REVIEW_MODEL_PRICING" {
+		if name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" {
 			values[name] = string(raw)
 			continue
 		}
@@ -212,6 +215,13 @@ func Load(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ReviewModelPricing = pricing
+	if _, configured := lookup("PROVIDERS"); configured {
+		providers, err := loadProviders(lookup)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Providers = providers
+	}
 
 	apiBaseURL, err := url.Parse("https://api.github.com")
 	if err != nil {
@@ -272,11 +282,13 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	} else {
 		cfg.MinimumImportance = minimumImportance
 	}
-	reviewModel, ok := loadRequiredText(lookup, "REVIEW_MODEL")
-	if !ok {
-		missing = append(missing, "REVIEW_MODEL")
-	} else {
-		cfg.ReviewModel = reviewModel
+	if _, configured := lookup("PROVIDERS"); !configured {
+		reviewModel, ok := loadRequiredText(lookup, "REVIEW_MODEL")
+		if !ok {
+			missing = append(missing, "REVIEW_MODEL")
+		} else {
+			cfg.ReviewModel = reviewModel
+		}
 	}
 	reviewMaxFiles, ok := loadReviewMaxFiles(lookup)
 	if !ok {
@@ -297,8 +309,10 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 		cfg.ReviewChunkTimeout = reviewChunkTimeout
 	}
 	missing = append(missing, loadGitHub(lookup, &cfg)...)
-	missing = append(missing, loadClyde(lookup, &cfg)...)
-	missing = append(missing, loadFallback(lookup, &cfg)...)
+	if _, configured := lookup("PROVIDERS"); !configured {
+		missing = append(missing, loadClyde(lookup, &cfg)...)
+		missing = append(missing, loadFallback(lookup, &cfg)...)
+	}
 	cfg.LogForwardURL = loadLogForwardURL(lookup)
 
 	return cfg, missing
