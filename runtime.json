@@ -16,7 +16,7 @@
       "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET"
     }
   ],
-  "PROVIDER_PRIORITY": ["clyde", "openai"],
+  "PROVIDER_PRIORITY": ["openai", "clyde"],
   "GITHUB_APP_ID": "4571682",
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
   "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",
