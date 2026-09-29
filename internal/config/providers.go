@@ -10,6 +10,16 @@ import (
 	"strings"
 )
 
+// TokenType selects an API usage category for a provider's daily limit.
+type TokenType string
+
+const (
+	// InputTokens includes cached input tokens.
+	InputTokens TokenType = "input"
+	// OutputTokens includes reasoning tokens.
+	OutputTokens TokenType = "output"
+)
+
 // ProviderConfig contains one validated model endpoint and its credentials.
 type ProviderConfig struct {
 	ID                   string
@@ -17,18 +27,20 @@ type ProviderConfig struct {
 	Model                string
 	APIKey               string
 	DailyTokenLimit      int64
+	DailyTokenTypes      []TokenType
 	CFAccessClientID     string
 	CFAccessClientSecret string
 }
 
 type providerDefinition struct {
-	ID                          string `json:"id"`
-	BaseURL                     string `json:"base_url"`
-	Model                       string `json:"model"`
-	APIKeyBinding               string `json:"api_key_binding"`
-	DailyTokenLimit             int64  `json:"daily_token_limit,omitempty"`
-	CFAccessClientIDBinding     string `json:"cf_access_client_id_binding,omitempty"`
-	CFAccessClientSecretBinding string `json:"cf_access_client_secret_binding,omitempty"`
+	ID                          string      `json:"id"`
+	BaseURL                     string      `json:"base_url"`
+	Model                       string      `json:"model"`
+	APIKeyBinding               string      `json:"api_key_binding"`
+	DailyTokenLimit             int64       `json:"daily_token_limit,omitempty"`
+	DailyTokenTypes             []TokenType `json:"daily_token_types,omitempty"`
+	CFAccessClientIDBinding     string      `json:"cf_access_client_id_binding,omitempty"`
+	CFAccessClientSecretBinding string      `json:"cf_access_client_secret_binding,omitempty"`
 }
 
 var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -55,6 +67,9 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		if definition.DailyTokenLimit < 0 {
 			return nil, fmt.Errorf("provider %q daily_token_limit must not be negative", definition.ID)
 		}
+		if err := validateTokenTypes(definition.ID, definition.DailyTokenTypes); err != nil {
+			return nil, err
+		}
 		if _, exists := configured[definition.ID]; exists {
 			return nil, fmt.Errorf("duplicate provider %q", definition.ID)
 		}
@@ -80,6 +95,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			Model:                definition.Model,
 			APIKey:               apiKey,
 			DailyTokenLimit:      definition.DailyTokenLimit,
+			DailyTokenTypes:      definition.DailyTokenTypes,
 			CFAccessClientID:     clientID,
 			CFAccessClientSecret: clientSecret, // gitleaks:allow
 		}
@@ -95,6 +111,17 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		providers = append(providers, provider)
 	}
 	return providers, nil
+}
+
+func validateTokenTypes(providerID string, tokenTypes []TokenType) error {
+	seen := make(map[TokenType]bool, len(tokenTypes))
+	for _, tokenType := range tokenTypes {
+		if tokenType != InputTokens && tokenType != OutputTokens || seen[tokenType] {
+			return fmt.Errorf("provider %q daily_token_types must contain input and/or output once", providerID)
+		}
+		seen[tokenType] = true
+	}
+	return nil
 }
 
 func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {

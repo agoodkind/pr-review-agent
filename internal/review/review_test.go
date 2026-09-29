@@ -4817,14 +4817,14 @@ func TestTheNeutralCheckNamesTheUnreadChunksWithoutQuotingTheProvider(t *testing
 // behind it reaches neither of them.
 func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		model: &sequenceModel{err: quotaExhaustedError{}},
+		model: &sequenceModel{err: dailyBudgetExhaustedError{}},
 	})
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	wantReason := "Review stopped: the model provider reported no remaining usage."
+	wantReason := "Review stopped: a configured provider exhausted its daily token limit."
 	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
 	if !ok || !strings.Contains(checkSummary, wantReason) {
 		t.Fatalf("check summary = %v, want the classified reason", checkOutput(t, fixture)["summary"])
@@ -4833,6 +4833,9 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 		t.Fatalf("check summary published the raw provider cause:\n%s", checkSummary)
 	}
 	assertSanitizedFailureComment(t, fixture, wantReason, "usage credits are exhausted")
+	if strings.Contains(failureSummaryComment(t, fixture), "Apply the `test-review-agent-rerun` label") {
+		t.Fatal("daily budget notice offered an immediate retry")
+	}
 }
 
 // A run that could not read every chunk leaves no review marker, so the same
@@ -5347,15 +5350,17 @@ func (model *failThenSucceedModel) Review(context.Context, string) (review.Compl
 	}, nil
 }
 
-// quotaExhaustedError mimics the provider error shape for exhausted usage.
-type quotaExhaustedError struct{}
+type dailyBudgetExhaustedError struct{}
 
-func (quotaExhaustedError) Error() string {
-	return "model provider returned HTTP 400 Bad Request: invalid_request_error: " +
-		"upstream_failed: upstream call failed: usage credits are exhausted"
+func (dailyBudgetExhaustedError) Error() string {
+	return "provider daily token limit exhausted: usage credits are exhausted"
 }
 
-func (quotaExhaustedError) UsageExceeded() bool {
+func (dailyBudgetExhaustedError) UsageExceeded() bool {
+	return true
+}
+
+func (dailyBudgetExhaustedError) DailyBudgetExhausted() bool {
 	return true
 }
 

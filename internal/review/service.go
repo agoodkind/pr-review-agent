@@ -35,6 +35,7 @@ const (
 	checkFailurePublish     = "Review failed while publishing the final decision."
 	checkFailurePanic       = "Review failed after an internal panic."
 	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
+	checkFailureDailyBudget = "Review stopped: a configured provider exhausted its daily token limit."
 	checkFailureUnavailable = "The model provider is unavailable. Wait for it to recover."
 	checkFailureDeadline    = "Review stopped: it ran out of time."
 	// checkTitleAlreadyReviewed names a run that found nothing owed, whether

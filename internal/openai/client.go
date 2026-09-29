@@ -26,6 +26,7 @@ type provider struct {
 	sdk             openaigo.Client
 	model           shared.ChatModel
 	dailyTokenLimit int64
+	dailyTokenTypes []config.TokenType
 	pricingByModel  map[string]config.ModelPricing
 }
 
@@ -53,6 +54,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			APIKey:               cfg.ClydeAPIKey,
 			Model:                cfg.ReviewModel,
 			DailyTokenLimit:      0,
+			DailyTokenTypes:      nil,
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 		}}
@@ -63,6 +65,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				APIKey:               cfg.FallbackAPIKey,
 				Model:                cfg.FallbackModel,
 				DailyTokenLimit:      0,
+				DailyTokenTypes:      nil,
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
@@ -86,6 +89,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			sdk:             newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
 			model:           configured.Model,
 			dailyTokenLimit: configured.DailyTokenLimit,
+			dailyTokenTypes: configured.DailyTokenTypes,
 			pricingByModel:  cfg.ReviewModelPricing,
 		})
 	}
@@ -318,7 +322,7 @@ func completeWith(
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
 		if hasUsage {
-			report(usage.TotalTokens)
+			report(budgetTokens(usage, target.dailyTokenTypes))
 		}
 	}()
 	for stream.Next() {
@@ -357,6 +361,22 @@ func completeWith(
 		return "", errors.New("openai response missing message content")
 	}
 	return result, nil
+}
+
+func budgetTokens(usage openaigo.CompletionUsage, tokenTypes []config.TokenType) int64 {
+	if len(tokenTypes) == 0 {
+		return usage.TotalTokens
+	}
+	var tokens int64
+	for _, tokenType := range tokenTypes {
+		switch tokenType {
+		case config.InputTokens:
+			tokens += usage.PromptTokens
+		case config.OutputTokens:
+			tokens += usage.CompletionTokens
+		}
+	}
+	return tokens
 }
 
 func modelUsage(model string, usage openaigo.CompletionUsage, usageReported bool, target provider) review.ModelUsage {

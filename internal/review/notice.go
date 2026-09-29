@@ -116,6 +116,8 @@ func failureTitle(stage string, cause error) string {
 func chunkFailureReason(failures []chunkFailure) string {
 	for _, failure := range failures {
 		switch {
+		case dailyBudgetExhausted(failure.err):
+			return checkFailureDailyBudget
 		case usageExceeded(failure.err):
 			return checkFailureUsage
 		case errors.Is(failure.err, context.DeadlineExceeded):
@@ -143,6 +145,15 @@ func publicFailureDetail(job domain.ReviewJob) string {
 // usageExceededError is any provider error that reports exhausted usage.
 type usageExceededError interface {
 	UsageExceeded() bool
+}
+
+type dailyBudgetError interface {
+	DailyBudgetExhausted() bool
+}
+
+func dailyBudgetExhausted(cause error) bool {
+	var target dailyBudgetError
+	return errors.As(cause, &target) && target.DailyBudgetExhausted()
 }
 
 type providerUnavailableError interface {

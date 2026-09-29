@@ -705,6 +705,7 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 		Providers: []config.ProviderConfig{{
 			ID: "capped", BaseURL: mustParseURL(t, providerServer.URL),
 			Model: testPrimaryModel, APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000,
+			DailyTokenTypes: []config.TokenType{config.InputTokens},
 		}},
 	}, budgetServer.Client())
 	for range 2 {
@@ -712,7 +713,7 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 			t.Fatalf("Review: %v", err)
 		}
 	}
-	if checkCount != 2 || reportCount != 2 || reportedTokens != 2400 || providerState.requestCount != 2 {
+	if checkCount != 2 || reportCount != 2 || reportedTokens != 2000 || providerState.requestCount != 2 {
 		t.Fatalf("checks = %d, reports = %d, tokens = %d, provider requests = %d", checkCount, reportCount, reportedTokens, providerState.requestCount)
 	}
 }

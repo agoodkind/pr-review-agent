@@ -47,8 +47,9 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
 | `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
-| `PROVIDERS[].daily_token_limit` | Maximum tokens reserved for one provider per UTC day; omit or set `0` for no limit |
-| `PROVIDER_BUDGET_URL` | Worker endpoint that records token reservations before model requests |
+| `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider per UTC day; omit or set `0` for no limit |
+| `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
+| `PROVIDER_BUDGET_URL` | Worker endpoint that records reported usage after model requests |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
@@ -66,7 +67,7 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 List every configured provider ID once in `PROVIDER_PRIORITY`. Put the preferred provider first. The service tries the next provider when the previous provider reports exhausted API usage or its configured daily token limit denies a request. The service rejects incomplete providers and invalid priority lists at startup. OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
 
-Set `daily_token_limit` on each provider that needs a daily cap. The Worker admits a request while reported usage for that UTC day is below the limit. After the model responds, the service reports the API's token total. Concurrent requests can exceed the limit because admission does not reserve tokens. A request without reported usage does not increase the counter. The service skips a provider if the Worker cannot check its usage. Keep the Worker URL and the `PROVIDER_BUDGET` Durable Object binding configured when any provider has a cap.
+Set `daily_token_limit` on each provider that needs a daily cap. Set `daily_token_types` to `input`, `output`, or both. OpenAI's complimentary data-sharing allowance counts both input and output. Both OpenAI providers select both types. The Worker admits a request while reported usage for that UTC day is below the limit. After the model responds, the service reports the selected token count. Concurrent requests can exceed the limit because admission does not reserve tokens. A request without reported usage does not increase the counter. The service skips a provider if the Worker cannot check its usage. Keep the Worker URL and the `PROVIDER_BUDGET` Durable Object binding configured when any provider has a cap.
 
 Set both `cf_access_client_id_binding` and `cf_access_client_secret_binding` for a provider behind Cloudflare Access. Omit both fields for public endpoints.
 

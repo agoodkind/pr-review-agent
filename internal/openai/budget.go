@@ -19,6 +19,8 @@ const (
 	budgetRequestTimeout = 5 * time.Second
 )
 
+var errDailyTokenLimitExhausted = errors.New("daily token limit exhausted")
+
 type budgetAdmissionError struct {
 	providerID string
 	cause      error
@@ -30,6 +32,14 @@ func (budgetError *budgetAdmissionError) Error() string {
 
 func (budgetError *budgetAdmissionError) Unwrap() error {
 	return budgetError.cause
+}
+
+func (budgetError *budgetAdmissionError) UsageExceeded() bool {
+	return errors.Is(budgetError.cause, errDailyTokenLimitExhausted)
+}
+
+func (budgetError *budgetAdmissionError) DailyBudgetExhausted() bool {
+	return errors.Is(budgetError.cause, errDailyTokenLimitExhausted)
 }
 
 func (client *Client) checkBudget(ctx context.Context, target provider) (string, error) {
@@ -72,7 +82,7 @@ func (client *Client) checkBudget(ctx context.Context, target provider) (string,
 		return "", &budgetAdmissionError{providerID: target.id, cause: err}
 	}
 	if !decision.Allowed {
-		return "", &budgetAdmissionError{providerID: target.id, cause: errors.New("daily token limit exhausted")}
+		return "", &budgetAdmissionError{providerID: target.id, cause: errDailyTokenLimitExhausted}
 	}
 	if decision.Day == "" {
 		return "", &budgetAdmissionError{providerID: target.id, cause: errors.New("budget service omitted the UTC day")}
