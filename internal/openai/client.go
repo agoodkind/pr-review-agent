@@ -28,6 +28,7 @@ type provider struct {
 	dailyTokenLimit         int64
 	dailyTokenTypes         []config.TokenType
 	omitMaxCompletionTokens bool
+	omitResponseFormat      bool
 	pricingByModel          map[string]config.ModelPricing
 }
 
@@ -57,6 +58,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			DailyTokenLimit:         0,
 			DailyTokenTypes:         nil,
 			OmitMaxCompletionTokens: false,
+			OmitResponseFormat:      false,
 			CFAccessClientID:        cfg.CFAccessClientID,
 			CFAccessClientSecret:    cfg.CFAccessClientSecret, // gitleaks:allow
 		}}
@@ -69,6 +71,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				DailyTokenLimit:         0,
 				DailyTokenTypes:         nil,
 				OmitMaxCompletionTokens: false,
+				OmitResponseFormat:      false,
 				CFAccessClientID:        cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret:    cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
@@ -94,6 +97,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			dailyTokenLimit:         configured.DailyTokenLimit,
 			dailyTokenTypes:         configured.DailyTokenTypes,
 			omitMaxCompletionTokens: configured.OmitMaxCompletionTokens,
+			omitResponseFormat:      configured.OmitResponseFormat,
 			pricingByModel:          cfg.ReviewModelPricing,
 		})
 	}
@@ -303,7 +307,12 @@ func completeWith(
 			openaigo.SystemMessage(structuredOutputPrompt(policy, schemaName, schema)),
 			openaigo.UserMessage(prompt),
 		},
-		ResponseFormat: openaigo.ChatCompletionNewParamsResponseFormatUnion{
+	}
+	if !target.omitMaxCompletionTokens {
+		params.MaxCompletionTokens = openaigo.Int(int64(config.MaximumOutputTokens))
+	}
+	if !target.omitResponseFormat {
+		params.ResponseFormat = openaigo.ChatCompletionNewParamsResponseFormatUnion{
 			OfJSONSchema: &openaigo.ResponseFormatJSONSchemaParam{
 				JSONSchema: openaigo.ResponseFormatJSONSchemaJSONSchemaParam{
 					Name:   schemaName,
@@ -311,10 +320,7 @@ func completeWith(
 					Schema: schema,
 				},
 			},
-		},
-	}
-	if !target.omitMaxCompletionTokens {
-		params.MaxCompletionTokens = openaigo.Int(int64(config.MaximumOutputTokens))
+		}
 	}
 	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
 	defer func() {
