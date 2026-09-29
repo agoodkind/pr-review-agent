@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/telemetry"
 )
 
@@ -78,9 +80,9 @@ func (client *Client) checkBudget(ctx context.Context, target provider) (string,
 	return decision.Day, nil
 }
 
-func (client *Client) reportBudget(ctx context.Context, target provider, day string, tokens int64) error {
+func (client *Client) reportBudget(ctx context.Context, target provider, day string, tokens int64) {
 	if target.dailyTokenLimit == 0 || tokens <= 0 {
-		return nil
+		return
 	}
 	body, err := json.Marshal(struct {
 		ProviderID string `json:"provider_id"`
@@ -88,23 +90,25 @@ func (client *Client) reportBudget(ctx context.Context, target provider, day str
 		Tokens     int64  `json:"tokens"`
 	}{ProviderID: target.id, Day: day, Tokens: tokens})
 	if err != nil {
-		return fmt.Errorf("encode budget report: %w", err)
+		gklog.L(ctx).WarnContext(ctx, "encode model budget report failed", slog.String("err", err.Error()))
+		return
 	}
 	requestContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), budgetRequestTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, client.budgetURL, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("create budget report request: %w", err)
+		gklog.L(ctx).WarnContext(ctx, "create model budget report request failed", slog.String("err", err.Error()))
+		return
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Pr-Agent-Budget-Signature", telemetry.Sign(client.budgetSigningKey, body))
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("send budget report: %w", err)
+		gklog.L(ctx).WarnContext(ctx, "send model budget report failed", slog.String("err", err.Error()))
+		return
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("budget report returned HTTP %d", response.StatusCode)
+		gklog.L(ctx).WarnContext(ctx, "model budget report rejected", slog.Int("status", response.StatusCode))
 	}
-	return nil
 }

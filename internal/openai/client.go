@@ -238,9 +238,7 @@ func (client *Client) complete(
 		content := ""
 		if err == nil {
 			report := func(tokens int64) {
-				if reportErr := client.reportBudget(ctx, target, day, tokens); reportErr != nil {
-					gklog.L(ctx).WarnContext(ctx, "model budget report failed", slog.String("err", reportErr.Error()))
-				}
+				client.reportBudget(ctx, target, day, tokens)
 			}
 			content, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 		}
