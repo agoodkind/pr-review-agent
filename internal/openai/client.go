@@ -50,25 +50,27 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	fallbackOnUsageExceeded := true
 	if len(configuredProviders) == 0 {
 		configuredProviders = []config.ProviderConfig{{
-			ID:                   "primary",
-			BaseURL:              cfg.ClydeBaseURL,
-			APIKey:               cfg.ClydeAPIKey,
-			Model:                cfg.ReviewModel,
-			DailyTokenLimit:      0,
-			DailyTokenTypes:      nil,
-			CFAccessClientID:     cfg.CFAccessClientID,
-			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
+			ID:                      "primary",
+			BaseURL:                 cfg.ClydeBaseURL,
+			APIKey:                  cfg.ClydeAPIKey,
+			Model:                   cfg.ReviewModel,
+			DailyTokenLimit:         0,
+			DailyTokenTypes:         nil,
+			OmitMaxCompletionTokens: false,
+			CFAccessClientID:        cfg.CFAccessClientID,
+			CFAccessClientSecret:    cfg.CFAccessClientSecret, // gitleaks:allow
 		}}
 		if cfg.HasFallback() {
 			configuredProviders = append(configuredProviders, config.ProviderConfig{
-				ID:                   "fallback",
-				BaseURL:              cfg.FallbackBaseURL,
-				APIKey:               cfg.FallbackAPIKey,
-				Model:                cfg.FallbackModel,
-				DailyTokenLimit:      0,
-				DailyTokenTypes:      nil,
-				CFAccessClientID:     cfg.FallbackCFAccessClientID,
-				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
+				ID:                      "fallback",
+				BaseURL:                 cfg.FallbackBaseURL,
+				APIKey:                  cfg.FallbackAPIKey,
+				Model:                   cfg.FallbackModel,
+				DailyTokenLimit:         0,
+				DailyTokenTypes:         nil,
+				OmitMaxCompletionTokens: false,
+				CFAccessClientID:        cfg.FallbackCFAccessClientID,
+				CFAccessClientSecret:    cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
 		}
 		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
