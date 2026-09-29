@@ -88,19 +88,19 @@ func (client *Client) reportBudget(ctx context.Context, target provider, day str
 		Tokens     int64  `json:"tokens"`
 	}{ProviderID: target.id, Day: day, Tokens: tokens})
 	if err != nil {
-		return err
+		return fmt.Errorf("encode budget report: %w", err)
 	}
 	requestContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), budgetRequestTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodPost, client.budgetURL, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("create budget report request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Pr-Agent-Budget-Signature", telemetry.Sign(client.budgetSigningKey, body))
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return err
+		return fmt.Errorf("send budget report: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {

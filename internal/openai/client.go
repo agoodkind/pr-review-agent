@@ -320,7 +320,7 @@ func completeWith(
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
 		if hasUsage {
-			report(int64(usage.TotalTokens))
+			report(usage.TotalTokens)
 		}
 	}()
 	for stream.Next() {
