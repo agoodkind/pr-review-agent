@@ -16,7 +16,16 @@ export async function handleProviderBudget(request, env, verifySignature) {
     return new Response("invalid signature", { status: 401 });
   }
   const budget = env.PROVIDER_BUDGET.getByName("provider-budgets");
-  return budget.fetch(new Request("https://budget/reserve", {
+  let pathname = "/check";
+  try {
+    const payload = JSON.parse(body);
+    if (Object.hasOwn(payload, "tokens")) {
+      pathname = Object.hasOwn(payload, "limit") ? "/reserve" : "/report";
+    }
+  } catch {
+    return new Response("invalid budget request", { status: 400 });
+  }
+  return budget.fetch(new Request(`https://budget${pathname}`, {
     method: "POST",
     body,
   }));

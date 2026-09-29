@@ -613,18 +613,17 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 			writer.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		var reservation struct {
+		var admission struct {
 			ProviderID string `json:"provider_id"`
-			Tokens     int64  `json:"tokens"`
 			Limit      int64  `json:"limit"`
 		}
-		if err := json.Unmarshal(body, &reservation); err != nil {
-			t.Errorf("decode reservation: %v", err)
+		if err := json.Unmarshal(body, &admission); err != nil {
+			t.Errorf("decode admission: %v", err)
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if reservation.ProviderID != "capped" || reservation.Tokens < config.MaximumOutputTokens || reservation.Limit != 2_000_000 {
-			t.Errorf("reservation = %+v", reservation)
+		if admission.ProviderID != "capped" || admission.Limit != 2_000_000 {
+			t.Errorf("admission = %+v", admission)
 		}
 		reservationCount++
 		writeJSON(writer, http.StatusOK, map[string]bool{"allowed": false})
@@ -646,6 +645,75 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 	}
 	if completion.Model != testFallbackModel || primaryState.requestCount != 0 || secondaryState.requestCount != 1 || reservationCount != 1 {
 		t.Fatalf("model = %q, primary requests = %d, secondary requests = %d, reservations = %d", completion.Model, primaryState.requestCount, secondaryState.requestCount, reservationCount)
+	}
+}
+
+func TestDailyBudgetReportsProviderUsage(t *testing.T) {
+	providerState := &testServerState{completionContent: validReviewContent()}
+	providerState.streamResponse = func(writer http.ResponseWriter) {
+		writeStreamFrames(writer, []map[string]any{
+			completionStreamChunk(validReviewContent(), "stop"),
+			{
+				"id": "chatcmpl-test", "object": "chat.completion.chunk", "created": 0,
+				"model": testPrimaryModel, "choices": []map[string]any{},
+				"usage": map[string]any{"prompt_tokens": 1000, "completion_tokens": 200, "total_tokens": 1200},
+			},
+		}, true)
+	}
+	providerServer := newProviderServer(providerState)
+	t.Cleanup(providerServer.Close)
+
+	signingKey := []byte("fixture-budget-signing-key")
+	checkCount := 0
+	reportCount := 0
+	reportedTokens := int64(0)
+	budgetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil || request.Header.Get("X-Pr-Agent-Budget-Signature") != telemetry.Sign(signingKey, body) {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var payload struct {
+			ProviderID string `json:"provider_id"`
+			Day        string `json:"day"`
+			Tokens     int64  `json:"tokens"`
+			Limit      int64  `json:"limit"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil || payload.ProviderID != "capped" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if payload.Day == "" {
+			checkCount++
+			writeJSON(writer, http.StatusOK, map[string]any{"allowed": reportedTokens < payload.Limit, "day": "2026-09-29"})
+			return
+		}
+		if payload.Day != "2026-09-29" {
+			writer.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reportCount++
+		reportedTokens += payload.Tokens
+		writeJSON(writer, http.StatusOK, map[string]bool{"reported": true})
+	}))
+	t.Cleanup(budgetServer.Close)
+
+	client := openai.NewClient(config.Config{
+		MinimumImportance:   7,
+		GitHubWebhookSecret: signingKey, // gitleaks:allow
+		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
+		Providers: []config.ProviderConfig{{
+			ID: "capped", BaseURL: mustParseURL(t, providerServer.URL),
+			Model: testPrimaryModel, APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000,
+		}},
+	}, budgetServer.Client())
+	for range 2 {
+		if _, err := client.Review(context.Background(), "prompt"); err != nil {
+			t.Fatalf("Review: %v", err)
+		}
+	}
+	if checkCount != 2 || reportCount != 2 || reportedTokens != 2400 || providerState.requestCount != 2 {
+		t.Fatalf("checks = %d, reports = %d, tokens = %d, provider requests = %d", checkCount, reportCount, reportedTokens, providerState.requestCount)
 	}
 }
 
