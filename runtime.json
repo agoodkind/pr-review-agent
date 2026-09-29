@@ -16,9 +16,17 @@
       "api_key_binding": "OPENAI_GOODKINDALEX_API_KEY",
       "daily_token_limit": 2500000,
       "daily_token_types": ["input", "output"]
+    },
+    {
+      "id": "clyde",
+      "base_url": "https://clyde-suburban.goodkind.io/v1",
+      "model": "gpt-6-luna",
+      "api_key_binding": "OPENAI_KEY",
+      "cf_access_client_id_binding": "CF_ACCESS_CLIENT_ID",
+      "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET"
     }
   ],
-  "PROVIDER_PRIORITY": ["openai_goodkind_io", "openai_goodkindalex"],
+  "PROVIDER_PRIORITY": ["openai_goodkind_io", "openai_goodkindalex", "clyde"],
   "PROVIDER_BUDGET_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/provider_budget",
   "GITHUB_APP_ID": "4571682",
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
