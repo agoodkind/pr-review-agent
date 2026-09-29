@@ -49,6 +49,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
 | `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider per UTC day; omit or set `0` for no limit |
 | `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
+| `PROVIDERS[].omit_max_completion_tokens` | Omit the completion size parameter for a backend that rejects it |
 | `PROVIDER_BUDGET_URL` | Worker endpoint that records reported usage after model requests |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |

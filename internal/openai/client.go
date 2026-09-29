@@ -22,12 +22,13 @@ import (
 
 // provider is one model endpoint the client can send a completion to.
 type provider struct {
-	id              string
-	sdk             openaigo.Client
-	model           shared.ChatModel
-	dailyTokenLimit int64
-	dailyTokenTypes []config.TokenType
-	pricingByModel  map[string]config.ModelPricing
+	id                      string
+	sdk                     openaigo.Client
+	model                   shared.ChatModel
+	dailyTokenLimit         int64
+	dailyTokenTypes         []config.TokenType
+	omitMaxCompletionTokens bool
+	pricingByModel          map[string]config.ModelPricing
 }
 
 // Client performs structured OpenAI chat completion requests.
@@ -49,25 +50,27 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	fallbackOnUsageExceeded := true
 	if len(configuredProviders) == 0 {
 		configuredProviders = []config.ProviderConfig{{
-			ID:                   "primary",
-			BaseURL:              cfg.ClydeBaseURL,
-			APIKey:               cfg.ClydeAPIKey,
-			Model:                cfg.ReviewModel,
-			DailyTokenLimit:      0,
-			DailyTokenTypes:      nil,
-			CFAccessClientID:     cfg.CFAccessClientID,
-			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
+			ID:                      "primary",
+			BaseURL:                 cfg.ClydeBaseURL,
+			APIKey:                  cfg.ClydeAPIKey,
+			Model:                   cfg.ReviewModel,
+			DailyTokenLimit:         0,
+			DailyTokenTypes:         nil,
+			OmitMaxCompletionTokens: false,
+			CFAccessClientID:        cfg.CFAccessClientID,
+			CFAccessClientSecret:    cfg.CFAccessClientSecret, // gitleaks:allow
 		}}
 		if cfg.HasFallback() {
 			configuredProviders = append(configuredProviders, config.ProviderConfig{
-				ID:                   "fallback",
-				BaseURL:              cfg.FallbackBaseURL,
-				APIKey:               cfg.FallbackAPIKey,
-				Model:                cfg.FallbackModel,
-				DailyTokenLimit:      0,
-				DailyTokenTypes:      nil,
-				CFAccessClientID:     cfg.FallbackCFAccessClientID,
-				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
+				ID:                      "fallback",
+				BaseURL:                 cfg.FallbackBaseURL,
+				APIKey:                  cfg.FallbackAPIKey,
+				Model:                   cfg.FallbackModel,
+				DailyTokenLimit:         0,
+				DailyTokenTypes:         nil,
+				OmitMaxCompletionTokens: false,
+				CFAccessClientID:        cfg.FallbackCFAccessClientID,
+				CFAccessClientSecret:    cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
 		}
 		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
@@ -85,12 +88,13 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	}
 	for _, configured := range configuredProviders {
 		client.providers = append(client.providers, provider{
-			id:              configured.ID,
-			sdk:             newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
-			model:           configured.Model,
-			dailyTokenLimit: configured.DailyTokenLimit,
-			dailyTokenTypes: configured.DailyTokenTypes,
-			pricingByModel:  cfg.ReviewModelPricing,
+			id:                      configured.ID,
+			sdk:                     newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
+			model:                   configured.Model,
+			dailyTokenLimit:         configured.DailyTokenLimit,
+			dailyTokenTypes:         configured.DailyTokenTypes,
+			omitMaxCompletionTokens: configured.OmitMaxCompletionTokens,
+			pricingByModel:          cfg.ReviewModelPricing,
 		})
 	}
 	return client
@@ -289,10 +293,9 @@ func completeWith(
 	schema json.RawMessage,
 	report func(int64),
 ) (string, error) {
-	stream := target.sdk.Chat.Completions.NewStreaming(ctx, openaigo.ChatCompletionNewParams{
-		Model:               target.model,
-		ReasoningEffort:     shared.ReasoningEffort(config.ReasoningEffort),
-		MaxCompletionTokens: openaigo.Int(int64(config.MaximumOutputTokens)),
+	params := openaigo.ChatCompletionNewParams{
+		Model:           target.model,
+		ReasoningEffort: shared.ReasoningEffort(config.ReasoningEffort),
 		StreamOptions: openaigo.ChatCompletionStreamOptionsParam{
 			IncludeUsage: openaigo.Bool(true),
 		},
@@ -309,7 +312,11 @@ func completeWith(
 				},
 			},
 		},
-	})
+	}
+	if !target.omitMaxCompletionTokens {
+		params.MaxCompletionTokens = openaigo.Int(int64(config.MaximumOutputTokens))
+	}
+	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
 	defer func() {
 		_ = stream.Close()
 	}()
