@@ -103,7 +103,7 @@ func incompleteCheckDetail(failures []chunkFailure, summary Summary, job domain.
 // a run that could not finish: how much went unread, and how to retry it.
 func incompleteCheckTitle(pending int, reason string) string {
 	if reason == checkFailureDailyBudget {
-		return fmt.Sprintf("%s could not be reviewed: daily model usage exhausted.", chunkCount(pending))
+		return chunkCount(pending) + " could not be reviewed: daily model usage exhausted."
 	}
 	return fmt.Sprintf("%s could not be reviewed. Apply `%s` to retry.",
 		chunkCount(pending), domain.RerunReviewLabel)

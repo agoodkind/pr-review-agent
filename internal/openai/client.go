@@ -26,7 +26,7 @@ type provider struct {
 	sdk             openaigo.Client
 	model           shared.ChatModel
 	dailyTokenLimit int64
-	dailyTokenTypes []string
+	dailyTokenTypes []config.TokenType
 	pricingByModel  map[string]config.ModelPricing
 }
 
@@ -54,6 +54,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			APIKey:               cfg.ClydeAPIKey,
 			Model:                cfg.ReviewModel,
 			DailyTokenLimit:      0,
+			DailyTokenTypes:      nil,
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 		}}
@@ -64,6 +65,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				APIKey:               cfg.FallbackAPIKey,
 				Model:                cfg.FallbackModel,
 				DailyTokenLimit:      0,
+				DailyTokenTypes:      nil,
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
@@ -361,16 +363,16 @@ func completeWith(
 	return result, nil
 }
 
-func budgetTokens(usage openaigo.CompletionUsage, tokenTypes []string) int64 {
+func budgetTokens(usage openaigo.CompletionUsage, tokenTypes []config.TokenType) int64 {
 	if len(tokenTypes) == 0 {
 		return usage.TotalTokens
 	}
 	var tokens int64
 	for _, tokenType := range tokenTypes {
 		switch tokenType {
-		case "input":
+		case config.InputTokens:
 			tokens += usage.PromptTokens
-		case "output":
+		case config.OutputTokens:
 			tokens += usage.CompletionTokens
 		}
 	}

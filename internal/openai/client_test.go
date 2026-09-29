@@ -705,7 +705,7 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 		Providers: []config.ProviderConfig{{
 			ID: "capped", BaseURL: mustParseURL(t, providerServer.URL),
 			Model: testPrimaryModel, APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000,
-			DailyTokenTypes: []string{"input"},
+			DailyTokenTypes: []config.TokenType{config.InputTokens},
 		}},
 	}, budgetServer.Client())
 	for range 2 {
