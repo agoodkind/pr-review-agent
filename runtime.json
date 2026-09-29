@@ -23,6 +23,7 @@
       "model": "gpt-6-luna",
       "api_key_binding": "OPENAI_KEY",
       "omit_max_completion_tokens": true,
+      "omit_response_format": true,
       "cf_access_client_id_binding": "CF_ACCESS_CLIENT_ID",
       "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET"
     }

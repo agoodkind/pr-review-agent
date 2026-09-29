@@ -29,6 +29,7 @@ type ProviderConfig struct {
 	DailyTokenLimit         int64
 	DailyTokenTypes         []TokenType
 	OmitMaxCompletionTokens bool
+	OmitResponseFormat      bool
 	CFAccessClientID        string
 	CFAccessClientSecret    string
 }
@@ -41,6 +42,7 @@ type providerDefinition struct {
 	DailyTokenLimit             int64       `json:"daily_token_limit,omitempty"`
 	DailyTokenTypes             []TokenType `json:"daily_token_types,omitempty"`
 	OmitMaxCompletionTokens     bool        `json:"omit_max_completion_tokens,omitempty"`
+	OmitResponseFormat          bool        `json:"omit_response_format,omitempty"`
 	CFAccessClientIDBinding     string      `json:"cf_access_client_id_binding,omitempty"`
 	CFAccessClientSecretBinding string      `json:"cf_access_client_secret_binding,omitempty"`
 }
@@ -99,6 +101,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			DailyTokenLimit:         definition.DailyTokenLimit,
 			DailyTokenTypes:         definition.DailyTokenTypes,
 			OmitMaxCompletionTokens: definition.OmitMaxCompletionTokens,
+			OmitResponseFormat:      definition.OmitResponseFormat,
 			CFAccessClientID:        clientID,
 			CFAccessClientSecret:    clientSecret, // gitleaks:allow
 		}

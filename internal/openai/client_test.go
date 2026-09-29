@@ -575,6 +575,7 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 			Model:                   "model-" + strconv.Itoa(index),
 			APIKey:                  testAPIKeyValue(),
 			OmitMaxCompletionTokens: index == 2,
+			OmitResponseFormat:      index == 2,
 		})
 	}
 	client := openai.NewClient(config.Config{Providers: providers, MinimumImportance: 7}, nil)
@@ -592,6 +593,9 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 	}
 	if _, sent := states[2].lastRequestBody["max_completion_tokens"]; sent {
 		t.Fatal("Codex provider request included max_completion_tokens")
+	}
+	if _, sent := states[2].lastRequestBody["response_format"]; sent {
+		t.Fatal("Codex provider request included response_format")
 	}
 }
 
