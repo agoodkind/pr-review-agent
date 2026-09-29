@@ -20,7 +20,7 @@ import (
 
 const (
 	// ReasoningEffort is the OpenAI reasoning effort for every completion.
-	ReasoningEffort = "high"
+	ReasoningEffort = "low"
 	// FallbackOnUsageExceeded is the only supported fallback trigger. It sends
 	// the request to the fallback provider when the primary reports that it has
 	// no remaining usage.

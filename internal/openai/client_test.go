@@ -71,8 +71,8 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if body["model"] != testPrimaryModel {
 		t.Fatalf("model = %v, want %q", body["model"], testPrimaryModel)
 	}
-	if body["reasoning_effort"] != config.ReasoningEffort {
-		t.Fatalf("reasoning_effort = %v, want %q", body["reasoning_effort"], config.ReasoningEffort)
+	if body["reasoning_effort"] != "low" {
+		t.Fatalf("reasoning_effort = %v, want low", body["reasoning_effort"])
 	}
 	if body["max_completion_tokens"] != float64(config.MaximumOutputTokens) {
 		t.Fatalf("max_completion_tokens = %v, want %d", body["max_completion_tokens"], config.MaximumOutputTokens)
