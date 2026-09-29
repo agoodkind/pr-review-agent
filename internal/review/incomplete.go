@@ -63,7 +63,7 @@ func (service *Service) concludeIncomplete(
 		job.Repository,
 		checkRun.ID,
 		checkConclusionDeclined,
-		incompleteCheckTitle(pending),
+		incompleteCheckTitle(pending, reason),
 		incompleteCheckDetail(unread, summary, job),
 	); err != nil {
 		return err
@@ -101,7 +101,10 @@ func incompleteCheckDetail(failures []chunkFailure, summary Summary, job domain.
 
 // incompleteCheckTitle is the one line a reader sees before opening anything on
 // a run that could not finish: how much went unread, and how to retry it.
-func incompleteCheckTitle(pending int) string {
+func incompleteCheckTitle(pending int, reason string) string {
+	if reason == checkFailureDailyBudget {
+		return fmt.Sprintf("%s could not be reviewed: daily model usage exhausted.", chunkCount(pending))
+	}
 	return fmt.Sprintf("%s could not be reviewed. Apply `%s` to retry.",
 		chunkCount(pending), domain.RerunReviewLabel)
 }

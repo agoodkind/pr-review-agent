@@ -17,18 +17,20 @@ type ProviderConfig struct {
 	Model                string
 	APIKey               string
 	DailyTokenLimit      int64
+	DailyTokenTypes      []string
 	CFAccessClientID     string
 	CFAccessClientSecret string
 }
 
 type providerDefinition struct {
-	ID                          string `json:"id"`
-	BaseURL                     string `json:"base_url"`
-	Model                       string `json:"model"`
-	APIKeyBinding               string `json:"api_key_binding"`
-	DailyTokenLimit             int64  `json:"daily_token_limit,omitempty"`
-	CFAccessClientIDBinding     string `json:"cf_access_client_id_binding,omitempty"`
-	CFAccessClientSecretBinding string `json:"cf_access_client_secret_binding,omitempty"`
+	ID                          string   `json:"id"`
+	BaseURL                     string   `json:"base_url"`
+	Model                       string   `json:"model"`
+	APIKeyBinding               string   `json:"api_key_binding"`
+	DailyTokenLimit             int64    `json:"daily_token_limit,omitempty"`
+	DailyTokenTypes             []string `json:"daily_token_types,omitempty"`
+	CFAccessClientIDBinding     string   `json:"cf_access_client_id_binding,omitempty"`
+	CFAccessClientSecretBinding string   `json:"cf_access_client_secret_binding,omitempty"`
 }
 
 var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -55,6 +57,15 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		if definition.DailyTokenLimit < 0 {
 			return nil, fmt.Errorf("provider %q daily_token_limit must not be negative", definition.ID)
 		}
+		if len(definition.DailyTokenTypes) > 0 {
+			seenTypes := make(map[string]bool, len(definition.DailyTokenTypes))
+			for _, tokenType := range definition.DailyTokenTypes {
+				if tokenType != "input" && tokenType != "output" || seenTypes[tokenType] {
+					return nil, fmt.Errorf("provider %q daily_token_types must contain input and/or output once", definition.ID)
+				}
+				seenTypes[tokenType] = true
+			}
+		}
 		if _, exists := configured[definition.ID]; exists {
 			return nil, fmt.Errorf("duplicate provider %q", definition.ID)
 		}
@@ -80,6 +91,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			Model:                definition.Model,
 			APIKey:               apiKey,
 			DailyTokenLimit:      definition.DailyTokenLimit,
+			DailyTokenTypes:      definition.DailyTokenTypes,
 			CFAccessClientID:     clientID,
 			CFAccessClientSecret: clientSecret, // gitleaks:allow
 		}
