@@ -22,14 +22,15 @@ const (
 
 // ProviderConfig contains one validated model endpoint and its credentials.
 type ProviderConfig struct {
-	ID                   string
-	BaseURL              *url.URL
-	Model                string
-	APIKey               string
-	DailyTokenLimit      int64
-	DailyTokenTypes      []TokenType
-	CFAccessClientID     string
-	CFAccessClientSecret string
+	ID                      string
+	BaseURL                 *url.URL
+	Model                   string
+	APIKey                  string
+	DailyTokenLimit         int64
+	DailyTokenTypes         []TokenType
+	OmitMaxCompletionTokens bool
+	CFAccessClientID        string
+	CFAccessClientSecret    string
 }
 
 type providerDefinition struct {
@@ -39,6 +40,7 @@ type providerDefinition struct {
 	APIKeyBinding               string      `json:"api_key_binding"`
 	DailyTokenLimit             int64       `json:"daily_token_limit,omitempty"`
 	DailyTokenTypes             []TokenType `json:"daily_token_types,omitempty"`
+	OmitMaxCompletionTokens     bool        `json:"omit_max_completion_tokens,omitempty"`
 	CFAccessClientIDBinding     string      `json:"cf_access_client_id_binding,omitempty"`
 	CFAccessClientSecretBinding string      `json:"cf_access_client_secret_binding,omitempty"`
 }
@@ -90,14 +92,15 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			return nil, fmt.Errorf("%s requires both Cloudflare Access credentials", prefix)
 		}
 		configured[definition.ID] = ProviderConfig{
-			ID:                   definition.ID,
-			BaseURL:              baseURL,
-			Model:                definition.Model,
-			APIKey:               apiKey,
-			DailyTokenLimit:      definition.DailyTokenLimit,
-			DailyTokenTypes:      definition.DailyTokenTypes,
-			CFAccessClientID:     clientID,
-			CFAccessClientSecret: clientSecret, // gitleaks:allow
+			ID:                      definition.ID,
+			BaseURL:                 baseURL,
+			Model:                   definition.Model,
+			APIKey:                  apiKey,
+			DailyTokenLimit:         definition.DailyTokenLimit,
+			DailyTokenTypes:         definition.DailyTokenTypes,
+			OmitMaxCompletionTokens: definition.OmitMaxCompletionTokens,
+			CFAccessClientID:        clientID,
+			CFAccessClientSecret:    clientSecret, // gitleaks:allow
 		}
 	}
 	providers := make([]ProviderConfig, 0, len(priority))

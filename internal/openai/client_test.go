@@ -571,9 +571,10 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 		server := newProviderServer(state)
 		t.Cleanup(server.Close)
 		providers = append(providers, config.ProviderConfig{
-			BaseURL: mustParseURL(t, server.URL),
-			Model:   "model-" + strconv.Itoa(index),
-			APIKey:  testAPIKeyValue(),
+			BaseURL:                 mustParseURL(t, server.URL),
+			Model:                   "model-" + strconv.Itoa(index),
+			APIKey:                  testAPIKeyValue(),
+			OmitMaxCompletionTokens: index == 2,
 		})
 	}
 	client := openai.NewClient(config.Config{Providers: providers, MinimumImportance: 7}, nil)
@@ -588,6 +589,9 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 		if state.requestCount != 1 {
 			t.Fatalf("provider %d request count = %d, want 1", index, state.requestCount)
 		}
+	}
+	if _, sent := states[2].lastRequestBody["max_completion_tokens"]; sent {
+		t.Fatal("Codex provider request included max_completion_tokens")
 	}
 }
 
