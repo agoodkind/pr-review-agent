@@ -234,10 +234,15 @@ func (client *Client) complete(
 ) (string, string, error) {
 	var failures []error
 	for index, target := range client.providers {
-		err := client.reserveBudget(ctx, target, prompt, policy, schemaName, schema)
+		day, err := client.checkBudget(ctx, target)
 		content := ""
 		if err == nil {
-			content, err = completeWith(ctx, target, prompt, policy, schemaName, schema)
+			report := func(tokens int64) {
+				if reportErr := client.reportBudget(ctx, target, day, tokens); reportErr != nil {
+					gklog.L(ctx).WarnContext(ctx, "model budget report failed", slog.String("err", reportErr.Error()))
+				}
+			}
+			content, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 		}
 		if err == nil {
 			return content, target.model, nil
@@ -280,6 +285,7 @@ func completeWith(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
+	report func(int64),
 ) (string, error) {
 	stream := target.sdk.Chat.Completions.NewStreaming(ctx, openaigo.ChatCompletionNewParams{
 		Model:               target.model,
@@ -313,6 +319,9 @@ func completeWith(
 	hasUsage := false
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
+		if hasUsage {
+			report(int64(usage.TotalTokens))
+		}
 	}()
 	for stream.Next() {
 		chunk := stream.Current()

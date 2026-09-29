@@ -61,8 +61,8 @@ async function stopRuntime(child) {
   });
 }
 
-async function reserve(port, providerId, tokens) {
-  const body = JSON.stringify({ provider_id: providerId, tokens, limit: 2_000_000 });
+async function budgetRequest(port, payload) {
+  const body = JSON.stringify(payload);
   const signature = "sha256=" + createHmac("sha256", signingKey).update(body).digest("hex");
   const response = await fetch(`http://127.0.0.1:${port}/internal/v1/provider_budget`, {
     method: "POST",
@@ -73,23 +73,34 @@ async function reserve(port, providerId, tokens) {
   return response.json();
 }
 
-test("daily provider reservations are atomic and survive worker restart", async function () {
+function check(port, providerId) {
+  return budgetRequest(port, { provider_id: providerId, limit: 2_000_000 });
+}
+
+function report(port, providerId, day, tokens) {
+  return budgetRequest(port, { provider_id: providerId, day, tokens });
+}
+
+test("reported tokens set the daily provider limit and survive worker restart", async function () {
   const persistPath = await mkdtemp(path.join(os.tmpdir(), "pr-agent-budget-"));
   const port = await unusedPort();
   let runtime;
   try {
     runtime = await startRuntime(port, persistPath);
-    assert.deepEqual(await reserve(port, "openai_goodkind_io", 1_500_000), { allowed: true });
-    const competing = await Promise.all([
-      reserve(port, "openai_goodkind_io", 500_000),
-      reserve(port, "openai_goodkind_io", 500_000),
-    ]);
-    assert.deepEqual(competing.map(function (answer) { return answer.allowed; }).sort(), [false, true]);
-    assert.deepEqual(await reserve(port, "openai_goodkindalex", 1), { allowed: true });
+    const first = await check(port, "openai_goodkind_io");
+    assert.equal(first.allowed, true);
+    assert.match(first.day, /^\d{4}-\d{2}-\d{2}$/);
+    assert.deepEqual(await report(port, "openai_goodkind_io", first.day, 1_500_000), { reported: true });
+    assert.equal((await check(port, "openai_goodkind_io")).allowed, true);
+    assert.deepEqual(await report(port, "openai_goodkind_io", first.day, 500_000), { reported: true });
+    assert.equal((await check(port, "openai_goodkindalex")).allowed, true);
+    assert.deepEqual(await budgetRequest(port, {
+      provider_id: "legacy", tokens: 2_000_000, limit: 2_000_000,
+    }), { allowed: true });
 
     await stopRuntime(runtime);
     runtime = await startRuntime(port, persistPath);
-    assert.deepEqual(await reserve(port, "openai_goodkind_io", 1), { allowed: false });
+    assert.equal((await check(port, "openai_goodkind_io")).allowed, false);
   } finally {
     await stopRuntime(runtime);
     await rm(persistPath, { recursive: true, force: true });
