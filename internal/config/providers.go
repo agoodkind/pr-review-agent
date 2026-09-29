@@ -10,14 +10,17 @@ import (
 	"strings"
 )
 
-// ProviderConfig contains one validated model endpoint and its credentials.
+// TokenType selects an API usage category for a provider's daily limit.
 type TokenType string
 
 const (
-	InputTokens  TokenType = "input"
+	// InputTokens includes cached input tokens.
+	InputTokens TokenType = "input"
+	// OutputTokens includes reasoning tokens.
 	OutputTokens TokenType = "output"
 )
 
+// ProviderConfig contains one validated model endpoint and its credentials.
 type ProviderConfig struct {
 	ID                   string
 	BaseURL              *url.URL
