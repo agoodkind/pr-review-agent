@@ -3277,8 +3277,8 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 
 	isReconcile := false
 	isReport := false
-	if responseFormat, ok := body["response_format"].(map[string]any); ok {
-		if jsonSchema, ok := responseFormat["json_schema"].(map[string]any); ok {
+	if textFormat, ok := body["text"].(map[string]any); ok {
+		if jsonSchema, ok := textFormat["format"].(map[string]any); ok {
 			if name, ok := jsonSchema["name"].(string); ok {
 				if name == "thread_resolutions" {
 					isReconcile = true
@@ -3414,34 +3414,27 @@ func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 func writeCompletionStream(writer http.ResponseWriter, content string) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
-	chunks := []map[string]any{
+	events := []map[string]any{
 		{
-			"id":      "chatcmpl-test",
-			"object":  "chat.completion.chunk",
-			"created": 0,
-			"model":   testReviewModel,
-			"choices": []map[string]any{{
-				"index": 0,
-				"delta": map[string]any{"role": "assistant", "content": content},
-			}},
+			"type": "response.output_text.delta", "delta": content,
+			"item_id": "item-test", "output_index": 0, "content_index": 0,
 		},
 		{
-			"id":      "chatcmpl-test",
-			"object":  "chat.completion.chunk",
-			"created": 0,
-			"model":   testReviewModel,
-			"choices": []map[string]any{{
-				"index":         0,
-				"delta":         map[string]any{},
-				"finish_reason": "stop",
-			}},
+			"type": "response.completed",
+			"response": map[string]any{
+				"id": "resp-test", "object": "response", "model": testReviewModel, "status": "completed",
+				"output": []map[string]any{{
+					"id": "item-test", "type": "message", "role": "assistant", "status": "completed",
+					"content": []map[string]any{{"type": "output_text", "text": content, "annotations": []any{}}},
+				}},
+			},
 		},
 	}
-	for _, chunk := range chunks {
-		encoded, _ := json.Marshal(chunk)
+	for _, event := range events {
+		encoded, _ := json.Marshal(event)
+		_, _ = writer.Write([]byte("event: " + event["type"].(string) + "\n"))
 		_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	}
-	_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 }
 
 // copyThreadNodes deep copies thread nodes one level down, which is the level

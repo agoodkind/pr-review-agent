@@ -1,4 +1,4 @@
-// Package openai calls OpenAI chat completions for review and reconciliation.
+// Package openai calls the Responses API for review and reconciliation.
 package openai
 
 import (
@@ -10,9 +10,10 @@ import (
 	"net/url"
 	"strings"
 
-	openaigo "github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
-	"github.com/openai/openai-go/shared"
+	openaigo "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
@@ -22,17 +23,36 @@ import (
 
 // provider is one model endpoint the client can send a completion to.
 type provider struct {
-	id                      string
-	sdk                     openaigo.Client
-	model                   shared.ChatModel
-	dailyTokenLimit         int64
-	dailyTokenTypes         []config.TokenType
-	omitMaxCompletionTokens bool
-	omitResponseFormat      bool
-	pricingByModel          map[string]config.ModelPricing
+	id                  string
+	sdk                 openaigo.Client
+	model               string
+	dailyTokenLimit     int64
+	dailyTokenTypes     []config.TokenType
+	omitMaxOutputTokens bool
+	omitTextFormat      bool
+	pricingByModel      map[string]config.ModelPricing
 }
 
-// Client performs structured OpenAI chat completion requests.
+type (
+	responseEventType         string
+	responseTerminalEventType string
+	responseErrorCode         string
+)
+
+const (
+	responseOutputTextDelta   responseEventType         = "response.output_text.delta"
+	responseCompleted         responseEventType         = "response.completed"
+	responseIncomplete        responseEventType         = "response.incomplete"
+	responseFailed            responseEventType         = "response.failed"
+	responseError             responseEventType         = "error"
+	terminalCompleted         responseTerminalEventType = "response.completed"
+	terminalIncomplete        responseTerminalEventType = "response.incomplete"
+	terminalFailed            responseTerminalEventType = "response.failed"
+	responseRateLimitExceeded responseErrorCode         = "rate_limit_exceeded"
+	responseServerError       responseErrorCode         = "server_error"
+)
+
+// Client performs structured Responses requests.
 type Client struct {
 	providers               []provider
 	fallbackOnUsageExceeded bool
@@ -51,29 +71,29 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	fallbackOnUsageExceeded := true
 	if len(configuredProviders) == 0 {
 		configuredProviders = []config.ProviderConfig{{
-			ID:                      "primary",
-			BaseURL:                 cfg.ClydeBaseURL,
-			APIKey:                  cfg.ClydeAPIKey,
-			Model:                   cfg.ReviewModel,
-			DailyTokenLimit:         0,
-			DailyTokenTypes:         nil,
-			OmitMaxCompletionTokens: false,
-			OmitResponseFormat:      false,
-			CFAccessClientID:        cfg.CFAccessClientID,
-			CFAccessClientSecret:    cfg.CFAccessClientSecret, // gitleaks:allow
+			ID:                   "primary",
+			BaseURL:              cfg.ClydeBaseURL,
+			APIKey:               cfg.ClydeAPIKey,
+			Model:                cfg.ReviewModel,
+			DailyTokenLimit:      0,
+			DailyTokenTypes:      nil,
+			OmitMaxOutputTokens:  false,
+			OmitTextFormat:       false,
+			CFAccessClientID:     cfg.CFAccessClientID,
+			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 		}}
 		if cfg.HasFallback() {
 			configuredProviders = append(configuredProviders, config.ProviderConfig{
-				ID:                      "fallback",
-				BaseURL:                 cfg.FallbackBaseURL,
-				APIKey:                  cfg.FallbackAPIKey,
-				Model:                   cfg.FallbackModel,
-				DailyTokenLimit:         0,
-				DailyTokenTypes:         nil,
-				OmitMaxCompletionTokens: false,
-				OmitResponseFormat:      false,
-				CFAccessClientID:        cfg.FallbackCFAccessClientID,
-				CFAccessClientSecret:    cfg.FallbackCFAccessClientSecret, // gitleaks:allow
+				ID:                   "fallback",
+				BaseURL:              cfg.FallbackBaseURL,
+				APIKey:               cfg.FallbackAPIKey,
+				Model:                cfg.FallbackModel,
+				DailyTokenLimit:      0,
+				DailyTokenTypes:      nil,
+				OmitMaxOutputTokens:  false,
+				OmitTextFormat:       false,
+				CFAccessClientID:     cfg.FallbackCFAccessClientID,
+				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 			})
 		}
 		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
@@ -91,14 +111,14 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	}
 	for _, configured := range configuredProviders {
 		client.providers = append(client.providers, provider{
-			id:                      configured.ID,
-			sdk:                     newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
-			model:                   configured.Model,
-			dailyTokenLimit:         configured.DailyTokenLimit,
-			dailyTokenTypes:         configured.DailyTokenTypes,
-			omitMaxCompletionTokens: configured.OmitMaxCompletionTokens,
-			omitResponseFormat:      configured.OmitResponseFormat,
-			pricingByModel:          cfg.ReviewModelPricing,
+			id:                  configured.ID,
+			sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
+			model:               configured.Model,
+			dailyTokenLimit:     configured.DailyTokenLimit,
+			dailyTokenTypes:     configured.DailyTokenTypes,
+			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
+			omitTextFormat:      configured.OmitTextFormat,
+			pricingByModel:      cfg.ReviewModelPricing,
 		})
 	}
 	return client
@@ -297,41 +317,22 @@ func completeWith(
 	schema json.RawMessage,
 	report func(int64),
 ) (string, error) {
-	params := openaigo.ChatCompletionNewParams{
-		Model:           target.model,
-		ReasoningEffort: shared.ReasoningEffort(config.ReasoningEffort),
-		StreamOptions: openaigo.ChatCompletionStreamOptionsParam{
-			IncludeUsage: openaigo.Bool(true),
-		},
-		Messages: []openaigo.ChatCompletionMessageParamUnion{
-			openaigo.SystemMessage(structuredOutputPrompt(policy, schemaName, schema)),
-			openaigo.UserMessage(prompt),
-		},
+	params, err := newResponseParams(target, prompt, policy, schemaName, schema)
+	if err != nil {
+		return "", err
 	}
-	if !target.omitMaxCompletionTokens {
-		params.MaxCompletionTokens = openaigo.Int(int64(config.MaximumOutputTokens))
-	}
-	if !target.omitResponseFormat {
-		params.ResponseFormat = openaigo.ChatCompletionNewParamsResponseFormatUnion{
-			OfJSONSchema: &openaigo.ResponseFormatJSONSchemaParam{
-				JSONSchema: openaigo.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name:   schemaName,
-					Strict: openaigo.Bool(true),
-					Schema: schema,
-				},
-			},
-		}
-	}
-	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
+	stream := target.sdk.Responses.NewStreaming(ctx, params)
 	defer func() {
 		_ = stream.Close()
 	}()
 
 	var content strings.Builder
-	finishReason := ""
 	responseModel := target.model
-	usage := openaigo.CompletionUsage{}
+	usage := responses.ResponseUsage{}
 	hasUsage := false
+	completed := false
+	incompleteReason := ""
+	var streamFailure error
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
 		if hasUsage {
@@ -339,35 +340,48 @@ func completeWith(
 		}
 	}()
 	for stream.Next() {
-		chunk := stream.Current()
-		if chunk.Model != "" {
-			responseModel = chunk.Model
-		}
-		if chunk.JSON.Usage.Valid() {
-			usage = chunk.Usage
-			hasUsage = true
-		}
-		for _, choice := range chunk.Choices {
-			if choice.Index != 0 {
-				continue
+		event := stream.Current()
+		switch responseEventType(event.Type) {
+		case responseOutputTextDelta:
+			content.WriteString(event.Delta)
+		case responseCompleted, responseIncomplete, responseFailed:
+			if event.Response.Model != "" {
+				responseModel = event.Response.Model
 			}
-			content.WriteString(choice.Delta.Content)
-			if choice.FinishReason != "" {
-				finishReason = choice.FinishReason
+			if event.Response.JSON.Usage.Valid() {
+				usage = event.Response.Usage
+				hasUsage = true
 			}
+			switch responseTerminalEventType(event.Type) {
+			case terminalCompleted:
+				completed = true
+				if text := event.Response.OutputText(); text != "" {
+					content.Reset()
+					content.WriteString(text)
+				}
+			case terminalIncomplete:
+				incompleteReason = event.Response.IncompleteDetails.Reason
+			case terminalFailed:
+				streamFailure = responseFailure(target.model, string(event.Response.Error.Code), event.Response.Error.Message)
+			}
+		case responseError:
+			streamFailure = responseFailure(target.model, event.Code, event.Message)
 		}
+	}
+	if streamFailure != nil {
+		return "", streamFailure
 	}
 	if err := stream.Err(); err != nil {
 		return "", modelProviderError(target.model, err)
 	}
-	if finishReason == "" {
-		return "", errors.New("openai response ended without a finish reason")
-	}
-	if finishReason == "length" {
+	if incompleteReason == "max_output_tokens" {
 		return "", &TruncatedError{Model: target.model}
 	}
-	if finishReason != "stop" {
-		return "", errors.New("openai response stopped with finish reason " + finishReason)
+	if incompleteReason != "" {
+		return "", errors.New("openai response incomplete: " + incompleteReason)
+	}
+	if !completed {
+		return "", errors.New("openai response ended without a completion event")
 	}
 	result := strings.TrimSpace(content.String())
 	if result == "" {
@@ -376,7 +390,43 @@ func completeWith(
 	return result, nil
 }
 
-func budgetTokens(usage openaigo.CompletionUsage, tokenTypes []config.TokenType) int64 {
+func newResponseParams(
+	target provider,
+	prompt string,
+	policy string,
+	schemaName string,
+	schema json.RawMessage,
+) (responses.ResponseNewParams, error) {
+	params := responses.ResponseNewParams{
+		Model:        target.model,
+		Instructions: openaigo.String(structuredOutputPrompt(policy, schemaName, schema)),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: openaigo.String(prompt),
+		},
+		Reasoning: shared.ReasoningParam{Effort: shared.ReasoningEffort(config.ReasoningEffort)},
+		Store:     openaigo.Bool(false),
+	}
+	if !target.omitMaxOutputTokens {
+		params.MaxOutputTokens = openaigo.Int(int64(config.MaximumOutputTokens))
+	}
+	if !target.omitTextFormat {
+		format := &responses.ResponseFormatTextJSONSchemaConfigParam{
+			Name:   schemaName,
+			Strict: openaigo.Bool(true),
+		}
+		if err := json.Unmarshal(schema, &format.Schema); err != nil {
+			return responses.ResponseNewParams{}, errors.New("decode response schema: " + err.Error())
+		}
+		params.Text = responses.ResponseTextConfigParam{
+			Format: responses.ResponseFormatTextConfigUnionParam{
+				OfJSONSchema: format,
+			},
+		}
+	}
+	return params, nil
+}
+
+func budgetTokens(usage responses.ResponseUsage, tokenTypes []config.TokenType) int64 {
 	if len(tokenTypes) == 0 {
 		return usage.TotalTokens
 	}
@@ -384,15 +434,15 @@ func budgetTokens(usage openaigo.CompletionUsage, tokenTypes []config.TokenType)
 	for _, tokenType := range tokenTypes {
 		switch tokenType {
 		case config.InputTokens:
-			tokens += usage.PromptTokens
+			tokens += usage.InputTokens
 		case config.OutputTokens:
-			tokens += usage.CompletionTokens
+			tokens += usage.OutputTokens
 		}
 	}
 	return tokens
 }
 
-func modelUsage(model string, usage openaigo.CompletionUsage, usageReported bool, target provider) review.ModelUsage {
+func modelUsage(model string, usage responses.ResponseUsage, usageReported bool, target provider) review.ModelUsage {
 	reportedRequests := 0
 	if usageReported {
 		reportedRequests = 1
@@ -403,11 +453,11 @@ func modelUsage(model string, usage openaigo.CompletionUsage, usageReported bool
 	pricing, pricingFound := config.FindModelPricing(target.pricingByModel, model)
 	priced := usageReported && pricingFound
 	if priced {
-		cachedTokens := usage.PromptTokensDetails.CachedTokens
-		uncachedTokens := max(usage.PromptTokens-cachedTokens, 0)
+		cachedTokens := usage.InputTokensDetails.CachedTokens
+		uncachedTokens := max(usage.InputTokens-cachedTokens, 0)
 		estimatedInputCost = float64(uncachedTokens) * pricing.InputPerMillionTokens / 1_000_000
 		estimatedCachedInputCost = float64(cachedTokens) * pricing.CachedInputPerMillionTokens / 1_000_000
-		estimatedOutputCost = float64(usage.CompletionTokens) * pricing.OutputPerMillionTokens / 1_000_000
+		estimatedOutputCost = float64(usage.OutputTokens) * pricing.OutputPerMillionTokens / 1_000_000
 	}
 	estimatedCost := estimatedInputCost + estimatedCachedInputCost + estimatedOutputCost
 	return review.ModelUsage{
@@ -416,14 +466,14 @@ func modelUsage(model string, usage openaigo.CompletionUsage, usageReported bool
 		Priced:                      priced,
 		Requests:                    1,
 		ReportedRequests:            reportedRequests,
-		InputTokens:                 usage.PromptTokens,
-		CachedInputTokens:           usage.PromptTokensDetails.CachedTokens,
-		AudioInputTokens:            usage.PromptTokensDetails.AudioTokens,
-		OutputTokens:                usage.CompletionTokens,
-		ReasoningTokens:             usage.CompletionTokensDetails.ReasoningTokens,
-		AudioOutputTokens:           usage.CompletionTokensDetails.AudioTokens,
-		AcceptedPredictionTokens:    usage.CompletionTokensDetails.AcceptedPredictionTokens,
-		RejectedPredictionTokens:    usage.CompletionTokensDetails.RejectedPredictionTokens,
+		InputTokens:                 usage.InputTokens,
+		CachedInputTokens:           usage.InputTokensDetails.CachedTokens,
+		AudioInputTokens:            0,
+		OutputTokens:                usage.OutputTokens,
+		ReasoningTokens:             usage.OutputTokensDetails.ReasoningTokens,
+		AudioOutputTokens:           0,
+		AcceptedPredictionTokens:    0,
+		RejectedPredictionTokens:    0,
 		TotalTokens:                 usage.TotalTokens,
 		EstimatedInputCostUSD:       estimatedInputCost,
 		EstimatedCachedInputCostUSD: estimatedCachedInputCost,
@@ -432,7 +482,7 @@ func modelUsage(model string, usage openaigo.CompletionUsage, usageReported bool
 	}
 }
 
-func modelProviderError(model shared.ChatModel, err error) error {
+func modelProviderError(model string, err error) error {
 	var apiError *openaigo.Error
 	if errors.As(err, &apiError) {
 		return &ProviderError{
@@ -454,6 +504,27 @@ func modelProviderError(model shared.ChatModel, err error) error {
 	// error the status path produces. The underlying error is kept because it
 	// is the only description of a dropped connection.
 	return &StreamError{Model: model, Cause: err, Provider: providerErrorFromStream(err)}
+}
+
+func responseFailure(model string, code string, message string) error {
+	if message == "" {
+		message = "model provider reported a failed response"
+	}
+	status := http.StatusBadRequest
+	switch responseErrorCode(code) {
+	case responseRateLimitExceeded:
+		status = http.StatusTooManyRequests
+	case responseServerError:
+		status = http.StatusBadGateway
+	}
+	providerError := &ProviderError{
+		StatusCode: status,
+		Type:       "invalid_request_error",
+		Code:       code,
+		Param:      "",
+		Message:    message,
+	}
+	return &StreamError{Model: model, Cause: errors.New(message), Provider: providerError}
 }
 
 func structuredOutputPrompt(policy string, schemaName string, schema json.RawMessage) string {

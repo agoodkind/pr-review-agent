@@ -40,6 +40,8 @@ A run that stopped early carries the same detail table as one that finished, fil
 
 ## Configure the service
 
+Model requests use the OpenAI Responses API over HTTP with server-sent events. Each review stage sends one request and reads its streamed response. WebSocket sessions are unnecessary because review stages do not continue model conversations with tools.
+
 Edit [runtime.json](../runtime.json) to set the models, publication threshold, review limits, and service port. Merge the change to deploy it. The release packages the file into the Go container and Worker. The Go service reads it at startup. The Worker signs the review limits on each webhook. A new limit applies to the next review without restarting the container.
 
 | Setting | Value |
@@ -49,8 +51,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
 | `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider per UTC day; omit or set `0` for no limit |
 | `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
-| `PROVIDERS[].omit_max_completion_tokens` | Omit the completion size parameter for a backend that rejects it |
-| `PROVIDERS[].omit_response_format` | Omit JSON schema enforcement for a backend that rejects it; the system prompt still requests JSON matching the schema |
+| `PROVIDERS[].omit_max_output_tokens` | Omit the output token limit for a backend that rejects it |
+| `PROVIDERS[].omit_text_format` | Omit JSON schema enforcement for a backend that rejects it; the system prompt still requests JSON matching the schema |
 | `PROVIDER_BUDGET_URL` | Worker endpoint that records reported usage after model requests |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
