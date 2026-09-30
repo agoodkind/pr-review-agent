@@ -57,6 +57,9 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	}
 
 	request := state.lastRequest
+	if request.Method != http.MethodPost || request.URL.Path != "/responses" {
+		t.Fatalf("request = %s %s, want POST /responses at the configured base URL", request.Method, request.URL.Path)
+	}
 	if request.Header.Get("Authorization") != "Bearer "+testAPIKeyValue() {
 		t.Fatalf("Authorization = %q, want Bearer prefix with api key", request.Header.Get("Authorization"))
 	}
@@ -71,25 +74,26 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if body["model"] != testPrimaryModel {
 		t.Fatalf("model = %v, want %q", body["model"], testPrimaryModel)
 	}
-	if body["reasoning_effort"] != config.ReasoningEffort {
-		t.Fatalf("reasoning_effort = %v, want %q", body["reasoning_effort"], config.ReasoningEffort)
+	reasoning, ok := body["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != config.ReasoningEffort {
+		t.Fatalf("reasoning = %v, want effort %q", body["reasoning"], config.ReasoningEffort)
 	}
-	if body["max_completion_tokens"] != float64(config.MaximumOutputTokens) {
-		t.Fatalf("max_completion_tokens = %v, want %d", body["max_completion_tokens"], config.MaximumOutputTokens)
+	if body["max_output_tokens"] != float64(config.MaximumOutputTokens) {
+		t.Fatalf("max_output_tokens = %v, want %d", body["max_output_tokens"], config.MaximumOutputTokens)
 	}
 	if body["stream"] != true {
 		t.Fatalf("stream = %v, want true", body["stream"])
 	}
-
-	messages, ok := body["messages"].([]any)
-	if !ok || len(messages) != 2 {
-		t.Fatalf("messages = %T len=%d, want 2 chat messages", body["messages"], len(messages))
+	if body["store"] != false {
+		t.Fatalf("store = %v, want false", body["store"])
 	}
-	systemMessage, ok := messages[0].(map[string]any)
+	if body["input"] != "review input" {
+		t.Fatalf("input = %v, want review input", body["input"])
+	}
+	systemContent, ok := body["instructions"].(string)
 	if !ok {
-		t.Fatalf("first message = %v, want system role", messages[0])
+		t.Fatalf("instructions = %v, want string", body["instructions"])
 	}
-	systemContent, _ := systemMessage["content"].(string)
 	if !strings.Contains(systemContent, review.PolicyHeader(7)) {
 		t.Fatalf("system message missing configured review rules")
 	}
@@ -122,13 +126,13 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 		t.Fatalf("system message asks the model for coverage it cannot know")
 	}
 
-	responseFormat, ok := body["response_format"].(map[string]any)
-	if !ok || responseFormat["type"] != "json_schema" {
-		t.Fatalf("response_format = %v, want json_schema type", body["response_format"])
-	}
-	jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
+	textFormat, ok := body["text"].(map[string]any)
 	if !ok {
-		t.Fatalf("json_schema missing")
+		t.Fatalf("text = %v, want object", body["text"])
+	}
+	jsonSchema, ok := textFormat["format"].(map[string]any)
+	if !ok || jsonSchema["type"] != "json_schema" {
+		t.Fatalf("text.format = %v, want json_schema type", textFormat["format"])
 	}
 	if jsonSchema["strict"] != true {
 		t.Fatalf("strict = %v, want true", jsonSchema["strict"])
@@ -365,13 +369,13 @@ func TestReviewRejectsUnterminatedStream(t *testing.T) {
 
 	state.streamResponse = func(writer http.ResponseWriter) {
 		writeStreamFrames(writer, []map[string]any{
-			completionStreamChunk(validReviewContent(), ""),
-		}, false)
+			responseTextDelta(validReviewContent()),
+		})
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
-	if err == nil || !strings.Contains(err.Error(), "ended without a finish reason") {
-		t.Fatalf("Review error = %v, want missing finish reason", err)
+	if err == nil || !strings.Contains(err.Error(), "ended without a completion event") {
+		t.Fatalf("Review error = %v, want missing completion event", err)
 	}
 }
 
@@ -381,8 +385,9 @@ func TestReviewRejectsIncompleteFinishReason(t *testing.T) {
 
 	state.streamResponse = func(writer http.ResponseWriter) {
 		writeStreamFrames(writer, []map[string]any{
-			completionStreamChunk(validReviewContent(), "length"),
-		}, true)
+			responseTextDelta(validReviewContent()),
+			responseIncomplete(validReviewContent()),
+		})
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
@@ -407,8 +412,9 @@ func TestTruncatedAnswerDoesNotEngageTheFallback(t *testing.T) {
 	fixture := newFallbackTestClient(t, false)
 	fixture.primary.streamResponse = func(writer http.ResponseWriter) {
 		writeStreamFrames(writer, []map[string]any{
-			completionStreamChunk(validReviewContent(), "length"),
-		}, true)
+			responseTextDelta(validReviewContent()),
+			responseIncomplete(validReviewContent()),
+		})
 	}
 
 	_, err := fixture.client.Review(context.Background(), "prompt")
@@ -571,11 +577,11 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 		server := newProviderServer(state)
 		t.Cleanup(server.Close)
 		providers = append(providers, config.ProviderConfig{
-			BaseURL:                 mustParseURL(t, server.URL),
-			Model:                   "model-" + strconv.Itoa(index),
-			APIKey:                  testAPIKeyValue(),
-			OmitMaxCompletionTokens: index == 2,
-			OmitResponseFormat:      index == 2,
+			BaseURL:             mustParseURL(t, server.URL),
+			Model:               "model-" + strconv.Itoa(index),
+			APIKey:              testAPIKeyValue(),
+			OmitMaxOutputTokens: index == 2,
+			OmitTextFormat:      index == 2,
 		})
 	}
 	client := openai.NewClient(config.Config{Providers: providers, MinimumImportance: 7}, nil)
@@ -591,11 +597,11 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 			t.Fatalf("provider %d request count = %d, want 1", index, state.requestCount)
 		}
 	}
-	if _, sent := states[2].lastRequestBody["max_completion_tokens"]; sent {
-		t.Fatal("Codex provider request included max_completion_tokens")
+	if _, sent := states[2].lastRequestBody["max_output_tokens"]; sent {
+		t.Fatal("Codex provider request included max_output_tokens")
 	}
-	if _, sent := states[2].lastRequestBody["response_format"]; sent {
-		t.Fatal("Codex provider request included response_format")
+	if _, sent := states[2].lastRequestBody["text"]; sent {
+		t.Fatal("Codex provider request included text format")
 	}
 }
 
@@ -660,13 +666,11 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 	providerState := &testServerState{completionContent: validReviewContent()}
 	providerState.streamResponse = func(writer http.ResponseWriter) {
 		writeStreamFrames(writer, []map[string]any{
-			completionStreamChunk(validReviewContent(), "stop"),
-			{
-				"id": "chatcmpl-test", "object": "chat.completion.chunk", "created": 0,
-				"model": testPrimaryModel, "choices": []map[string]any{},
-				"usage": map[string]any{"prompt_tokens": 1000, "completion_tokens": 200, "total_tokens": 1200},
-			},
-		}, true)
+			responseTextDelta(validReviewContent()),
+			responseCompleted(validReviewContent(), testPrimaryModel, map[string]any{
+				"input_tokens": 1000, "output_tokens": 200, "total_tokens": 1200,
+			}),
+		})
 	}
 	providerServer := newProviderServer(providerState)
 	t.Cleanup(providerServer.Close)
@@ -951,7 +955,7 @@ func brokenStreamPayload() string {
 func writeBrokenStream(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
-	encoded, _ := json.Marshal(completionStreamChunk(`{"findings":`, ""))
+	encoded, _ := json.Marshal(responseTextDelta(`{"findings":`))
 	_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	_, _ = writer.Write([]byte("data: " + brokenStreamPayload() + "\n\n"))
 }
@@ -1008,8 +1012,9 @@ func TestReviewDoesNotRetryATruncatedAnswer(t *testing.T) {
 
 	state.streamResponse = func(writer http.ResponseWriter) {
 		writeStreamFrames(writer, []map[string]any{
-			completionStreamChunk(validReviewContent(), "length"),
-		}, true)
+			responseTextDelta(validReviewContent()),
+			responseIncomplete(validReviewContent()),
+		})
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
@@ -1027,48 +1032,34 @@ func TestReviewRecordsDetailedStreamUsageAndEstimatedCost(t *testing.T) {
 	defer server.Close()
 
 	state.streamResponse = func(writer http.ResponseWriter) {
-		usageChunk := map[string]any{
-			"id":      "chatcmpl-test",
-			"object":  "chat.completion.chunk",
-			"created": 0,
-			"model":   testPrimaryModel + "-2026-09-13",
-			"choices": []map[string]any{},
-			"usage": map[string]any{
-				"prompt_tokens":     1000,
-				"completion_tokens": 200,
-				"total_tokens":      1200,
-				"prompt_tokens_details": map[string]any{
-					"cached_tokens": 400,
-					"audio_tokens":  3,
-				},
-				"completion_tokens_details": map[string]any{
-					"reasoning_tokens":           40,
-					"audio_tokens":               5,
-					"accepted_prediction_tokens": 6,
-					"rejected_prediction_tokens": 7,
-				},
+		usage := map[string]any{
+			"input_tokens":  1000,
+			"output_tokens": 200,
+			"total_tokens":  1200,
+			"input_tokens_details": map[string]any{
+				"cached_tokens": 400,
+			},
+			"output_tokens_details": map[string]any{
+				"reasoning_tokens": 40,
 			},
 		}
 		writeStreamFrames(writer, []map[string]any{
-			completionStreamChunk(validReviewContent(), "stop"),
-			usageChunk,
-		}, true)
+			responseTextDelta(validReviewContent()),
+			responseCompleted(validReviewContent(), testPrimaryModel+"-2026-09-13", usage),
+		})
 	}
 
 	ctx, recorder := review.WithUsageRecorder(context.Background())
 	if _, err := client.Review(ctx, "prompt"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	streamOptions, ok := state.lastRequestBody["stream_options"].(map[string]any)
-	if !ok || streamOptions["include_usage"] != true {
-		t.Fatalf("stream_options = %v, want include_usage true", state.lastRequestBody["stream_options"])
+	if state.lastRequestBody["stream"] != true {
+		t.Fatalf("stream = %v, want true", state.lastRequestBody["stream"])
 	}
 	usage := recorder.Summary()
 	if usage.Requests != 1 || usage.ReportedRequests != 1 || usage.InputTokens != 1000 || usage.CachedInputTokens != 400 ||
-		usage.AudioInputTokens != 3 || usage.OutputTokens != 200 || usage.ReasoningTokens != 40 ||
-		usage.AudioOutputTokens != 5 || usage.AcceptedPredictionTokens != 6 ||
-		usage.RejectedPredictionTokens != 7 || usage.TotalTokens != 1200 {
-		t.Fatalf("usage = %+v, want every streamed token field", usage)
+		usage.OutputTokens != 200 || usage.ReasoningTokens != 40 || usage.TotalTokens != 1200 {
+		t.Fatalf("usage = %+v, want streamed Responses token fields", usage)
 	}
 	if usage.EstimatedInputCostUSD != 0.0006 || usage.EstimatedCachedInputCostUSD != 0.0001 ||
 		usage.EstimatedOutputCostUSD != 0.0004 || usage.EstimatedCostUSD != 0.0011 {
@@ -1239,11 +1230,7 @@ func newProviderServer(state *testServerState) *httptest.Server {
 			return
 		}
 
-		writeJSON(writer, status, map[string]any{
-			"id":      "chatcmpl-test",
-			"object":  "chat.completion",
-			"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": state.completionContent}}},
-		})
+		writeJSON(writer, status, responseObject(state.completionContent, testPrimaryModel, "completed", nil))
 	}))
 }
 
@@ -1271,37 +1258,51 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 
 func writeStream(writer http.ResponseWriter, content string) {
 	writeStreamFrames(writer, []map[string]any{
-		completionStreamChunk(content, ""),
-		completionStreamChunk("", "stop"),
-	}, true)
+		responseTextDelta(content),
+		responseCompleted(content, testPrimaryModel, nil),
+	})
 }
 
-func completionStreamChunk(content string, finishReason string) map[string]any {
-	choice := map[string]any{
-		"index": 0,
-		"delta": map[string]any{"content": content},
-	}
-	if finishReason != "" {
-		choice["finish_reason"] = finishReason
-	}
+func responseTextDelta(content string) map[string]any {
 	return map[string]any{
-		"id":      "chatcmpl-test",
-		"object":  "chat.completion.chunk",
-		"created": 0,
-		"model":   testPrimaryModel,
-		"choices": []map[string]any{choice},
+		"type": "response.output_text.delta", "delta": content,
+		"item_id": "item-test", "output_index": 0, "content_index": 0,
 	}
 }
 
-func writeStreamFrames(writer http.ResponseWriter, chunks []map[string]any, done bool) {
+func responseObject(content, model, status string, usage map[string]any) map[string]any {
+	response := map[string]any{
+		"id": "resp-test", "object": "response", "model": model, "status": status,
+		"output": []map[string]any{{
+			"id": "item-test", "type": "message", "role": "assistant", "status": "completed",
+			"content": []map[string]any{{"type": "output_text", "text": content, "annotations": []any{}}},
+		}},
+	}
+	if usage != nil {
+		response["usage"] = usage
+	}
+	return response
+}
+
+func responseCompleted(content, model string, usage map[string]any) map[string]any {
+	return map[string]any{"type": "response.completed", "response": responseObject(content, model, "completed", usage)}
+}
+
+func responseIncomplete(content string) map[string]any {
+	response := responseObject(content, testPrimaryModel, "incomplete", nil)
+	response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+	return map[string]any{"type": "response.incomplete", "response": response}
+}
+
+func writeStreamFrames(writer http.ResponseWriter, chunks []map[string]any) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
 	for _, chunk := range chunks {
 		encoded, _ := json.Marshal(chunk)
+		if eventType, ok := chunk["type"].(string); ok {
+			_, _ = writer.Write([]byte("event: " + eventType + "\n"))
+		}
 		_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
-	}
-	if done {
-		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 	}
 }
 
