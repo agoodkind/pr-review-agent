@@ -308,9 +308,16 @@ func completeValidated(
 	}
 	content, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 	if err != nil {
-		return err
+		combined := errors.Join(validationErr, err)
+		gklog.L(ctx).WarnContext(ctx, "structured response retry failed", slog.String("error", combined.Error()))
+		return combined
 	}
-	return validate(content)
+	if retryErr := validate(content); retryErr != nil {
+		combined := errors.Join(validationErr, retryErr)
+		gklog.L(ctx).WarnContext(ctx, "structured response retry failed", slog.String("error", combined.Error()))
+		return combined
+	}
+	return nil
 }
 
 // shouldUseFallback reports whether this failure is the declared condition for
