@@ -37,7 +37,7 @@
   "REVIEW_CHUNK_TIMEOUT": "5m",
   "REVIEW_MAX_CHUNKS": "60",
   "REVIEW_MAX_FILES": "100",
-  "REVIEW_MIN_IMPORTANCE": "9",
+  "REVIEW_MIN_IMPORTANCE": "8",
   "REVIEW_MODEL_PRICING": {
     "gpt-5.4-nano": {
       "input_per_million_tokens": 0.20,
