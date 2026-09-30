@@ -134,101 +134,115 @@ func newProviderSDK(
 // Review requests one structured review completion and reports the model that
 // served it, which is the fallback model whenever the primary refused.
 func (client *Client) Review(ctx context.Context, prompt string) (review.Completion, error) {
-	content, model, err := client.complete(
+	var result domain.ReviewResult
+	model, err := client.complete(
 		ctx,
 		prompt,
 		review.PolicyHeader(client.minimumImportance),
 		reviewSchemaName,
 		reviewSchemaJSON,
+		func(content string) error {
+			var candidate domain.ReviewResult
+			decoder := json.NewDecoder(strings.NewReader(content))
+			if err := decoder.Decode(&candidate); err != nil {
+				return errors.New("decode structured output: " + err.Error())
+			}
+			if err := candidate.Validate(); err != nil {
+				return errors.New("validate review result: " + err.Error())
+			}
+			result = candidate
+			return nil
+		},
 	)
 	if err != nil {
 		return review.Completion{}, err
-	}
-	var result domain.ReviewResult
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&result); err != nil {
-		return review.Completion{}, errors.New("decode structured output: " + err.Error())
-	}
-	if err := result.Validate(); err != nil {
-		return review.Completion{}, errors.New("validate review result: " + err.Error())
 	}
 	return review.Completion{Result: result, Model: model}, nil
 }
 
 // Report requests the final prose for a completed deterministic review.
 func (client *Client) Report(ctx context.Context, prompt string) (review.ReportCompletion, error) {
-	content, model, err := client.complete(
+	var report review.Report
+	model, err := client.complete(
 		ctx,
 		prompt,
 		review.ReportPolicy(),
 		reportSchemaName,
 		reportSchemaJSON,
+		func(content string) error {
+			var candidate review.Report
+			decoder := json.NewDecoder(strings.NewReader(content))
+			if err := decoder.Decode(&candidate); err != nil {
+				return errors.New("decode structured output: " + err.Error())
+			}
+			candidate = review.SanitizeReport(candidate)
+			if err := candidate.Validate(); err != nil {
+				return errors.New("validate review report: " + err.Error())
+			}
+			report = candidate
+			return nil
+		},
 	)
 	if err != nil {
 		return review.ReportCompletion{}, err
-	}
-	var report review.Report
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&report); err != nil {
-		return review.ReportCompletion{}, errors.New("decode structured output: " + err.Error())
-	}
-	report = review.SanitizeReport(report)
-	if err := report.Validate(); err != nil {
-		return review.ReportCompletion{}, errors.New("validate review report: " + err.Error())
 	}
 	return review.ReportCompletion{Report: report, Model: model}, nil
 }
 
 // Reconcile requests one structured thread reconciliation completion.
 func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.ThreadResolution, error) {
-	content, _, err := client.complete(
+	var resolutions []domain.ThreadResolution
+	_, err := client.complete(
 		ctx,
 		prompt,
 		review.ReconciliationPolicy(),
 		reconcileSchemaName,
 		reconcileSchemaJSON,
+		func(content string) error {
+			var candidate struct {
+				Resolutions []domain.ThreadResolution `json:"resolutions"`
+			}
+			decoder := json.NewDecoder(strings.NewReader(content))
+			if err := decoder.Decode(&candidate); err != nil {
+				return errors.New("decode structured output: " + err.Error())
+			}
+			if err := domain.ValidateThreadResolutions(candidate.Resolutions); err != nil {
+				return errors.New("validate thread resolutions: " + err.Error())
+			}
+			resolutions = candidate.Resolutions
+			return nil
+		},
 	)
 	if err != nil {
 		return nil, err
 	}
-	var response struct {
-		Resolutions []domain.ThreadResolution `json:"resolutions"`
-	}
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&response); err != nil {
-		return nil, errors.New("decode structured output: " + err.Error())
-	}
-	if err := domain.ValidateThreadResolutions(response.Resolutions); err != nil {
-		return nil, errors.New("validate thread resolutions: " + err.Error())
-	}
-	return response.Resolutions, nil
+	return resolutions, nil
 }
 
 // Consolidate requests one structured grouping of a chunk's own findings.
 func (client *Client) Consolidate(ctx context.Context, prompt string) (review.Consolidation, error) {
-	content, _, err := client.complete(
+	var consolidation review.Consolidation
+	_, err := client.complete(
 		ctx,
 		prompt,
 		review.ConsolidationPolicy(),
 		consolidateSchemaName,
 		consolidateSchemaJSON,
+		func(content string) error {
+			var candidate review.Consolidation
+			decoder := json.NewDecoder(strings.NewReader(content))
+			if err := decoder.Decode(&candidate); err != nil {
+				return errors.New("decode structured output: " + err.Error())
+			}
+			if err := candidate.ValidateShape(); err != nil {
+				return errors.New("validate consolidation: " + err.Error())
+			}
+			consolidation = candidate
+			return nil
+		},
 	)
 	if err != nil {
 		return review.Consolidation{}, err
-	}
-	var consolidation review.Consolidation
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&consolidation); err != nil {
-		return review.Consolidation{}, errors.New("decode structured output: " + err.Error())
-	}
-	// Only the shape is checkable here, and it is checked for the same reason a
-	// review result and a set of thread resolutions are: a malformed answer is
-	// refused while the provider that produced it is still in view. Whether a
-	// candidate number is inside the range depends on how many candidates the
-	// caller showed, which lives in the prompt rather than in anything this
-	// client holds, so the caller tests that before it merges anything.
-	if err := consolidation.ValidateShape(); err != nil {
-		return review.Consolidation{}, errors.New("validate consolidation: " + err.Error())
 	}
 	return consolidation, nil
 }
@@ -243,32 +257,60 @@ func (client *Client) complete(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-) (string, string, error) {
+	validate func(string) error,
+) (string, error) {
 	var failures []error
 	for index, target := range client.providers {
 		day, err := client.checkBudget(ctx, target)
-		content := ""
 		if err == nil {
 			report := func(tokens int64) {
 				client.reportBudget(ctx, target, day, tokens)
 			}
-			content, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
+			err = completeValidated(ctx, target, prompt, policy, schemaName, schema, report, validate)
 		}
 		if err == nil {
-			return content, target.model, nil
+			return target.model, nil
 		}
 		failures = append(failures, err)
 		if index == len(client.providers)-1 || !client.shouldUseFallback(err) {
 			if len(failures) == 1 {
-				return "", "", err
+				return "", err
 			}
 			combined := errors.Join(failures...)
 			gklog.L(ctx).WarnContext(ctx, "model providers failed", slog.String("error", combined.Error()))
-			return "", "", combined
+			return "", combined
 		}
 		gklog.L(ctx).WarnContext(ctx, "model provider fallback engaged", slog.String("err", err.Error()))
 	}
-	return "", "", errors.New("no model providers configured")
+	return "", errors.New("no model providers configured")
+}
+
+func completeValidated(
+	ctx context.Context,
+	target provider,
+	prompt string,
+	policy string,
+	schemaName string,
+	schema json.RawMessage,
+	report func(int64),
+	validate func(string) error,
+) error {
+	content, err := completeWith(ctx, target, prompt, policy, schemaName, schema, report)
+	if err != nil {
+		return err
+	}
+	validationErr := validate(content)
+	if validationErr == nil {
+		return nil
+	}
+	if !target.omitResponseFormat {
+		return validationErr
+	}
+	content, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
+	if err != nil {
+		return err
+	}
+	return validate(content)
 }
 
 // shouldUseFallback reports whether this failure is the declared condition for

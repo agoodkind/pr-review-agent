@@ -235,6 +235,66 @@ func TestReviewRejectsInvalidFindings(t *testing.T) {
 	}
 }
 
+func TestClydeRetriesInvalidStructuredReviewOnce(t *testing.T) {
+	cases := []struct {
+		name          string
+		firstContent  string
+		secondContent string
+		wantError     string
+	}{
+		{
+			name:          "malformed JSON then valid review",
+			firstContent:  "not JSON",
+			secondContent: validReviewContent(),
+		},
+		{
+			name:          "invalid review twice",
+			firstContent:  `{"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`,
+			secondContent: `{"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`,
+			wantError:     "validate review result",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			state := &testServerState{}
+			state.streamResponse = func(writer http.ResponseWriter) {
+				content := testCase.firstContent
+				if atomic.LoadInt32(&state.requestCount) == 2 {
+					content = testCase.secondContent
+				}
+				writeStream(writer, content)
+			}
+			server := newProviderServer(state)
+			defer server.Close()
+			client := openai.NewClient(config.Config{
+				MinimumImportance: 7,
+				Providers: []config.ProviderConfig{{
+					ID:                      "clyde",
+					BaseURL:                 mustParseURL(t, server.URL),
+					Model:                   testPrimaryModel,
+					APIKey:                  testAPIKeyValue(),
+					OmitMaxCompletionTokens: true,
+					OmitResponseFormat:      true,
+				}},
+			}, server.Client())
+			completion, err := client.Review(context.Background(), "prompt")
+			if testCase.wantError == "" {
+				if err != nil {
+					t.Fatalf("Review: %v", err)
+				}
+				if completion.Model != testPrimaryModel {
+					t.Fatalf("model = %q, want %q", completion.Model, testPrimaryModel)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), testCase.wantError) {
+				t.Fatalf("Review error = %v, want %q", err, testCase.wantError)
+			}
+			if state.requestCount != 2 {
+				t.Fatalf("request count = %d, want 2", state.requestCount)
+			}
+		})
+	}
+}
+
 func TestReviewDoesNotRetryTransientHTTPFailures(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
