@@ -15,6 +15,7 @@ import (
 	"log/slog"
 
 	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
@@ -38,7 +39,15 @@ func (service *Service) failCheck(
 		gklog.L(ctx).InfoContext(ctx, "review interrupted", slog.String("err", cause.Error()))
 		return cause
 	}
-	return service.reportFailedCheck(ctx, job, checkRunID, progress, stage, "failure", cause)
+	return service.reportFailedCheck(
+		ctx,
+		job,
+		checkRunID,
+		progress,
+		stage,
+		service.presentedConclusion(failureClassOf(cause), "failure"),
+		cause,
+	)
 }
 
 // reportFailedCheck publishes a failed attempt with the conclusion that
@@ -91,14 +100,16 @@ func (service *Service) reportFailedCheck(
 // A failed model call never reaches here. It leaves its chunk pending rather
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
-	switch {
-	case usageExceeded(cause):
+	switch failureClassOf(cause) {
+	case config.FailureDailyBudget:
+		return checkFailureDailyBudget
+	case config.FailureUsageExceeded:
 		return checkFailureUsage
-	case errors.Is(cause, context.DeadlineExceeded):
+	case config.FailureDeadline:
 		return checkFailureDeadline
-	case providerUnavailable(cause):
+	case config.FailureUnavailable:
 		return checkFailureUnavailable
-	case isChunkPanic(cause):
+	case config.FailurePanic:
 		return checkFailurePanic
 	}
 	if stage == "" {
@@ -114,19 +125,64 @@ func failureTitle(stage string, cause error) string {
 // Exhausted usage is the largest single cause in production, and a reader who
 // sees only a chunk count cannot tell it apart from a provider outage.
 func chunkFailureReason(failures []chunkFailure) string {
+	switch chunkFailureClass(failures) {
+	case config.FailureDailyBudget:
+		return checkFailureDailyBudget
+	case config.FailureUsageExceeded:
+		return checkFailureUsage
+	case config.FailureDeadline:
+		return checkFailureDeadline
+	case config.FailureUnavailable:
+		return checkFailureUnavailable
+	default:
+		return ""
+	}
+}
+
+// chunkFailureClass is the failure class named for a run that left chunks
+// unread, or FailureOther when nothing in the unread set classifies.
+func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 	for _, failure := range failures {
-		switch {
-		case dailyBudgetExhausted(failure.err):
-			return checkFailureDailyBudget
-		case usageExceeded(failure.err):
-			return checkFailureUsage
-		case errors.Is(failure.err, context.DeadlineExceeded):
-			return checkFailureDeadline
-		case providerUnavailable(failure.err):
-			return checkFailureUnavailable
+		class := failureClassOf(failure.err)
+		switch class {
+		case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureDeadline, config.FailureUnavailable:
+			return class
 		}
 	}
-	return ""
+	return config.FailureOther
+}
+
+// failureClassOf classifies a service failure the same way the public title does.
+// Daily budget is distinct from provider usage exhaustion even though a budget
+// denial also reports that usage was exceeded.
+func failureClassOf(cause error) config.FailureClass {
+	switch {
+	case dailyBudgetExhausted(cause):
+		return config.FailureDailyBudget
+	case usageExceeded(cause):
+		return config.FailureUsageExceeded
+	case errors.Is(cause, context.DeadlineExceeded):
+		return config.FailureDeadline
+	case providerUnavailable(cause):
+		return config.FailureUnavailable
+	case isChunkPanic(cause):
+		return config.FailurePanic
+	default:
+		return config.FailureOther
+	}
+}
+
+// presentedConclusion is the GitHub conclusion for one failure class.
+//
+// pass concludes the check as success, which satisfies a required check. The
+// title and comment still name the failure, and the run still publishes no
+// verdict. Every other appearance keeps the blocking conclusion the caller
+// already chose.
+func (service *Service) presentedConclusion(class config.FailureClass, blocking string) string {
+	if service.failureAppearances.Passes(class) {
+		return "success"
+	}
+	return blocking
 }
 
 // publicFailureDetail points a reader at the cause instead of reprinting it.

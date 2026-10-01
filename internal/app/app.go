@@ -64,6 +64,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		cfg.ReviewMaxFiles,
 		cfg.ReviewMaxChunks,
 		cfg.ReviewChunkTimeout,
+		cfg.ServiceFailureAppearance,
 		time.Now,
 		logger,
 	)

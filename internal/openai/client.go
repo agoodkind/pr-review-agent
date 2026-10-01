@@ -110,6 +110,9 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		client.budgetURL = cfg.ProviderBudgetURL.String()
 	}
 	for _, configured := range configuredProviders {
+		if configured.Disabled {
+			continue
+		}
 		client.providers = append(client.providers, provider{
 			id:                  configured.ID,
 			sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),

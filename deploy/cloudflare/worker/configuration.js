@@ -124,6 +124,7 @@ const publicSettings = [
   "PROVIDERS",
   "PROVIDER_PRIORITY",
   "PROVIDER_BUDGET_URL",
+  "SERVICE_FAILURE_APPEARANCE",
   "GITHUB_APP_ID",
   "GITHUB_BOT_LOGIN",
   "LOG_FORWARD_URL",
@@ -147,7 +148,7 @@ export function createPrAgentEnvironment(bindings, configuration = runtime) {
     if (configuration[name] === undefined) {
       continue;
     }
-    if (name === "REVIEW_MODEL_PRICING" || name === "PROVIDERS" || name === "PROVIDER_PRIORITY") {
+    if (name === "REVIEW_MODEL_PRICING" || name === "PROVIDERS" || name === "PROVIDER_PRIORITY" || name === "SERVICE_FAILURE_APPEARANCE") {
       environment[name] = JSON.stringify(configuration[name]);
       continue;
     }

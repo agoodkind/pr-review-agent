@@ -91,6 +91,7 @@ type Service struct {
 	chunkTimeout           time.Duration
 	checkCompletionTimeout time.Duration
 	publicationTimeout     time.Duration
+	failureAppearances     config.FailureAppearances
 	now                    func() time.Time
 	logger                 *slog.Logger
 }
@@ -107,6 +108,7 @@ func NewService(
 	reviewMaxFiles int,
 	reviewMaxChunks int,
 	chunkTimeout time.Duration,
+	failureAppearances config.FailureAppearances,
 	now func() time.Time,
 	logger *slog.Logger,
 ) *Service {
@@ -140,6 +142,7 @@ func NewService(
 		reviewMaxFiles:         reviewMaxFiles,
 		reviewMaxChunks:        reviewMaxChunks,
 		chunkTimeout:           chunkTimeout,
+		failureAppearances:     failureAppearances,
 		checkCompletionTimeout: completionBudget,
 		publicationTimeout:     publicationBudget,
 		now:                    now,

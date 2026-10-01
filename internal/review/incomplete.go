@@ -62,7 +62,7 @@ func (service *Service) concludeIncomplete(
 		job.InstallationID,
 		job.Repository,
 		checkRun.ID,
-		checkConclusionDeclined,
+		service.presentedConclusion(chunkFailureClass(unread), checkConclusionDeclined),
 		incompleteCheckTitle(pending, reason),
 		incompleteCheckDetail(unread, summary, job),
 	); err != nil {

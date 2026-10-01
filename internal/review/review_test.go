@@ -4838,6 +4838,119 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	}
 }
 
+func usagePassAppearances() config.FailureAppearances {
+	return config.FailureAppearances{config.FailureUsageExceeded: config.FailureAppearancePass}
+}
+
+// A configured pass changes the check conclusion and nothing else about the
+// stop. The comment still names exhausted usage, the unread chunk stays owed,
+// and no verdict is published.
+func TestUsageExhaustionCanPassTheCheck(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: &stubProviderFailure{
+			reason: "The usage limit has been reached",
+			usage:  true,
+		}},
+		failureAppearances: usagePassAppearances(),
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	assertSanitizedFailureComment(
+		t,
+		fixture,
+		"Review stopped: the model provider reported no remaining usage.",
+		"The usage limit has been reached",
+	)
+	if len(fixture.state.submittedReviews) != 0 {
+		t.Fatalf("submitted reviews = %v, want none", fixture.state.submittedReviews)
+	}
+	if pending := decodedSummaryState(t, fixture).Pending; len(pending) != 1 {
+		t.Fatalf("pending chunks = %v, want the unread chunk retained", pending)
+	}
+}
+
+func TestUsageExhaustionBlocksTheCheckByDefault(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: &stubProviderFailure{
+			reason: "The usage limit has been reached",
+			usage:  true,
+		}},
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want action_required", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+// Daily budget exhaustion also reports that usage was exceeded. It stays a
+// separate class, so a pass configured only for provider usage does not open
+// the gate for it.
+func TestDailyBudgetStaysBlockingWhenOnlyUsageExhaustionPasses(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model:              &sequenceModel{err: dailyBudgetExhaustedError{}},
+		failureAppearances: usagePassAppearances(),
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "action_required" {
+		t.Fatalf("conclusion = %v, want action_required", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
+// An aborted run can pass the check without being treated as finished. The
+// error still returns, so a pending delivery can be replayed, and no review
+// object changes.
+func TestAbortedUsageExhaustionPassesTheCheckAndStillReturnsTheError(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reconcileErr: &stubProviderFailure{
+			reason: "The usage limit has been reached",
+			usage:  true,
+		},
+		failureAppearances: usagePassAppearances(),
+	})
+
+	err := fixture.run(context.Background(), fixture.job())
+	if err == nil || !strings.Contains(err.Error(), "The usage limit has been reached") {
+		t.Fatalf("Run error = %v, want the usage failure returned", err)
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want none", fixture.state.lastSubmitReview)
+	}
+	assertSanitizedFailureComment(
+		t,
+		fixture,
+		"Review stopped: the model provider reported no remaining usage.",
+		"The usage limit has been reached",
+	)
+}
+
+func TestConfiguredPassDoesNotApplyToADifferentFailure(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		reconcileErr:       errors.New("reconcile exploded"),
+		failureAppearances: usagePassAppearances(),
+	})
+
+	if err := fixture.run(context.Background(), fixture.job()); err == nil {
+		t.Fatal("Run: want the reconciliation failure")
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+}
+
 // A run that could not read every chunk leaves no review marker, so the same
 // head is reviewed again rather than being suppressed as already done.
 func TestAnIncompleteRunOmitsTheReviewMarkerSoTheHeadIsReviewedAgain(t *testing.T) {
@@ -6078,6 +6191,9 @@ type serviceFixtureOptions struct {
 	reviewMaxFiles     int
 	reviewMaxChunks    int
 	chunkTimeout       time.Duration
+	// failureAppearances chooses which service failures conclude the check as
+	// success. Nil keeps every class blocking.
+	failureAppearances config.FailureAppearances
 	// unsetReviewBudgets passes zero budgets to NewService, the way a caller
 	// that never set them would.
 	unsetReviewBudgets bool
@@ -6694,6 +6810,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		reviewMaxFiles,
 		reviewMaxChunks,
 		chunkTimeout,
+		options.failureAppearances,
 		testClock(8*time.Second),
 		slog.New(slog.NewTextHandler(logWriter, nil)),
 	)
