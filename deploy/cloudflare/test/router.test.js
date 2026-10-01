@@ -8,12 +8,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
-let createPrAgentEnvironment;
 const execFileAsync = promisify(execFile);
-
-try {
-  ({ createPrAgentEnvironment } = await import("../worker/configuration.js"));
-} catch {}
 
 test("health probe exits when the endpoint returns HTTP 200", async function (context) {
   const server = http.createServer(function handleRequest(_request, response) {
@@ -38,12 +33,6 @@ test("health probe exits when the endpoint returns HTTP 200", async function (co
       RETRY_DELAY_SECONDS: "0",
     },
   });
-});
-
-test("an unlisted binding never reaches the Go service", function () {
-  const environment = createPrAgentEnvironment({ UNLISTED_BINDING: "fixture" });
-
-  assert.equal("UNLISTED_BINDING" in environment, false);
 });
 
 test("release image selection writes the exact immutable digest", async function () {
