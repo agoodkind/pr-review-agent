@@ -141,8 +141,8 @@ func chunkFailureReason(failures []chunkFailure) string {
 	return ""
 }
 
-// chunkFailureClass is the first failure class named for a run that left chunks
-// unread, or FailureOther when nothing in the unread set classifies.
+// chunkFailureClass is the first named class among chunks left unread.
+// It is FailureOther when none of those chunks classify.
 func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 	classes := chunkFailureClasses(failures)
 	for _, class := range classes {
@@ -155,9 +155,8 @@ func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 	return config.FailureOther
 }
 
-// chunkFailureClasses is every class present in the unread chunks. A run passes
-// only when each of them is configured to pass, so one passing class cannot
-// hide another that still blocks.
+// chunkFailureClasses lists every class present in the unread chunks.
+// The check passes only when each of those classes is configured to pass.
 func chunkFailureClasses(failures []chunkFailure) []config.FailureClass {
 	classes := make([]config.FailureClass, 0, len(failures))
 	for _, failure := range failures {
@@ -167,8 +166,7 @@ func chunkFailureClasses(failures []chunkFailure) []config.FailureClass {
 }
 
 // failureClassOf classifies a service failure the same way the public title does.
-// Daily budget is distinct from provider usage exhaustion even though a budget
-// denial also reports that usage was exceeded.
+// A daily token limit is its own class, even when that denial also reports exhausted usage.
 func failureClassOf(cause error) config.FailureClass {
 	switch {
 	case dailyBudgetExhausted(cause):
@@ -189,8 +187,8 @@ func failureClassOf(cause error) config.FailureClass {
 // presentedConclusion is the GitHub conclusion for the failure classes in one run.
 //
 // The check concludes success only when every class is configured to pass.
-// One passing class does not hide another that still blocks. The title and
-// comment still name the failure, and the run still publishes no verdict.
+// One passing class does not hide another that still blocks.
+// The title and the comment still name the failure. The run publishes no verdict.
 func (service *Service) presentedConclusion(classes []config.FailureClass, blocking string) string {
 	if len(classes) == 0 {
 		return blocking
@@ -203,8 +201,8 @@ func (service *Service) presentedConclusion(classes []config.FailureClass, block
 	return "success"
 }
 
-// failureClassesOf is every class in a failure, including each error joined
-// after provider fallback. A single wrapped error stays one class.
+// failureClassesOf lists every class in a failure.
+// A joined provider error contributes one class per cause. A single wrapped error stays one class.
 func failureClassesOf(cause error) []config.FailureClass {
 	if cause == nil {
 		return nil
