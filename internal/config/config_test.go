@@ -503,6 +503,92 @@ func TestLoadRuntimeRejectsUnlistedSettings(t *testing.T) {
 	}
 }
 
+func TestLoadKeepsADisabledProviderInPriority(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{
+		"PROVIDERS": `[
+			{"id":"primary","base_url":"https://primary.example/v1","model":"primary-model","api_key_binding":"PRIMARY_KEY","daily_token_limit":10,"daily_token_types":["input"]},
+			{"id":"clyde","base_url":"https://clyde.example/v1","model":"clyde-model","api_key_binding":"OPENAI_KEY","disabled":true,"cf_access_client_id_binding":"CF_ID","cf_access_client_secret_binding":"CF_SECRET"}
+		]`,
+		"PROVIDER_PRIORITY":                      `["primary","clyde"]`,
+		"PROVIDER_BUDGET_URL":                    "https://budget.example/internal/v1/provider_budget",
+		"PROVIDER_PRIMARY_API_KEY":               "fixture-primary-" + strings.Repeat("p", 8),
+		"PROVIDER_CLYDE_API_KEY":                 "fixture-clyde-" + strings.Repeat("k", 8),
+		"PROVIDER_CLYDE_CF_ACCESS_CLIENT_ID":     "fixture-access-id",
+		"PROVIDER_CLYDE_CF_ACCESS_CLIENT_SECRET": "fixture-access-" + strings.Repeat("s", 8),
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Providers) != 2 || cfg.Providers[0].Disabled || cfg.Providers[0].ID != "primary" {
+		t.Fatalf("primary = %+v", cfg.Providers[0])
+	}
+	clyde := cfg.Providers[1]
+	if clyde.ID != "clyde" || !clyde.Disabled || clyde.APIKey == "" {
+		t.Fatalf("clyde disabled = %t, id = %q", clyde.Disabled, clyde.ID)
+	}
+}
+
+func TestLoadRejectsADisabledProviderWithMissingCredentials(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{
+		"PROVIDERS":                `[{"id":"primary","base_url":"https://primary.example/v1","model":"primary-model","api_key_binding":"PRIMARY_KEY"},{"id":"clyde","base_url":"https://clyde.example/v1","model":"clyde-model","api_key_binding":"OPENAI_KEY","disabled":true}]`,
+		"PROVIDER_PRIORITY":        `["primary","clyde"]`,
+		"PROVIDER_PRIMARY_API_KEY": "fixture-primary-" + strings.Repeat("p", 8),
+	})
+	if err == nil || !strings.Contains(err.Error(), "PROVIDER_CLYDE_API_KEY") {
+		t.Fatalf("Load error = %v, want the disabled provider's credential", err)
+	}
+}
+
+func TestLoadRejectsEveryProviderDisabled(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{
+		"PROVIDERS":                `[{"id":"primary","base_url":"https://primary.example/v1","model":"primary-model","api_key_binding":"PRIMARY_KEY","disabled":true}]`,
+		"PROVIDER_PRIORITY":        `["primary"]`,
+		"PROVIDER_PRIMARY_API_KEY": "fixture-primary-" + strings.Repeat("p", 8),
+	})
+	if err == nil || !strings.Contains(err.Error(), "at least one provider must be enabled") {
+		t.Fatalf("Load error = %v, want every provider disabled rejected", err)
+	}
+}
+
+func TestLoadFailureAppearance(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{
+		"SERVICE_FAILURE_APPEARANCE": `{"usage_exceeded":"pass","daily_budget":"fail"}`,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("usage exhaustion appearance does not pass")
+	}
+	if cfg.ServiceFailureAppearance.Passes(FailureDailyBudget) || cfg.ServiceFailureAppearance.Passes(FailureUnavailable) {
+		t.Fatal("an omitted or failing class was treated as pass")
+	}
+}
+
+func TestLoadRejectsUnknownFailureAppearance(t *testing.T) {
+	for _, value := range []string{
+		`{"usage_exceeded":"pass"} {}`,
+		`{"not_a_class":"pass"}`,
+		`{"usage_exceeded":"neutral"}`,
+		`[]`,
+	} {
+		_, err := loadWithOverrides(map[string]string{"SERVICE_FAILURE_APPEARANCE": value})
+		if err == nil || !strings.Contains(err.Error(), "SERVICE_FAILURE_APPEARANCE") {
+			t.Fatalf("Load appearance %q: err = %v, want SERVICE_FAILURE_APPEARANCE", value, err)
+		}
+	}
+}
+
+func TestOmittedFailureAppearanceBlocksEveryClass(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("omitted appearance passed usage exhaustion")
+	}
+}
+
 func TestLoadRuntimeRejectsNullSetting(t *testing.T) {
 	_, err := LoadRuntime([]byte(`{"REVIEW_MAX_FILES":null}`), nil)
 	if err == nil || !strings.Contains(err.Error(), `"REVIEW_MAX_FILES" must not be null`) {
