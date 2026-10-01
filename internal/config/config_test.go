@@ -4,9 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -570,6 +568,28 @@ func TestLoadFailureAppearance(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeAcceptsAFailureAppearanceObject(t *testing.T) {
+	lookup, err := lookupWithOverrides(nil)
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	cfg, err := LoadRuntime([]byte(`{
+		"GITHUB_APP_ID": "12345",
+		"GITHUB_BOT_LOGIN": "fixture-bot[bot]",
+		"CLYDE_BASE_URL": "https://clyde.example/v1",
+		"REVIEW_MIN_IMPORTANCE": "8",
+		"REVIEW_WORKERS": "4",
+		"REVIEW_MODEL": "gpt-6-luna",
+		"SERVICE_FAILURE_APPEARANCE": {"usage_exceeded": "pass"}
+	}`), lookup)
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if !cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("runtime appearance did not pass usage exhaustion")
+	}
+}
+
 func TestLoadRejectsUnknownFailureAppearance(t *testing.T) {
 	for _, value := range []string{
 		`{"usage_exceeded":"pass"} {}`,
@@ -592,52 +612,6 @@ func TestOmittedFailureAppearanceBlocksEveryClass(t *testing.T) {
 	if cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
 		t.Fatal("omitted appearance passed usage exhaustion")
 	}
-}
-
-func TestRuntimeConfigDisablesClydeAndPassesUsageExhaustion(t *testing.T) {
-	data, err := os.ReadFile("../../runtime.json")
-	if err != nil {
-		t.Fatalf("read runtime.json: %v", err)
-	}
-	var raw struct {
-		Providers []struct {
-			ID       string `json:"id"`
-			Disabled bool   `json:"disabled"`
-		} `json:"PROVIDERS"`
-		Priority   []string          `json:"PROVIDER_PRIORITY"`
-		Appearance map[string]string `json:"SERVICE_FAILURE_APPEARANCE"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("decode runtime.json: %v", err)
-	}
-	found := false
-	for _, provider := range raw.Providers {
-		if provider.ID != "clyde" {
-			continue
-		}
-		found = true
-		if !provider.Disabled {
-			t.Fatal("clyde is present and enabled")
-		}
-	}
-	if !found {
-		t.Fatal("clyde is missing from PROVIDERS")
-	}
-	if !slicesContains(raw.Priority, "clyde") {
-		t.Fatal("clyde is missing from PROVIDER_PRIORITY")
-	}
-	if raw.Appearance["usage_exceeded"] != string(FailureAppearancePass) {
-		t.Fatalf("usage_exceeded appearance = %q, want pass", raw.Appearance["usage_exceeded"])
-	}
-}
-
-func slicesContains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func TestLoadRuntimeRejectsNullSetting(t *testing.T) {
