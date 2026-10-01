@@ -119,8 +119,10 @@ var runtimeConfigKeys = map[string]struct{}{
 	"PROVIDER_PRIORITY":          {},
 	"PROVIDER_BUDGET_URL":        {},
 	"SERVICE_FAILURE_APPEARANCE": {},
+	"GITHUB_API_BASE_URL":        {},
 	"GITHUB_APP_ID":              {},
 	"GITHUB_BOT_LOGIN":           {},
+	"GITHUB_GRAPHQL_URL":         {},
 	"LOG_FORWARD_URL":            {},
 	"PORT":                       {},
 	"REVIEW_CHUNK_TIMEOUT":       {},
@@ -212,7 +214,11 @@ func FindModelPricing(pricingByModel map[string]ModelPricing, model string) (Mod
 
 // FromEnvironment loads public settings from the deployed file and secrets from the environment.
 func FromEnvironment() (Config, error) {
-	data, err := os.ReadFile(runtimeConfigPath)
+	path := os.Getenv("RUNTIME_CONFIG_PATH")
+	if strings.TrimSpace(path) == "" {
+		path = runtimeConfigPath
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Error("read runtime configuration", "error", err)
 		return Config{}, fmt.Errorf("read runtime configuration: %w", err)
@@ -301,6 +307,20 @@ func Load(lookup LookupEnv) (Config, error) {
 	}
 	cfg.GitHubAPIBaseURL = apiBaseURL
 	cfg.GitHubGraphQLURL = graphqlURL
+	if value, ok := loadRequiredText(lookup, "GITHUB_API_BASE_URL"); ok {
+		parsed, err := parseRequiredHTTPSURL("GITHUB_API_BASE_URL", value)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.GitHubAPIBaseURL = parsed
+	}
+	if value, ok := loadRequiredText(lookup, "GITHUB_GRAPHQL_URL"); ok {
+		parsed, err := parseRequiredHTTPSURL("GITHUB_GRAPHQL_URL", value)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.GitHubGraphQLURL = parsed
+	}
 
 	return cfg, nil
 }
@@ -708,10 +728,14 @@ func parseRequiredHTTPSURL(name string, value string) (*url.URL, error) {
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("%s must be an absolute URL", name)
 	}
-	if parsed.Scheme != "https" {
-		return nil, fmt.Errorf("%s must use HTTPS", name)
+	if parsed.Scheme == "https" {
+		return parsed, nil
 	}
-	return parsed, nil
+	host := parsed.Hostname()
+	if parsed.Scheme == "http" && (host == "127.0.0.1" || host == "localhost" || host == "::1") {
+		return parsed, nil
+	}
+	return nil, fmt.Errorf("%s must use HTTPS", name)
 }
 
 func parseRSAPrivateKey(value string) (*rsa.PrivateKey, error) {

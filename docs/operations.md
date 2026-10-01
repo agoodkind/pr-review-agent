@@ -47,6 +47,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | Setting | Value |
 | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
+| `GITHUB_API_BASE_URL`, `GITHUB_GRAPHQL_URL` | Optional GitHub endpoints. Omission uses `https://api.github.com`. Loopback HTTP is accepted for a local peer |
 | `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
 | `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider per UTC day; omit or set `0` for no limit |
