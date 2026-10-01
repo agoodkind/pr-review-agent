@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -214,16 +215,35 @@ func FindModelPricing(pricingByModel map[string]ModelPricing, model string) (Mod
 
 // FromEnvironment loads public settings from the deployed file and secrets from the environment.
 func FromEnvironment() (Config, error) {
-	path := os.Getenv("RUNTIME_CONFIG_PATH")
-	if strings.TrimSpace(path) == "" {
-		path = runtimeConfigPath
+	path, err := runtimeFilePath()
+	if err != nil {
+		return Config{}, err
 	}
-	data, err := os.ReadFile(path)
+	// The path is the deployed constant or a cleaned absolute runtime.json chosen
+	// by the operator. It is not request input.
+	data, err := os.ReadFile(path) // #nosec G703 -- operator runtime file, constrained to an absolute runtime.json
 	if err != nil {
 		slog.Error("read runtime configuration", "error", err)
 		return Config{}, fmt.Errorf("read runtime configuration: %w", err)
 	}
 	return LoadRuntime(data, os.LookupEnv)
+}
+
+// runtimeFilePath is the deployed runtime file, or RUNTIME_CONFIG_PATH when a
+// local process names an absolute runtime.json without a traversal segment.
+func runtimeFilePath() (string, error) {
+	override := strings.TrimSpace(os.Getenv("RUNTIME_CONFIG_PATH"))
+	if override == "" {
+		return runtimeConfigPath, nil
+	}
+	if strings.Contains(override, "..") {
+		return "", errors.New("RUNTIME_CONFIG_PATH must not contain traversal")
+	}
+	cleaned := filepath.Clean(override)
+	if !filepath.IsAbs(cleaned) || filepath.Base(cleaned) != "runtime.json" {
+		return "", errors.New("RUNTIME_CONFIG_PATH must be an absolute runtime.json path")
+	}
+	return cleaned, nil
 }
 
 // LoadRuntime parses public JSON settings and reads credentials from lookup.
