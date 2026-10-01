@@ -32,8 +32,7 @@ type ProviderConfig struct {
 	OmitTextFormat       bool
 	CFAccessClientID     string
 	CFAccessClientSecret string
-	// Disabled leaves this provider in the configuration and in the priority list.
-	// The service sends it no requests. Its credentials are still required, so clearing the flag is enough to use it again.
+	// Disabled keeps this provider ready for later use without sending it requests.
 	Disabled bool
 }
 

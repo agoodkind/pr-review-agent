@@ -27,42 +27,38 @@ const (
 	FallbackOnUsageExceeded = "usage_exceeded"
 )
 
-// FailureClass names one kind of service failure.
-// The runtime configuration chooses the GitHub check conclusion for each class.
+// FailureClass separates failures that operators may present differently on GitHub.
 type FailureClass string
 
 const (
-	// FailureUsageExceeded means the provider refused the request because it has no remaining usage.
+	// FailureUsageExceeded lets operators treat exhausted provider accounts as nonblocking.
 	FailureUsageExceeded FailureClass = "usage_exceeded"
-	// FailureDailyBudget means a configured daily token limit denied the request.
+	// FailureDailyBudget keeps local budget denials independent from provider usage policy.
 	FailureDailyBudget FailureClass = "daily_budget"
-	// FailureUnavailable means the service could not reach the provider.
+	// FailureUnavailable keeps connectivity failures independent from usage policy.
 	FailureUnavailable FailureClass = "provider_unavailable"
-	// FailureDeadline means one model call ran out of time.
+	// FailureDeadline keeps timeouts independent from provider availability policy.
 	FailureDeadline FailureClass = "deadline"
-	// FailurePanic means the review recovered from an internal panic.
+	// FailurePanic lets operators preserve a blocking result for recovered internal faults.
 	FailurePanic FailureClass = "panic"
-	// FailureOther means the failure matches none of the classes above.
+	// FailureOther keeps unrecognized failures blocking unless operators explicitly allow them.
 	FailureOther FailureClass = "other"
 )
 
-// FailureAppearance is the GitHub check conclusion chosen for one failure class.
+// FailureAppearance controls whether one failure class blocks the GitHub check.
 type FailureAppearance string
 
 const (
-	// FailureAppearanceFail keeps the conclusion that blocks merge.
-	// An aborted run stays `failure`. A run that left chunks unread stays `action_required`.
+	// FailureAppearanceFail preserves the blocking conclusion for the run.
 	FailureAppearanceFail FailureAppearance = "fail"
-	// FailureAppearancePass concludes the check as `success`.
-	// The title and the comment still name the failure. The run publishes no review verdict.
+	// FailureAppearancePass allows the check to conclude with success.
 	FailureAppearancePass FailureAppearance = "pass"
 )
 
-// FailureAppearances maps each failure class to a check conclusion.
-// A missing class keeps the blocking conclusion.
+// FailureAppearances lets operators choose the check result for each failure class.
 type FailureAppearances map[FailureClass]FailureAppearance
 
-// Passes reports whether this class is set to conclude the check as success.
+// Passes reports whether class is allowed to conclude the check with success.
 func (appearances FailureAppearances) Passes(class FailureClass) bool {
 	return appearances[class] == FailureAppearancePass
 }
@@ -173,8 +169,7 @@ type Config struct {
 	FallbackCFAccessClientID     string
 	FallbackCFAccessClientSecret string
 	FallbackOnUsageExceeded      bool
-	// ServiceFailureAppearance chooses the GitHub check conclusion for each service failure class.
-	// A missing class keeps the blocking conclusion.
+	// ServiceFailureAppearance allows expected service failures to leave the required check green.
 	ServiceFailureAppearance FailureAppearances
 	// LogForwardURL is where the service ships its own logs so a person can
 	// read them. Container stdout reaches no log sink, so without this the

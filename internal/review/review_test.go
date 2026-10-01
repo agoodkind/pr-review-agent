@@ -6138,8 +6138,6 @@ type serviceFixtureOptions struct {
 	reviewMaxFiles     int
 	reviewMaxChunks    int
 	chunkTimeout       time.Duration
-	// failureAppearances chooses which service failures conclude the check as
-	// success. Nil keeps every class blocking.
 	failureAppearances config.FailureAppearances
 	// unsetReviewBudgets passes zero budgets to NewService, the way a caller
 	// that never set them would.

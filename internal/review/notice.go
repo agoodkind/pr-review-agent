@@ -141,8 +141,6 @@ func chunkFailureReason(failures []chunkFailure) string {
 	return ""
 }
 
-// chunkFailureClass is the first named class among chunks left unread.
-// It is FailureOther when none of those chunks classify.
 func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 	classes := chunkFailureClasses(failures)
 	for _, class := range classes {
@@ -155,8 +153,6 @@ func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 	return config.FailureOther
 }
 
-// chunkFailureClasses lists every class present in the unread chunks.
-// The check passes only when each of those classes is configured to pass.
 func chunkFailureClasses(failures []chunkFailure) []config.FailureClass {
 	classes := make([]config.FailureClass, 0, len(failures))
 	for _, failure := range failures {
@@ -165,8 +161,7 @@ func chunkFailureClasses(failures []chunkFailure) []config.FailureClass {
 	return uniqueFailureClasses(classes)
 }
 
-// failureClassOf classifies a service failure the same way the public title does.
-// A daily token limit is its own class, even when that denial also reports exhausted usage.
+// failureClassOf checks the daily budget first because its error also reports exhausted usage.
 func failureClassOf(cause error) config.FailureClass {
 	switch {
 	case dailyBudgetExhausted(cause):
@@ -184,11 +179,7 @@ func failureClassOf(cause error) config.FailureClass {
 	}
 }
 
-// presentedConclusion is the GitHub conclusion for the failure classes in one run.
-//
-// The check concludes success only when every class is configured to pass.
-// One passing class does not hide another that still blocks.
-// The title and the comment still name the failure. The run publishes no verdict.
+// presentedConclusion prevents an allowed failure from hiding a blocking failure in the same run.
 func (service *Service) presentedConclusion(classes []config.FailureClass, blocking string) string {
 	if len(classes) == 0 {
 		return blocking
@@ -201,8 +192,7 @@ func (service *Service) presentedConclusion(classes []config.FailureClass, block
 	return "success"
 }
 
-// failureClassesOf lists every class in a failure.
-// A joined provider error contributes one class per cause. A single wrapped error stays one class.
+// failureClassesOf retains every joined cause so the check accounts for every failure.
 func failureClassesOf(cause error) []config.FailureClass {
 	if cause == nil {
 		return nil
