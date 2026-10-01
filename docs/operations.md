@@ -53,7 +53,9 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
 | `PROVIDERS[].omit_max_output_tokens` | Omit the output token limit for a backend that rejects it |
 | `PROVIDERS[].omit_text_format` | Omit JSON schema enforcement for a backend that rejects it; the system prompt still requests JSON matching the schema |
+| `PROVIDERS[].disabled` | Keep the provider configured without sending it requests |
 | `PROVIDER_BUDGET_URL` | Worker endpoint that records reported usage after model requests |
+| `SERVICE_FAILURE_APPEARANCE` | Choose whether each service failure class blocks the check |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
@@ -69,7 +71,23 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 ## Configure provider order
 
-List every configured provider ID once in `PROVIDER_PRIORITY`. Put the preferred provider first. The service tries the next provider when the previous provider reports exhausted API usage or its configured daily token limit denies a request. The service rejects incomplete providers and invalid priority lists at startup. OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
+List every configured provider ID once in `PROVIDER_PRIORITY`, including providers marked `disabled`. Put the preferred provider first. The service rejects incomplete providers and invalid priority lists at startup.
+
+The service tries the next enabled provider when the previous provider reports exhausted API usage. It also tries the next enabled provider when a configured daily token limit denies a request.
+
+OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
+
+Set `disabled` to keep a provider available in the configuration without sending it requests. The service still validates that provider and its credentials. At least one provider must stay enabled.
+
+Set `SERVICE_FAILURE_APPEARANCE` to choose whether each service failure class blocks the check. The available classes are `usage_exceeded`, `daily_budget`, `provider_unavailable`, `deadline`, `panic`, and `other`.
+
+Set a class to `fail` to preserve the existing blocking conclusion. An aborted run concludes with `failure`. A run with unread chunks concludes with `action_required`.
+
+Set a class to `pass` to conclude the check with `success`. Every failure class in the run must be set to `pass`. One passing class cannot hide a blocking class. An omitted class remains blocking.
+
+The selected appearance changes only the check conclusion. The check title and the summary comment still report the recognized failure class. The run publishes no review verdict.
+
+Unread chunks stay pending. The next push reviews those chunks and any new changes.
 
 Set `daily_token_limit` on each provider that needs a daily cap. Set `daily_token_types` to `input`, `output`, or both. OpenAI's complimentary data-sharing allowance counts both input and output. Both OpenAI providers select both types. The Worker admits a request while reported usage for that UTC day is below the limit. After the model responds, the service reports the selected token count. Concurrent requests can exceed the limit because admission does not reserve tokens. A request without reported usage does not increase the counter. The service skips a provider if the Worker cannot check its usage. Keep the Worker URL and the `PROVIDER_BUDGET` Durable Object binding configured when any provider has a cap.
 

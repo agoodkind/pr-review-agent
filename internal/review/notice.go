@@ -15,6 +15,7 @@ import (
 	"log/slog"
 
 	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
@@ -38,7 +39,15 @@ func (service *Service) failCheck(
 		gklog.L(ctx).InfoContext(ctx, "review interrupted", slog.String("err", cause.Error()))
 		return cause
 	}
-	return service.reportFailedCheck(ctx, job, checkRunID, progress, stage, "failure", cause)
+	return service.reportFailedCheck(
+		ctx,
+		job,
+		checkRunID,
+		progress,
+		stage,
+		service.presentedConclusion(failureClassesOf(cause), "failure"),
+		cause,
+	)
 }
 
 // reportFailedCheck publishes a failed attempt with the conclusion that
@@ -91,15 +100,18 @@ func (service *Service) reportFailedCheck(
 // A failed model call never reaches here. It leaves its chunk pending rather
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
-	switch {
-	case usageExceeded(cause):
+	switch failureClassOf(cause) {
+	case config.FailureDailyBudget:
+		return checkFailureDailyBudget
+	case config.FailureUsageExceeded:
 		return checkFailureUsage
-	case errors.Is(cause, context.DeadlineExceeded):
+	case config.FailureDeadline:
 		return checkFailureDeadline
-	case providerUnavailable(cause):
+	case config.FailureUnavailable:
 		return checkFailureUnavailable
-	case isChunkPanic(cause):
+	case config.FailurePanic:
 		return checkFailurePanic
+	case config.FailureOther:
 	}
 	if stage == "" {
 		return checkSummaryFailure
@@ -114,19 +126,101 @@ func failureTitle(stage string, cause error) string {
 // Exhausted usage is the largest single cause in production, and a reader who
 // sees only a chunk count cannot tell it apart from a provider outage.
 func chunkFailureReason(failures []chunkFailure) string {
-	for _, failure := range failures {
-		switch {
-		case dailyBudgetExhausted(failure.err):
-			return checkFailureDailyBudget
-		case usageExceeded(failure.err):
-			return checkFailureUsage
-		case errors.Is(failure.err, context.DeadlineExceeded):
-			return checkFailureDeadline
-		case providerUnavailable(failure.err):
-			return checkFailureUnavailable
-		}
+	switch chunkFailureClass(failures) {
+	case config.FailureDailyBudget:
+		return checkFailureDailyBudget
+	case config.FailureUsageExceeded:
+		return checkFailureUsage
+	case config.FailureDeadline:
+		return checkFailureDeadline
+	case config.FailureUnavailable:
+		return checkFailureUnavailable
+	case config.FailurePanic, config.FailureOther:
+		return ""
 	}
 	return ""
+}
+
+func chunkFailureClass(failures []chunkFailure) config.FailureClass {
+	classes := chunkFailureClasses(failures)
+	for _, class := range classes {
+		switch class {
+		case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureDeadline, config.FailureUnavailable:
+			return class
+		case config.FailurePanic, config.FailureOther:
+		}
+	}
+	return config.FailureOther
+}
+
+func chunkFailureClasses(failures []chunkFailure) []config.FailureClass {
+	classes := make([]config.FailureClass, 0, len(failures))
+	for _, failure := range failures {
+		classes = append(classes, failureClassesOf(failure.err)...)
+	}
+	return uniqueFailureClasses(classes)
+}
+
+// failureClassOf checks the daily budget first because its error also reports exhausted usage.
+func failureClassOf(cause error) config.FailureClass {
+	switch {
+	case dailyBudgetExhausted(cause):
+		return config.FailureDailyBudget
+	case usageExceeded(cause):
+		return config.FailureUsageExceeded
+	case errors.Is(cause, context.DeadlineExceeded):
+		return config.FailureDeadline
+	case providerUnavailable(cause):
+		return config.FailureUnavailable
+	case isChunkPanic(cause):
+		return config.FailurePanic
+	default:
+		return config.FailureOther
+	}
+}
+
+// presentedConclusion prevents an allowed failure from hiding a blocking failure in the same run.
+func (service *Service) presentedConclusion(classes []config.FailureClass, blocking string) string {
+	if len(classes) == 0 {
+		return blocking
+	}
+	for _, class := range classes {
+		if !service.failureAppearances.Passes(class) {
+			return blocking
+		}
+	}
+	return "success"
+}
+
+// failureClassesOf retains every joined cause so the check accounts for every failure.
+func failureClassesOf(cause error) []config.FailureClass {
+	if cause == nil {
+		return nil
+	}
+	if joined, ok := cause.(interface{ Unwrap() []error }); ok {
+		classes := make([]config.FailureClass, 0, len(joined.Unwrap()))
+		for _, err := range joined.Unwrap() {
+			classes = append(classes, failureClassesOf(err)...)
+		}
+		return uniqueFailureClasses(classes)
+	}
+	return []config.FailureClass{failureClassOf(cause)}
+}
+
+func uniqueFailureClasses(classes []config.FailureClass) []config.FailureClass {
+	if len(classes) == 0 {
+		return []config.FailureClass{config.FailureOther}
+	}
+	seen := make(map[config.FailureClass]struct{}, len(classes))
+	unique := make([]config.FailureClass, 0, len(classes))
+	for _, class := range classes {
+		if _, found := seen[class]; found {
+			continue
+		}
+		seen[class] = struct{}{}
+		unique = append(unique, class)
+	}
+	return unique
 }
 
 // publicFailureDetail points a reader at the cause instead of reprinting it.

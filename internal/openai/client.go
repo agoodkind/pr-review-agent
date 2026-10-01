@@ -81,6 +81,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			OmitTextFormat:       false,
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
+			Disabled:             false,
 		}}
 		if cfg.HasFallback() {
 			configuredProviders = append(configuredProviders, config.ProviderConfig{
@@ -94,6 +95,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				OmitTextFormat:       false,
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
+				Disabled:             false,
 			})
 		}
 		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
@@ -110,6 +112,9 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		client.budgetURL = cfg.ProviderBudgetURL.String()
 	}
 	for _, configured := range configuredProviders {
+		if configured.Disabled {
+			continue
+		}
 		client.providers = append(client.providers, provider{
 			id:                  configured.ID,
 			sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
