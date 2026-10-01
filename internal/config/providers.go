@@ -32,6 +32,10 @@ type ProviderConfig struct {
 	OmitTextFormat       bool
 	CFAccessClientID     string
 	CFAccessClientSecret string
+	// Disabled keeps this provider in configuration and in the priority list
+	// without sending it any requests. Its credentials are still required, so
+	// clearing the flag is enough to use it again.
+	Disabled bool
 }
 
 type providerDefinition struct {
@@ -45,6 +49,7 @@ type providerDefinition struct {
 	OmitTextFormat              bool        `json:"omit_text_format,omitempty"`
 	CFAccessClientIDBinding     string      `json:"cf_access_client_id_binding,omitempty"`
 	CFAccessClientSecretBinding string      `json:"cf_access_client_secret_binding,omitempty"`
+	Disabled                    bool        `json:"disabled,omitempty"`
 }
 
 var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -104,17 +109,25 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			OmitTextFormat:       definition.OmitTextFormat,
 			CFAccessClientID:     clientID,
 			CFAccessClientSecret: clientSecret, // gitleaks:allow
+			Disabled:             definition.Disabled,
 		}
 	}
 	providers := make([]ProviderConfig, 0, len(priority))
 	seen := make(map[string]bool, len(priority))
+	enabled := 0
 	for _, id := range priority {
 		provider, exists := configured[id]
 		if !exists || seen[id] {
 			return nil, errors.New("PROVIDER_PRIORITY must list each provider exactly once")
 		}
 		seen[id] = true
+		if !provider.Disabled {
+			enabled++
+		}
 		providers = append(providers, provider)
+	}
+	if enabled == 0 {
+		return nil, errors.New("at least one provider must be enabled")
 	}
 	return providers, nil
 }

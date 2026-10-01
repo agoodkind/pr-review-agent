@@ -25,10 +25,14 @@
       "omit_max_output_tokens": true,
       "omit_text_format": true,
       "cf_access_client_id_binding": "CF_ACCESS_CLIENT_ID",
-      "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET"
+      "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET",
+      "disabled": true
     }
   ],
   "PROVIDER_PRIORITY": ["openai_goodkind_io", "openai_goodkindalex", "clyde"],
+  "SERVICE_FAILURE_APPEARANCE": {
+    "usage_exceeded": "pass"
+  },
   "PROVIDER_BUDGET_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/provider_budget",
   "GITHUB_APP_ID": "4571682",
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",

@@ -25,6 +25,48 @@ const (
 	// the request to the fallback provider when the primary reports that it has
 	// no remaining usage.
 	FallbackOnUsageExceeded = "usage_exceeded"
+)
+
+// FailureClass names a service-level failure whose check conclusion can be configured.
+type FailureClass string
+
+const (
+	// FailureUsageExceeded is a provider refusal for lack of remaining usage.
+	FailureUsageExceeded FailureClass = "usage_exceeded"
+	// FailureDailyBudget is a configured daily token limit denying a request.
+	FailureDailyBudget FailureClass = "daily_budget"
+	// FailureUnavailable is a provider the service could not reach.
+	FailureUnavailable FailureClass = "provider_unavailable"
+	// FailureDeadline is a model call that ran out of time.
+	FailureDeadline FailureClass = "deadline"
+	// FailurePanic is an internal panic recovered inside a review.
+	FailurePanic FailureClass = "panic"
+	// FailureOther is any service failure that matches none of the classes above.
+	FailureOther FailureClass = "other"
+)
+
+// FailureAppearance is how a service-level failure concludes the GitHub check.
+type FailureAppearance string
+
+const (
+	// FailureAppearanceFail keeps the blocking conclusion. An aborted run stays
+	// failure, and a run that left chunks unread stays action_required.
+	FailureAppearanceFail FailureAppearance = "fail"
+	// FailureAppearancePass concludes the check as success. The comment and the
+	// title still name the failure, and no review verdict is published.
+	FailureAppearancePass FailureAppearance = "pass"
+)
+
+// FailureAppearances maps a failure class to its check appearance.
+// A class that is absent keeps the blocking conclusion.
+type FailureAppearances map[FailureClass]FailureAppearance
+
+// Passes reports whether this class is configured to conclude the check as success.
+func (appearances FailureAppearances) Passes(class FailureClass) bool {
+	return appearances[class] == FailureAppearancePass
+}
+
+const (
 	// ReviewCheckName is the GitHub check run name for review lifecycle.
 	ReviewCheckName = "PR-Agent Review"
 	// QueueCapacity is the maximum number of queued review jobs.
@@ -68,25 +110,26 @@ type LookupEnv func(string) (string, bool)
 const runtimeConfigPath = "/runtime.json"
 
 var runtimeConfigKeys = map[string]struct{}{
-	"CLYDE_BASE_URL":        {},
-	"CONTAINER_SLEEP_AFTER": {},
-	"FALLBACK_BASE_URL":     {},
-	"FALLBACK_MODEL":        {},
-	"FALLBACK_ON":           {},
-	"PROVIDERS":             {},
-	"PROVIDER_PRIORITY":     {},
-	"PROVIDER_BUDGET_URL":   {},
-	"GITHUB_APP_ID":         {},
-	"GITHUB_BOT_LOGIN":      {},
-	"LOG_FORWARD_URL":       {},
-	"PORT":                  {},
-	"REVIEW_CHUNK_TIMEOUT":  {},
-	"REVIEW_MAX_CHUNKS":     {},
-	"REVIEW_MAX_FILES":      {},
-	"REVIEW_MIN_IMPORTANCE": {},
-	"REVIEW_MODEL":          {},
-	"REVIEW_MODEL_PRICING":  {},
-	"REVIEW_WORKERS":        {},
+	"CLYDE_BASE_URL":             {},
+	"CONTAINER_SLEEP_AFTER":      {},
+	"FALLBACK_BASE_URL":          {},
+	"FALLBACK_MODEL":             {},
+	"FALLBACK_ON":                {},
+	"PROVIDERS":                  {},
+	"PROVIDER_PRIORITY":          {},
+	"PROVIDER_BUDGET_URL":        {},
+	"SERVICE_FAILURE_APPEARANCE": {},
+	"GITHUB_APP_ID":              {},
+	"GITHUB_BOT_LOGIN":           {},
+	"LOG_FORWARD_URL":            {},
+	"PORT":                       {},
+	"REVIEW_CHUNK_TIMEOUT":       {},
+	"REVIEW_MAX_CHUNKS":          {},
+	"REVIEW_MAX_FILES":           {},
+	"REVIEW_MIN_IMPORTANCE":      {},
+	"REVIEW_MODEL":               {},
+	"REVIEW_MODEL_PRICING":       {},
+	"REVIEW_WORKERS":             {},
 }
 
 // ModelPricing holds estimated US dollar rates per million tokens.
@@ -129,6 +172,10 @@ type Config struct {
 	FallbackCFAccessClientID     string
 	FallbackCFAccessClientSecret string
 	FallbackOnUsageExceeded      bool
+	// ServiceFailureAppearance chooses the check conclusion for each
+	// service-level failure class. A class that is absent keeps the blocking
+	// conclusion.
+	ServiceFailureAppearance FailureAppearances
 	// LogForwardURL is where the service ships its own logs so a person can
 	// read them. Container stdout reaches no log sink, so without this the
 	// service is invisible in production. It is optional, and an empty value
@@ -187,7 +234,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
-		if name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" {
+		if name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" {
 			values[name] = string(raw)
 			continue
 		}
@@ -217,6 +264,11 @@ func Load(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ReviewModelPricing = pricing
+	appearances, err := loadFailureAppearances(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ServiceFailureAppearance = appearances
 	if _, configured := lookup("PROVIDERS"); configured {
 		providers, err := loadProviders(lookup)
 		if err != nil {
@@ -224,7 +276,7 @@ func Load(lookup LookupEnv) (Config, error) {
 		}
 		cfg.Providers = providers
 		for _, provider := range providers {
-			if provider.DailyTokenLimit == 0 {
+			if provider.Disabled || provider.DailyTokenLimit == 0 {
 				continue
 			}
 			budgetURL, ok := loadRequiredText(lookup, "PROVIDER_BUDGET_URL")
@@ -279,6 +331,40 @@ func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
 		}
 	}
 	return pricing, nil
+}
+
+func loadFailureAppearances(lookup LookupEnv) (FailureAppearances, error) {
+	raw, ok := lookup("SERVICE_FAILURE_APPEARANCE")
+	if !ok || strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	var parsed map[FailureClass]FailureAppearance
+	if err := decoder.Decode(&parsed); err != nil {
+		return nil, errors.New("SERVICE_FAILURE_APPEARANCE must be a JSON object")
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, errors.New("SERVICE_FAILURE_APPEARANCE must contain one JSON object")
+	}
+	for class, appearance := range parsed {
+		if _, known := knownFailureClasses[class]; !known {
+			return nil, fmt.Errorf("SERVICE_FAILURE_APPEARANCE has unknown failure class %q", class)
+		}
+		if appearance != FailureAppearanceFail && appearance != FailureAppearancePass {
+			return nil, fmt.Errorf("SERVICE_FAILURE_APPEARANCE appearance for %q must be %q or %q", class, FailureAppearanceFail, FailureAppearancePass)
+		}
+	}
+	return parsed, nil
+}
+
+var knownFailureClasses = map[FailureClass]struct{}{
+	FailureUsageExceeded: {},
+	FailureDailyBudget:   {},
+	FailureUnavailable:   {},
+	FailureDeadline:      {},
+	FailurePanic:         {},
+	FailureOther:         {},
 }
 
 func loadBase(lookup LookupEnv) (Config, []string) {

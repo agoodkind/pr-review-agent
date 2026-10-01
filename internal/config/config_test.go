@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -501,6 +503,141 @@ func TestLoadRuntimeRejectsUnlistedSettings(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unknown runtime configuration key") {
 		t.Fatalf("LoadRuntime: %v", err)
 	}
+}
+
+func TestLoadKeepsADisabledProviderInPriority(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{
+		"PROVIDERS": `[
+			{"id":"primary","base_url":"https://primary.example/v1","model":"primary-model","api_key_binding":"PRIMARY_KEY","daily_token_limit":10,"daily_token_types":["input"]},
+			{"id":"clyde","base_url":"https://clyde.example/v1","model":"clyde-model","api_key_binding":"OPENAI_KEY","disabled":true,"cf_access_client_id_binding":"CF_ID","cf_access_client_secret_binding":"CF_SECRET"}
+		]`,
+		"PROVIDER_PRIORITY":                      `["primary","clyde"]`,
+		"PROVIDER_BUDGET_URL":                    "https://budget.example/internal/v1/provider_budget",
+		"PROVIDER_PRIMARY_API_KEY":               "fixture-primary-" + strings.Repeat("p", 8),
+		"PROVIDER_CLYDE_API_KEY":                 "fixture-clyde-" + strings.Repeat("k", 8),
+		"PROVIDER_CLYDE_CF_ACCESS_CLIENT_ID":     "fixture-access-id",
+		"PROVIDER_CLYDE_CF_ACCESS_CLIENT_SECRET": "fixture-access-" + strings.Repeat("s", 8),
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Providers) != 2 {
+		t.Fatalf("providers = %d, want 2", len(cfg.Providers))
+	}
+	if cfg.Providers[0].ID != "primary" || cfg.Providers[0].Disabled {
+		t.Fatalf("primary = %+v, want an enabled provider", cfg.Providers[0].ID)
+	}
+	clyde := cfg.Providers[1]
+	if clyde.ID != "clyde" || !clyde.Disabled || clyde.APIKey == "" || clyde.CFAccessClientID == "" {
+		t.Fatalf("clyde = id %q disabled %t, want the configured entry kept and disabled", clyde.ID, clyde.Disabled)
+	}
+}
+
+func TestLoadRejectsADisabledProviderWithMissingCredentials(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{
+		"PROVIDERS":                `[{"id":"primary","base_url":"https://primary.example/v1","model":"primary-model","api_key_binding":"PRIMARY_KEY"},{"id":"clyde","base_url":"https://clyde.example/v1","model":"clyde-model","api_key_binding":"OPENAI_KEY","disabled":true}]`,
+		"PROVIDER_PRIORITY":        `["primary","clyde"]`,
+		"PROVIDER_PRIMARY_API_KEY": "fixture-primary-" + strings.Repeat("p", 8),
+	})
+	if err == nil || !strings.Contains(err.Error(), "PROVIDER_CLYDE_API_KEY") {
+		t.Fatalf("Load error = %v, want the disabled provider's credential", err)
+	}
+}
+
+func TestLoadRejectsEveryProviderDisabled(t *testing.T) {
+	_, err := loadWithOverrides(map[string]string{
+		"PROVIDERS":                `[{"id":"primary","base_url":"https://primary.example/v1","model":"primary-model","api_key_binding":"PRIMARY_KEY","disabled":true}]`,
+		"PROVIDER_PRIORITY":        `["primary"]`,
+		"PROVIDER_PRIMARY_API_KEY": "fixture-primary-" + strings.Repeat("p", 8),
+	})
+	if err == nil || !strings.Contains(err.Error(), "at least one provider must be enabled") {
+		t.Fatalf("Load error = %v, want every provider disabled rejected", err)
+	}
+}
+
+func TestLoadFailureAppearance(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{
+		"SERVICE_FAILURE_APPEARANCE": `{"usage_exceeded":"pass","daily_budget":"fail"}`,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("usage exhaustion appearance does not pass")
+	}
+	if cfg.ServiceFailureAppearance.Passes(FailureDailyBudget) || cfg.ServiceFailureAppearance.Passes(FailureUnavailable) {
+		t.Fatal("an omitted or failing class was treated as pass")
+	}
+}
+
+func TestLoadRejectsUnknownFailureAppearance(t *testing.T) {
+	for _, value := range []string{
+		`{"usage_exceeded":"pass"} {}`,
+		`{"not_a_class":"pass"}`,
+		`{"usage_exceeded":"neutral"}`,
+		`[]`,
+	} {
+		_, err := loadWithOverrides(map[string]string{"SERVICE_FAILURE_APPEARANCE": value})
+		if err == nil || !strings.Contains(err.Error(), "SERVICE_FAILURE_APPEARANCE") {
+			t.Fatalf("Load appearance %q: err = %v, want SERVICE_FAILURE_APPEARANCE", value, err)
+		}
+	}
+}
+
+func TestOmittedFailureAppearanceBlocksEveryClass(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("omitted appearance passed usage exhaustion")
+	}
+}
+
+func TestRuntimeConfigDisablesClydeAndPassesUsageExhaustion(t *testing.T) {
+	data, err := os.ReadFile("../../runtime.json")
+	if err != nil {
+		t.Fatalf("read runtime.json: %v", err)
+	}
+	var raw struct {
+		Providers []struct {
+			ID       string `json:"id"`
+			Disabled bool   `json:"disabled"`
+		} `json:"PROVIDERS"`
+		Priority   []string          `json:"PROVIDER_PRIORITY"`
+		Appearance map[string]string `json:"SERVICE_FAILURE_APPEARANCE"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("decode runtime.json: %v", err)
+	}
+	found := false
+	for _, provider := range raw.Providers {
+		if provider.ID != "clyde" {
+			continue
+		}
+		found = true
+		if !provider.Disabled {
+			t.Fatal("clyde is present and enabled")
+		}
+	}
+	if !found {
+		t.Fatal("clyde is missing from PROVIDERS")
+	}
+	if !slicesContains(raw.Priority, "clyde") {
+		t.Fatal("clyde is missing from PROVIDER_PRIORITY")
+	}
+	if raw.Appearance["usage_exceeded"] != string(FailureAppearancePass) {
+		t.Fatalf("usage_exceeded appearance = %q, want pass", raw.Appearance["usage_exceeded"])
+	}
+}
+
+func slicesContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadRuntimeRejectsNullSetting(t *testing.T) {
