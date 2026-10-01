@@ -148,11 +148,16 @@ export function createPrAgentEnvironment(bindings, configuration = runtime) {
     if (configuration[name] === undefined) {
       continue;
     }
-    if (name === "REVIEW_MODEL_PRICING" || name === "PROVIDERS" || name === "PROVIDER_PRIORITY" || name === "SERVICE_FAILURE_APPEARANCE") {
-      environment[name] = JSON.stringify(configuration[name]);
-      continue;
+    switch (name) {
+      case "REVIEW_MODEL_PRICING":
+      case "PROVIDERS":
+      case "PROVIDER_PRIORITY":
+      case "SERVICE_FAILURE_APPEARANCE":
+        environment[name] = JSON.stringify(configuration[name]);
+        continue;
+      default:
+        environment[name] = configuration[name];
     }
-    environment[name] = configuration[name];
   }
 
   for (const provider of configuration.PROVIDERS) {
