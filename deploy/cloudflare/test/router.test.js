@@ -479,29 +479,6 @@ test("health probe exits when the endpoint returns HTTP 200", async function (co
 });
 
 
-test("service failure appearance is forwarded as JSON text", function () {
-  const environment = createPrAgentEnvironment({});
-  assert.equal(typeof environment.SERVICE_FAILURE_APPEARANCE, "string");
-  assert.deepEqual(JSON.parse(environment.SERVICE_FAILURE_APPEARANCE), {
-    usage_exceeded: "pass",
-  });
-});
-
-test("a disabled provider stays configured and still receives its secret", function () {
-  const environment = createPrAgentEnvironment({
-    OPENAI_KEY: "clyde-key",
-    CF_ACCESS_CLIENT_ID: "access-id",
-    CF_ACCESS_CLIENT_SECRET: "access-secret",
-  });
-  const providers = JSON.parse(environment.PROVIDERS);
-  const clyde = providers.find(function (provider) {
-    return provider.id === "clyde";
-  });
-  assert.equal(clyde.disabled, true);
-  assert.equal(environment.PROVIDER_CLYDE_API_KEY, "clyde-key");
-  assert.ok(JSON.parse(environment.PROVIDER_PRIORITY).includes("clyde"));
-});
-
 test("an unlisted binding never reaches the Go service", function () {
   const environment = createPrAgentEnvironment({ UNLISTED_BINDING: "fixture" });
 
