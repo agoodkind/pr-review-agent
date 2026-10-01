@@ -111,6 +111,7 @@ func failureTitle(stage string, cause error) string {
 		return checkFailureUnavailable
 	case config.FailurePanic:
 		return checkFailurePanic
+	case config.FailureOther:
 	}
 	if stage == "" {
 		return checkSummaryFailure
@@ -134,9 +135,10 @@ func chunkFailureReason(failures []chunkFailure) string {
 		return checkFailureDeadline
 	case config.FailureUnavailable:
 		return checkFailureUnavailable
-	default:
+	case config.FailurePanic, config.FailureOther:
 		return ""
 	}
+	return ""
 }
 
 // chunkFailureClass is the failure class named for a run that left chunks
@@ -147,6 +149,7 @@ func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 		switch class {
 		case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureDeadline, config.FailureUnavailable:
 			return class
+		case config.FailurePanic, config.FailureOther:
 		}
 	}
 	return config.FailureOther
