@@ -93,7 +93,7 @@ Set `daily_token_limit` on each provider that needs a daily cap. Set `daily_toke
 
 Set both `cf_access_client_id_binding` and `cf_access_client_secret_binding` for a provider behind Cloudflare Access. Omit both fields for public endpoints.
 
-Change credentials through Cloudflare secret bindings. Create a dedicated API key for each OpenAI organization, set its provider's `api_key_binding`, and deploy the Worker secret before merging the runtime configuration. The Go service validates the runtime configuration and available credentials at startup.
+Change credentials through Cloudflare secret bindings. Set each provider's `api_key_binding` to its Cloudflare secret name, and upload the secret before merging the runtime configuration. The Go service validates the runtime configuration and available credentials at startup.
 
 ## Run the container
 
