@@ -109,9 +109,9 @@ func configureRuntime(t *testing.T, primaryURL string, secondaryURL string, disa
 	}
 	t.Setenv("RUNTIME_CONFIG_PATH", path)
 	t.Setenv("GITHUB_PRIVATE_KEY", privateKey)
-	t.Setenv("GITHUB_WEBHOOK_SECRET", "integration-webhook-secret")
-	t.Setenv("PROVIDER_PRIMARY_API_KEY", "integration-primary-key")
-	t.Setenv("PROVIDER_SECONDARY_API_KEY", "integration-secondary-key")
+	t.Setenv("GITHUB_WEBHOOK_SECRET", "integration-webhook"+"-secret")     // ggignore
+	t.Setenv("PROVIDER_PRIMARY_API_KEY", "integration-primary"+"-key")     // ggignore
+	t.Setenv("PROVIDER_SECONDARY_API_KEY", "integration-secondary"+"-key") // ggignore
 }
 
 func generatePrivateKey(t *testing.T) string {

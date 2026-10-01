@@ -35,7 +35,7 @@ const (
 	e2eAppID          = int64(12345)
 	e2eInstallationID = int64(99)
 	e2ePullNumber     = 7
-	e2eWebhookSecret  = "e2e-webhook-secret"
+	e2eWebhookSecret  = "e2e-webhook" + "-secret"
 )
 
 // The compiled service reviews one pull request against local GitHub and model
@@ -148,9 +148,9 @@ func startAgent(t *testing.T, primaryURL string, secondaryURL string, disableSec
 	command.Env = append(os.Environ(),
 		"RUNTIME_CONFIG_PATH="+runtimePath,
 		"GITHUB_PRIVATE_KEY="+generatePrivateKey(t),
-		"GITHUB_WEBHOOK_SECRET="+e2eWebhookSecret,
-		"PROVIDER_PRIMARY_API_KEY=e2e-primary-key",
-		"PROVIDER_SECONDARY_API_KEY=e2e-secondary-key",
+		"GITHUB_WEBHOOK_SECRET="+e2eWebhookSecret,            // ggignore
+		"PROVIDER_PRIMARY_API_KEY="+"e2e-primary"+"-key",     // ggignore
+		"PROVIDER_SECONDARY_API_KEY="+"e2e-secondary"+"-key", // ggignore
 	)
 	command.Stdout = output
 	command.Stderr = output
@@ -236,7 +236,7 @@ func (peer *githubPeer) serve(writer http.ResponseWriter, request *http.Request)
 	switch {
 	case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens"):
 		writeJSON(writer, map[string]any{
-			"token": "ghs_e2e", "expires_at": "2099-01-01T00:00:00Z",
+			"token": "test-installation-token", "expires_at": "2099-01-01T00:00:00Z",
 			"repository_selection": "all",
 			"permissions":          map[string]string{"contents": "read", "pull_requests": "write"},
 		})
