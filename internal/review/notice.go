@@ -45,7 +45,7 @@ func (service *Service) failCheck(
 		checkRunID,
 		progress,
 		stage,
-		service.presentedConclusion(failureClassOf(cause), "failure"),
+		service.presentedConclusion(failureClassesOf(cause), "failure"),
 		cause,
 	)
 }
@@ -141,11 +141,11 @@ func chunkFailureReason(failures []chunkFailure) string {
 	return ""
 }
 
-// chunkFailureClass is the failure class named for a run that left chunks
+// chunkFailureClass is the first failure class named for a run that left chunks
 // unread, or FailureOther when nothing in the unread set classifies.
 func chunkFailureClass(failures []chunkFailure) config.FailureClass {
-	for _, failure := range failures {
-		class := failureClassOf(failure.err)
+	classes := chunkFailureClasses(failures)
+	for _, class := range classes {
 		switch class {
 		case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureDeadline, config.FailureUnavailable:
 			return class
@@ -153,6 +153,17 @@ func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 		}
 	}
 	return config.FailureOther
+}
+
+// chunkFailureClasses is every class present in the unread chunks. A run passes
+// only when each of them is configured to pass, so one passing class cannot
+// hide another that still blocks.
+func chunkFailureClasses(failures []chunkFailure) []config.FailureClass {
+	classes := make([]config.FailureClass, 0, len(failures))
+	for _, failure := range failures {
+		classes = append(classes, failureClassesOf(failure.err)...)
+	}
+	return uniqueFailureClasses(classes)
 }
 
 // failureClassOf classifies a service failure the same way the public title does.
@@ -175,17 +186,53 @@ func failureClassOf(cause error) config.FailureClass {
 	}
 }
 
-// presentedConclusion is the GitHub conclusion for one failure class.
+// presentedConclusion is the GitHub conclusion for the failure classes in one run.
 //
-// pass concludes the check as success, which satisfies a required check. The
-// title and comment still name the failure, and the run still publishes no
-// verdict. Every other appearance keeps the blocking conclusion the caller
-// already chose.
-func (service *Service) presentedConclusion(class config.FailureClass, blocking string) string {
-	if service.failureAppearances.Passes(class) {
-		return "success"
+// The check concludes success only when every class is configured to pass.
+// One passing class does not hide another that still blocks. The title and
+// comment still name the failure, and the run still publishes no verdict.
+func (service *Service) presentedConclusion(classes []config.FailureClass, blocking string) string {
+	if len(classes) == 0 {
+		return blocking
 	}
-	return blocking
+	for _, class := range classes {
+		if !service.failureAppearances.Passes(class) {
+			return blocking
+		}
+	}
+	return "success"
+}
+
+// failureClassesOf is every class in a failure, including each error joined
+// after provider fallback. A single wrapped error stays one class.
+func failureClassesOf(cause error) []config.FailureClass {
+	if cause == nil {
+		return nil
+	}
+	if joined, ok := cause.(interface{ Unwrap() []error }); ok {
+		classes := make([]config.FailureClass, 0, len(joined.Unwrap()))
+		for _, err := range joined.Unwrap() {
+			classes = append(classes, failureClassesOf(err)...)
+		}
+		return uniqueFailureClasses(classes)
+	}
+	return []config.FailureClass{failureClassOf(cause)}
+}
+
+func uniqueFailureClasses(classes []config.FailureClass) []config.FailureClass {
+	if len(classes) == 0 {
+		return []config.FailureClass{config.FailureOther}
+	}
+	seen := make(map[config.FailureClass]struct{}, len(classes))
+	unique := make([]config.FailureClass, 0, len(classes))
+	for _, class := range classes {
+		if _, found := seen[class]; found {
+			continue
+		}
+		seen[class] = struct{}{}
+		unique = append(unique, class)
+	}
+	return unique
 }
 
 // publicFailureDetail points a reader at the cause instead of reprinting it.

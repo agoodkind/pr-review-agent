@@ -503,6 +503,67 @@ func TestLoadRuntimeRejectsUnlistedSettings(t *testing.T) {
 	}
 }
 
+func TestLoadFailureAppearance(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{
+		"SERVICE_FAILURE_APPEARANCE": `{"usage_exceeded":"pass","daily_budget":"fail"}`,
+	})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("usage exhaustion appearance does not pass")
+	}
+	if cfg.ServiceFailureAppearance.Passes(FailureDailyBudget) || cfg.ServiceFailureAppearance.Passes(FailureUnavailable) {
+		t.Fatal("an omitted or failing class was treated as pass")
+	}
+}
+
+func TestLoadRuntimeAcceptsAFailureAppearanceObject(t *testing.T) {
+	lookup, err := lookupWithOverrides(nil)
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	cfg, err := LoadRuntime([]byte(`{
+		"GITHUB_APP_ID": "12345",
+		"GITHUB_BOT_LOGIN": "fixture-bot[bot]",
+		"CLYDE_BASE_URL": "https://clyde.example/v1",
+		"REVIEW_MIN_IMPORTANCE": "8",
+		"REVIEW_WORKERS": "4",
+		"REVIEW_MODEL": "gpt-6-luna",
+		"SERVICE_FAILURE_APPEARANCE": {"usage_exceeded": "pass"}
+	}`), lookup)
+	if err != nil {
+		t.Fatalf("LoadRuntime: %v", err)
+	}
+	if !cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("runtime appearance did not pass usage exhaustion")
+	}
+}
+
+func TestLoadRejectsUnknownFailureAppearance(t *testing.T) {
+	for _, value := range []string{
+		`{"usage_exceeded":"pass"} {}`,
+		`{"not_a_class":"pass"}`,
+		`{"usage_exceeded":"neutral"}`,
+		`[]`,
+	} {
+		_, err := loadWithOverrides(map[string]string{"SERVICE_FAILURE_APPEARANCE": value})
+		if err == nil || !strings.Contains(err.Error(), "SERVICE_FAILURE_APPEARANCE") {
+			t.Fatalf("Load appearance %q: err = %v, want SERVICE_FAILURE_APPEARANCE", value, err)
+		}
+	}
+}
+
+func TestOmittedFailureAppearanceBlocksEveryClass(t *testing.T) {
+	cfg, err := loadWithOverrides(map[string]string{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
+		t.Fatal("omitted appearance passed usage exhaustion")
+	}
+}
+
 func TestLoadRuntimeRejectsNullSetting(t *testing.T) {
 	_, err := LoadRuntime([]byte(`{"REVIEW_MAX_FILES":null}`), nil)
 	if err == nil || !strings.Contains(err.Error(), `"REVIEW_MAX_FILES" must not be null`) {
