@@ -13,12 +13,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
 )
+
+const checkFailureMixedUsage = "Review stopped: the app exhausted its configured daily token limit, and a provider API reported no remaining usage."
 
 // failCheck ends one run with its cause reported and no review object touched.
 //
@@ -126,6 +129,10 @@ func failureTitle(stage string, cause error) string {
 // Exhausted usage is the largest single cause in production, and a reader who
 // sees only a chunk count cannot tell it apart from a provider outage.
 func chunkFailureReason(failures []chunkFailure) string {
+	classes := chunkFailureClasses(failures)
+	if slices.Contains(classes, config.FailureDailyBudget) && slices.Contains(classes, config.FailureUsageExceeded) {
+		return checkFailureMixedUsage
+	}
 	switch chunkFailureClass(failures) {
 	case config.FailureDailyBudget:
 		return checkFailureDailyBudget
@@ -197,12 +204,19 @@ func failureClassesOf(cause error) []config.FailureClass {
 	if cause == nil {
 		return nil
 	}
-	if joined, ok := cause.(interface{ Unwrap() []error }); ok {
-		classes := make([]config.FailureClass, 0, len(joined.Unwrap()))
-		for _, err := range joined.Unwrap() {
-			classes = append(classes, failureClassesOf(err)...)
+	for current := cause; current != nil; {
+		if joined, ok := current.(interface{ Unwrap() []error }); ok {
+			classes := make([]config.FailureClass, 0, len(joined.Unwrap()))
+			for _, err := range joined.Unwrap() {
+				classes = append(classes, failureClassesOf(err)...)
+			}
+			return uniqueFailureClasses(classes)
 		}
-		return uniqueFailureClasses(classes)
+		wrapped, ok := current.(interface{ Unwrap() error })
+		if !ok {
+			break
+		}
+		current = wrapped.Unwrap()
 	}
 	return []config.FailureClass{failureClassOf(cause)}
 }
