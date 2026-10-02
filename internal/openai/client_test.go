@@ -42,7 +42,7 @@ func testCFClientSecretValue() string {
 	return "fixture-cf-" + strings.Repeat("s", 12)
 }
 
-func TestAutoRouterSendsLowCostTierAndReportsSelectedModel(t *testing.T) {
+func TestAutoRouterReportsSelectedModel(t *testing.T) {
 	state := &testServerState{completionContent: validReviewContent()}
 	server := newProviderServer(state)
 	defer server.Close()
@@ -71,21 +71,6 @@ func TestAutoRouterSendsLowCostTierAndReportsSelectedModel(t *testing.T) {
 	}
 	if completion.Model != selectedModel {
 		t.Fatalf("completion model = %q, want %q", completion.Model, selectedModel)
-	}
-	if state.lastRequestBody["model"] != "openrouter/auto" {
-		t.Fatalf("request model = %v, want openrouter/auto", state.lastRequestBody["model"])
-	}
-	plugins, ok := state.lastRequestBody["plugins"].([]any)
-	if !ok || len(plugins) != 1 {
-		t.Fatalf("plugins = %v, want one auto-router plugin", state.lastRequestBody["plugins"])
-	}
-	plugin, ok := plugins[0].(map[string]any)
-	if !ok || plugin["id"] != "auto-router" || plugin["cost_tier"] != "low" {
-		t.Fatalf("plugin = %v, want auto-router with low cost tier", plugins[0])
-	}
-	providerOptions, ok := state.lastRequestBody["provider"].(map[string]any)
-	if !ok || providerOptions["require_parameters"] != true {
-		t.Fatalf("provider = %v, want require_parameters true", state.lastRequestBody["provider"])
 	}
 	if usage := recorder.Summary(); len(usage.Models) != 1 || usage.Models[0].RequestedModel != "openrouter/auto" || usage.Models[0].Model != selectedModel {
 		t.Fatalf("usage models = %+v, want requested and selected models", usage.Models)

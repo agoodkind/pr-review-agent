@@ -289,9 +289,6 @@ func (client *Client) complete(
 			content, model, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 		}
 		if err == nil {
-			if target.model != config.AutoRouterModel {
-				model = target.model
-			}
 			return content, model, nil
 		}
 		failure := &providerAttemptError{provider: target, budget: budget, cause: err}
@@ -411,7 +408,11 @@ func completeWith(
 	if result == "" {
 		return "", "", errors.New("openai response missing message content")
 	}
-	return result, responseModel, nil
+	completionModel := target.model
+	if target.model == config.AutoRouterModel {
+		completionModel = responseModel
+	}
+	return result, completionModel, nil
 }
 
 func newResponseParams(
