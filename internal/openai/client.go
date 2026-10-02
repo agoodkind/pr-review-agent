@@ -28,6 +28,7 @@ type provider struct {
 	model               string
 	dailyTokenLimit     int64
 	dailyTokenTypes     []config.TokenType
+	maxOutputTokens     int64
 	omitMaxOutputTokens bool
 	omitTextFormat      bool
 	pricingByModel      map[string]config.ModelPricing
@@ -77,6 +78,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			Model:                cfg.ReviewModel,
 			DailyTokenLimit:      0,
 			DailyTokenTypes:      nil,
+			MaxOutputTokens:      0,
 			OmitMaxOutputTokens:  false,
 			OmitTextFormat:       false,
 			CFAccessClientID:     cfg.CFAccessClientID,
@@ -91,6 +93,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				Model:                cfg.FallbackModel,
 				DailyTokenLimit:      0,
 				DailyTokenTypes:      nil,
+				MaxOutputTokens:      0,
 				OmitMaxOutputTokens:  false,
 				OmitTextFormat:       false,
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
@@ -121,6 +124,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			model:               configured.Model,
 			dailyTokenLimit:     configured.DailyTokenLimit,
 			dailyTokenTypes:     configured.DailyTokenTypes,
+			maxOutputTokens:     configured.MaxOutputTokens,
 			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
 			omitTextFormat:      configured.OmitTextFormat,
 			pricingByModel:      cfg.ReviewModelPricing,
@@ -413,7 +417,11 @@ func newResponseParams(
 		Store:     openaigo.Bool(false),
 	}
 	if !target.omitMaxOutputTokens {
-		params.MaxOutputTokens = openaigo.Int(int64(config.MaximumOutputTokens))
+		maxOutputTokens := target.maxOutputTokens
+		if maxOutputTokens == 0 {
+			maxOutputTokens = config.MaximumOutputTokens
+		}
+		params.MaxOutputTokens = openaigo.Int(maxOutputTokens)
 	}
 	if !target.omitTextFormat {
 		format := &responses.ResponseFormatTextJSONSchemaConfigParam{
