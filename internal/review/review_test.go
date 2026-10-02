@@ -4824,10 +4824,15 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	wantReason := "Review stopped: a configured provider exhausted its daily token limit."
+	wantReason := "Review stopped: the app's configured daily token limit was exhausted."
 	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
 	if !ok || !strings.Contains(checkSummary, wantReason) {
 		t.Fatalf("check summary = %v, want the classified reason", checkOutput(t, fixture)["summary"])
+	}
+	for _, want := range []string{"| Model | `gpt-5.6-luna` |", "`openai_goodkind_io` uses `gpt-5.6-luna`.", "2,500,000 of 2,500,000 tokens today; 0 remain", "The app denied the request; the provider API was not called."} {
+		if !strings.Contains(checkSummary, want) || !strings.Contains(failureSummaryComment(t, fixture), want) {
+			t.Fatalf("provider status missing %q from check or comment", want)
+		}
 	}
 	if strings.Contains(checkSummary, "usage credits are exhausted") {
 		t.Fatalf("check summary published the raw provider cause:\n%s", checkSummary)
@@ -4835,6 +4840,32 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	assertSanitizedFailureComment(t, fixture, wantReason, "usage credits are exhausted")
 	if strings.Contains(failureSummaryComment(t, fixture), "Apply the `test-review-agent-rerun` label") {
 		t.Fatal("daily budget notice offered an immediate retry")
+	}
+}
+
+func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{
+		model: &sequenceModel{err: errors.Join(dailyBudgetExhaustedError{}, providerUsageError{})},
+	})
+	if err := fixture.run(context.Background(), fixture.job()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
+	if !ok {
+		t.Fatal("check summary is not text")
+	}
+	for _, output := range []string{checkSummary, failureSummaryComment(t, fixture)} {
+		for _, want := range []string{
+			"`openai_goodkind_io` uses `gpt-5.6-luna`.",
+			"The app denied the request; the provider API was not called.",
+			"`openrouter` uses `openai/gpt-5.6-luna`.",
+			"200,000 of 500,000 tokens today; 300,000 remain.",
+			"The provider API reported no remaining usage.",
+		} {
+			if !strings.Contains(output, want) {
+				t.Fatalf("usage detail missing %q", want)
+			}
+		}
 	}
 }
 
@@ -5422,6 +5453,28 @@ func (dailyBudgetExhaustedError) UsageExceeded() bool {
 
 func (dailyBudgetExhaustedError) DailyBudgetExhausted() bool {
 	return true
+}
+
+func (dailyBudgetExhaustedError) ProviderStatus() review.ProviderStatus {
+	return review.ProviderStatus{
+		ProviderID: "openai_goodkind_io", Model: "gpt-5.6-luna",
+		Cause: "The app denied the request; the provider API was not called.",
+		Used:  2500000, Limit: 2500000, Remaining: 0, QuotaKnown: true,
+	}
+}
+
+type providerUsageError struct{}
+
+func (providerUsageError) Error() string { return "provider usage exhausted" }
+
+func (providerUsageError) UsageExceeded() bool { return true }
+
+func (providerUsageError) ProviderStatus() review.ProviderStatus {
+	return review.ProviderStatus{
+		ProviderID: "openrouter", Model: "openai/gpt-5.6-luna",
+		Cause: "The provider API reported no remaining usage.",
+		Used:  200000, Limit: 500000, Remaining: 300000, QuotaKnown: true,
+	}
 }
 
 // A finding an earlier review already carried stays suppressed even when this

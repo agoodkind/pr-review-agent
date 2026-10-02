@@ -271,21 +271,22 @@ func (client *Client) complete(
 ) (string, string, error) {
 	var failures []error
 	for index, target := range client.providers {
-		day, err := client.checkBudget(ctx, target)
+		budget, err := client.checkBudget(ctx, target)
 		content := ""
 		if err == nil {
 			report := func(tokens int64) {
-				client.reportBudget(ctx, target, day, tokens)
+				client.reportBudget(ctx, target, budget.day, tokens)
 			}
 			content, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 		}
 		if err == nil {
 			return content, target.model, nil
 		}
-		failures = append(failures, err)
+		failure := &providerAttemptError{provider: target, budget: budget, cause: err}
+		failures = append(failures, failure)
 		if index == len(client.providers)-1 || !client.shouldUseFallback(err) {
 			if len(failures) == 1 {
-				return "", "", err
+				return "", "", failure
 			}
 			combined := errors.Join(failures...)
 			gklog.L(ctx).WarnContext(ctx, "model providers failed", slog.String("error", combined.Error()))

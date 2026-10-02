@@ -549,10 +549,10 @@ func codeSpan(text string) string {
 // The table reports coverage rather than a stage. This run reached the end and
 // published a verdict, so there is no stage it stopped at, and a chunk nobody
 // read is exactly what the coverage row is for.
-func RenderIncompleteBody(summary Summary, pending int, reason string, detail string) string {
+func RenderIncompleteBody(summary Summary, pending int, reason string, detail string, statuses ...ProviderStatus) string {
 	lead := fmt.Sprintf("%s could not be reviewed on `%s`.", chunkCount(pending), shortHead(summary.Head))
 	if reason == checkFailureDailyBudget {
-		lead += " Daily model usage is exhausted. The allowance resets at 00:00 UTC."
+		lead += " The app's daily token limit resets at 00:00 UTC."
 	} else {
 		lead += fmt.Sprintf(" Apply the `%s` label to retry this head.", domain.RerunReviewLabel)
 	}
@@ -565,7 +565,7 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 		"## Review",
 		lead,
 	}
-	for _, note := range []string{reason, coverageReason, renderBlocking(blocking), detail} {
+	for _, note := range []string{reason, renderProviderStatuses(statuses), coverageReason, renderBlocking(blocking), detail} {
 		if trimmed := strings.TrimSpace(note); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
