@@ -79,7 +79,7 @@ func (summary Summary) Title() string {
 
 // RenderDetails renders the collapsed review detail table. A failed review
 // reports how far it got, so the same table explains both outcomes.
-func RenderDetails(summary Summary) string {
+func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	rows := [][2]string{
 		{"Model", formatModels(summary.Models)},
 		{"Duration", formatDuration(summary.Duration)},
@@ -112,6 +112,9 @@ func RenderDetails(summary Summary) string {
 	builder.WriteString("| | |\n| --- | --- |\n")
 	for _, row := range rows {
 		fmt.Fprintf(&builder, "| %s | %s |\n", row[0], row[1])
+	}
+	if providerAttempts := renderProviderStatuses(statuses); providerAttempts != "" {
+		builder.WriteString("\n" + providerAttempts + "\n")
 	}
 	builder.WriteString(renderUsageDetails(summary.Usage))
 	builder.WriteString("\n</details>")
@@ -565,12 +568,12 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 		"## Review",
 		lead,
 	}
-	for _, note := range []string{reason, renderProviderStatuses(statuses), coverageReason, renderBlocking(blocking), detail} {
+	for _, note := range []string{reason, coverageReason, renderBlocking(blocking), detail} {
 		if trimmed := strings.TrimSpace(note); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
-	parts = append(parts, RenderDetails(summary))
+	parts = append(parts, RenderDetails(summary, statuses...))
 	return strings.Join(parts, "\n\n")
 }
 

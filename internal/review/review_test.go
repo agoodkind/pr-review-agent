@@ -4829,7 +4829,7 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	if !ok || !strings.Contains(checkSummary, wantReason) {
 		t.Fatalf("check summary = %v, want the classified reason", checkOutput(t, fixture)["summary"])
 	}
-	for _, want := range []string{"| Model | `gpt-5.6-luna` |", "`openai_goodkind_io` uses `gpt-5.6-luna`.", "2,500,000 of 2,500,000 tokens today; 0 remain", "The app denied the request; the provider API was not called."} {
+	for _, want := range []string{"| Model | `gpt-5.6-luna` |", "| `openai_goodkind_io` | `gpt-5.6-luna` | 2,500,000 / 2,500,000 (0 left) | App denied request; API not called |"} {
 		if !strings.Contains(checkSummary, want) || !strings.Contains(failureSummaryComment(t, fixture), want) {
 			t.Fatalf("provider status missing %q from check or comment", want)
 		}
@@ -4857,16 +4857,18 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 	for _, output := range []string{checkSummary, failureSummaryComment(t, fixture)} {
 		for _, want := range []string{
 			"Review stopped: the app exhausted its configured daily token limit, and a provider API reported no remaining usage.",
-			"`openai_goodkind_io` uses `gpt-5.6-luna`.",
-			"The app denied the request; the provider API was not called.",
-			"`openrouter` uses `openai/gpt-5.6-luna`.",
-			"200,000 of 500,000 tokens today; 300,000 remain.",
-			"The provider API reported no remaining usage.",
+			"| Provider | Model | App quota | Result |",
+			"| `openai_goodkind_io` | `gpt-5.6-luna` | 2,500,000 / 2,500,000 (0 left) | App denied request; API not called |",
+			"| `openrouter` | `openai/gpt-5.6-luna` | 200,000 / 500,000 (300,000 left) | Provider reported no remaining usage |",
 		} {
 			if !strings.Contains(output, want) {
 				t.Fatalf("usage detail missing %q from %s", want, output)
 			}
 		}
+	}
+	visible, details, found := strings.Cut(failureSummaryComment(t, fixture), "<details>")
+	if !found || strings.Contains(visible, "openrouter") || !strings.Contains(details, "| `openrouter` |") {
+		t.Fatalf("provider quota table is not folded: %s", failureSummaryComment(t, fixture))
 	}
 	if title := fmt.Sprint(checkOutput(t, fixture)["title"]); !strings.Contains(title, "app and provider usage exhausted") {
 		t.Fatalf("check title = %q", title)
@@ -5462,7 +5464,7 @@ func (dailyBudgetExhaustedError) DailyBudgetExhausted() bool {
 func (dailyBudgetExhaustedError) ProviderStatus() review.ProviderStatus {
 	return review.ProviderStatus{
 		ProviderID: "openai_goodkind_io", Model: "gpt-5.6-luna",
-		Cause: "The app denied the request; the provider API was not called.",
+		Cause: review.ProviderAppBudgetDenied,
 		Used:  2500000, Limit: 2500000, Remaining: 0, QuotaKnown: true,
 	}
 }
@@ -5476,7 +5478,7 @@ func (providerUsageError) UsageExceeded() bool { return true }
 func (providerUsageError) ProviderStatus() review.ProviderStatus {
 	return review.ProviderStatus{
 		ProviderID: "openrouter", Model: "openai/gpt-5.6-luna",
-		Cause: "The provider API reported no remaining usage.",
+		Cause: review.ProviderUsageExhausted,
 		Used:  200000, Limit: 500000, Remaining: 300000, QuotaKnown: true,
 	}
 }
