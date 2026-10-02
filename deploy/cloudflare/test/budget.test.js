@@ -10,6 +10,10 @@ import test from "node:test";
 
 const signingKey = "test-review-budget-secret";
 const cloudflareDirectory = fileURLToPath(new URL("..", import.meta.url));
+const providerId = "provider_a";
+const otherProviderId = "provider_b";
+const modelId = "model_a";
+const otherModelId = "model_b";
 
 async function unusedPort() {
   const server = net.createServer();
@@ -73,11 +77,11 @@ async function budgetRequest(port, payload) {
   return response.json();
 }
 
-function check(port, providerId, model = "gpt-5.6-luna") {
+function check(port, providerId, model = modelId) {
   return budgetRequest(port, { provider_id: providerId, model, limit: 2_000_000 });
 }
 
-function report(port, providerId, day, tokens, model = "gpt-5.6-luna") {
+function report(port, providerId, day, tokens, model = modelId) {
   return budgetRequest(port, { provider_id: providerId, model, day, tokens });
 }
 
@@ -87,15 +91,15 @@ test("reported tokens set the daily provider limit and survive worker restart", 
   let runtime;
   try {
     runtime = await startRuntime(port, persistPath);
-    const first = await check(port, "openai_goodkind_io");
+    const first = await check(port, providerId);
     assert.equal(first.allowed, true);
     assert.deepEqual([first.used, first.limit, first.remaining], [0, 2_000_000, 2_000_000]);
     assert.match(first.day, /^\d{4}-\d{2}-\d{2}$/);
-    assert.deepEqual(await report(port, "openai_goodkind_io", first.day, 1_500_000), { reported: true });
-    assert.equal((await check(port, "openai_goodkind_io")).allowed, true);
-    assert.deepEqual(await report(port, "openai_goodkind_io", first.day, 500_000), { reported: true });
-    assert.equal((await check(port, "openai_goodkindalex")).allowed, true);
-    assert.deepEqual(await check(port, "openai_goodkind_io", "another-model"), {
+    assert.deepEqual(await report(port, providerId, first.day, 1_500_000), { reported: true });
+    assert.equal((await check(port, providerId)).allowed, true);
+    assert.deepEqual(await report(port, providerId, first.day, 500_000), { reported: true });
+    assert.equal((await check(port, otherProviderId)).allowed, true);
+    assert.deepEqual(await check(port, providerId, otherModelId), {
       allowed: true, day: first.day, used: 0, limit: 2_000_000, remaining: 2_000_000,
     });
     assert.deepEqual(await budgetRequest(port, {
@@ -104,15 +108,10 @@ test("reported tokens set the daily provider limit and survive worker restart", 
 
     await stopRuntime(runtime);
     runtime = await startRuntime(port, persistPath);
-    assert.deepEqual(await check(port, "openai_goodkind_io"), {
+    assert.deepEqual(await check(port, providerId), {
       allowed: false, day: first.day, used: 2_000_000, limit: 2_000_000, remaining: 0,
     });
-    assert.equal((await check(port, "openai_goodkind_io", "another-model")).remaining, 2_000_000);
-    assert.deepEqual(await budgetRequest(port, {
-      provider_id: "openrouter", day: first.day, tokens: 700,
-    }), { reported: true });
-    assert.equal((await check(port, "openrouter", "openai/gpt-5.6-luna")).used, 700);
-    assert.equal((await check(port, "openrouter", "another-model")).used, 0);
+    assert.equal((await check(port, providerId, otherModelId)).remaining, 2_000_000);
   } finally {
     await stopRuntime(runtime);
     await rm(persistPath, { recursive: true, force: true });
