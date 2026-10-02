@@ -4856,6 +4856,7 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 	}
 	for _, output := range []string{checkSummary, failureSummaryComment(t, fixture)} {
 		for _, want := range []string{
+			"Review stopped: the app exhausted its configured daily token limit, and a provider API reported no remaining usage.",
 			"`openai_goodkind_io` uses `gpt-5.6-luna`.",
 			"The app denied the request; the provider API was not called.",
 			"`openrouter` uses `openai/gpt-5.6-luna`.",
@@ -4863,9 +4864,12 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 			"The provider API reported no remaining usage.",
 		} {
 			if !strings.Contains(output, want) {
-				t.Fatalf("usage detail missing %q", want)
+				t.Fatalf("usage detail missing %q from %s", want, output)
 			}
 		}
+	}
+	if title := fmt.Sprint(checkOutput(t, fixture)["title"]); !strings.Contains(title, "app and provider usage exhausted") {
+		t.Fatalf("check title = %q", title)
 	}
 }
 

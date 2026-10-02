@@ -110,6 +110,9 @@ func incompleteCheckTitle(pending int, reason string) string {
 	if reason == checkFailureDailyBudget {
 		return chunkCount(pending) + " could not be reviewed: app token limit exhausted."
 	}
+	if reason == checkFailureMixedUsage {
+		return chunkCount(pending) + " could not be reviewed: app and provider usage exhausted."
+	}
 	return fmt.Sprintf("%s could not be reviewed. Apply `%s` to retry.",
 		chunkCount(pending), domain.RerunReviewLabel)
 }
