@@ -7,11 +7,25 @@ import (
 	"strings"
 )
 
+// ProviderFailureCause identifies the boundary that rejected a model request.
+type ProviderFailureCause string
+
+const (
+	// ProviderAppBudgetDenied means the app rejected a request before calling the provider.
+	ProviderAppBudgetDenied ProviderFailureCause = "app_budget_denied"
+	// ProviderAppBudgetUnavailable means the app could not check its configured quota.
+	ProviderAppBudgetUnavailable ProviderFailureCause = "app_budget_unavailable"
+	// ProviderUsageExhausted means the provider reported no remaining usage.
+	ProviderUsageExhausted ProviderFailureCause = "provider_usage_exhausted"
+	// ProviderRequestFailed means the provider request failed for another reason.
+	ProviderRequestFailed ProviderFailureCause = "provider_request_failed"
+)
+
 // ProviderStatus records a configured model's failed attempt without provider-supplied text.
 type ProviderStatus struct {
 	ProviderID string
 	Model      string
-	Cause      string
+	Cause      ProviderFailureCause
 	Used       int64
 	Limit      int64
 	Remaining  int64
@@ -64,20 +78,35 @@ func renderProviderStatuses(statuses []ProviderStatus) string {
 		return ""
 	}
 	var builder strings.Builder
+	builder.WriteString("#### Provider attempts\n\n| Provider | Model | App quota | Result |\n| --- | --- | --- | --- |\n")
 	for _, status := range statuses {
-		fmt.Fprintf(&builder, "- %s uses %s. ", codeSpan(status.ProviderID), codeSpan(status.Model))
+		quota := "No app limit"
 		switch {
 		case status.Limit == 0:
-			builder.WriteString("The app has no configured token limit. ")
 		case status.QuotaKnown:
-			fmt.Fprintf(&builder, "The app counted %s of %s tokens today; %s remain. ", formatTokenCount(status.Used), formatTokenCount(status.Limit), formatTokenCount(status.Remaining))
-		default:
-			fmt.Fprintf(&builder, "The app's limit is %s tokens; current usage is unavailable. ", formatTokenCount(status.Limit))
+			quota = fmt.Sprintf("%s / %s (%s left)", formatTokenCount(status.Used), formatTokenCount(status.Limit), formatTokenCount(status.Remaining))
+		case status.Limit > 0:
+			quota = "Unknown / " + formatTokenCount(status.Limit)
 		}
-		builder.WriteString(status.Cause)
-		builder.WriteByte('\n')
+		fmt.Fprintf(&builder, "| %s | %s | %s | %s |\n",
+			usageModelCell(status.ProviderID), usageModelCell(status.Model), quota, providerCauseLabel(status.Cause))
 	}
 	return strings.TrimSuffix(builder.String(), "\n")
+}
+
+func providerCauseLabel(cause ProviderFailureCause) string {
+	switch cause {
+	case ProviderAppBudgetDenied:
+		return "App denied request; API not called"
+	case ProviderAppBudgetUnavailable:
+		return "App quota check failed; API not called"
+	case ProviderUsageExhausted:
+		return "Provider reported no remaining usage"
+	case ProviderRequestFailed:
+		return "Provider request failed"
+	default:
+		return "Provider request failed"
+	}
 }
 
 func formatTokenCount(count int64) string {

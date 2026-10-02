@@ -13,11 +13,29 @@ import (
 // TokenType selects an API usage category for a provider's daily limit.
 type TokenType string
 
+// AutoRouterCostTier selects OpenRouter's auto routing price band.
+type AutoRouterCostTier string
+
 const (
 	// InputTokens includes cached input tokens.
 	InputTokens TokenType = "input"
 	// OutputTokens includes reasoning tokens.
 	OutputTokens TokenType = "output"
+)
+
+const (
+	// AutoRouterModel selects OpenRouter's automatic model router.
+	AutoRouterModel = "openrouter/auto"
+	// AutoRouterCostLow selects the lowest price band.
+	AutoRouterCostLow AutoRouterCostTier = "low"
+	// AutoRouterCostMedium selects the medium price band.
+	AutoRouterCostMedium AutoRouterCostTier = "medium"
+	// AutoRouterCostHigh selects the high price band.
+	AutoRouterCostHigh AutoRouterCostTier = "high"
+	// AutoRouterCostXHigh selects the extra high price band.
+	AutoRouterCostXHigh AutoRouterCostTier = "xhigh"
+	// AutoRouterCostMax selects the maximum price band.
+	AutoRouterCostMax AutoRouterCostTier = "max"
 )
 
 // ProviderConfig contains one validated model endpoint and its credentials.
@@ -31,6 +49,7 @@ type ProviderConfig struct {
 	MaxOutputTokens      int64
 	OmitMaxOutputTokens  bool
 	OmitTextFormat       bool
+	AutoRouterCostTier   AutoRouterCostTier
 	CFAccessClientID     string
 	CFAccessClientSecret string
 	// Disabled keeps this provider ready for later use without sending it requests.
@@ -38,18 +57,19 @@ type ProviderConfig struct {
 }
 
 type providerDefinition struct {
-	ID                          string      `json:"id"`
-	BaseURL                     string      `json:"base_url"`
-	Model                       string      `json:"model"`
-	APIKeyBinding               string      `json:"api_key_binding"`
-	DailyTokenLimit             int64       `json:"daily_token_limit,omitempty"`
-	DailyTokenTypes             []TokenType `json:"daily_token_types,omitempty"`
-	MaxOutputTokens             int64       `json:"max_output_tokens,omitempty"`
-	OmitMaxOutputTokens         bool        `json:"omit_max_output_tokens,omitempty"`
-	OmitTextFormat              bool        `json:"omit_text_format,omitempty"`
-	CFAccessClientIDBinding     string      `json:"cf_access_client_id_binding,omitempty"`
-	CFAccessClientSecretBinding string      `json:"cf_access_client_secret_binding,omitempty"`
-	Disabled                    bool        `json:"disabled,omitempty"`
+	ID                          string             `json:"id"`
+	BaseURL                     string             `json:"base_url"`
+	Model                       string             `json:"model"`
+	APIKeyBinding               string             `json:"api_key_binding"`
+	DailyTokenLimit             int64              `json:"daily_token_limit,omitempty"`
+	DailyTokenTypes             []TokenType        `json:"daily_token_types,omitempty"`
+	MaxOutputTokens             int64              `json:"max_output_tokens,omitempty"`
+	OmitMaxOutputTokens         bool               `json:"omit_max_output_tokens,omitempty"`
+	OmitTextFormat              bool               `json:"omit_text_format,omitempty"`
+	AutoRouterCostTier          AutoRouterCostTier `json:"auto_router_cost_tier,omitempty"`
+	CFAccessClientIDBinding     string             `json:"cf_access_client_id_binding,omitempty"`
+	CFAccessClientSecretBinding string             `json:"cf_access_client_secret_binding,omitempty"`
+	Disabled                    bool               `json:"disabled,omitempty"`
 }
 
 var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -108,6 +128,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			MaxOutputTokens:      definition.MaxOutputTokens,
 			OmitMaxOutputTokens:  definition.OmitMaxOutputTokens,
 			OmitTextFormat:       definition.OmitTextFormat,
+			AutoRouterCostTier:   definition.AutoRouterCostTier,
 			CFAccessClientID:     clientID,
 			CFAccessClientSecret: clientSecret, // gitleaks:allow
 			Disabled:             definition.Disabled,
@@ -134,6 +155,16 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 }
 
 func validateProviderLimits(definition providerDefinition) error {
+	if definition.AutoRouterCostTier != "" {
+		if definition.Model != AutoRouterModel {
+			return fmt.Errorf("provider %q auto_router_cost_tier requires openrouter/auto", definition.ID)
+		}
+		switch definition.AutoRouterCostTier {
+		case AutoRouterCostLow, AutoRouterCostMedium, AutoRouterCostHigh, AutoRouterCostXHigh, AutoRouterCostMax:
+		default:
+			return fmt.Errorf("provider %q auto_router_cost_tier must be low, medium, high, xhigh, or max", definition.ID)
+		}
+	}
 	if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > MaximumOutputTokens {
 		return fmt.Errorf("provider %q max_output_tokens must be between 1 and %d when set", definition.ID, MaximumOutputTokens)
 	}

@@ -42,6 +42,41 @@ func testCFClientSecretValue() string {
 	return "fixture-cf-" + strings.Repeat("s", 12)
 }
 
+func TestAutoRouterReportsSelectedModel(t *testing.T) {
+	state := &testServerState{completionContent: validReviewContent()}
+	server := newProviderServer(state)
+	defer server.Close()
+	const selectedModel = "openai/gpt-6-luna"
+	state.streamResponse = func(writer http.ResponseWriter) {
+		writeStreamFrames(writer, []map[string]any{
+			responseTextDelta(validReviewContent()),
+			responseCompleted(validReviewContent(), selectedModel, map[string]any{
+				"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+			}),
+		})
+	}
+	client := openai.NewClient(config.Config{
+		Providers: []config.ProviderConfig{{
+			ID:                 "openrouter",
+			BaseURL:            mustParseURL(t, server.URL),
+			APIKey:             testAPIKeyValue(),
+			Model:              "openrouter/auto",
+			AutoRouterCostTier: "low",
+		}},
+	}, server.Client())
+	ctx, recorder := review.WithUsageRecorder(context.Background())
+	completion, err := client.Review(ctx, "review input")
+	if err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if completion.Model != selectedModel {
+		t.Fatalf("completion model = %q, want %q", completion.Model, selectedModel)
+	}
+	if usage := recorder.Summary(); len(usage.Models) != 1 || usage.Models[0].RequestedModel != "openrouter/auto" || usage.Models[0].Model != selectedModel {
+		t.Fatalf("usage models = %+v, want requested and selected models", usage.Models)
+	}
+}
+
 func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	client, server, state := newTestClient(t)
 	defer server.Close()
@@ -310,7 +345,7 @@ func TestReviewReportsGatewayFoldedUpstreamMessage(t *testing.T) {
 		t.Fatalf("error = %q, want provider status", err)
 	}
 	status := reported.ProviderStatus()
-	if status.Model != testPrimaryModel || status.Cause != "The provider API reported no remaining usage." {
+	if status.Model != testPrimaryModel || status.Cause != review.ProviderUsageExhausted {
 		t.Fatalf("provider status = %+v", status)
 	}
 }
@@ -723,7 +758,7 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 	status := reported.ProviderStatus()
 	if status.ProviderID != "capped" || status.Model != testPrimaryModel || !status.QuotaKnown ||
 		status.Used != 2_000_000 || status.Limit != 2_000_000 || status.Remaining != 0 ||
-		status.Cause != "The app denied the request; the provider API was not called." {
+		status.Cause != review.ProviderAppBudgetDenied {
 		t.Fatalf("denied provider status = %+v", status)
 	}
 }

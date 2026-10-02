@@ -31,6 +31,7 @@ type provider struct {
 	maxOutputTokens     int64
 	omitMaxOutputTokens bool
 	omitTextFormat      bool
+	autoRouterCostTier  config.AutoRouterCostTier
 	pricingByModel      map[string]config.ModelPricing
 }
 
@@ -81,6 +82,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			MaxOutputTokens:      0,
 			OmitMaxOutputTokens:  false,
 			OmitTextFormat:       false,
+			AutoRouterCostTier:   "",
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 			Disabled:             false,
@@ -96,6 +98,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				MaxOutputTokens:      0,
 				OmitMaxOutputTokens:  false,
 				OmitTextFormat:       false,
+				AutoRouterCostTier:   "",
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 				Disabled:             false,
@@ -127,6 +130,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			maxOutputTokens:     configured.MaxOutputTokens,
 			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
 			omitTextFormat:      configured.OmitTextFormat,
+			autoRouterCostTier:  configured.AutoRouterCostTier,
 			pricingByModel:      cfg.ReviewModelPricing,
 		})
 	}
@@ -277,14 +281,15 @@ func (client *Client) complete(
 	for index, target := range client.providers {
 		budget, err := client.checkBudget(ctx, target)
 		content := ""
+		model := target.model
 		if err == nil {
 			report := func(tokens int64) {
 				client.reportBudget(ctx, target, budget.day, tokens)
 			}
-			content, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
+			content, model, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 		}
 		if err == nil {
-			return content, target.model, nil
+			return content, model, nil
 		}
 		failure := &providerAttemptError{provider: target, budget: budget, cause: err}
 		failures = append(failures, failure)
@@ -326,12 +331,18 @@ func completeWith(
 	schemaName string,
 	schema json.RawMessage,
 	report func(int64),
-) (string, error) {
+) (string, string, error) {
 	params, err := newResponseParams(target, prompt, policy, schemaName, schema)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	stream := target.sdk.Responses.NewStreaming(ctx, params)
+	var options []option.RequestOption
+	if target.autoRouterCostTier != "" {
+		options = append(options, option.WithJSONSet("plugins", []map[string]string{{
+			"id": "auto-router", "cost_tier": string(target.autoRouterCostTier),
+		}}), option.WithJSONSet("provider.require_parameters", true))
+	}
+	stream := target.sdk.Responses.NewStreaming(ctx, params, options...)
 	defer func() {
 		_ = stream.Close()
 	}()
@@ -379,25 +390,29 @@ func completeWith(
 		}
 	}
 	if streamFailure != nil {
-		return "", streamFailure
+		return "", "", streamFailure
 	}
 	if err := stream.Err(); err != nil {
-		return "", modelProviderError(target.model, err)
+		return "", "", modelProviderError(target.model, err)
 	}
 	if incompleteReason == "max_output_tokens" {
-		return "", &TruncatedError{Model: target.model}
+		return "", "", &TruncatedError{Model: target.model}
 	}
 	if incompleteReason != "" {
-		return "", errors.New("openai response incomplete: " + incompleteReason)
+		return "", "", errors.New("openai response incomplete: " + incompleteReason)
 	}
 	if !completed {
-		return "", errors.New("openai response ended without a completion event")
+		return "", "", errors.New("openai response ended without a completion event")
 	}
 	result := strings.TrimSpace(content.String())
 	if result == "" {
-		return "", errors.New("openai response missing message content")
+		return "", "", errors.New("openai response missing message content")
 	}
-	return result, nil
+	completionModel := target.model
+	if target.model == config.AutoRouterModel {
+		completionModel = responseModel
+	}
+	return result, completionModel, nil
 }
 
 func newResponseParams(
