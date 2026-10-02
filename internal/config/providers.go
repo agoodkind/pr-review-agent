@@ -76,13 +76,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		if definition.DailyTokenLimit < 0 {
 			return nil, fmt.Errorf("provider %q daily_token_limit must not be negative", definition.ID)
 		}
-		if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > MaximumOutputTokens {
-			return nil, fmt.Errorf("provider %q max_output_tokens must be between 1 and %d when set", definition.ID, MaximumOutputTokens)
-		}
-		if definition.MaxOutputTokens != 0 && definition.OmitMaxOutputTokens {
-			return nil, fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
-		}
-		if err := validateTokenTypes(definition.ID, definition.DailyTokenTypes); err != nil {
+		if err := validateProviderLimits(definition); err != nil {
 			return nil, err
 		}
 		if _, exists := configured[definition.ID]; exists {
@@ -139,11 +133,17 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 	return providers, nil
 }
 
-func validateTokenTypes(providerID string, tokenTypes []TokenType) error {
-	seen := make(map[TokenType]bool, len(tokenTypes))
-	for _, tokenType := range tokenTypes {
+func validateProviderLimits(definition providerDefinition) error {
+	if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > MaximumOutputTokens {
+		return fmt.Errorf("provider %q max_output_tokens must be between 1 and %d when set", definition.ID, MaximumOutputTokens)
+	}
+	if definition.MaxOutputTokens != 0 && definition.OmitMaxOutputTokens {
+		return fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
+	}
+	seen := make(map[TokenType]bool, len(definition.DailyTokenTypes))
+	for _, tokenType := range definition.DailyTokenTypes {
 		if tokenType != InputTokens && tokenType != OutputTokens || seen[tokenType] {
-			return fmt.Errorf("provider %q daily_token_types must contain input and/or output once", providerID)
+			return fmt.Errorf("provider %q daily_token_types must contain input and/or output once", definition.ID)
 		}
 		seen[tokenType] = true
 	}
