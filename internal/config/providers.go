@@ -28,6 +28,7 @@ type ProviderConfig struct {
 	APIKey               string
 	DailyTokenLimit      int64
 	DailyTokenTypes      []TokenType
+	MaxOutputTokens      int64
 	OmitMaxOutputTokens  bool
 	OmitTextFormat       bool
 	CFAccessClientID     string
@@ -43,6 +44,7 @@ type providerDefinition struct {
 	APIKeyBinding               string      `json:"api_key_binding"`
 	DailyTokenLimit             int64       `json:"daily_token_limit,omitempty"`
 	DailyTokenTypes             []TokenType `json:"daily_token_types,omitempty"`
+	MaxOutputTokens             int64       `json:"max_output_tokens,omitempty"`
 	OmitMaxOutputTokens         bool        `json:"omit_max_output_tokens,omitempty"`
 	OmitTextFormat              bool        `json:"omit_text_format,omitempty"`
 	CFAccessClientIDBinding     string      `json:"cf_access_client_id_binding,omitempty"`
@@ -74,6 +76,12 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		if definition.DailyTokenLimit < 0 {
 			return nil, fmt.Errorf("provider %q daily_token_limit must not be negative", definition.ID)
 		}
+		if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > MaximumOutputTokens {
+			return nil, fmt.Errorf("provider %q max_output_tokens must be between 1 and %d when set", definition.ID, MaximumOutputTokens)
+		}
+		if definition.MaxOutputTokens != 0 && definition.OmitMaxOutputTokens {
+			return nil, fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
+		}
 		if err := validateTokenTypes(definition.ID, definition.DailyTokenTypes); err != nil {
 			return nil, err
 		}
@@ -103,6 +111,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			APIKey:               apiKey,
 			DailyTokenLimit:      definition.DailyTokenLimit,
 			DailyTokenTypes:      definition.DailyTokenTypes,
+			MaxOutputTokens:      definition.MaxOutputTokens,
 			OmitMaxOutputTokens:  definition.OmitMaxOutputTokens,
 			OmitTextFormat:       definition.OmitTextFormat,
 			CFAccessClientID:     clientID,

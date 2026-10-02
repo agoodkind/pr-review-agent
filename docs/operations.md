@@ -51,6 +51,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
 | `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider and model per UTC day; omit or set `0` for no limit |
 | `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
+| `PROVIDERS[].max_output_tokens` | Maximum output tokens per request for one provider; omit or set `0` to use 8,000 |
 | `PROVIDERS[].omit_max_output_tokens` | Omit the output token limit for a backend that rejects it |
 | `PROVIDERS[].omit_text_format` | Omit JSON schema enforcement for a backend that rejects it; the system prompt still requests JSON matching the schema |
 | `PROVIDERS[].disabled` | Keep the provider configured without sending it requests |
