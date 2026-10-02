@@ -36,7 +36,7 @@ Neither the check nor the comment reprints what the failure said. A model provid
 
 The check also publishes the run's own log, every line and every field. A field's value is printed only when that field is one the service vouched for as its own measurement, identifier, or wording. Every other value is withheld, and the field says so where the value would be. Read the withheld values from the service log for that run identifier, following [logs.md](logs.md).
 
-A run that stopped early carries the same detail table as one that finished, filled with what it had learned when it stopped. In place of the coverage row it names the last stage it completed, and it names no model when none answered. Findings post while the review runs, so a failed run can still leave comments on the page, and the table reports them.
+An incomplete review reports each attempted provider and configured model, the remaining app quota, and any provider API refusal. A failed run reports the last completed stage. The detail table also reports findings published before a later stage failed.
 
 ## Configure the service
 
@@ -49,7 +49,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
 | `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
-| `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider per UTC day; omit or set `0` for no limit |
+| `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider and model per UTC day; omit or set `0` for no limit |
 | `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
 | `PROVIDERS[].omit_max_output_tokens` | Omit the output token limit for a backend that rejects it |
 | `PROVIDERS[].omit_text_format` | Omit JSON schema enforcement for a backend that rejects it; the system prompt still requests JSON matching the schema |
@@ -89,7 +89,7 @@ The selected appearance changes only the check conclusion. The check title and t
 
 Unread chunks stay pending. The next push reviews those chunks and any new changes.
 
-Set `daily_token_limit` on each provider that needs a daily cap. Set `daily_token_types` to `input`, `output`, or both. OpenAI's complimentary data-sharing allowance counts both input and output. Both OpenAI providers select both types. The Worker admits a request while reported usage for that UTC day is below the limit. After the model responds, the service reports the selected token count. Concurrent requests can exceed the limit because admission does not reserve tokens. A request without reported usage does not increase the counter. The service skips a provider if the Worker cannot check its usage. Keep the Worker URL and the `PROVIDER_BUDGET` Durable Object binding configured when any provider has a cap.
+Set `daily_token_limit` on each provider that needs a daily cap. Set `daily_token_types` to `input`, `output`, or both. OpenAI's complimentary data-sharing allowance counts both input and output. Both OpenAI providers select both types. The Worker counts reported usage separately for each provider ID and model. It admits a request while that count is below the limit and returns the used, limit, and remaining token counts. The review check and comment report those counts for a denied request and identify whether the app denied it or the provider API refused it. After the model responds, the service reports the selected token count. Concurrent requests can exceed the limit because admission does not reserve tokens. A request without reported usage does not increase the counter. The service skips a provider if the Worker cannot check its usage. Keep the Worker URL and the `PROVIDER_BUDGET` Durable Object binding configured when any provider has a cap.
 
 Set both `cf_access_client_id_binding` and `cf_access_client_secret_binding` for a provider behind Cloudflare Access. Omit both fields for public endpoints.
 

@@ -49,8 +49,10 @@ func (service *Service) concludeIncomplete(
 	pending := len(state.Pending)
 	unread := pass.unreadChunks()
 	reason := chunkFailureReason(unread)
+	statuses := providerStatuses(unread)
+	addAttemptedModels(&summary, statuses)
 	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderIncompleteBody(summary, pending, reason, publicFailureDetail(job)),
+		Prose: RenderIncompleteBody(summary, pending, reason, publicFailureDetail(job), statuses...),
 		State: state,
 	}); err != nil {
 		return service.failCheck(
@@ -95,6 +97,9 @@ func incompleteCheckDetail(failures []chunkFailure, summary Summary, job domain.
 	if reason := chunkFailureReason(failures); reason != "" {
 		parts = append(parts, reason)
 	}
+	if statuses := renderProviderStatuses(providerStatuses(failures)); statuses != "" {
+		parts = append(parts, statuses)
+	}
 	parts = append(parts, publicFailureDetail(job), RenderDetails(summary))
 	return strings.Join(parts, "\n\n")
 }
@@ -103,7 +108,7 @@ func incompleteCheckDetail(failures []chunkFailure, summary Summary, job domain.
 // a run that could not finish: how much went unread, and how to retry it.
 func incompleteCheckTitle(pending int, reason string) string {
 	if reason == checkFailureDailyBudget {
-		return chunkCount(pending) + " could not be reviewed: daily model usage exhausted."
+		return chunkCount(pending) + " could not be reviewed: app token limit exhausted."
 	}
 	return fmt.Sprintf("%s could not be reviewed. Apply `%s` to retry.",
 		chunkCount(pending), domain.RerunReviewLabel)

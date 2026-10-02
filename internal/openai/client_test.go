@@ -305,6 +305,14 @@ func TestReviewReportsGatewayFoldedUpstreamMessage(t *testing.T) {
 	if !providerError.UsageExceeded() {
 		t.Fatalf("UsageExceeded() = false for %q, want true", err)
 	}
+	var reported interface{ ProviderStatus() review.ProviderStatus }
+	if !errors.As(err, &reported) {
+		t.Fatalf("error = %q, want provider status", err)
+	}
+	status := reported.ProviderStatus()
+	if status.Model != testPrimaryModel || status.Cause != "The provider API reported no remaining usage." {
+		t.Fatalf("provider status = %+v", status)
+	}
 }
 
 func TestProviderErrorClassifiesUsageExhaustion(t *testing.T) {
@@ -664,6 +672,7 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 		}
 		var admission struct {
 			ProviderID string `json:"provider_id"`
+			Model      string `json:"model"`
 			Limit      int64  `json:"limit"`
 		}
 		if err := json.Unmarshal(body, &admission); err != nil {
@@ -671,11 +680,14 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if admission.ProviderID != "capped" || admission.Limit != 2_000_000 {
+		if admission.ProviderID != "capped" || admission.Model != testPrimaryModel || admission.Limit != 2_000_000 {
 			t.Errorf("admission = %+v", admission)
 		}
 		reservationCount++
-		writeJSON(writer, http.StatusOK, map[string]bool{"allowed": false})
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"allowed": false, "day": "2026-09-29", "used": 2_000_000,
+			"limit": 2_000_000, "remaining": 0,
+		})
 	}))
 	t.Cleanup(budgetServer.Close)
 
@@ -694,6 +706,25 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 	}
 	if completion.Model != testFallbackModel || primaryState.requestCount != 0 || secondaryState.requestCount != 1 || reservationCount != 1 {
 		t.Fatalf("model = %q, primary requests = %d, secondary requests = %d, reservations = %d", completion.Model, primaryState.requestCount, secondaryState.requestCount, reservationCount)
+	}
+	cappedClient := openai.NewClient(config.Config{
+		GitHubWebhookSecret: signingKey, // gitleaks:allow
+		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
+		Providers: []config.ProviderConfig{{
+			ID: "capped", BaseURL: mustParseURL(t, primaryServer.URL), Model: testPrimaryModel,
+			APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000,
+		}},
+	}, budgetServer.Client())
+	_, err = cappedClient.Review(context.Background(), "prompt")
+	var reported interface{ ProviderStatus() review.ProviderStatus }
+	if !errors.As(err, &reported) {
+		t.Fatalf("denied review error = %v, want provider status", err)
+	}
+	status := reported.ProviderStatus()
+	if status.ProviderID != "capped" || status.Model != testPrimaryModel || !status.QuotaKnown ||
+		status.Used != 2_000_000 || status.Limit != 2_000_000 || status.Remaining != 0 ||
+		status.Cause != "The app denied the request; the provider API was not called." {
+		t.Fatalf("denied provider status = %+v", status)
 	}
 }
 
@@ -722,17 +753,21 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 		}
 		var payload struct {
 			ProviderID string `json:"provider_id"`
+			Model      string `json:"model"`
 			Day        string `json:"day"`
 			Tokens     int64  `json:"tokens"`
 			Limit      int64  `json:"limit"`
 		}
-		if err := json.Unmarshal(body, &payload); err != nil || payload.ProviderID != "capped" {
+		if err := json.Unmarshal(body, &payload); err != nil || payload.ProviderID != "capped" || payload.Model != testPrimaryModel {
 			writer.WriteHeader(http.StatusBadRequest)
 			return
 		}
 		if payload.Day == "" {
 			checkCount++
-			writeJSON(writer, http.StatusOK, map[string]any{"allowed": reportedTokens < payload.Limit, "day": "2026-09-29"})
+			writeJSON(writer, http.StatusOK, map[string]any{
+				"allowed": reportedTokens < payload.Limit, "day": "2026-09-29",
+				"used": reportedTokens, "limit": payload.Limit, "remaining": payload.Limit - reportedTokens,
+			})
 			return
 		}
 		if payload.Day != "2026-09-29" {
