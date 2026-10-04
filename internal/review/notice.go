@@ -21,7 +21,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-const checkFailureMixedUsage = "Review stopped: the app exhausted its configured daily token limit, and a provider API reported no remaining usage."
+const checkFailureMixedUsage = "Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage."
 
 // failCheck ends one run with its cause reported and no review object touched.
 //

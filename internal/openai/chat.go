@@ -21,7 +21,7 @@ func completeChat(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(int64),
+	report func(responses.ResponseUsage),
 ) (string, string, error) {
 	params := openaigo.ChatCompletionNewParams{
 		Model: target.model,
@@ -63,7 +63,7 @@ func completeChat(
 		result.RejectedPredictionTokens = usage.CompletionTokensDetails.RejectedPredictionTokens
 		review.RecordModelUsage(ctx, result)
 		if hasUsage {
-			report(budgetTokens(converted, target.dailyTokenTypes))
+			report(converted)
 		}
 	}()
 	for stream.Next() {

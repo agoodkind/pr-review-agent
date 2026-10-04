@@ -4824,7 +4824,7 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	wantReason := "Review stopped: the app's configured daily token limit was exhausted."
+	wantReason := "Review stopped: the app's configured token limit was exhausted."
 	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
 	if !ok || !strings.Contains(checkSummary, wantReason) {
 		t.Fatalf("check summary = %v, want the classified reason", checkOutput(t, fixture)["summary"])
@@ -4856,7 +4856,7 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 	}
 	for _, output := range []string{checkSummary, failureSummaryComment(t, fixture)} {
 		for _, want := range []string{
-			"Review stopped: the app exhausted its configured daily token limit, and a provider API reported no remaining usage.",
+			"Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage.",
 			"| Provider | Model | App quota | Result |",
 			"| `openai_goodkind_io` | `gpt-5.6-luna` | 2,500,000 / 2,500,000 (0 left) | App denied request; API not called |",
 			"| `openrouter` | `openai/gpt-5.6-luna` | 200,000 / 500,000 (300,000 left) | Provider reported no remaining usage |",

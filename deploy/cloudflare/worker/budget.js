@@ -19,7 +19,15 @@ export async function handleProviderBudget(request, env, verifySignature) {
   let pathname = "/check";
   try {
     const payload = JSON.parse(body);
-    if (Object.hasOwn(payload, "tokens")) {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      return new Response("invalid budget request", { status: 400 });
+    }
+    if (Object.hasOwn(payload, "action")) {
+      if (payload.action !== "query_usage" && payload.action !== "report_usage") {
+        return new Response("invalid budget action", { status: 400 });
+      }
+      pathname = `/${payload.action}`;
+    } else if (Object.hasOwn(payload, "tokens")) {
       pathname = Object.hasOwn(payload, "limit") ? "/reserve" : "/report";
     }
   } catch {

@@ -16,8 +16,10 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 
 	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/clock"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
@@ -28,6 +30,9 @@ type provider struct {
 	model               string
 	dailyTokenLimit     int64
 	dailyTokenTypes     []config.TokenType
+	tokenLimit          int64
+	tokenTypes          []config.TokenType
+	tokenWindow         quota.Window
 	maxOutputTokens     int64
 	omitMaxOutputTokens bool
 	omitTextFormat      bool
@@ -63,6 +68,7 @@ type Client struct {
 	budgetURL               string
 	budgetSigningKey        []byte
 	httpClient              *http.Client
+	now                     clock.Clock
 }
 
 // NewClient constructs an SDK client for each configured provider.
@@ -71,6 +77,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		httpClient = http.DefaultClient
 	}
 	configuredProviders := cfg.Providers
+	var emptyWindow quota.Window
 	fallbackOnUsageExceeded := true
 	if len(configuredProviders) == 0 {
 		configuredProviders = []config.ProviderConfig{{
@@ -80,6 +87,9 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			Model:                cfg.ReviewModel,
 			DailyTokenLimit:      0,
 			DailyTokenTypes:      nil,
+			TokenLimit:           0,
+			TokenTypes:           nil,
+			TokenWindow:          emptyWindow,
 			MaxOutputTokens:      0,
 			OmitMaxOutputTokens:  false,
 			OmitTextFormat:       false,
@@ -97,6 +107,9 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				Model:                cfg.FallbackModel,
 				DailyTokenLimit:      0,
 				DailyTokenTypes:      nil,
+				TokenLimit:           0,
+				TokenTypes:           nil,
+				TokenWindow:          emptyWindow,
 				MaxOutputTokens:      0,
 				OmitMaxOutputTokens:  false,
 				OmitTextFormat:       false,
@@ -116,6 +129,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		budgetURL:               "",
 		budgetSigningKey:        cfg.GitHubWebhookSecret,
 		httpClient:              httpClient,
+		now:                     clock.System,
 	}
 	if cfg.ProviderBudgetURL != nil {
 		client.budgetURL = cfg.ProviderBudgetURL.String()
@@ -130,6 +144,9 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			model:               configured.Model,
 			dailyTokenLimit:     configured.DailyTokenLimit,
 			dailyTokenTypes:     configured.DailyTokenTypes,
+			tokenLimit:          configured.TokenLimit,
+			tokenTypes:          configured.TokenTypes,
+			tokenWindow:         configured.TokenWindow,
 			maxOutputTokens:     configured.MaxOutputTokens,
 			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
 			omitTextFormat:      configured.OmitTextFormat,
@@ -287,8 +304,8 @@ func (client *Client) complete(
 		content := ""
 		model := target.model
 		if err == nil {
-			report := func(tokens int64) {
-				client.reportBudget(ctx, target, budget.day, tokens)
+			report := func(usage responses.ResponseUsage) {
+				client.reportBudget(ctx, target, budget, usage)
 			}
 			if target.api == config.ChatCompletionsAPI {
 				content, model, err = completeChat(ctx, target, prompt, policy, schemaName, schema, report)
@@ -300,6 +317,7 @@ func (client *Client) complete(
 			return content, model, nil
 		}
 		failure := &providerAttemptError{provider: target, budget: budget, cause: err}
+		logProviderAttempt(ctx, failure)
 		failures = append(failures, failure)
 		if index == len(client.providers)-1 || !client.shouldUseFallback(err) {
 			if len(failures) == 1 {
@@ -309,9 +327,40 @@ func (client *Client) complete(
 			gklog.L(ctx).WarnContext(ctx, "model providers failed", slog.String("error", combined.Error()))
 			return "", "", combined
 		}
-		gklog.L(ctx).WarnContext(ctx, "model provider fallback engaged", slog.String("err", err.Error()))
 	}
 	return "", "", errors.New("no model providers configured")
+}
+
+func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
+	status := failure.ProviderStatus()
+	attributes := []slog.Attr{
+		slog.String("provider_id", status.ProviderID),
+		slog.String("configured_model", status.Model),
+		slog.String("cause", string(status.Cause)),
+		slog.Bool("quota_known", status.QuotaKnown),
+		slog.Int64("quota_used", status.Used),
+		slog.Int64("quota_limit", status.Limit),
+		slog.Int64("quota_remaining", status.Remaining),
+	}
+	if status.QuotaKnown && status.QuotaSnapshot.Bounds.EndMS > 0 {
+		accounting := status.QuotaSnapshot
+		mode := status.TokenWindow.Mode
+		if mode == "" {
+			mode = quota.Fixed
+		}
+		attributes = append(attributes,
+			slog.String("quota_window_mode", string(mode)),
+			slog.Int64("quota_window_start_ms", accounting.Bounds.StartMS),
+			slog.Int64("quota_window_end_ms", accounting.Bounds.EndMS),
+			slog.Int64("quota_available_at_ms", accounting.AvailableAtMS),
+			slog.Int64("quota_history_start_ms", accounting.HistoryStartMS),
+			slog.Bool("quota_history_complete", accounting.HistoryComplete))
+	}
+	var apiError *ProviderError
+	if errors.As(failure.cause, &apiError) {
+		attributes = append(attributes, slog.Int("api_status", apiError.StatusCode), slog.String("api_code", apiError.Code))
+	}
+	gklog.L(ctx).LogAttrs(ctx, slog.LevelWarn, "model provider attempt failed", attributes...)
 }
 
 // shouldUseFallback reports whether this failure is the declared condition for
@@ -338,7 +387,7 @@ func completeWith(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(int64),
+	report func(responses.ResponseUsage),
 ) (string, string, error) {
 	params, err := newResponseParams(target, prompt, policy, schemaName, schema)
 	if err != nil {
@@ -365,7 +414,7 @@ func completeWith(
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
 		if hasUsage {
-			report(budgetTokens(usage, target.dailyTokenTypes))
+			report(usage)
 		}
 	}()
 	for stream.Next() {
