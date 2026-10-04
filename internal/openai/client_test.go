@@ -112,38 +112,43 @@ func TestChatCompletionsReviewAndQuotaFallback(t *testing.T) {
 	}
 }
 
-func TestAutoRouterReportsSelectedModel(t *testing.T) {
-	state := &testServerState{completionContent: validReviewContent()}
-	server := newProviderServer(state)
-	defer server.Close()
-	const selectedModel = "openai/gpt-6-luna"
-	state.streamResponse = func(writer http.ResponseWriter) {
-		writeStreamFrames(writer, []map[string]any{
-			responseTextDelta(validReviewContent()),
-			responseCompleted(validReviewContent(), selectedModel, map[string]any{
-				"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
-			}),
+func TestRoutersReportSelectedModel(t *testing.T) {
+	for _, routerModel := range []string{config.AutoRouterModel, config.FreeRouterModel} {
+		t.Run(routerModel, func(t *testing.T) {
+			state := &testServerState{completionContent: validReviewContent()}
+			server := newProviderServer(state)
+			defer server.Close()
+			const selectedModel = "fixture-selected-model"
+			state.streamResponse = func(writer http.ResponseWriter) {
+				writeStreamFrames(writer, []map[string]any{
+					responseTextDelta(validReviewContent()),
+					responseCompleted(validReviewContent(), selectedModel, map[string]any{
+						"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+					}),
+				})
+			}
+			autoRouterCostTier := config.AutoRouterCostTier("")
+			if routerModel == config.AutoRouterModel {
+				autoRouterCostTier = config.AutoRouterCostLow
+			}
+			client := openai.NewClient(config.Config{
+				Providers: []config.ProviderConfig{{
+					ID: "openrouter", BaseURL: mustParseURL(t, server.URL), APIKey: testAPIKeyValue(),
+					Model: routerModel, AutoRouterCostTier: autoRouterCostTier,
+				}},
+			}, server.Client())
+			ctx, recorder := review.WithUsageRecorder(context.Background())
+			completion, err := client.Review(ctx, "review input")
+			if err != nil {
+				t.Fatalf("Review: %v", err)
+			}
+			if completion.Model != selectedModel {
+				t.Fatalf("completion model = %q, want %q", completion.Model, selectedModel)
+			}
+			if usage := recorder.Summary(); len(usage.Models) != 1 || usage.Models[0].RequestedModel != routerModel || usage.Models[0].Model != selectedModel {
+				t.Fatalf("usage models = %+v, want requested and selected models", usage.Models)
+			}
 		})
-	}
-	client := openai.NewClient(config.Config{
-		Providers: []config.ProviderConfig{{
-			ID:                 "openrouter",
-			BaseURL:            mustParseURL(t, server.URL),
-			APIKey:             testAPIKeyValue(),
-			Model:              "openrouter/auto",
-			AutoRouterCostTier: "low",
-		}},
-	}, server.Client())
-	ctx, recorder := review.WithUsageRecorder(context.Background())
-	completion, err := client.Review(ctx, "review input")
-	if err != nil {
-		t.Fatalf("Review: %v", err)
-	}
-	if completion.Model != selectedModel {
-		t.Fatalf("completion model = %q, want %q", completion.Model, selectedModel)
-	}
-	if usage := recorder.Summary(); len(usage.Models) != 1 || usage.Models[0].RequestedModel != "openrouter/auto" || usage.Models[0].Model != selectedModel {
-		t.Fatalf("usage models = %+v, want requested and selected models", usage.Models)
 	}
 }
 

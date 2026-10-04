@@ -36,6 +36,8 @@ const (
 const (
 	// AutoRouterModel selects OpenRouter's automatic model router.
 	AutoRouterModel = "openrouter/auto"
+	// FreeRouterModel selects OpenRouter's free model router.
+	FreeRouterModel = "openrouter/free"
 	// AutoRouterCostLow selects the lowest price band.
 	AutoRouterCostLow AutoRouterCostTier = "low"
 	// AutoRouterCostMedium selects the medium price band.

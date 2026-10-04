@@ -417,7 +417,7 @@ func completeWith(
 		return "", "", errors.New("openai response missing message content")
 	}
 	completionModel := target.model
-	if target.model == config.AutoRouterModel {
+	if target.model == config.AutoRouterModel || target.model == config.FreeRouterModel {
 		completionModel = responseModel
 	}
 	return result, completionModel, nil
