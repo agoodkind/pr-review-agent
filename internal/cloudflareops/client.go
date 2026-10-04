@@ -288,7 +288,12 @@ func (client *Client) tokenBody(ctx context.Context, options CredentialOptions) 
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(tokenRequest{Name: "pragent-ops-temporary", ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339), Policies: []tokenPolicy{{Effect: "allow", PermissionGroups: []permissionGroup{{ID: permissionID}}, Resources: map[string]string{"com.cloudflare.api.account." + options.Account: "*"}}}})
+	body, err := json.Marshal(tokenRequest{Name: "pragent-ops-temporary", ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339), Policies: []tokenPolicy{{Effect: "allow", PermissionGroups: []permissionGroup{{ID: permissionID}}, Resources: map[string]string{"com.cloudflare.api.account." + options.Account: "*"}}}})
+	if err != nil {
+		slog.WarnContext(ctx, "Temporary token policy encoding failed")
+		return nil, fmt.Errorf("encode temporary token policy: %w", err)
+	}
+	return body, nil
 }
 
 func (client *Client) permissionID(ctx context.Context, name string) (string, error) {
