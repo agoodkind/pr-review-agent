@@ -114,11 +114,13 @@ func chatProviderError(model string, err error) error {
 	if json.Unmarshal([]byte(apiError.RawJSON()), &payload) != nil {
 		return converted
 	}
-	if payload.Status == "RESOURCE_EXHAUSTED" || payload.Error.Status == "RESOURCE_EXHAUSTED" {
-		var providerError *ProviderError
-		if errors.As(converted, &providerError) {
-			providerError.Code = "RESOURCE_EXHAUSTED"
-		}
+	status := payload.Error.Status
+	if status == "" {
+		status = payload.Status
+	}
+	var providerError *ProviderError
+	if status != "" && errors.As(converted, &providerError) {
+		providerError.Code = status
 	}
 	return converted
 }

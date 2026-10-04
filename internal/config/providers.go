@@ -141,7 +141,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			OmitMaxOutputTokens:  definition.OmitMaxOutputTokens,
 			OmitTextFormat:       definition.OmitTextFormat,
 			AutoRouterCostTier:   definition.AutoRouterCostTier,
-			API:                  providerAPI(definition.API),
+			API:                  definition.API,
 			CFAccessClientID:     clientID,
 			CFAccessClientSecret: clientSecret, // gitleaks:allow
 			Disabled:             definition.Disabled,
@@ -168,7 +168,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 }
 
 func validateProviderLimits(definition providerDefinition) error {
-	if definition.API != "" && definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI {
+	if definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI {
 		return fmt.Errorf("provider %q api_kind must be responses or chat_completions", definition.ID)
 	}
 	if definition.API == ChatCompletionsAPI && definition.AutoRouterCostTier != "" {
@@ -200,13 +200,6 @@ func validateProviderLimits(definition providerDefinition) error {
 	return nil
 }
 
-func providerAPI(value ProviderAPI) ProviderAPI {
-	if value == "" {
-		return ResponsesAPI
-	}
-	return value
-}
-
 func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -216,6 +209,11 @@ func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 	}
 	if err := rejectTrailingProviderJSON(decoder); err != nil {
 		return nil, err
+	}
+	for index := range definitions {
+		if definitions[index].API == "" {
+			definitions[index].API = ResponsesAPI
+		}
 	}
 	return definitions, nil
 }
