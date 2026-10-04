@@ -176,6 +176,7 @@ type CredentialOptions struct {
 	Account          string
 	TTL              time.Duration
 	APIURL           string
+	PermissionName   string
 }
 
 // Credentials retains recovery metadata until revocation and rejection are verified.
@@ -246,9 +247,9 @@ func AcquireCredentials(ctx context.Context, options CredentialOptions) (credent
 			returnErr = errors.Join(returnErr, acquired.Close(ctx))
 		}
 	}()
-	body, err := json.Marshal(tokenRequest{Name: "pragent-ops-observability", ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339), Policies: []tokenPolicy{{Effect: "allow", PermissionGroups: []permissionGroup{{ID: observabilityPermission}}, Resources: map[string]string{"com.cloudflare.api.account." + options.Account: "*"}}}})
+	body, err := client.tokenBody(ctx, options)
 	if err != nil {
-		return nil, errors.New("temporary token policy could not be encoded")
+		return nil, err
 	}
 	created, err := client.createToken(ctx, body)
 	if err != nil {
@@ -280,6 +281,44 @@ func AcquireCredentials(ctx context.Context, options CredentialOptions) (credent
 		return nil, fmt.Errorf("scoped credential verification failed: %w", err)
 	}
 	return credentials, nil
+}
+
+func (client *Client) tokenBody(ctx context.Context, options CredentialOptions) ([]byte, error) {
+	permissionID, err := client.permissionID(ctx, options.PermissionName)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(tokenRequest{Name: "pragent-ops-temporary", ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339), Policies: []tokenPolicy{{Effect: "allow", PermissionGroups: []permissionGroup{{ID: permissionID}}, Resources: map[string]string{"com.cloudflare.api.account." + options.Account: "*"}}}})
+}
+
+func (client *Client) permissionID(ctx context.Context, name string) (string, error) {
+	if name == "" {
+		return observabilityPermission, nil
+	}
+	response, _, err := client.request(ctx, http.MethodGet, "/user/tokens/permission_groups", nil)
+	if err != nil {
+		return "", err
+	}
+	var groups []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(response.Result, &groups); err != nil {
+		return "", errors.New("cloudflare returned invalid permission groups")
+	}
+	var identifier string
+	for _, group := range groups {
+		if group.Name == name {
+			if identifier != "" || group.ID == "" {
+				return "", errors.New("cloudflare permission group is ambiguous")
+			}
+			identifier = group.ID
+		}
+	}
+	if identifier == "" {
+		return "", fmt.Errorf("cloudflare permission group %q is unavailable", name)
+	}
+	return identifier, nil
 }
 
 func (client *Client) createToken(ctx context.Context, body []byte) (envelope, error) {
