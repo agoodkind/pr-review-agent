@@ -22,13 +22,15 @@ func (attempt *providerAttemptError) Unwrap() error {
 
 func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 	status := review.ProviderStatus{
-		ProviderID: attempt.provider.id,
-		Model:      attempt.provider.model,
-		Cause:      review.ProviderRequestFailed,
-		Used:       attempt.budget.used,
-		Limit:      attempt.budget.limit,
-		Remaining:  attempt.budget.remaining,
-		QuotaKnown: attempt.budget.known,
+		ProviderID:    attempt.provider.id,
+		Model:         attempt.provider.model,
+		Cause:         review.ProviderRequestFailed,
+		Used:          attempt.budget.used,
+		Limit:         attempt.budget.limit,
+		Remaining:     attempt.budget.remaining,
+		QuotaKnown:    attempt.budget.known,
+		TokenWindow:   attempt.budget.window,
+		QuotaSnapshot: attempt.budget.accounting,
 	}
 	var admission *budgetAdmissionError
 	if errors.As(attempt.cause, &admission) {
@@ -36,6 +38,8 @@ func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 		status.Limit = admission.snapshot.limit
 		status.Remaining = admission.snapshot.remaining
 		status.QuotaKnown = admission.snapshot.known
+		status.TokenWindow = admission.snapshot.window
+		status.QuotaSnapshot = admission.snapshot.accounting
 		if admission.DailyBudgetExhausted() {
 			status.Cause = review.ProviderAppBudgetDenied
 		} else {

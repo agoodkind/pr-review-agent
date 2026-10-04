@@ -4,6 +4,7 @@
   "account_id": "ee7d7ca7d611ef8c2a07885e8362de0c",
   "main": "worker/index.js",
   "compatibility_date": "2026-08-12",
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
   "observability": {
     "enabled": true
   },

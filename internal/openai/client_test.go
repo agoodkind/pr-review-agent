@@ -864,8 +864,8 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 		var payload struct {
 			ProviderID string `json:"provider_id"`
 			Model      string `json:"model"`
-			Day        string `json:"day"`
-			Tokens     int64  `json:"tokens"`
+			Day        string `json:"legacy_day"`
+			Tokens     int64  `json:"legacy_tokens"`
 			Limit      int64  `json:"limit"`
 		}
 		if err := json.Unmarshal(body, &payload); err != nil || payload.ProviderID != "capped" || payload.Model != testPrimaryModel {

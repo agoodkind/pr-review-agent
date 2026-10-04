@@ -92,7 +92,8 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	} else {
 		rows = append(rows, [2]string{"Coverage complete", formatYesNo(summary.CoverageComplete)})
 	}
-	rows = append(rows,
+	rows = append(
+		rows,
 		[2]string{"Forced run", formatYesNo(summary.Forced)},
 		[2]string{"Minimum importance", fmt.Sprintf("`%d`", summary.MinimumImportance)},
 		[2]string{"Findings observed", formatCountAndImportances(summary.Observed)},
@@ -555,7 +556,16 @@ func codeSpan(text string) string {
 func RenderIncompleteBody(summary Summary, pending int, reason string, detail string, statuses ...ProviderStatus) string {
 	lead := fmt.Sprintf("%s could not be reviewed on `%s`.", chunkCount(pending), shortHead(summary.Head))
 	if reason == checkFailureDailyBudget || reason == checkFailureMixedUsage {
-		lead += " The app's daily token limit resets at 00:00 UTC."
+		legacyDaily := false
+		for _, status := range statuses {
+			if status.Cause == ProviderAppBudgetDenied && status.TokenWindow.Mode == "" {
+				legacyDaily = true
+				break
+			}
+		}
+		if legacyDaily {
+			lead += " The app's daily token limit resets at 00:00 UTC."
+		}
 	} else {
 		lead += fmt.Sprintf(" Apply the `%s` label to retry this head.", domain.RerunReviewLabel)
 	}

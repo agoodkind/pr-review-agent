@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
+
+	"goodkind.io/pr-review-agent/internal/quota"
 )
 
-// TokenType selects an API usage category for a provider's daily limit.
-type TokenType string
+// TokenType selects an API usage category for a provider's token limit.
+type TokenType = quota.TokenType
 
 // AutoRouterCostTier selects OpenRouter's auto routing price band.
 type AutoRouterCostTier string
@@ -58,6 +61,9 @@ type ProviderConfig struct {
 	APIKey               string
 	DailyTokenLimit      int64
 	DailyTokenTypes      []TokenType
+	TokenLimit           int64
+	TokenTypes           []TokenType
+	TokenWindow          quota.Window
 	MaxOutputTokens      int64
 	OmitMaxOutputTokens  bool
 	OmitTextFormat       bool
@@ -74,8 +80,11 @@ type providerDefinition struct {
 	BaseURL                     string             `json:"base_url"`
 	Model                       string             `json:"model"`
 	APIKeyBinding               string             `json:"api_key_binding"`
-	DailyTokenLimit             int64              `json:"daily_token_limit,omitempty"`
+	DailyTokenLimit             *int64             `json:"daily_token_limit,omitempty"`
 	DailyTokenTypes             []TokenType        `json:"daily_token_types,omitempty"`
+	TokenLimit                  *int64             `json:"token_limit,omitempty"`
+	TokenTypes                  []TokenType        `json:"token_types,omitempty"`
+	TokenWindow                 *quota.Window      `json:"token_window,omitempty"`
 	MaxOutputTokens             int64              `json:"max_output_tokens,omitempty"`
 	OmitMaxOutputTokens         bool               `json:"omit_max_output_tokens,omitempty"`
 	OmitTextFormat              bool               `json:"omit_text_format,omitempty"`
@@ -107,7 +116,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		if !providerIDPattern.MatchString(definition.ID) || strings.TrimSpace(definition.Model) == "" || strings.TrimSpace(definition.APIKeyBinding) == "" {
 			return nil, errors.New("each provider requires an id, model, and api_key_binding")
 		}
-		if definition.DailyTokenLimit < 0 {
+		if definition.dailyLimit() < 0 {
 			return nil, fmt.Errorf("provider %q daily_token_limit must not be negative", definition.ID)
 		}
 		if err := validateProviderLimits(definition); err != nil {
@@ -137,8 +146,11 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			BaseURL:              baseURL,
 			Model:                definition.Model,
 			APIKey:               apiKey,
-			DailyTokenLimit:      definition.DailyTokenLimit,
+			DailyTokenLimit:      definition.dailyLimit(),
 			DailyTokenTypes:      definition.DailyTokenTypes,
+			TokenLimit:           definition.tokenLimit(),
+			TokenTypes:           definition.TokenTypes,
+			TokenWindow:          definition.tokenWindow(),
 			MaxOutputTokens:      definition.MaxOutputTokens,
 			OmitMaxOutputTokens:  definition.OmitMaxOutputTokens,
 			OmitTextFormat:       definition.OmitTextFormat,
@@ -169,7 +181,58 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 	return providers, nil
 }
 
+func (definition providerDefinition) dailyLimit() int64 {
+	if definition.DailyTokenLimit == nil {
+		return 0
+	}
+	return *definition.DailyTokenLimit
+}
+
+func (definition providerDefinition) tokenLimit() int64 {
+	if definition.TokenLimit == nil {
+		return 0
+	}
+	return *definition.TokenLimit
+}
+
+func (definition providerDefinition) tokenWindow() quota.Window {
+	if definition.TokenWindow == nil {
+		var window quota.Window
+		return window
+	}
+	return *definition.TokenWindow
+}
+
+func validateProviderQuota(definition providerDefinition) error {
+	if definition.dailyLimit() > quota.MaximumInteger {
+		return fmt.Errorf("provider %q daily_token_limit exceeds the storage integer range", definition.ID)
+	}
+	if definition.TokenLimit != nil {
+		if definition.DailyTokenLimit != nil || definition.DailyTokenTypes != nil {
+			return fmt.Errorf("provider %q cannot mix daily and generic token limits", definition.ID)
+		}
+		if *definition.TokenLimit < 0 || *definition.TokenLimit > quota.MaximumInteger {
+			return fmt.Errorf("provider %q token_limit is outside the storage integer range", definition.ID)
+		}
+		if *definition.TokenLimit > 0 && definition.TokenWindow == nil {
+			return fmt.Errorf("provider %q token_limit requires token_window", definition.ID)
+		}
+	} else if definition.TokenWindow != nil || len(definition.TokenTypes) != 0 {
+		return fmt.Errorf("provider %q token_window and token_types require token_limit", definition.ID)
+	}
+	if definition.TokenWindow != nil {
+		if err := definition.TokenWindow.Validate(); err != nil {
+			slog.Warn("invalid provider quota window", slog.String("provider_id", definition.ID), slog.String("err", err.Error()))
+			return fmt.Errorf("provider %q token_window: %w", definition.ID, err)
+		}
+	}
+	return nil
+}
+
 func validateProviderLimits(definition providerDefinition) error {
+	if err := validateProviderQuota(definition); err != nil {
+		return err
+	}
 	if definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI {
 		return fmt.Errorf("provider %q api_kind must be responses or chat_completions", definition.ID)
 	}
@@ -192,10 +255,14 @@ func validateProviderLimits(definition providerDefinition) error {
 	if definition.MaxOutputTokens != 0 && definition.OmitMaxOutputTokens {
 		return fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
 	}
-	seen := make(map[TokenType]bool, len(definition.DailyTokenTypes))
-	for _, tokenType := range definition.DailyTokenTypes {
+	tokenTypes := definition.DailyTokenTypes
+	if definition.TokenLimit != nil {
+		tokenTypes = definition.TokenTypes
+	}
+	seen := make(map[TokenType]bool, len(tokenTypes))
+	for _, tokenType := range tokenTypes {
 		if tokenType != InputTokens && tokenType != OutputTokens || seen[tokenType] {
-			return fmt.Errorf("provider %q daily_token_types must contain input and/or output once", definition.ID)
+			return fmt.Errorf("provider %q token types must contain input and/or output once", definition.ID)
 		}
 		seen[tokenType] = true
 	}

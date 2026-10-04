@@ -2,6 +2,7 @@
   "name": "pr-agent-budget-test",
   "main": "budget-fixture.js",
   "compatibility_date": "2026-08-12",
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
   "durable_objects": {
     "bindings": [
       { "name": "PROVIDER_BUDGET", "class_name": "ProviderBudget" }

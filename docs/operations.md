@@ -50,8 +50,6 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
 | `PROVIDERS[].api_kind` | Select `chat_completions` for a compatible Chat Completions endpoint; omission selects `responses` |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
-| `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider and model per UTC day; omit or set `0` for no limit |
-| `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
 | `PROVIDERS[].max_output_tokens` | Maximum output tokens per request for one provider; omit or set `0` to use 8,000 |
 | `PROVIDERS[].omit_max_output_tokens` | Omit the output token limit for a backend that rejects it |
 | `PROVIDERS[].omit_text_format` | Omit JSON schema enforcement for a backend that rejects it; the system prompt still requests JSON matching the schema |
@@ -76,7 +74,7 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 List every configured provider ID once in `PROVIDER_PRIORITY`, including providers marked `disabled`. Put the preferred provider first. The service rejects incomplete providers and invalid priority lists at startup.
 
-The service tries the next enabled provider when the previous provider reports exhausted API usage. It also tries the next enabled provider when a configured daily token limit denies a request.
+The service tries the next enabled provider when the previous provider reports exhausted API usage or the app's configured token quota denies a request.
 
 OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
 
@@ -92,7 +90,7 @@ The selected appearance changes only the check conclusion. The check title and t
 
 Unread chunks stay pending. The next push reviews those chunks and any new changes.
 
-Set `daily_token_limit` on each provider that needs a daily cap. Set `daily_token_types` to `input`, `output`, or both. OpenAI's complimentary data-sharing allowance counts both input and output. Both OpenAI providers select both types. The Worker counts reported usage separately for each provider ID and configured model. The `openrouter/free` provider shares one cap across its selected models because the model is selected after admission. The response reports the selected model. The Worker admits a request while the configured count is below the limit and returns the used, limit, and remaining token counts. The collapsed review details identify whether the app denied a request or the provider API refused it. After the model responds, the service reports the selected token count. Concurrent requests can exceed the limit because admission does not reserve tokens. A request without reported usage does not increase the counter. The service skips a provider if the Worker cannot check its usage. Keep the Worker URL and the `PROVIDER_BUDGET` Durable Object binding configured when any provider has a cap.
+Configure each provider's quota fields using the [quota reference](quotas.md). Select input and output when matching OpenAI's complimentary data-sharing allowance. Keep the quota endpoint and its Durable Object binding configured when any provider has a cap.
 
 Set both `cf_access_client_id_binding` and `cf_access_client_secret_binding` for a provider behind Cloudflare Access. Omit both fields for public endpoints.
 
