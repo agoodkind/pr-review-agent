@@ -1,4 +1,4 @@
-// Package openai calls the Responses API for review and reconciliation.
+// Package openai calls model APIs for review and reconciliation.
 package openai
 
 import (
@@ -32,6 +32,7 @@ type provider struct {
 	omitMaxOutputTokens bool
 	omitTextFormat      bool
 	autoRouterCostTier  config.AutoRouterCostTier
+	api                 config.ProviderAPI
 	pricingByModel      map[string]config.ModelPricing
 }
 
@@ -83,6 +84,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			OmitMaxOutputTokens:  false,
 			OmitTextFormat:       false,
 			AutoRouterCostTier:   "",
+			API:                  config.ResponsesAPI,
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 			Disabled:             false,
@@ -99,6 +101,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				OmitMaxOutputTokens:  false,
 				OmitTextFormat:       false,
 				AutoRouterCostTier:   "",
+				API:                  config.ResponsesAPI,
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 				Disabled:             false,
@@ -131,6 +134,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
 			omitTextFormat:      configured.OmitTextFormat,
 			autoRouterCostTier:  configured.AutoRouterCostTier,
+			api:                 configured.API,
 			pricingByModel:      cfg.ReviewModelPricing,
 		})
 	}
@@ -286,7 +290,11 @@ func (client *Client) complete(
 			report := func(tokens int64) {
 				client.reportBudget(ctx, target, budget.day, tokens)
 			}
-			content, model, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
+			if target.api == config.ChatCompletionsAPI {
+				content, model, err = completeChat(ctx, target, prompt, policy, schemaName, schema, report)
+			} else {
+				content, model, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
+			}
 		}
 		if err == nil {
 			return content, model, nil
@@ -409,7 +417,7 @@ func completeWith(
 		return "", "", errors.New("openai response missing message content")
 	}
 	completionModel := target.model
-	if target.model == config.AutoRouterModel {
+	if target.model == config.AutoRouterModel || target.model == config.FreeRouterModel {
 		completionModel = responseModel
 	}
 	return result, completionModel, nil
