@@ -4,6 +4,9 @@ package quota_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +19,81 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/quota"
 )
+
+func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
+	url := startBudgetWorker(t)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	signed := quota.NewClient(url, []byte("test-review-budget-secret"), nil)
+	legacyTokens := int64(300)
+	if err := signed.Report(t.Context(), quota.ReportRequest{
+		ProviderID: "operator_test", Model: "test_model", AdmittedAtMS: now.UnixMilli(),
+		Usage:     quota.Usage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
+		LegacyDay: now.Format("2006-01-02"), LegacyTokens: &legacyTokens,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	tokenFile := filepath.Join(directory, "operator-token")
+	if err := os.WriteFile(tokenFile, []byte("test-operator-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configuration := struct {
+		URL       string `json:"PROVIDER_BUDGET_URL"`
+		Providers []struct {
+			ID    string `json:"id"`
+			Model string `json:"model"`
+			Limit int64  `json:"daily_token_limit"`
+		} `json:"PROVIDERS"`
+	}{URL: url}
+	configuration.Providers = append(configuration.Providers, struct {
+		ID    string `json:"id"`
+		Model string `json:"model"`
+		Limit int64  `json:"daily_token_limit"`
+	}{ID: "operator_test", Model: "test_model", Limit: 1000})
+	data, err := json.Marshal(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimePath := filepath.Join(directory, "runtime.json")
+	if err := os.WriteFile(runtimePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(directory, "capture")
+	command := exec.CommandContext(t.Context(), "go", "run", "../../cmd/pragent-ops", "counters", "--runtime", runtimePath, "--operator-token-file", tokenFile, "--output-dir", outputPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("operator CLI failed: %v: %s", err, output)
+	}
+	data, err = os.ReadFile(filepath.Join(outputPath, "counters.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var capture struct {
+		Counters []struct {
+			Legacy quota.DailySnapshot `json:"legacy_daily_snapshot"`
+		} `json:"counters"`
+	}
+	if err := json.Unmarshal(data, &capture); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.Counters) != 1 || capture.Counters[0].Legacy.Used == nil || *capture.Counters[0].Legacy.Used != 300 || capture.Counters[0].Legacy.Remaining == nil || *capture.Counters[0].Legacy.Remaining != 700 {
+		t.Fatalf("operator CLI returned incorrect usage: %+v", capture)
+	}
+	operator, err := quota.NewOperatorClient(url, []byte("test-operator-token"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bounds, err := (quota.Window{Mode: quota.Rolling, Duration: "24h"}).Bounds(now.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := operator.Query(t.Context(), "operator_test", "test_model", bounds)
+	if err != nil || len(history.Events) != 1 || history.Events[0].TotalTokens != 300 {
+		t.Fatalf("operator history query failed: %+v, %v", history, err)
+	}
+	if err := operator.Report(t.Context(), quota.ReportRequest{ProviderID: "operator_test", Model: "test_model", AdmittedAtMS: now.UnixMilli(), Usage: quota.Usage{TotalTokens: 1}}); err == nil {
+		t.Fatal("operator token permitted a usage report")
+	}
+}
 
 func TestClientUsesRealDurableStorageForSelectedUsageAndPagination(t *testing.T) {
 	url := startBudgetWorker(t)
@@ -90,7 +168,8 @@ func startBudgetWorker(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(filepath.Join(directory, "node_modules", ".bin", "wrangler"), "dev", "--config", "test/budget.wrangler.jsonc", "--local", "--port", strconv.Itoa(port), "--persist-to", t.TempDir())
+	digest := sha256.Sum256([]byte("test-operator-token"))
+	command := exec.Command(filepath.Join(directory, "node_modules", ".bin", "wrangler"), "dev", "--config", "test/budget.wrangler.jsonc", "--local", "--port", strconv.Itoa(port), "--persist-to", t.TempDir(), "--var", "OPERATOR_TOKEN_SHA256:"+hex.EncodeToString(digest[:]))
 	command.Dir = directory
 	command.Stdout, command.Stderr = logFile, logFile
 	if err := command.Start(); err != nil {

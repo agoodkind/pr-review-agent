@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -29,9 +29,11 @@ async function unusedPort() {
 
 async function startRuntime(port, persistPath) {
   const wrangler = path.join(cloudflareDirectory, "node_modules/.bin/wrangler");
+  const operatorDigest = createHash("sha256").update("test-operator-token").digest("hex");
   const child = spawn(wrangler, [
     "dev", "--config", "test/budget.wrangler.jsonc", "--local",
     "--port", String(port), "--persist-to", persistPath,
+    "--var", `OPERATOR_TOKEN_SHA256:${operatorDigest}`,
   ], { cwd: cloudflareDirectory, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   try {
@@ -113,6 +115,63 @@ function reportUsage(port, providerId, admittedAt, options = {}) {
     ...options,
   });
 }
+
+async function operatorRequest(port, body, expectedStatus = 200, authorization = "Bearer test-operator-token") {
+  const response = await fetch(`http://127.0.0.1:${port}/internal/v1/provider_budget`, {
+    method: "POST", headers: { Authorization: authorization }, body,
+  });
+  assert.equal(response.status, expectedStatus, response.ok ? undefined : await response.text());
+  if (response.ok) {
+    return response.json();
+  }
+}
+
+test("operator authentication reads actual counters and rejects usage writes", async function () {
+  const persistPath = await mkdtemp(path.join(os.tmpdir(), "pr-agent-operator-"));
+  const port = await unusedPort();
+  const admittedAt = Date.now() - 1000;
+  let runtime;
+  try {
+    runtime = await startRuntime(port, persistPath);
+    const daily = await check(port, providerId);
+    await reportUsage(port, providerId, admittedAt, { legacy_day: daily.day, legacy_tokens: 18 });
+    const snapshot = { provider_id: providerId, model: modelId, limit: 2_000_000 };
+    const query = {
+      action: "query_usage", provider_id: providerId, model: modelId,
+      start_ms: 0, end_ms: Date.now(), include_start: true, include_end: true,
+      after_sequence: 0, snapshot_sequence: 0, page_size: 500,
+    };
+    assert.deepEqual(await operatorRequest(port, JSON.stringify(snapshot)), await check(port, providerId));
+    const before = await operatorRequest(port, JSON.stringify(query));
+    assert.equal(before.events.length, 1);
+    assert.deepEqual([before.events[0].input_tokens, before.events[0].output_tokens], [11, 7]);
+    for (const authorization of ["", "Bearer wrong-token", "Basic test-operator-token", "Bearer test-operator-token extra"]) {
+      await operatorRequest(port, JSON.stringify(snapshot), 401, authorization);
+    }
+    await operatorRequest(port, "null", 400);
+    await operatorRequest(port, "[]", 400);
+    await operatorRequest(port, "{", 400);
+    for (const mutation of [
+      { ...snapshot, tokens: 1 },
+      { provider_id: providerId, model: modelId, day: daily.day, tokens: 1 },
+      { ...query, action: "report_usage", admitted_at_ms: admittedAt, input_tokens: 1, output_tokens: 0, total_tokens: 1 },
+      { ...query, tokens: 1 },
+      { ...query, action: "reserve" },
+      { ...snapshot, constructor: { tokens: 1 } },
+      { ...snapshot, prototype: { tokens: 1 } },
+    ]) {
+      await operatorRequest(port, JSON.stringify(mutation), 403);
+    }
+    await operatorRequest(port, '{"provider_id":"provider_a","model":"model_a","limit":2000000,"__proto__":{"tokens":1}}', 403);
+    assert.equal((await check(port, providerId)).used, 18);
+    assert.deepEqual(await operatorRequest(port, JSON.stringify(query)), before);
+    await report(port, providerId, daily.day, 1);
+    assert.equal((await operatorRequest(port, JSON.stringify(snapshot))).used, 19);
+  } finally {
+    await stopRuntime(runtime);
+    await rm(persistPath, { recursive: true, force: true });
+  }
+});
 
 test("reported tokens set the daily provider limit and survive worker restart", async function () {
   const persistPath = await mkdtemp(path.join(os.tmpdir(), "pr-agent-budget-"));

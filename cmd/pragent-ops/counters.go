@@ -56,12 +56,29 @@ func (capture counterCapture) MarshalJSON() ([]byte, error) {
 	return data, nil
 }
 
+func counterClient(endpoint, signingKeyPath, operatorTokenPath string) (*quota.Client, error) {
+	credentialPath := signingKeyPath
+	if operatorTokenPath != "" {
+		credentialPath = operatorTokenPath
+	}
+	key, err := cloudflareops.ReadCredential(credentialPath)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	if operatorTokenPath != "" {
+		return quota.NewOperatorClient(endpoint, key, httpClient)
+	}
+	return quota.NewClient(endpoint, key, httpClient), nil
+}
+
 func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
-	var runtimePath, signingKeyPath, output, providerID string
+	var runtimePath, signingKeyPath, operatorTokenPath, output, providerID string
 	set := flag.NewFlagSet("counters", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&runtimePath, "runtime", "runtime.json", "Public provider runtime configuration.")
 	set.StringVar(&signingKeyPath, "signing-key-file", "", "File containing the production provider-budget HMAC key.")
+	set.StringVar(&operatorTokenPath, "operator-token-file", "", "File containing the registered operator token for counter reads.")
 	set.StringVar(&output, "output-dir", "", "New private output directory; defaults to a private temporary directory.")
 	set.StringVar(&providerID, "provider", "", "Optional exact provider ID; defaults to every enabled capped provider.")
 	if err := set.Parse(args); err != nil {
@@ -73,8 +90,8 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	if set.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if signingKeyPath == "" {
-		return errors.New("counters requires --signing-key-file")
+	if (signingKeyPath == "") == (operatorTokenPath == "") {
+		return errors.New("counters requires exactly one --operator-token-file or --signing-key-file")
 	}
 	data, err := os.ReadFile(runtimePath)
 	if err != nil {
@@ -85,16 +102,15 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	if json.Unmarshal(data, &runtime) != nil || runtime.URL == "" || len(runtime.Providers) == 0 {
 		return errors.New("runtime configuration requires PROVIDER_BUDGET_URL and PROVIDERS")
 	}
-	key, err := cloudflareops.ReadCredential(signingKeyPath)
+	client, err := counterClient(runtime.URL, signingKeyPath, operatorTokenPath)
 	if err != nil {
 		return err
 	}
-	client := quota.NewClient(runtime.URL, key, &http.Client{Timeout: 30 * time.Second})
 	var capture counterCapture
 	capture.CapturedAt = clock.System().UTC()
 	capture.Runtime = runtimePath
 	capture.Counters = []providerCounter{}
-	capture.Limitations = []string{"The production signed budget endpoint provides configured-provider counters; raw Durable Object storage inspection is not implemented.", "Legacy snapshots cover the current UTC day only. Event history starts at the stored history_start_ms; earlier history is not fabricated.", "A history query may initialize the provider history boundary. The command does not report usage or change token limits."}
+	capture.Limitations = []string{"Legacy snapshots cover the current UTC day only. Event history starts at the stored history_start_ms; earlier history is not fabricated.", "A history query may initialize the provider history boundary. The command does not report usage or change token limits."}
 	for _, provider := range runtime.Providers {
 		if providerID != "" && provider.ID != providerID {
 			continue

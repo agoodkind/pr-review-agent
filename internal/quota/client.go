@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/telemetry"
@@ -71,11 +73,12 @@ type ReportRequest struct {
 	LegacyTokens *int64 `json:"legacy_tokens,omitempty"`
 }
 
-// Client authenticates storage operations with an HMAC signature.
+// Client uses server enforcement to reject writes authenticated with an operator credential.
 type Client struct {
-	url        string
-	signingKey []byte
-	httpClient *http.Client
+	url           string
+	signingKey    []byte
+	operatorToken string
+	httpClient    *http.Client
 }
 
 // NewClient requires one endpoint for legacy daily checks and timestamped usage.
@@ -83,7 +86,28 @@ func NewClient(url string, signingKey []byte, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{url: url, signingKey: signingKey, httpClient: httpClient}
+	return &Client{url: url, signingKey: signingKey, operatorToken: "", httpClient: httpClient}
+}
+
+// NewOperatorClient disables redirects because another origin must not receive the operator credential.
+func NewOperatorClient(endpoint string, token []byte, httpClient *http.Client) (*Client, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, errors.New("operator counter URL is invalid")
+	}
+	loopback := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1"
+	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !loopback) {
+		return nil, errors.New("operator counter URL must use HTTPS or a loopback test server")
+	}
+	if strings.TrimSpace(string(token)) == "" {
+		return nil, errors.New("operator token is empty")
+	}
+	client := NewClient(endpoint, nil, httpClient)
+	client.operatorToken = string(token)
+	copyHTTPClient := *client.httpClient
+	copyHTTPClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	client.httpClient = &copyHTTPClient
+	return client, nil
 }
 
 // CheckDaily uses legacy UTC daily totals, which contain no request timestamps.
@@ -170,7 +194,11 @@ func post[Request QueryRequest | ReportRequest | dailyRequest, Response QueryRes
 		return fmt.Errorf("create quota storage request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("X-Pr-Agent-Budget-Signature", telemetry.Sign(client.signingKey, body))
+	if client.operatorToken != "" {
+		request.Header.Set("Authorization", "Bearer "+client.operatorToken)
+	} else {
+		request.Header.Set("X-Pr-Agent-Budget-Signature", telemetry.Sign(client.signingKey, body))
+	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		logger.WarnContext(ctx, "quota storage request failed", slog.String("err", err.Error()))

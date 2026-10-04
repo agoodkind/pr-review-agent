@@ -38,17 +38,26 @@ The summary distinguishes app quota denials, provider API exhaustion, and unclas
 
 ## Inspect current provider counters
 
-1. Provide a private file containing the existing `GITHUB_WEBHOOK_SECRET`. Cloudflare's [secret metadata API](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/secrets/methods/get/) does not return its value.
+1. Register a Cloudflare credential file as the operator token:
+
+   ```bash
+   go run ./cmd/pragent-ops operator-token \
+       --account-token-file /path/to/account-token
+   ```
+
+   The command uploads only the token's SHA256 digest as `OPERATOR_TOKEN_SHA256`. It creates a temporary account-scoped token with Workers Scripts Write permission, then revokes that temporary token and verifies rejection. Use `--token-file` instead for an existing credential with that permission. Use `--operator-token-file` to register a separate credential. Registering another token replaces the previous operator credential.
 2. Query the configured quota endpoint:
 
    ```bash
    go run ./cmd/pragent-ops counters \
        --runtime runtime.json \
-       --signing-key-file /path/to/webhook-signing-key
+       --operator-token-file /path/to/account-token
    ```
 3. Read the printed counter artifact. Use `--provider` with an exact configured provider ID to inspect one provider.
 
-The command uses the production signed quota client. Provider API balances and subscription allowances are separate from the app's counters. Counter reports include the measured time bounds; newly collected timestamped history cannot reconstruct earlier daily totals.
+The operator token permits counter reads. Usage reports and reservations require the existing webhook signature. The CLI also accepts `--signing-key-file` for signed counter reads; supply only one authentication file.
+
+Provider API balances and subscription allowances are separate from the app's counters. Counter reports include the measured time bounds; newly collected timestamped history cannot reconstruct earlier daily totals.
 
 ## Watch new events
 
