@@ -16,6 +16,16 @@ type TokenType string
 // AutoRouterCostTier selects OpenRouter's auto routing price band.
 type AutoRouterCostTier string
 
+// ProviderAPI selects the request and response protocol for a provider.
+type ProviderAPI string
+
+const (
+	// ResponsesAPI uses the Responses API.
+	ResponsesAPI ProviderAPI = "responses"
+	// ChatCompletionsAPI uses the Chat Completions API.
+	ChatCompletionsAPI ProviderAPI = "chat_completions"
+)
+
 const (
 	// InputTokens includes cached input tokens.
 	InputTokens TokenType = "input"
@@ -50,6 +60,7 @@ type ProviderConfig struct {
 	OmitMaxOutputTokens  bool
 	OmitTextFormat       bool
 	AutoRouterCostTier   AutoRouterCostTier
+	API                  ProviderAPI
 	CFAccessClientID     string
 	CFAccessClientSecret string
 	// Disabled keeps this provider ready for later use without sending it requests.
@@ -67,6 +78,7 @@ type providerDefinition struct {
 	OmitMaxOutputTokens         bool               `json:"omit_max_output_tokens,omitempty"`
 	OmitTextFormat              bool               `json:"omit_text_format,omitempty"`
 	AutoRouterCostTier          AutoRouterCostTier `json:"auto_router_cost_tier,omitempty"`
+	API                         ProviderAPI        `json:"api_kind,omitempty"`
 	CFAccessClientIDBinding     string             `json:"cf_access_client_id_binding,omitempty"`
 	CFAccessClientSecretBinding string             `json:"cf_access_client_secret_binding,omitempty"`
 	Disabled                    bool               `json:"disabled,omitempty"`
@@ -129,6 +141,7 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			OmitMaxOutputTokens:  definition.OmitMaxOutputTokens,
 			OmitTextFormat:       definition.OmitTextFormat,
 			AutoRouterCostTier:   definition.AutoRouterCostTier,
+			API:                  providerAPI(definition.API),
 			CFAccessClientID:     clientID,
 			CFAccessClientSecret: clientSecret, // gitleaks:allow
 			Disabled:             definition.Disabled,
@@ -155,6 +168,12 @@ func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 }
 
 func validateProviderLimits(definition providerDefinition) error {
+	if definition.API != "" && definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI {
+		return fmt.Errorf("provider %q api_kind must be responses or chat_completions", definition.ID)
+	}
+	if definition.API == ChatCompletionsAPI && definition.AutoRouterCostTier != "" {
+		return fmt.Errorf("provider %q auto_router_cost_tier requires the Responses API", definition.ID)
+	}
 	if definition.AutoRouterCostTier != "" {
 		if definition.Model != AutoRouterModel {
 			return fmt.Errorf("provider %q auto_router_cost_tier requires openrouter/auto", definition.ID)
@@ -179,6 +198,13 @@ func validateProviderLimits(definition providerDefinition) error {
 		seen[tokenType] = true
 	}
 	return nil
+}
+
+func providerAPI(value ProviderAPI) ProviderAPI {
+	if value == "" {
+		return ResponsesAPI
+	}
+	return value
 }
 
 func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {

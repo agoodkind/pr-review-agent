@@ -267,6 +267,9 @@ func (providerError *ProviderError) UsageExceeded() bool {
 	if providerError.StatusCode == http.StatusPaymentRequired {
 		return true
 	}
+	if strings.EqualFold(providerError.Code, "RESOURCE_EXHAUSTED") || strings.EqualFold(providerError.Type, "RESOURCE_EXHAUSTED") {
+		return true
+	}
 	lowered := strings.ToLower(providerError.Type + " " + providerError.Code + " " + providerError.Message)
 	for _, phrase := range usageExceededPhrases {
 		if strings.Contains(lowered, phrase) {

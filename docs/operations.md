@@ -40,7 +40,7 @@ An incomplete review puts each provider attempt, configured model, remaining app
 
 ## Configure the service
 
-Model requests use the OpenAI Responses API over HTTP with server-sent events. Each review stage sends one request and reads its streamed response. WebSocket sessions are unnecessary because review stages do not continue model conversations with tools.
+The service uses the Responses API unless a provider selects `chat_completions`. Both APIs stream one response per review stage over HTTP.
 
 Edit [runtime.json](../runtime.json) to set the models, publication threshold, review limits, and service port. Merge the change to deploy it. The release packages the file into the Go container and Worker. The Go service reads it at startup. The Worker signs the review limits on each webhook. A new limit applies to the next review without restarting the container.
 
@@ -48,6 +48,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
 | `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
+| `PROVIDERS[].api_kind` | Select `chat_completions` for a compatible Chat Completions endpoint; omission selects `responses` |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
 | `PROVIDERS[].daily_token_limit` | Maximum reported tokens for one provider and model per UTC day; omit or set `0` for no limit |
 | `PROVIDERS[].daily_token_types` | Count `input`, `output`, or both; omission counts the API's total tokens |
@@ -67,7 +68,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
 
-The usage estimate does not subtract [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown. The token limit applies to the provider's requests from this service.
+The usage estimate uses configured paid list rates. It does not subtract free-tier usage or [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown. The token limit applies to the provider's requests from this service.
 
 Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials in Cloudflare secret bindings. Set each provider's binding names in the runtime configuration. The Go service rejects secret values in that file.
 
