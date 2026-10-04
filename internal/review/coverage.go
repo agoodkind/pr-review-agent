@@ -228,7 +228,7 @@ func omissionPrompt(shortfall structuralShortfall) string {
 			escapeOmissionPromptText(hunk.Reason),
 		)
 	}
-	return "The service omitted the changed content described below. Set omissions_acceptable to true only when the pull request context, readable changes, and this metadata together support a reliable verdict. An omission can be acceptable without reading its content when the other evidence explains the change and leaves no material review risk. Do not treat missing access to the omitted content as material risk by itself. No file type or omission reason decides this by itself. Otherwise set it to false. Set decision_reason to one or two short sentences that name the concrete evidence you used and explain why the unread change does or does not prevent a decision. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n" +
+	return "The service did not read the changes listed below. Apply the review rule for deciding whether unread content is necessary. Set omissions_acceptable to true when every omission is acceptable, or false when at least one omission prevents a decision. Set decision_reason to one or two short sentences explaining the decision from the available evidence. For a false answer, state the specific unresolved question and the evidence needed to answer it. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n" +
 		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
 }
 
@@ -249,9 +249,9 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 			reviewed.WriteString(value)
 		}
 	}
-	const instruction = "This call decides only whether the pull request can receive a verdict. " +
+	const instruction = "This call decides only whether unread content prevents approval. " +
 		"Return no findings because this call supplies no changed lines. " +
-		"A false omissions_acceptable answer requests changes. It does not withhold the verdict. " +
+		"A false omissions_acceptable answer withholds approval; it does not request changes without an actionable finding. " +
 		"Use the unread change list before the supporting context.\n"
 	required := instruction + omissionPrompt(shortfall)
 	contextText := pullRequestPrompt(pass.work.PullRequest, pass.work.Files) +
@@ -309,7 +309,7 @@ func pullRequestPrompt(
 			escapeOmissionPromptText(file.Status),
 		)
 	}
-	return "Review the pull request as a whole, as a human reviewer would. Treat its stated intent as a claim, not proof. The latest title, description, complete changed-file list, current diff chunk, and current inline discussions are the review context. Use commit identifiers only to anchor comments and cancel a stale run. If changed content is unavailable, reason from every available signal. No file type or omission reason decides the verdict by itself.\n" +
+	return "Review the pull request as a whole, as a human reviewer would. Treat its stated intent as a claim, not proof. The latest title, description, complete changed-file list, current diff chunk, and current inline discussions are the review context. Use commit identifiers only to anchor comments and cancel a stale run.\n" +
 		WrapUntrusted(contextText.String()) + "\n"
 }
 

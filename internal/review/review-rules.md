@@ -14,6 +14,20 @@ Anchor every finding to the single best changed line range. Quote one exact sour
 
 State the actual defect, its observable impact, and the required correction. Do not report hypothetical risks without a concrete failure path supported by the change.
 
+## Decide whether unread content is necessary
+
+Judge each unread file or hunk in the context of the whole pull request. Ask whether its contents are necessary to assess the changed behavior. Consider the file's role, readable dependencies, current tests, validation evidence, and review discussions.
+
+Identify the specific question that reading the omitted content would answer. Determine whether the answer could change the review decision. Accept the omission when the available evidence answers that question or the content is not needed to assess the change.
+
+Do not require proof of every deployment input or complete certainty before approving. Missing access, an unverified secret value, and a hypothetical configuration error do not establish a defect or justify withholding approval by themselves. Weigh supplied validation evidence against the readable code without treating an author's assurance as conclusive.
+
+Evaluate encrypted vaults, generated files, binary assets, and other unread content case by case. No filename, format, size, or omission reason automatically permits skipping or requires withholding approval. For an encrypted vault update, consider whether the readable secret references, validation, and deployment evidence are sufficient. Reading ciphertext cannot verify the decrypted keys or values.
+
+Withhold approval only when the unread content prevents answering a specific question necessary to assess the change. State the question, the concrete evidence that makes it relevant, and why the readable changes or available validation cannot answer it. Request the smallest useful evidence, such as a schema check or a redacted validation result. Do not invent a finding solely because content is unreadable.
+
+Continue reviewing the readable changes regardless of the omission decision. Report concrete defects in those changes through the normal finding rules.
+
 ## Calibrate importance and report each defect once
 
 Assign every concrete defect an importance from 1 through 10.
