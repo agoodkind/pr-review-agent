@@ -160,7 +160,7 @@ const (
 type CorrectionAction string
 
 const (
-	// CorrectionNone permits a file finding without an exact edit.
+	// CorrectionNone permits a finding without an exact edit.
 	CorrectionNone CorrectionAction = "none"
 	// CorrectionReplace includes the complete replacement for the selected lines.
 	CorrectionReplace CorrectionAction = "replace"
@@ -222,12 +222,12 @@ func (finding Finding) Validate() error {
 		return errors.New("finding correction_action is invalid")
 	}
 	if finding.EffectiveSurface() != FindingFile {
-		if finding.CorrectionAction != CorrectionReplace && finding.CorrectionAction != CorrectionDelete {
-			return errors.New("metadata prose findings require an exact replacement or deletion")
-		}
 		if finding.CorrectionAction == CorrectionReplace && strings.TrimSpace(finding.Suggestion) == "" {
 			return errors.New("metadata prose replacement is empty")
 		}
+	}
+	if finding.CorrectionAction == CorrectionNone && finding.Suggestion != "" {
+		return errors.New("an unavailable correction cannot include replacement text")
 	}
 	if finding.CorrectionAction == CorrectionDelete && finding.Suggestion != "" {
 		return errors.New("a deletion cannot include replacement text")

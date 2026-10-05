@@ -113,9 +113,11 @@ func renderMetadataFindings(findings []domain.Finding) string {
 			fmt.Sprintf("##### %s, lines %d-%d: %s", label, finding.StartLine, finding.EndLine, sanitizeReportText(finding.Title)),
 			sanitizeReportText(finding.Body),
 		}
-		if finding.CorrectionAction == domain.CorrectionDelete {
+		switch finding.CorrectionAction {
+		case "", domain.CorrectionNone:
+		case domain.CorrectionDelete:
 			parts = append(parts, fmt.Sprintf("Delete lines %d-%d.", finding.StartLine, finding.EndLine))
-		} else {
+		case domain.CorrectionReplace:
 			fence := metadataReplacementFence(finding.Suggestion)
 			parts = append(parts, "Replace those lines with:", fence+"text\n"+finding.Suggestion+"\n"+fence)
 		}

@@ -44,7 +44,7 @@ The command publishes no GitHub review. A request failure or missing usage is an
 ## Verify metadata findings and resumed reviews
 
 1. Save the existing test pull request's title, description, head, labels, and thread state before changing the fixture.
-2. Introduce a known prose violation separately in the title, description, and a commit message. Require a current review with an exact field correction in the existing summary. Require `request_changes` and the actual commit SHA for commit-message findings. Metadata findings must not use fabricated file anchors.
+2. Introduce a known prose violation separately in the title, description, and a commit message. Require a current finding at the actual field lines in the existing summary. Require `request_changes` and the actual commit SHA for commit-message findings. Metadata findings must not use fabricated file anchors. Require an exact replacement or deletion when a safe correction is available. Feedback without an exact correction must request changes without printing an empty replacement.
 3. Correct the title or description without pushing a commit. Require an `edited` event to produce a new completed check on the unchanged head. Confirm that the corrected field no longer blocks approval.
 4. Resolve file threads while retaining a metadata defect. Require `request_changes` for the metadata defect. Confirm that required commit attribution remains unchanged.
 5. Interrupt a review after a metadata chunk is checkpointed. Push another commit while retaining the earlier bad commit message. Require a current finding for that commit after the resumed review completes.
