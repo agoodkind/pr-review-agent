@@ -30,11 +30,16 @@ type provider struct {
 	id                  string
 	sdk                 openaigo.Client
 	model               string
+	reasoningEffort     config.ReasoningEffort
+	apiKey              string
+	baseURL             *url.URL
+	httpClient          *http.Client
 	dailyTokenLimit     int64
 	dailyTokenTypes     []config.TokenType
 	tokenLimit          int64
 	tokenTypes          []config.TokenType
 	tokenWindow         quota.Window
+	tokenLimits         []quota.Limit
 	maxOutputTokens     int64
 	omitMaxOutputTokens bool
 	omitTextFormat      bool
@@ -88,16 +93,18 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			BaseURL:              cfg.ClydeBaseURL,
 			APIKey:               cfg.ClydeAPIKey,
 			Model:                cfg.ReviewModel,
+			ReasoningEffort:      "",
 			DailyTokenLimit:      0,
 			DailyTokenTypes:      nil,
 			TokenLimit:           0,
 			TokenTypes:           nil,
 			TokenWindow:          emptyWindow,
+			TokenLimits:          nil,
 			MaxOutputTokens:      0,
 			OmitMaxOutputTokens:  false,
 			OmitTextFormat:       false,
 			AutoRouterCostTier:   "",
-			API:                  config.ResponsesAPI,
+			API:                  "",
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 			Disabled:             false,
@@ -108,16 +115,18 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				BaseURL:              cfg.FallbackBaseURL,
 				APIKey:               cfg.FallbackAPIKey,
 				Model:                cfg.FallbackModel,
+				ReasoningEffort:      "",
 				DailyTokenLimit:      0,
 				DailyTokenTypes:      nil,
 				TokenLimit:           0,
 				TokenTypes:           nil,
 				TokenWindow:          emptyWindow,
+				TokenLimits:          nil,
 				MaxOutputTokens:      0,
 				OmitMaxOutputTokens:  false,
 				OmitTextFormat:       false,
 				AutoRouterCostTier:   "",
-				API:                  config.ResponsesAPI,
+				API:                  "",
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 				Disabled:             false,
@@ -142,20 +151,27 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		if configured.Disabled {
 			continue
 		}
+		reasoningEffort := config.ResolveReasoningEffort(configured.ReasoningEffort)
+		apiKind := config.ResolveProviderAPI(configured.API)
 		client.providers = append(client.providers, provider{
 			id:                  configured.ID,
 			sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
 			model:               configured.Model,
+			reasoningEffort:     reasoningEffort,
+			apiKey:              configured.APIKey,
+			baseURL:             configured.BaseURL,
+			httpClient:          httpClient,
 			dailyTokenLimit:     configured.DailyTokenLimit,
 			dailyTokenTypes:     configured.DailyTokenTypes,
 			tokenLimit:          configured.TokenLimit,
 			tokenTypes:          configured.TokenTypes,
 			tokenWindow:         configured.TokenWindow,
+			tokenLimits:         configured.TokenLimits,
 			maxOutputTokens:     configured.MaxOutputTokens,
 			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
 			omitTextFormat:      configured.OmitTextFormat,
 			autoRouterCostTier:  configured.AutoRouterCostTier,
-			api:                 configured.API,
+			api:                 apiKind,
 			pricingByModel:      cfg.ReviewModelPricing,
 		})
 	}
@@ -313,9 +329,12 @@ func (client *Client) complete(
 			report := func(usage responses.ResponseUsage) {
 				client.reportBudget(ctx, target, budget, usage)
 			}
-			if target.api == config.ChatCompletionsAPI {
+			switch target.api {
+			case config.GeminiAPI:
+				content, model, err = completeGemini(ctx, target, prompt, policy, schemaName, schema, report)
+			case config.ChatCompletionsAPI:
 				content, model, err = completeChat(ctx, target, prompt, policy, schemaName, schema, report)
-			} else {
+			case config.ResponsesAPI:
 				content, model, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 			}
 		}
@@ -364,7 +383,12 @@ func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 	}
 	var apiError *ProviderError
 	if errors.As(failure.cause, &apiError) {
-		attributes = append(attributes, slog.Int("api_status", apiError.StatusCode), slog.String("api_code", apiError.Code))
+		attributes = append(attributes, slog.String("api_code", apiError.Code))
+		if apiError.StatusCode == 0 {
+			attributes = append(attributes, slog.String("api_source", "stream"))
+		} else {
+			attributes = append(attributes, slog.String("api_source", "http"), slog.Int("api_status", apiError.StatusCode))
+		}
 	}
 	gklog.L(ctx).LogAttrs(ctx, slog.LevelWarn, "model provider attempt failed", attributes...)
 }
@@ -383,7 +407,7 @@ func (client *Client) shouldUseFallback(err error) bool {
 	if !errors.As(err, &providerError) {
 		return false
 	}
-	return providerError.UsageExceeded() || providerError.ProviderUnavailable()
+	return providerError.UsageExceeded() || providerError.RateLimited() || providerError.ProviderUnavailable()
 }
 
 func completeWith(
@@ -491,7 +515,7 @@ func newResponseParams(
 		Input: responses.ResponseNewParamsInputUnion{
 			OfString: openaigo.String(prompt),
 		},
-		Reasoning: shared.ReasoningParam{Effort: shared.ReasoningEffort(config.ReasoningEffort)},
+		Reasoning: shared.ReasoningParam{Effort: shared.ReasoningEffort(target.reasoningEffort)},
 		Store:     openaigo.Bool(false),
 	}
 	if !target.omitMaxOutputTokens {
@@ -602,16 +626,9 @@ func responseFailure(model string, code string, message string) error {
 	if message == "" {
 		message = "model provider reported a failed response"
 	}
-	status := http.StatusBadRequest
-	switch responseErrorCode(code) {
-	case responseRateLimitExceeded:
-		status = http.StatusTooManyRequests
-	case responseServerError:
-		status = http.StatusBadGateway
-	}
 	providerError := &ProviderError{
-		StatusCode: status,
-		Type:       "invalid_request_error",
+		StatusCode: 0,
+		Type:       "",
 		Code:       code,
 		Param:      "",
 		Message:    message,

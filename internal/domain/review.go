@@ -35,6 +35,8 @@ type ReviewSettings struct {
 	MaxFiles          int
 	MaxChunks         int
 	ChunkTimeout      time.Duration
+	ChunkConcurrency  int
+	MaxPromptBytes    int
 }
 
 // HeadSHA is a validated pull request head commit identifier.

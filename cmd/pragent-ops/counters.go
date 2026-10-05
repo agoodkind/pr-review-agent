@@ -26,6 +26,7 @@ type publicProvider struct {
 	TokenLimit      int64             `json:"token_limit"`
 	TokenTypes      []quota.TokenType `json:"token_types"`
 	Window          quota.Window      `json:"token_window"`
+	TokenLimits     []quota.Limit     `json:"token_limits"`
 }
 type counterRuntime struct {
 	URL       string           `json:"PROVIDER_BUDGET_URL"`
@@ -39,6 +40,14 @@ type providerCounter struct {
 	Window          *quota.Bounds        `json:"window,omitempty"`
 	History         *quota.QueryResponse `json:"history,omitempty"`
 	Snapshot        *quota.Snapshot      `json:"snapshot,omitempty"`
+	TokenLimits     []windowCounter      `json:"token_limits,omitempty"`
+}
+
+type windowCounter struct {
+	Configuration quota.Limit         `json:"configuration"`
+	Window        quota.Bounds        `json:"window"`
+	History       quota.QueryResponse `json:"history"`
+	Snapshot      quota.Snapshot      `json:"snapshot"`
 }
 type counterCapture struct {
 	CapturedAt  time.Time         `json:"captured_at"`
@@ -129,25 +138,16 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		result.Model = provider.Model
 		switch {
 		case provider.TokenLimit > 0:
-			bounds, boundsErr := provider.Window.Bounds(capture.CapturedAt)
-			if boundsErr != nil {
-				slog.WarnContext(ctx, "Provider token window validation failed", "provider", provider.ID)
-				return fmt.Errorf("provider %s token window is invalid: %w", provider.ID, boundsErr)
-			}
-			history, queryErr := client.Query(ctx, provider.ID, provider.Model, bounds)
-			if queryErr != nil {
-				slog.WarnContext(ctx, "Provider counter query failed", "provider", provider.ID)
-				return fmt.Errorf("provider %s counter query failed: %w", provider.ID, queryErr)
+			counter, counterErr := readWindowCounter(ctx, client, provider, capture.CapturedAt, quota.Limit{
+				Limit: provider.TokenLimit, TokenTypes: provider.TokenTypes, Window: provider.Window,
+			})
+			if counterErr != nil {
+				return counterErr
 			}
 			result.ConfiguredLimit = provider.TokenLimit
-			result.Window = &bounds
-			result.History = &history
-			snapshot, evaluateErr := quota.Evaluate(provider.Window, capture.CapturedAt, provider.TokenLimit, provider.TokenTypes, history.Events, history.HistoryStartMS)
-			if evaluateErr != nil {
-				slog.WarnContext(ctx, "Provider counter evaluation failed", "provider", provider.ID)
-				return fmt.Errorf("provider %s counter evaluation failed: %w", provider.ID, evaluateErr)
-			}
-			result.Snapshot = &snapshot
+			result.Window = &counter.Window
+			result.History = &counter.History
+			result.Snapshot = &counter.Snapshot
 		case provider.DailyTokenLimit > 0:
 			snapshot, queryErr := client.CheckDaily(ctx, provider.ID, provider.Model, provider.DailyTokenLimit)
 			if queryErr != nil {
@@ -157,7 +157,16 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			result.ConfiguredLimit = provider.DailyTokenLimit
 			result.Legacy = &snapshot
 		default:
-			continue
+			if len(provider.TokenLimits) == 0 {
+				continue
+			}
+		}
+		for _, limit := range provider.TokenLimits {
+			counter, counterErr := readWindowCounter(ctx, client, provider, capture.CapturedAt, limit)
+			if counterErr != nil {
+				return counterErr
+			}
+			result.TokenLimits = append(result.TokenLimits, counter)
 		}
 		capture.Counters = append(capture.Counters, result)
 	}
@@ -174,4 +183,30 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 	_, err = fmt.Fprintf(stdout, "Provider counter snapshots: %d. Captured at: %s.\nPrivate counters: %s\n", len(capture.Counters), capture.CapturedAt.Format(time.RFC3339), path)
 	return err
+}
+
+func readWindowCounter(ctx context.Context, client *quota.Client, provider publicProvider, now time.Time, limit quota.Limit) (windowCounter, error) {
+	var result windowCounter
+	result.Configuration = limit
+	if err := limit.Validate(); err != nil {
+		slog.WarnContext(ctx, "Provider token limit validation failed", "provider", provider.ID)
+		return result, fmt.Errorf("provider %s token limit is invalid: %w", provider.ID, err)
+	}
+	var err error
+	result.Window, err = limit.Window.Bounds(now)
+	if err != nil {
+		slog.WarnContext(ctx, "Provider token window validation failed", "provider", provider.ID)
+		return result, fmt.Errorf("provider %s token window is invalid: %w", provider.ID, err)
+	}
+	result.History, err = client.Query(ctx, provider.ID, provider.Model, result.Window)
+	if err != nil {
+		slog.WarnContext(ctx, "Provider counter query failed", "provider", provider.ID)
+		return result, fmt.Errorf("provider %s counter query failed: %w", provider.ID, err)
+	}
+	result.Snapshot, err = quota.Evaluate(limit.Window, now, limit.Limit, limit.TokenTypes, result.History.Events, result.History.HistoryStartMS)
+	if err != nil {
+		slog.WarnContext(ctx, "Provider counter evaluation failed", "provider", provider.ID)
+		return result, fmt.Errorf("provider %s counter evaluation failed: %w", provider.ID, err)
+	}
+	return result, nil
 }

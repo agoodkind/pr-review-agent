@@ -66,6 +66,14 @@ export function createReviewSettingsHeader(bindings = runtime) {
   if (chunkTimeout !== null) {
     settings.chunk_timeout = chunkTimeout;
   }
+  const chunkConcurrency = readPositiveInteger(bindings.REVIEW_CHUNK_CONCURRENCY);
+  if (chunkConcurrency !== null) {
+    settings.chunk_concurrency = chunkConcurrency;
+  }
+  const maxPromptBytes = readPositiveInteger(bindings.REVIEW_MAX_PROMPT_BYTES);
+  if (maxPromptBytes !== null) {
+    settings.max_prompt_bytes = maxPromptBytes;
+  }
   if (Object.keys(settings).length === 0) {
     return "";
   }
@@ -130,6 +138,8 @@ const publicSettings = [
   "LOG_FORWARD_URL",
   "PORT",
   "REVIEW_CHUNK_TIMEOUT",
+  "REVIEW_CHUNK_CONCURRENCY",
+  "REVIEW_MAX_PROMPT_BYTES",
   "REVIEW_MAX_CHUNKS",
   "REVIEW_MAX_FILES",
   "REVIEW_MIN_IMPORTANCE",

@@ -40,7 +40,7 @@ An incomplete review puts each provider attempt, configured model, remaining app
 
 ## Configure the service
 
-The service uses the Responses API unless a provider selects `chat_completions`. Both APIs stream one response per review stage over HTTP.
+The service uses the Responses API unless a provider selects `chat_completions` or `gemini`. The Gemini integration uses Google's Go SDK. Each API streams one response per review stage over HTTP.
 
 Edit [runtime.json](../runtime.json) to set the models, publication threshold, review limits, and service port. Merge the change to deploy it. The release packages the file into the Go container and Worker. The Go service reads it at startup. The Worker signs the review limits on each webhook. A new limit applies to the next review without restarting the container.
 
@@ -48,7 +48,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | --- | --- |
 | `GITHUB_APP_ID`, `GITHUB_BOT_LOGIN` | Existing GitHub App identity |
 | `PROVIDERS` | Provider IDs, endpoints, models, and Cloudflare secret binding names |
-| `PROVIDERS[].api_kind` | Select `chat_completions` for a compatible Chat Completions endpoint; omission selects `responses` |
+| `PROVIDERS[].api_kind` | Select `responses`, `chat_completions`, or Google's native `gemini` API |
+| `PROVIDERS[].reasoning_effort` | Reasoning effort for every review stage sent to that provider; select a level supported by the configured model |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
 | `PROVIDERS[].max_output_tokens` | Maximum output tokens per request for one provider; omit or set `0` to use 8,000 |
 | `PROVIDERS[].omit_max_output_tokens` | Omit the output token limit for a backend that rejects it |
@@ -62,6 +63,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
 | `REVIEW_CHUNK_TIMEOUT` | Timeout for one model request |
+| `REVIEW_CHUNK_CONCURRENCY` | Maximum chunks reviewed concurrently within one review |
+| `REVIEW_MAX_PROMPT_BYTES` | Chunk and context text budget, in bytes |
 | `REVIEW_MODEL_PRICING` | Estimated dollars per million input, cached input, and output tokens by model |
 | `PORT` | Sets the container listener port and the Worker connection port |
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
@@ -75,13 +78,13 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 List every configured provider ID once in `PROVIDER_PRIORITY`, including providers marked `disabled`. Put the preferred provider first. The service rejects incomplete providers and invalid priority lists at startup.
 
-The service tries the next enabled provider after exhausted API usage, an app quota denial, or a structured HTTP `5xx` failure. It does not retry the failed provider within that request.
+The service tries the next enabled provider after exhausted API usage, an app quota denial, a provider rate limit, or a structured server failure. It does not retry the failed provider within that request.
 
 OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
 
 Set `disabled` to keep a provider available in the configuration without sending it requests. The service still validates that provider and its credentials. At least one provider must stay enabled.
 
-Set `SERVICE_FAILURE_APPEARANCE` to choose whether each service failure class blocks the check. The available classes are `usage_exceeded`, `daily_budget`, `provider_unavailable`, `deadline`, `panic`, and `other`.
+Set `SERVICE_FAILURE_APPEARANCE` to choose whether each service failure class blocks the check. The available classes are `usage_exceeded`, `rate_limited`, `daily_budget`, `provider_unavailable`, `deadline`, `panic`, and `other`.
 
 Set a class to `fail` to preserve the existing blocking conclusion. An aborted run concludes with `failure`. A run with unread chunks concludes with `action_required`.
 

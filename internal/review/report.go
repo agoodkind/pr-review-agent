@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -120,7 +119,7 @@ func (service *Service) generateReport(
 	defer cancel()
 	completion, err := reporter.Report(
 		reportCtx,
-		reportPrompt(pullRequest, pass.overviews()),
+		reportPrompt(pullRequest, pass.overviews(), pass.settings.maximumPromptBytes),
 	)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "write final review report", slog.String("err", err.Error()))
@@ -138,6 +137,7 @@ func (service *Service) generateReport(
 func reportPrompt(
 	pullRequest githubapp.PullRequest,
 	overviews []string,
+	maximumBytes int,
 ) string {
 	const instruction = "Write the final report for the single top-level review comment. " +
 		"Write at most two short summary sentences that state why the pull request exists and its resulting behavior. " +
@@ -152,9 +152,9 @@ func reportPrompt(
 	}
 	input := strings.ReplaceAll(body.String(), promptInputBegin, "<UNTRUSTED_INPUT>")
 	input = strings.ReplaceAll(input, promptInputEnd, "<END_UNTRUSTED_INPUT>")
-	maximumInput := config.MaximumPromptBytes - len(instruction) - len(promptInputBegin) -
+	maximumInput := maximumBytes - len(instruction) - len(promptInputBegin) -
 		len(promptInputEnd) - 2
-	return instruction + WrapUntrusted(truncateUTF8(input, maximumInput))
+	return instruction + WrapUntrusted(truncateUTF8(input, max(maximumInput, 0)))
 }
 
 func fallbackReport(overviews []string) Report {

@@ -35,7 +35,11 @@ func PolicyHeader(minimumImportance int, importance reviewrules.Importance) stri
 
 // ReconciliationPolicy is the instruction for silent thread resolution.
 func ReconciliationPolicy() string {
-	return "Resolve a bot thread only when the current pull request and inline discussion together prove the finding is fixed or does not apply. Keep it open when it still applies. Use uncertain when evidence is incomplete. Never reply.\nWriting policy: " +
+	return "Resolve a bot thread only when the current pull request and inline discussion together prove the finding is fixed or does not apply. " +
+		"Treat the current file content as the source of current behavior. A diff line prefixed with minus represents deleted historical content. A plus line represents current added content. " +
+		"For a prose finding, identify the criticized text in the current file before deciding the violation still applies. Deleted text does not establish a current writing defect. " +
+		"An outdated thread alone does not prove a fix. Determine whether the same defect remains in rewritten or relocated content. " +
+		"Keep it open when it still applies. Use uncertain when evidence is incomplete. Never reply.\nWriting policy: " +
 		config.WritingPolicy + "\nUntrusted input policy: " + UntrustedInputPolicy
 }
 

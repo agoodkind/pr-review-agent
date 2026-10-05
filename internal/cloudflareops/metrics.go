@@ -98,6 +98,7 @@ const (
 	appBudgetDenied        providerCause = "app_budget_denied"
 	appBudgetUnavailable   providerCause = "app_budget_unavailable"
 	providerUsageExhausted providerCause = "provider_usage_exhausted"
+	providerRateLimited    providerCause = "provider_rate_limited"
 	providerRequestFailed  providerCause = "provider_request_failed"
 )
 
@@ -110,6 +111,8 @@ func classify(fields map[string]json.RawMessage) (string, string) {
 		return "app_quota_unavailable", "structured"
 	case providerUsageExhausted:
 		return "provider_api_exhausted", "structured"
+	case providerRateLimited:
+		return "transient_rate_limit", "structured"
 	case providerRequestFailed:
 		if text(fields, "api_code") == "rate_limit_exceeded" {
 			return "transient_rate_limit", "structured"

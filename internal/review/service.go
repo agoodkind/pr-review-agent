@@ -75,16 +75,18 @@ type Reconciler interface {
 
 // Service publishes one complete GitHub review per pull request head.
 type Service struct {
-	github            GitHub
-	collector         Collector
-	model             Model
-	reconciler        Reconciler
-	locker            *queue.KeyedLocker
-	botLogin          string
-	checkName         string
-	minimumImportance int
-	reviewMaxFiles    int
-	reviewMaxChunks   int
+	github             GitHub
+	collector          Collector
+	model              Model
+	reconciler         Reconciler
+	locker             *queue.KeyedLocker
+	botLogin           string
+	checkName          string
+	minimumImportance  int
+	reviewMaxFiles     int
+	reviewMaxChunks    int
+	chunkConcurrency   int
+	maximumPromptBytes int
 	// chunkTimeout is the only clock over a model call, and the only clock in
 	// a review at all. A run is bounded by admission instead, so a large diff
 	// cannot run out of time part way through and lose what it already read.
@@ -111,6 +113,8 @@ func NewService(
 	failureAppearances config.FailureAppearances,
 	now func() time.Time,
 	logger *slog.Logger,
+	chunkConcurrency int,
+	maximumPromptBytes int,
 ) *Service {
 	if logger == nil {
 		logger = slog.Default()
@@ -141,6 +145,8 @@ func NewService(
 		minimumImportance:      minimumImportance,
 		reviewMaxFiles:         reviewMaxFiles,
 		reviewMaxChunks:        reviewMaxChunks,
+		chunkConcurrency:       chunkConcurrency,
+		maximumPromptBytes:     maximumPromptBytes,
 		chunkTimeout:           chunkTimeout,
 		failureAppearances:     failureAppearances,
 		checkCompletionTimeout: completionBudget,
@@ -181,6 +187,8 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 		slog.Duration("chunk_timeout", settings.chunkTimeout),
 		slog.Int("max_files", settings.maxFiles),
 		slog.Int("max_chunks", settings.maxChunks),
+		slog.Int("chunk_concurrency", settings.chunkConcurrency),
+		slog.Int("max_prompt_bytes", settings.maximumPromptBytes),
 		slog.Any("settings_carried", service.carriedSettingFields(job)),
 	)
 	if job.CheckRunID == 0 {
@@ -463,10 +471,11 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 // of them drifts: the importance ceiling was added in one place and this list
 // went on naming a refused value as carried.
 func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
-	carried := make([]string, 0, 4)
+	carried := make([]string, 0, 6)
 	unsettled := job
 	unsettled.Settings = domain.ReviewSettings{
 		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
+		ChunkConcurrency: 0, MaxPromptBytes: 0,
 	}
 	empty := service.settingsFor(unsettled)
 	resolved := service.settingsFor(job)
@@ -482,16 +491,24 @@ func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
 	if resolved.chunkTimeout != empty.chunkTimeout {
 		carried = append(carried, "chunk_timeout")
 	}
+	if resolved.chunkConcurrency != empty.chunkConcurrency {
+		carried = append(carried, "chunk_concurrency")
+	}
+	if resolved.maximumPromptBytes != empty.maximumPromptBytes {
+		carried = append(carried, "max_prompt_bytes")
+	}
 	return carried
 }
 
 // reviewSettings are the tuning values one run is bound by, after the values the
 // delivery carried are laid over the ones this process was configured with.
 type reviewSettings struct {
-	minimumImportance int
-	maxFiles          int
-	maxChunks         int
-	chunkTimeout      time.Duration
+	minimumImportance  int
+	maxFiles           int
+	maxChunks          int
+	chunkTimeout       time.Duration
+	chunkConcurrency   int
+	maximumPromptBytes int
 }
 
 // settingsFor resolves what this run is bound by.
@@ -513,10 +530,12 @@ type reviewSettings struct {
 // defects rather than as a threshold nothing could clear.
 func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
 	settings := reviewSettings{
-		minimumImportance: service.minimumImportance,
-		maxFiles:          service.reviewMaxFiles,
-		maxChunks:         service.reviewMaxChunks,
-		chunkTimeout:      service.chunkTimeout,
+		minimumImportance:  service.minimumImportance,
+		maxFiles:           service.reviewMaxFiles,
+		maxChunks:          service.reviewMaxChunks,
+		chunkTimeout:       service.chunkTimeout,
+		chunkConcurrency:   service.chunkConcurrency,
+		maximumPromptBytes: service.maximumPromptBytes,
 	}
 	if job.Settings.MinimumImportance > 0 && job.Settings.MinimumImportance <= domain.MaximumFindingImportance {
 		settings.minimumImportance = job.Settings.MinimumImportance
@@ -529,6 +548,12 @@ func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
 	}
 	if job.Settings.ChunkTimeout > 0 {
 		settings.chunkTimeout = job.Settings.ChunkTimeout
+	}
+	if job.Settings.ChunkConcurrency > 0 {
+		settings.chunkConcurrency = job.Settings.ChunkConcurrency
+	}
+	if job.Settings.MaxPromptBytes > 0 {
+		settings.maximumPromptBytes = job.Settings.MaxPromptBytes
 	}
 	return settings
 }

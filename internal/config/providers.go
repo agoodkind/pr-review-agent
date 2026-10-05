@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/url"
 	"regexp"
 	"strings"
@@ -22,12 +23,50 @@ type AutoRouterCostTier string
 // ProviderAPI selects the request and response protocol for a provider.
 type ProviderAPI string
 
+// ReasoningEffort selects an analysis level supported by the configured model.
+type ReasoningEffort string
+
+const (
+	// ReasoningNone disables analysis and is rejected by native Gemini configuration.
+	ReasoningNone ReasoningEffort = "none"
+	// ReasoningMinimal requests the least intensive supported analysis level.
+	ReasoningMinimal ReasoningEffort = "minimal"
+	// ReasoningLow favors shorter reasoning over additional analysis.
+	ReasoningLow ReasoningEffort = "low"
+	// ReasoningMedium requests more analysis than low effort.
+	ReasoningMedium ReasoningEffort = "medium"
+	// ReasoningHigh requests additional analysis before the answer.
+	ReasoningHigh ReasoningEffort = "high"
+	// ReasoningXHigh is rejected by native Gemini configuration.
+	ReasoningXHigh ReasoningEffort = "xhigh"
+	// DefaultReasoningEffort applies when a provider omits reasoning_effort.
+	DefaultReasoningEffort = ReasoningHigh
+)
+
 const (
 	// ResponsesAPI uses the Responses API.
 	ResponsesAPI ProviderAPI = "responses"
 	// ChatCompletionsAPI uses the Chat Completions API.
 	ChatCompletionsAPI ProviderAPI = "chat_completions"
+	// GeminiAPI uses Google's native GenerateContent API.
+	GeminiAPI ProviderAPI = "gemini"
 )
+
+// ResolveReasoningEffort applies the default when an effort is unspecified.
+func ResolveReasoningEffort(effort ReasoningEffort) ReasoningEffort {
+	if effort == "" {
+		return DefaultReasoningEffort
+	}
+	return effort
+}
+
+// ResolveProviderAPI applies Responses when a protocol is unspecified.
+func ResolveProviderAPI(api ProviderAPI) ProviderAPI {
+	if api == "" {
+		return ResponsesAPI
+	}
+	return api
+}
 
 const (
 	// InputTokens includes cached input tokens.
@@ -58,12 +97,14 @@ type ProviderConfig struct {
 	ID                   string
 	BaseURL              *url.URL
 	Model                string
+	ReasoningEffort      ReasoningEffort
 	APIKey               string
 	DailyTokenLimit      int64
 	DailyTokenTypes      []TokenType
 	TokenLimit           int64
 	TokenTypes           []TokenType
 	TokenWindow          quota.Window
+	TokenLimits          []quota.Limit
 	MaxOutputTokens      int64
 	OmitMaxOutputTokens  bool
 	OmitTextFormat       bool
@@ -79,12 +120,14 @@ type providerDefinition struct {
 	ID                          string             `json:"id"`
 	BaseURL                     string             `json:"base_url"`
 	Model                       string             `json:"model"`
+	ReasoningEffort             ReasoningEffort    `json:"reasoning_effort,omitempty"`
 	APIKeyBinding               string             `json:"api_key_binding"`
 	DailyTokenLimit             *int64             `json:"daily_token_limit,omitempty"`
 	DailyTokenTypes             []TokenType        `json:"daily_token_types,omitempty"`
 	TokenLimit                  *int64             `json:"token_limit,omitempty"`
 	TokenTypes                  []TokenType        `json:"token_types,omitempty"`
 	TokenWindow                 *quota.Window      `json:"token_window,omitempty"`
+	TokenLimits                 []quota.Limit      `json:"token_limits,omitempty"`
 	MaxOutputTokens             int64              `json:"max_output_tokens,omitempty"`
 	OmitMaxOutputTokens         bool               `json:"omit_max_output_tokens,omitempty"`
 	OmitTextFormat              bool               `json:"omit_text_format,omitempty"`
@@ -146,12 +189,14 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			ID:                   definition.ID,
 			BaseURL:              baseURL,
 			Model:                definition.Model,
+			ReasoningEffort:      definition.ReasoningEffort,
 			APIKey:               apiKey,
 			DailyTokenLimit:      definition.dailyLimit(),
 			DailyTokenTypes:      definition.DailyTokenTypes,
 			TokenLimit:           definition.tokenLimit(),
 			TokenTypes:           definition.TokenTypes,
 			TokenWindow:          definition.tokenWindow(),
+			TokenLimits:          definition.TokenLimits,
 			MaxOutputTokens:      definition.MaxOutputTokens,
 			OmitMaxOutputTokens:  definition.OmitMaxOutputTokens,
 			OmitTextFormat:       definition.OmitTextFormat,
@@ -205,6 +250,11 @@ func (definition providerDefinition) tokenWindow() quota.Window {
 }
 
 func validateProviderQuota(definition providerDefinition) error {
+	for index, limit := range definition.TokenLimits {
+		if err := limit.Validate(); err != nil {
+			return fmt.Errorf("provider %q token_limits[%d]: %w", definition.ID, index, err)
+		}
+	}
 	if definition.dailyLimit() > quota.MaximumInteger {
 		return fmt.Errorf("provider %q daily_token_limit exceeds the storage integer range", definition.ID)
 	}
@@ -230,14 +280,27 @@ func validateProviderQuota(definition providerDefinition) error {
 	return nil
 }
 
+// HasTokenLimit includes daily, generic, and additional accounting windows.
+func (provider ProviderConfig) HasTokenLimit() bool {
+	return provider.DailyTokenLimit > 0 || provider.TokenLimit > 0 || len(provider.TokenLimits) > 0
+}
+
 func validateProviderLimits(definition providerDefinition) error {
+	switch definition.ReasoningEffort {
+	case ReasoningNone, ReasoningMinimal, ReasoningLow, ReasoningMedium, ReasoningHigh, ReasoningXHigh:
+	default:
+		return fmt.Errorf("provider %q reasoning_effort must be none, minimal, low, medium, high, or xhigh", definition.ID)
+	}
 	if err := validateProviderQuota(definition); err != nil {
 		return err
 	}
-	if definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI {
-		return fmt.Errorf("provider %q api_kind must be responses or chat_completions", definition.ID)
+	if definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI && definition.API != GeminiAPI {
+		return fmt.Errorf("provider %q api_kind must be responses, chat_completions, or gemini", definition.ID)
 	}
-	if definition.API == ChatCompletionsAPI && definition.AutoRouterCostTier != "" {
+	if definition.API == GeminiAPI && (definition.ReasoningEffort == ReasoningNone || definition.ReasoningEffort == ReasoningXHigh) {
+		return fmt.Errorf("provider %q Gemini reasoning_effort must be minimal, low, medium, or high", definition.ID)
+	}
+	if definition.API != ResponsesAPI && definition.AutoRouterCostTier != "" {
 		return fmt.Errorf("provider %q auto_router_cost_tier requires the Responses API", definition.ID)
 	}
 	if definition.AutoRouterCostTier != "" {
@@ -250,8 +313,8 @@ func validateProviderLimits(definition providerDefinition) error {
 			return fmt.Errorf("provider %q auto_router_cost_tier must be low, medium, high, xhigh, or max", definition.ID)
 		}
 	}
-	if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > MaximumOutputTokens {
-		return fmt.Errorf("provider %q max_output_tokens must be between 1 and %d when set", definition.ID, MaximumOutputTokens)
+	if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > math.MaxInt32 {
+		return fmt.Errorf("provider %q max_output_tokens must be positive when set and fit a 32-bit signed integer", definition.ID)
 	}
 	if definition.MaxOutputTokens != 0 && definition.OmitMaxOutputTokens {
 		return fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
@@ -281,9 +344,8 @@ func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 		return nil, err
 	}
 	for index := range definitions {
-		if definitions[index].API == "" {
-			definitions[index].API = ResponsesAPI
-		}
+		definitions[index].ReasoningEffort = ResolveReasoningEffort(definitions[index].ReasoningEffort)
+		definitions[index].API = ResolveProviderAPI(definitions[index].API)
 	}
 	return definitions, nil
 }

@@ -3,6 +3,25 @@
 Run these live checks after a release changes review behavior. Confirm the
 deployed image digest before testing.
 
+## Verify one provider
+
+1. Set `PR_AGENT_LIVE_PROVIDER_ID` to a configured provider ID and `PR_AGENT_LIVE_API_KEY_FILE` to its private credential file. Set `PR_AGENT_LIVE_SIGNING_KEY_FILE` when the provider has an app quota.
+2. Run the live test from the repository root:
+
+   ```bash
+   go test -tags=integration ./cmd/pragent-ops -run TestLiveProviderProbe -count=1
+   ```
+
+3. Confirm that the test passes. It requires one successful model request with reported token usage. It uses the configured API, model, reasoning effort, and output limit. It publishes no GitHub review.
+4. Verify quota fallback with the configured provider credential. This test uses three real model responses and waits for a one-minute window to expire:
+
+   ```bash
+   PR_AGENT_LIVE_QUOTA_TEST=1 go test -tags=integration ./internal/quota \
+       -run TestLiveReviewChecksMultipleWindowsAndChargesEachResponseOnce -count=1
+   ```
+
+   The test checks minute-limit denial, fallback, recovery after expiry, and one usage record per response in real local Cloudflare storage.
+
 ## Watch what happens
 
 Every check below is easier with the log open in another terminal:

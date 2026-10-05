@@ -20,6 +20,8 @@ const (
 	ProviderAppBudgetUnavailable ProviderFailureCause = "app_budget_unavailable"
 	// ProviderUsageExhausted means the provider reported no remaining usage.
 	ProviderUsageExhausted ProviderFailureCause = "provider_usage_exhausted"
+	// ProviderRateLimited means the provider throttled a request.
+	ProviderRateLimited ProviderFailureCause = "provider_rate_limited"
 	// ProviderRequestFailed means the provider request failed for another reason.
 	ProviderRequestFailed ProviderFailureCause = "provider_request_failed"
 )
@@ -138,6 +140,8 @@ func providerCauseLabel(cause ProviderFailureCause) string {
 		return "App quota check failed; API not called"
 	case ProviderUsageExhausted:
 		return "Provider reported no remaining usage"
+	case ProviderRateLimited:
+		return "Provider rate limited the request"
 	case ProviderRequestFailed:
 		return "Provider request failed"
 	default:

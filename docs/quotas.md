@@ -11,9 +11,12 @@ Provider quota fields are configured in [runtime.json](../runtime.json).
 | `token_limit` | Maximum counted tokens within the configured window. |
 | `token_types` | Count `input`, `output`, or both. Omission selects the API's reported total. |
 | `token_window` | Defines the window mode and its applicable fields. |
-| `daily_token_limit`, `daily_token_types` | Compatibility fields for the existing midnight UTC counters. They cannot be combined with generic quota fields. |
+| `token_limits` | Additional limits with independent `limit`, `token_types`, and `window` fields. Every configured limit applies to the same reported usage. |
+| `daily_token_limit`, `daily_token_types` | Existing midnight UTC counters. They cannot be combined with `token_limit`, `token_types`, or `token_window`, but allow additional `token_limits`. |
 
 Input includes cached input. Output includes reasoning tokens. A request without reported usage adds no estimate. Usage reported by an incomplete response is still counted.
+
+A rolling window with duration `1m` limits measured tokens per minute. Additional windows can use different durations, modes, and token categories. Each response records usage once, regardless of the number of limits.
 
 The configured model determines the counter identity. An automatic router can report a different selected model for pricing and diagnostics without changing the quota identity.
 
@@ -39,4 +42,6 @@ The Cloudflare quota store records admission timestamps and reported input, outp
 
 Existing daily counters remain authoritative for legacy daily quotas. The daily totals do not contain timestamps or token-category splits and are not converted into invented events. Timestamped collection begins when the quota store receives its first query or report for a provider. Diagnostics identify the measured history boundary when it does not cover the requested span.
 
-The app's quota is independent of provider API or subscription limits. Exhaustion of either can select the next configured fallback. The `daily_budget` failure-appearance key remains compatible with app quota denials for every window mode.
+The app's quota is independent of provider API or subscription limits. An app denial, provider quota refusal, or provider rate limit can select the next configured fallback without repeating the refused request. The `daily_budget` failure-appearance key applies to app quota denials for every window mode. The `rate_limited` key applies to provider throttling.
+
+The [OpenAI rate-limit calculation](https://developers.openai.com/api/docs/guides/rate-limits) uses the larger of the output limit and a prompt-size estimate for admission.

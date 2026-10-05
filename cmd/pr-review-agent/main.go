@@ -87,12 +87,26 @@ func run(
 		}
 	}()
 	slog.SetDefault(logger)
+	type providerSetting struct {
+		ID              string
+		Model           string
+		API             config.ProviderAPI
+		ReasoningEffort config.ReasoningEffort
+		Disabled        bool
+	}
+	providerSettings := make([]providerSetting, 0, len(cfg.Providers))
+	for _, provider := range cfg.Providers {
+		providerSettings = append(providerSettings, providerSetting{
+			ID: provider.ID, Model: provider.Model, API: provider.API,
+			ReasoningEffort: provider.ReasoningEffort, Disabled: provider.Disabled,
+		})
+	}
 	logger.Info(
 		"pr-review-agent configured",
 		slog.String("version", version.String()),
 		slog.String("platform", runtime.GOOS+"/"+runtime.GOARCH),
 		slog.String("model", cfg.ReviewModel),
-		slog.String("reasoning_effort", config.ReasoningEffort),
+		slog.Any("providers", providerSettings),
 		slog.Bool("fallback_configured", cfg.HasFallback()),
 		slog.Duration("review_chunk_timeout", cfg.ReviewChunkTimeout),
 		slog.Int("review_workers", cfg.ReviewWorkers),

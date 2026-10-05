@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -33,24 +32,26 @@ type Model interface {
 
 // Service reconciles unresolved bot findings on one pull request head.
 type Service struct {
-	github   GitHub
-	model    Model
-	botLogin string
-	logger   *slog.Logger
+	github             GitHub
+	model              Model
+	botLogin           string
+	logger             *slog.Logger
+	maximumPromptBytes int
 }
 
 var errHeadChanged = errors.New("head changed during reconciliation")
 
 // NewService constructs a reconciliation service.
-func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger) *Service {
+func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger, maximumPromptBytes int) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Service{
-		github:   github,
-		model:    model,
-		botLogin: botLogin,
-		logger:   logger,
+		github:             github,
+		model:              model,
+		botLogin:           botLogin,
+		logger:             logger,
+		maximumPromptBytes: maximumPromptBytes,
 	}
 }
 
@@ -118,9 +119,13 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 	}
 
 	prepared := make([]preparedThread, 0, len(owned))
+	maximumBytes := service.maximumPromptBytes
+	if job.Settings.MaxPromptBytes > 0 {
+		maximumBytes = job.Settings.MaxPromptBytes
+	}
 	removed := make([]domain.OwnedThread, 0)
 	for _, thread := range owned {
-		contextText, state := service.loadThreadContext(ctx, job, thread, currentHead, changedFiles)
+		contextText, state := service.loadThreadContext(ctx, job, thread, currentHead, changedFiles, maximumBytes)
 		switch state {
 		case threadContextRemoved:
 			removed = append(removed, thread)
@@ -135,7 +140,7 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		})
 	}
 
-	batches := batchPreparedThreads(prepared, config.MaximumPromptBytes)
+	batches := batchPreparedThreads(prepared, maximumBytes)
 	logger.InfoContext(
 		ctx,
 		"review reconciliation analysis started",
@@ -347,8 +352,11 @@ func preparedThreadIDs(threads []preparedThread) []string {
 }
 
 type threadContext struct {
-	currentContent string
-	currentDiff    string
+	currentContent        string
+	currentDiff           string
+	originalAnchor        string
+	originalAnchorKnown   bool
+	originalAnchorPresent bool
 }
 
 type threadContextState uint8
@@ -360,7 +368,10 @@ const (
 )
 
 func emptyThreadContext() threadContext {
-	return threadContext{currentContent: "", currentDiff: ""}
+	return threadContext{
+		currentContent: "", currentDiff: "", originalAnchor: "",
+		originalAnchorKnown: false, originalAnchorPresent: false,
+	}
 }
 
 func selectOwnedThreads(
@@ -414,6 +425,7 @@ func (service *Service) loadThreadContext(
 	thread domain.OwnedThread,
 	currentHead domain.HeadSHA,
 	changedFiles []githubapp.ChangedFile,
+	maximumBytes int,
 ) (threadContext, threadContextState) {
 	normalizedPath, err := marker.NormalizePath(thread.Finding.Path)
 	if err != nil {
@@ -449,7 +461,19 @@ func (service *Service) loadThreadContext(
 		return emptyThreadContext(), threadContextUnavailable
 	}
 
-	currentContent := boundedCurrentFileContext(fileBytes)
+	originalAnchor := strings.TrimSpace(thread.Finding.Evidence)
+	originalAnchorKnown := originalAnchor != ""
+	if !originalAnchorKnown {
+		originalContent, originalErr := service.github.GetFile(ctx, job.InstallationID, job.Repository, normalizedPath, thread.FindingHead)
+		if originalErr != nil {
+			gklog.L(ctx).WarnContext(ctx, "load original finding source", slog.String("path", normalizedPath), slog.String("err", originalErr.Error()))
+		} else {
+			originalAnchor = originalSourceLines(originalContent, thread.Finding.StartLine, thread.Finding.EndLine)
+			originalAnchorKnown = strings.TrimSpace(originalAnchor) != ""
+		}
+	}
+	originalAnchorPresent := originalAnchorKnown && strings.Contains(string(fileBytes), originalAnchor)
+	currentContent := boundedCurrentFileContext(fileBytes, maximumBytes/2)
 	if hasCurrentPatch {
 		currentContent = extractAnchorWindow(
 			fileBytes,
@@ -458,9 +482,20 @@ func (service *Service) loadThreadContext(
 		)
 	}
 	return threadContext{
-		currentContent: currentContent,
-		currentDiff:    currentDiff,
+		currentContent:        currentContent,
+		currentDiff:           currentDiff,
+		originalAnchor:        originalAnchor,
+		originalAnchorKnown:   originalAnchorKnown,
+		originalAnchorPresent: originalAnchorPresent,
 	}, threadContextPresent
+}
+
+func originalSourceLines(content []byte, startLine, endLine int) string {
+	lines := strings.Split(string(content), "\n")
+	if startLine < 1 || startLine > len(lines) || endLine < startLine || endLine > len(lines) {
+		return ""
+	}
+	return strings.Join(lines[startLine-1:endLine], "\n")
 }
 
 // anchorWindowRadius is the context shown on each side of the anchor. GitHub
@@ -468,15 +503,13 @@ func (service *Service) loadThreadContext(
 // commits shift the anchor and an exact-line excerpt would show unrelated code.
 const anchorWindowRadius = 15
 
-const maximumCurrentFileContextBytes = config.MaximumPromptBytes / 2
-
 const currentFileMiddleOmitted = "\n\n[The middle of this file was omitted to fit the review request.]\n\n"
 
-func boundedCurrentFileContext(content []byte) string {
-	if len(content) <= maximumCurrentFileContextBytes {
+func boundedCurrentFileContext(content []byte, maximumBytes int) string {
+	if len(content) <= maximumBytes {
 		return string(content)
 	}
-	available := maximumCurrentFileContextBytes - len(currentFileMiddleOmitted)
+	available := maximumBytes - len(currentFileMiddleOmitted)
 	if available < 1 {
 		return ""
 	}
@@ -529,6 +562,13 @@ func formatThreadSection(
 	builder.WriteString(thread.Finding.Body)
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
+	if contextText.originalAnchorKnown {
+		builder.WriteString("\n\nOriginal finding source at the earlier commit (historical evidence):\n")
+		builder.WriteString(contextText.originalAnchor)
+		fmt.Fprintf(&builder, "\nOriginal finding source still appears verbatim in the complete current file: %t\n", contextText.originalAnchorPresent)
+	} else {
+		builder.WriteString("\nOriginal finding source could not be reconstructed. Decide from the current source and discussion.\n")
+	}
 	if len(thread.Replies) > 0 {
 		// The replies are not labelled as the author's. Anyone who can comment on
 		// a pull request can reply on a thread, so calling them all the author's
@@ -545,9 +585,9 @@ func formatThreadSection(
 			builder.WriteString(line)
 		}
 	}
-	builder.WriteString("\n\nCurrent file context (the original line numbers may have shifted):\n")
+	builder.WriteString("\n\nCurrent file context (the original line numbers may have shifted):\nThe following source is authoritative for the current head.\n")
 	builder.WriteString(contextText.currentContent)
-	builder.WriteString("\n\nLatest pull request diff for this file:\n")
+	builder.WriteString("\n\nLatest pull request diff for this file:\nThis diff records historical changes. Minus lines were removed. Plus lines exist in the current head. Space lines are unchanged context.\n")
 	builder.WriteString(contextText.currentDiff)
 	return builder.String()
 }
@@ -606,7 +646,7 @@ func buildBatchPrompt(
 	var builder strings.Builder
 	builder.WriteString("Review unresolved inline findings against the pull request as it exists now. Batch ")
 	fmt.Fprintf(&builder, "%d/%d", index, total)
-	builder.WriteString(". Resolve a thread when the latest pull request no longer has its defect, or when a reply correctly disproves it. Keep it open only when the finding still applies. Use uncertain only when the current pull request and discussion cannot decide.\n")
+	builder.WriteString(". Resolve a thread when the latest pull request no longer has its defect, or when a reply correctly disproves it. Keep it open only when the finding still applies to current source. The current file content establishes what exists now. A minus-prefixed diff line and the original finding describe historical source; neither establishes a defect in the current file. Resolve a wording finding when its offending prose was removed or corrected and no equivalent violation remains in current source. Absence of the original wording does not prove that a behavioral defect was fixed. Use uncertain only when the current pull request and discussion cannot decide.\n")
 	var body strings.Builder
 	body.WriteString("Latest pull request title: ")
 	body.WriteString(pullRequest.Title)
