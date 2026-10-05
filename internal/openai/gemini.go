@@ -46,7 +46,7 @@ func completeGemini(
 	}
 
 	var content strings.Builder
-	model := target.model
+	model := ""
 	usage := responses.ResponseUsage{}
 	hasUsage := false
 	finishReason := genai.FinishReasonUnspecified
@@ -84,6 +84,9 @@ func completeGemini(
 	result := strings.TrimSpace(content.String())
 	if result == "" {
 		return "", "", errors.New("gemini completion missing message content")
+	}
+	if model == "" {
+		return result, target.model, nil
 	}
 	return result, model, nil
 }

@@ -1,8 +1,10 @@
 package openai
 
 import (
+	"context"
 	"errors"
 
+	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
@@ -10,6 +12,35 @@ type providerAttemptError struct {
 	provider provider
 	budget   budgetSnapshot
 	cause    error
+}
+
+func (target provider) outputTokenLimit() int64 {
+	if target.omitMaxOutputTokens {
+		return 0
+	}
+	if target.maxOutputTokens != 0 {
+		return target.maxOutputTokens
+	}
+	return config.MaximumOutputTokens
+}
+
+func (client *Client) recordProviderAttempt(ctx context.Context, target provider, budget budgetSnapshot, err error, fallback bool) {
+	failure := &providerAttemptError{provider: target, budget: budget, cause: err}
+	status := failure.ProviderStatus()
+	if err == nil {
+		status.Cause = review.ProviderSucceeded
+	}
+	attempt := review.ProviderAttempt{
+		Status: status, API: target.api, ReasoningEffort: target.reasoningEffort,
+		MaxOutputTokens: target.outputTokenLimit(), OutputCapOmitted: target.omitMaxOutputTokens,
+		Completed: err == nil, Fallback: fallback, HTTPStatus: 0, ErrorCode: "", Count: 1, Sequence: 0,
+	}
+	var providerError *ProviderError
+	if errors.As(err, &providerError) {
+		attempt.HTTPStatus = providerError.StatusCode
+		attempt.ErrorCode = providerError.Code
+	}
+	review.RecordProviderAttempt(ctx, attempt, client.reviewPolicy.ProviderDetails())
 }
 
 func (attempt *providerAttemptError) Error() string {

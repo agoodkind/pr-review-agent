@@ -1262,7 +1262,7 @@ func TestReviewRecordsFailedRequestWithoutReportedUsage(t *testing.T) {
 	usage := recorder.Summary()
 	if usage.Requests != 1 || usage.ReportedRequests != 0 || usage.PricedRequests != 0 ||
 		usage.TotalTokens != 0 || usage.EstimatedCostUSD != 0 || len(usage.Models) != 1 ||
-		usage.Models[0].RequestedModel != testPrimaryModel || usage.Models[0].Model != testPrimaryModel ||
+		usage.Models[0].RequestedModel != testPrimaryModel || usage.Models[0].Model != "" ||
 		usage.Models[0].Priced {
 		t.Fatalf("usage = %+v, want one failed request without reported tokens", usage)
 	}

@@ -54,9 +54,10 @@ type untrustedMarkers struct {
 }
 
 type promptsFile struct {
-	UntrustedMarkers untrustedMarkers  `json:"untrusted_markers"`
-	Limits           FormattingLimits  `json:"limits"`
-	Templates        map[string]string `json:"templates"`
+	UntrustedMarkers untrustedMarkers       `json:"untrusted_markers"`
+	Limits           FormattingLimits       `json:"limits"`
+	Templates        map[string]string      `json:"templates"`
+	ProviderDetails  []ProviderDetailColumn `json:"provider_details"`
 }
 
 // FormattingLimits bounds generated reports using the loaded configuration.
@@ -95,6 +96,7 @@ type Policy struct {
 	templates        map[string]*template.Template
 	untrustedMarkers untrustedMarkers
 	limits           FormattingLimits
+	providerDetails  []ProviderDetailColumn
 }
 
 // LoadPolicy requires both configuration files and rejects malformed templates.
@@ -115,6 +117,9 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	}
 	if prompts.Limits.SummarySentences <= 0 || prompts.Limits.WalkthroughItems <= 0 {
 		return Policy{}, fmt.Errorf("prompt formatting limits must be positive")
+	}
+	if err := validateProviderColumns(prompts.ProviderDetails); err != nil {
+		return Policy{}, err
 	}
 	if len(prompts.Templates) == 0 {
 		return Policy{}, fmt.Errorf("prompt configuration requires templates")
@@ -146,6 +151,7 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	return Policy{
 		catalog: Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
 		untrustedMarkers: prompts.UntrustedMarkers, limits: prompts.Limits,
+		providerDetails: prompts.ProviderDetails,
 	}, nil
 }
 
@@ -233,6 +239,11 @@ func render(templates map[string]*template.Template, name string, data PromptDat
 
 // Limits supplies the same constraints used by prompt text and report processing.
 func (policy Policy) Limits() FormattingLimits { return policy.limits }
+
+// ProviderDetails returns the configured collapsed table columns.
+func (policy Policy) ProviderDetails() []ProviderDetailColumn {
+	return slices.Clone(policy.providerDetails)
+}
 
 // WrapUntrusted delimits source material using the configured protocol markers.
 func (policy Policy) WrapUntrusted(input string) string {

@@ -10,7 +10,6 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
@@ -42,17 +41,13 @@ func completeChat(
 		}
 	}
 	if !target.omitMaxOutputTokens {
-		maxOutputTokens := target.maxOutputTokens
-		if maxOutputTokens == 0 {
-			maxOutputTokens = config.MaximumOutputTokens
-		}
-		params.MaxTokens = openaigo.Int(maxOutputTokens)
+		params.MaxTokens = openaigo.Int(target.outputTokenLimit())
 	}
 	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
 	defer func() { _ = stream.Close() }()
 
 	var content strings.Builder
-	model := target.model
+	model := ""
 	usage := openaigo.CompletionUsage{}
 	hasUsage := false
 	finished := false
@@ -98,6 +93,9 @@ func completeChat(
 	result := strings.TrimSpace(content.String())
 	if result == "" {
 		return "", "", errors.New("chat completion missing message content")
+	}
+	if model == "" {
+		return result, target.model, nil
 	}
 	return result, model, nil
 }

@@ -369,12 +369,15 @@ func (client *Client) complete(
 			}
 		}
 		if err == nil {
+			client.recordProviderAttempt(ctx, target, budget, nil, false)
 			return content, model, nil
 		}
 		failure := &providerAttemptError{provider: target, budget: budget, cause: err}
+		fallback := index < len(client.providers)-1 && client.shouldUseFallback(err)
+		client.recordProviderAttempt(ctx, target, budget, err, fallback)
 		logProviderAttempt(ctx, failure)
 		failures = append(failures, failure)
-		if index == len(client.providers)-1 || !client.shouldUseFallback(err) {
+		if !fallback {
 			if len(failures) == 1 {
 				return "", "", failure
 			}
@@ -465,7 +468,7 @@ func completeWith(
 	}()
 
 	var content strings.Builder
-	responseModel := target.model
+	responseModel := ""
 	usage := responses.ResponseUsage{}
 	hasUsage := false
 	completed := false
@@ -526,7 +529,7 @@ func completeWith(
 		return "", "", errors.New("openai response missing message content")
 	}
 	completionModel := target.model
-	if target.model == config.AutoRouterModel || target.model == config.FreeRouterModel {
+	if (target.model == config.AutoRouterModel || target.model == config.FreeRouterModel) && responseModel != "" {
 		completionModel = responseModel
 	}
 	return result, completionModel, nil
@@ -549,11 +552,7 @@ func newResponseParams(
 		Store:     openaigo.Bool(false),
 	}
 	if !target.omitMaxOutputTokens {
-		maxOutputTokens := target.maxOutputTokens
-		if maxOutputTokens == 0 {
-			maxOutputTokens = config.MaximumOutputTokens
-		}
-		params.MaxOutputTokens = openaigo.Int(maxOutputTokens)
+		params.MaxOutputTokens = openaigo.Int(target.outputTokenLimit())
 	}
 	if !target.omitTextFormat {
 		format := &responses.ResponseFormatTextJSONSchemaConfigParam{
@@ -596,7 +595,11 @@ func modelUsage(model string, usage responses.ResponseUsage, usageReported bool,
 	estimatedInputCost := float64(0)
 	estimatedCachedInputCost := float64(0)
 	estimatedOutputCost := float64(0)
-	pricing, pricingFound := config.FindModelPricing(target.pricingByModel, model)
+	pricingModel := model
+	if pricingModel == "" {
+		pricingModel = target.model
+	}
+	pricing, pricingFound := config.FindModelPricing(target.pricingByModel, pricingModel)
 	priced := usageReported && pricingFound
 	if priced {
 		cachedTokens := usage.InputTokensDetails.CachedTokens
@@ -607,6 +610,7 @@ func modelUsage(model string, usage responses.ResponseUsage, usageReported bool,
 	}
 	estimatedCost := estimatedInputCost + estimatedCachedInputCost + estimatedOutputCost
 	return review.ModelUsage{
+		ProviderID:                  target.id,
 		RequestedModel:              target.model,
 		Model:                       model,
 		Priced:                      priced,

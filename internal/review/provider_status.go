@@ -14,6 +14,8 @@ import (
 type ProviderFailureCause string
 
 const (
+	// ProviderSucceeded means the API completed the requested response.
+	ProviderSucceeded ProviderFailureCause = "provider_succeeded"
 	// ProviderAppBudgetDenied means the app rejected a request before calling the provider.
 	ProviderAppBudgetDenied ProviderFailureCause = "app_budget_denied"
 	// ProviderAppBudgetUnavailable means the app could not check its configured quota.
@@ -134,6 +136,8 @@ func renderProviderStatuses(statuses []ProviderStatus) string {
 
 func providerCauseLabel(cause ProviderFailureCause) string {
 	switch cause {
+	case ProviderSucceeded:
+		return "API completed the response"
 	case ProviderAppBudgetDenied:
 		return "App denied request; API not called"
 	case ProviderAppBudgetUnavailable:

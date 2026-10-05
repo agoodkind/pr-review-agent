@@ -119,7 +119,9 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	for _, row := range rows {
 		fmt.Fprintf(&builder, "| %s | %s |\n", row[0], row[1])
 	}
-	if providerAttempts := renderProviderStatuses(statuses); providerAttempts != "" {
+	if providerDetails := renderProviderDetails(summary.Usage); providerDetails != "" {
+		builder.WriteString(providerDetails)
+	} else if providerAttempts := renderProviderStatuses(statuses); providerAttempts != "" {
 		builder.WriteString("\n" + providerAttempts + "\n")
 	}
 	builder.WriteString(renderUsageDetails(summary.Usage))
