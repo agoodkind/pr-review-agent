@@ -51,7 +51,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 
 	githubClient := githubapp.NewClient(cfg, githubHTTP, time.Now, logger)
 	openaiClient := openai.NewClient(cfg, openaiHTTP)
-	reconcileService := reconcile.NewService(githubClient, openaiClient, cfg.GitHubBotLogin, logger, cfg)
+	reconcileService := reconcile.NewService(githubClient, openaiClient, cfg.GitHubBotLogin, logger, cfg.PromptBytes())
 	collector := diff.NewCollector(githubClient)
 	reviewService := review.NewService(
 		githubClient,
@@ -67,7 +67,8 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		cfg.ServiceFailureAppearance,
 		time.Now,
 		logger,
-		cfg,
+		cfg.ChunkConcurrency(),
+		cfg.PromptBytes(),
 	)
 
 	cache := queue.NewDeliveryCache(

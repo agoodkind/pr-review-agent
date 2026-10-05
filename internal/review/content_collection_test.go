@@ -84,7 +84,7 @@ func newContentCollectionFixture(t *testing.T, model *sequenceModel) (*serviceFi
 	fixture.service = review.NewService(client, diff.NewCollector(client), model, fixture.reconciler,
 		queue.NewKeyedLocker(), testBotLogin, testMinimumImportance,
 		config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks,
-		config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, config.Config{})
+		config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, config.MaximumChunkConcurrency, config.MaximumPromptBytes)
 	return fixture, contentStatus
 }
 

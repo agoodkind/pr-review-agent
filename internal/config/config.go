@@ -33,6 +33,8 @@ type FailureClass string
 const (
 	// FailureUsageExceeded lets operators treat exhausted provider accounts as nonblocking.
 	FailureUsageExceeded FailureClass = "usage_exceeded"
+	// FailureRateLimited separates provider throttling from exhausted usage.
+	FailureRateLimited FailureClass = "rate_limited"
 	// FailureDailyBudget keeps local budget denials independent from provider usage policy.
 	FailureDailyBudget FailureClass = "daily_budget"
 	// FailureUnavailable keeps connectivity failures independent from usage policy.
@@ -208,18 +210,18 @@ func (cfg Config) PromptBytes() int {
 // LoadReviewLimits validates optional runtime limits shared by service and diagnostic callers.
 func LoadReviewLimits(lookup LookupEnv, cfg *Config) error {
 	var err error
-	cfg.ReviewChunkConcurrency, err = loadPositiveSetting(lookup, "REVIEW_CHUNK_CONCURRENCY", MaximumChunkConcurrency)
+	cfg.ReviewChunkConcurrency, err = loadPositiveSetting(lookup, "REVIEW_CHUNK_CONCURRENCY")
 	if err != nil {
 		return err
 	}
-	cfg.ReviewMaxPromptBytes, err = loadPositiveSetting(lookup, "REVIEW_MAX_PROMPT_BYTES", MaximumPromptBytes)
+	cfg.ReviewMaxPromptBytes, err = loadPositiveSetting(lookup, "REVIEW_MAX_PROMPT_BYTES")
 	return err
 }
 
-func loadPositiveSetting(lookup LookupEnv, name string, defaultValue int) (int, error) {
+func loadPositiveSetting(lookup LookupEnv, name string) (int, error) {
 	value, configured := lookup(name)
 	if !configured {
-		return defaultValue, nil
+		return 0, nil
 	}
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
@@ -324,7 +326,7 @@ func Load(lookup LookupEnv) (Config, error) {
 		}
 		cfg.Providers = providers
 		for _, provider := range providers {
-			if provider.Disabled || provider.DailyTokenLimit == 0 {
+			if provider.Disabled || !provider.HasTokenLimit() {
 				continue
 			}
 			budgetURL, ok := loadRequiredText(lookup, "PROVIDER_BUDGET_URL")
@@ -428,6 +430,7 @@ func loadFailureAppearances(lookup LookupEnv) (FailureAppearances, error) {
 
 var knownFailureClasses = map[FailureClass]struct{}{
 	FailureUsageExceeded: {},
+	FailureRateLimited:   {},
 	FailureDailyBudget:   {},
 	FailureUnavailable:   {},
 	FailureDeadline:      {},

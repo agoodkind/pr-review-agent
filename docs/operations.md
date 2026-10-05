@@ -78,13 +78,13 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 List every configured provider ID once in `PROVIDER_PRIORITY`, including providers marked `disabled`. Put the preferred provider first. The service rejects incomplete providers and invalid priority lists at startup.
 
-The service tries the next enabled provider after exhausted API usage, an app quota denial, or a structured HTTP `5xx` failure. It does not retry the failed provider within that request.
+The service tries the next enabled provider after exhausted API usage, an app quota denial, a provider rate limit, or a structured server failure. It does not retry the failed provider within that request.
 
 OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
 
 Set `disabled` to keep a provider available in the configuration without sending it requests. The service still validates that provider and its credentials. At least one provider must stay enabled.
 
-Set `SERVICE_FAILURE_APPEARANCE` to choose whether each service failure class blocks the check. The available classes are `usage_exceeded`, `daily_budget`, `provider_unavailable`, `deadline`, `panic`, and `other`.
+Set `SERVICE_FAILURE_APPEARANCE` to choose whether each service failure class blocks the check. The available classes are `usage_exceeded`, `rate_limited`, `daily_budget`, `provider_unavailable`, `deadline`, `panic`, and `other`.
 
 Set a class to `fail` to preserve the existing blocking conclusion. An aborted run concludes with `failure`. A run with unread chunks concludes with `action_required`.
 

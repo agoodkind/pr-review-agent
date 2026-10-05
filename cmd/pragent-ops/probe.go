@@ -150,7 +150,7 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	if err != nil || cfg.ReviewChunkTimeout <= 0 {
 		return cfg, errors.New("runtime REVIEW_CHUNK_TIMEOUT must be a positive duration")
 	}
-	if providers[0].DailyTokenLimit > 0 || providers[0].TokenLimit > 0 {
+	if providers[0].HasTokenLimit() {
 		if signingKeyPath == "" {
 			return cfg, errors.New("capped provider probe requires --signing-key-file; configured limits are not bypassed")
 		}
@@ -231,14 +231,14 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	client := openai.NewClient(cfg, &http.Client{Transport: transport})
 	completion, reviewErr := client.Review(ctx, prompt)
 	result := struct {
-		Provider        string              `json:"provider"`
-		ConfiguredModel string              `json:"configured_model"`
+		Provider        string                 `json:"provider"`
+		ConfiguredModel string                 `json:"configured_model"`
 		ReasoningEffort config.ReasoningEffort `json:"reasoning_effort"`
-		Success         bool                `json:"success"`
-		Completion      review.Completion   `json:"completion"`
-		Usage           review.UsageSummary `json:"usage"`
-		HTTPStatuses    map[int]int         `json:"http_statuses"`
-		Error           string              `json:"error,omitempty"`
+		Success         bool                   `json:"success"`
+		Completion      review.Completion      `json:"completion"`
+		Usage           review.UsageSummary    `json:"usage"`
+		HTTPStatuses    map[int]int            `json:"http_statuses"`
+		Error           string                 `json:"error,omitempty"`
 	}{Provider: providerID, ConfiguredModel: cfg.Providers[0].Model, ReasoningEffort: cfg.Providers[0].ReasoningEffort, Success: reviewErr == nil, Completion: completion, Usage: recorder.Summary(), HTTPStatuses: transport.statuses}
 	if reviewErr != nil {
 		result.Error = reviewErr.Error()

@@ -63,12 +63,30 @@ func (client *Client) checkBudget(ctx context.Context, target provider) (budgetS
 	var emptyWindow quota.Window
 	var emptyAccounting quota.Snapshot
 	snapshot := budgetSnapshot{day: "", used: 0, limit: target.dailyTokenLimit, remaining: 0, known: false, admittedAtMS: now.UnixMilli(), window: emptyWindow, accounting: emptyAccounting}
+	var err error
 	if target.tokenLimit > 0 {
-		return client.checkWindowBudget(ctx, target, now, snapshot)
+		snapshot, err = client.checkWindowBudget(ctx, target, now, snapshot, quota.Limit{
+			Limit: target.tokenLimit, TokenTypes: target.tokenTypes, Window: target.tokenWindow,
+		})
+	} else if target.dailyTokenLimit > 0 {
+		snapshot, err = client.checkDailyBudget(ctx, target, snapshot)
 	}
-	if target.dailyTokenLimit == 0 {
-		return snapshot, nil
+	if err != nil {
+		return snapshot, err
 	}
+	for index, limit := range target.tokenLimits {
+		checked, checkErr := client.checkWindowBudget(ctx, target, now, snapshot, limit)
+		if checkErr != nil {
+			return checked, checkErr
+		}
+		if index == 0 && target.dailyTokenLimit == 0 && target.tokenLimit == 0 {
+			snapshot = checked
+		}
+	}
+	return snapshot, nil
+}
+
+func (client *Client) checkDailyBudget(ctx context.Context, target provider, snapshot budgetSnapshot) (budgetSnapshot, error) {
 	if client.budgetURL == "" || len(client.budgetSigningKey) == 0 {
 		return snapshot, budgetFailure(target, snapshot, errors.New("budget service is not configured"))
 	}
@@ -130,12 +148,15 @@ func (client *Client) checkBudget(ctx context.Context, target provider) (budgetS
 	return snapshot, nil
 }
 
-func (client *Client) checkWindowBudget(ctx context.Context, target provider, now time.Time, snapshot budgetSnapshot) (budgetSnapshot, error) {
-	snapshot.limit, snapshot.window = target.tokenLimit, target.tokenWindow
+func (client *Client) checkWindowBudget(ctx context.Context, target provider, now time.Time, snapshot budgetSnapshot, limit quota.Limit) (budgetSnapshot, error) {
+	snapshot.limit, snapshot.window = limit.Limit, limit.Window
+	snapshot.used, snapshot.remaining, snapshot.known = 0, 0, false
+	var emptyAccounting quota.Snapshot
+	snapshot.accounting = emptyAccounting
 	if client.budgetURL == "" || len(client.budgetSigningKey) == 0 {
 		return snapshot, budgetFailure(target, snapshot, errors.New("budget service is not configured"))
 	}
-	bounds, err := target.tokenWindow.Bounds(now)
+	bounds, err := limit.Window.Bounds(now)
 	if err != nil {
 		return snapshot, budgetFailure(target, snapshot, err)
 	}
@@ -146,7 +167,7 @@ func (client *Client) checkWindowBudget(ctx context.Context, target provider, no
 	if err != nil {
 		return snapshot, budgetFailure(target, snapshot, err)
 	}
-	accounting, err := quota.Evaluate(target.tokenWindow, now, target.tokenLimit, target.tokenTypes, usage.Events, usage.HistoryStartMS)
+	accounting, err := quota.Evaluate(limit.Window, now, limit.Limit, limit.TokenTypes, usage.Events, usage.HistoryStartMS)
 	if err != nil {
 		return snapshot, budgetFailure(target, snapshot, err)
 	}

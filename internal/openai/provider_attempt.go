@@ -48,8 +48,13 @@ func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 		return status
 	}
 	var providerError *ProviderError
-	if errors.As(attempt.cause, &providerError) && providerError.UsageExceeded() {
-		status.Cause = review.ProviderUsageExhausted
+	if errors.As(attempt.cause, &providerError) {
+		switch {
+		case providerError.RateLimited():
+			status.Cause = review.ProviderRateLimited
+		case providerError.UsageExceeded():
+			status.Cause = review.ProviderUsageExhausted
+		}
 	}
 	return status
 }

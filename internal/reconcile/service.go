@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -43,7 +42,7 @@ type Service struct {
 var errHeadChanged = errors.New("head changed during reconciliation")
 
 // NewService constructs a reconciliation service.
-func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger, limits config.Config) *Service {
+func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger, maximumPromptBytes int) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -52,7 +51,7 @@ func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger
 		model:              model,
 		botLogin:           botLogin,
 		logger:             logger,
-		maximumPromptBytes: limits.PromptBytes(),
+		maximumPromptBytes: maximumPromptBytes,
 	}
 }
 

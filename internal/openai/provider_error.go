@@ -102,6 +102,9 @@ type ProviderError struct {
 // ProviderUnavailable reports a server-side failure rather than a refusal of
 // this request.
 func (providerError *ProviderError) ProviderUnavailable() bool {
+	if responseErrorCode(providerError.Code) == responseServerError {
+		return true
+	}
 	if providerError.StatusCode >= http.StatusInternalServerError && providerError.StatusCode <= 599 {
 		return true
 	}
@@ -199,11 +202,8 @@ func providerErrorFromStream(err error) *ProviderError {
 	if !ok {
 		return nil
 	}
-	// The gateway states no HTTP status inside the frame, and it flattens every
-	// upstream status onto 400 on the path that does carry one. Recording 400
-	// keeps both transports reporting the same status for the same refusal.
 	return &ProviderError{
-		StatusCode: http.StatusBadRequest,
+		StatusCode: 0,
 		Type:       frame.Type,
 		Code:       frame.Code,
 		Param:      frame.Param,
@@ -213,11 +213,11 @@ func providerErrorFromStream(err error) *ProviderError {
 
 // Error renders the provider status and every non-empty detail it reported.
 func (providerError *ProviderError) Error() string {
-	details := []string{fmt.Sprintf(
-		"model provider returned HTTP %d %s",
-		providerError.StatusCode,
-		http.StatusText(providerError.StatusCode),
-	)}
+	source := "model provider reported a stream error"
+	if providerError.StatusCode != 0 {
+		source = fmt.Sprintf("model provider returned HTTP %d %s", providerError.StatusCode, http.StatusText(providerError.StatusCode))
+	}
+	details := []string{source}
 	fields := []string{
 		providerError.Type,
 		providerError.Code,
@@ -264,6 +264,9 @@ func (truncatedError *TruncatedError) ProviderReason() string {
 // UsageExceeded reports whether the provider refused the request for lack of
 // remaining usage rather than for a transient or request-shape problem.
 func (providerError *ProviderError) UsageExceeded() bool {
+	if responseErrorCode(providerError.Code) == responseRateLimitExceeded {
+		return false
+	}
 	if providerError.StatusCode == http.StatusPaymentRequired {
 		return true
 	}
@@ -277,4 +280,12 @@ func (providerError *ProviderError) UsageExceeded() bool {
 		}
 	}
 	return false
+}
+
+// RateLimited identifies a provider throttle separately from exhausted usage.
+func (providerError *ProviderError) RateLimited() bool {
+	if providerError.UsageExceeded() {
+		return false
+	}
+	return providerError.StatusCode == http.StatusTooManyRequests || responseErrorCode(providerError.Code) == responseRateLimitExceeded
 }

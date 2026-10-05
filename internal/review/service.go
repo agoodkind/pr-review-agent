@@ -113,7 +113,8 @@ func NewService(
 	failureAppearances config.FailureAppearances,
 	now func() time.Time,
 	logger *slog.Logger,
-	limits config.Config,
+	chunkConcurrency int,
+	maximumPromptBytes int,
 ) *Service {
 	if logger == nil {
 		logger = slog.Default()
@@ -144,8 +145,8 @@ func NewService(
 		minimumImportance:      minimumImportance,
 		reviewMaxFiles:         reviewMaxFiles,
 		reviewMaxChunks:        reviewMaxChunks,
-		chunkConcurrency:       limits.ChunkConcurrency(),
-		maximumPromptBytes:     limits.PromptBytes(),
+		chunkConcurrency:       chunkConcurrency,
+		maximumPromptBytes:     maximumPromptBytes,
 		chunkTimeout:           chunkTimeout,
 		failureAppearances:     failureAppearances,
 		checkCompletionTimeout: completionBudget,

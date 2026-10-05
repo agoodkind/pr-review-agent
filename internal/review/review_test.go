@@ -6816,7 +6816,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		chunkTimeout,
 		options.failureAppearances,
 		testClock(8*time.Second),
-		slog.New(slog.NewTextHandler(logWriter, nil)), config.Config{},
+		slog.New(slog.NewTextHandler(logWriter, nil)), config.MaximumChunkConcurrency, config.MaximumPromptBytes,
 	)
 
 	return &serviceFixture{

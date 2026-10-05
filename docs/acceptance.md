@@ -13,6 +13,14 @@ deployed image digest before testing.
    ```
 
 3. Confirm that the test passes. It requires one successful model request with reported token usage. It uses the configured API, model, reasoning effort, and output limit. It publishes no GitHub review.
+4. Verify quota fallback with the configured provider credential. This test uses three real model responses and waits for a one-minute window to expire:
+
+   ```bash
+   PR_AGENT_LIVE_QUOTA_TEST=1 go test -tags=integration ./internal/quota \
+       -run TestLiveReviewChecksMultipleWindowsAndChargesEachResponseOnce -count=1
+   ```
+
+   The test checks minute-limit denial, fallback, recovery after expiry, and one usage record per response in real local Cloudflare storage.
 
 ## Watch what happens
 

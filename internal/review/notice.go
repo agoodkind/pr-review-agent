@@ -21,7 +21,11 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-const checkFailureMixedUsage = "Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage."
+const (
+	checkFailureMixedUsage     = "Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage."
+	checkFailureRateLimited    = "Review stopped: a provider temporarily limited the request rate."
+	checkFailureMixedRateLimit = "Review stopped: an app token limit was exhausted, and a provider temporarily limited the request rate."
+)
 
 // failCheck ends one run with its cause reported and no review object touched.
 //
@@ -108,6 +112,8 @@ func failureTitle(stage string, cause error) string {
 		return checkFailureDailyBudget
 	case config.FailureUsageExceeded:
 		return checkFailureUsage
+	case config.FailureRateLimited:
+		return checkFailureRateLimited
 	case config.FailureDeadline:
 		return checkFailureDeadline
 	case config.FailureUnavailable:
@@ -130,6 +136,9 @@ func failureTitle(stage string, cause error) string {
 // sees only a chunk count cannot tell it apart from a provider outage.
 func chunkFailureReason(failures []chunkFailure) string {
 	classes := chunkFailureClasses(failures)
+	if slices.Contains(classes, config.FailureDailyBudget) && slices.Contains(classes, config.FailureRateLimited) {
+		return checkFailureMixedRateLimit
+	}
 	if slices.Contains(classes, config.FailureDailyBudget) && slices.Contains(classes, config.FailureUsageExceeded) {
 		return checkFailureMixedUsage
 	}
@@ -138,6 +147,8 @@ func chunkFailureReason(failures []chunkFailure) string {
 		return checkFailureDailyBudget
 	case config.FailureUsageExceeded:
 		return checkFailureUsage
+	case config.FailureRateLimited:
+		return checkFailureRateLimited
 	case config.FailureDeadline:
 		return checkFailureDeadline
 	case config.FailureUnavailable:
@@ -152,7 +163,7 @@ func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 	classes := chunkFailureClasses(failures)
 	for _, class := range classes {
 		switch class {
-		case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureDeadline, config.FailureUnavailable:
+		case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureRateLimited, config.FailureDeadline, config.FailureUnavailable:
 			return class
 		case config.FailurePanic, config.FailureOther:
 		}
@@ -173,6 +184,8 @@ func failureClassOf(cause error) config.FailureClass {
 	switch {
 	case dailyBudgetExhausted(cause):
 		return config.FailureDailyBudget
+	case providerRateLimited(cause):
+		return config.FailureRateLimited
 	case usageExceeded(cause):
 		return config.FailureUsageExceeded
 	case errors.Is(cause, context.DeadlineExceeded):
@@ -266,6 +279,15 @@ func dailyBudgetExhausted(cause error) bool {
 
 type providerUnavailableError interface {
 	ProviderUnavailable() bool
+}
+
+type rateLimitedError interface {
+	RateLimited() bool
+}
+
+func providerRateLimited(cause error) bool {
+	var target rateLimitedError
+	return errors.As(cause, &target) && target.RateLimited()
 }
 
 func providerUnavailable(cause error) bool {

@@ -8,7 +8,10 @@
       "reasoning_effort": "high",
       "api_key_binding": "OPENAI_GOODKIND_IO_API_KEY",
       "daily_token_limit": 2500000,
-      "daily_token_types": ["input", "output"]
+      "daily_token_types": ["input", "output"],
+      "token_limits": [
+        {"limit": 500000, "token_types": ["input", "output"], "window": {"mode": "rolling", "duration": "1m"}}
+      ]
     },
     {
       "id": "openai_goodkindalex",
@@ -17,7 +20,10 @@
       "reasoning_effort": "high",
       "api_key_binding": "OPENAI_GOODKINDALEX_API_KEY",
       "daily_token_limit": 2500000,
-      "daily_token_types": ["input", "output"]
+      "daily_token_types": ["input", "output"],
+      "token_limits": [
+        {"limit": 500000, "token_types": ["input", "output"], "window": {"mode": "rolling", "duration": "1m"}}
+      ]
     },
     {
       "id": "gemini",

@@ -52,6 +52,22 @@ const (
 	GeminiAPI ProviderAPI = "gemini"
 )
 
+// ResolveReasoningEffort applies the default when an effort is unspecified.
+func ResolveReasoningEffort(effort ReasoningEffort) ReasoningEffort {
+	if effort == "" {
+		return DefaultReasoningEffort
+	}
+	return effort
+}
+
+// ResolveProviderAPI applies Responses when a protocol is unspecified.
+func ResolveProviderAPI(api ProviderAPI) ProviderAPI {
+	if api == "" {
+		return ResponsesAPI
+	}
+	return api
+}
+
 const (
 	// InputTokens includes cached input tokens.
 	InputTokens TokenType = "input"
@@ -88,6 +104,7 @@ type ProviderConfig struct {
 	TokenLimit           int64
 	TokenTypes           []TokenType
 	TokenWindow          quota.Window
+	TokenLimits          []quota.Limit
 	MaxOutputTokens      int64
 	OmitMaxOutputTokens  bool
 	OmitTextFormat       bool
@@ -110,6 +127,7 @@ type providerDefinition struct {
 	TokenLimit                  *int64             `json:"token_limit,omitempty"`
 	TokenTypes                  []TokenType        `json:"token_types,omitempty"`
 	TokenWindow                 *quota.Window      `json:"token_window,omitempty"`
+	TokenLimits                 []quota.Limit      `json:"token_limits,omitempty"`
 	MaxOutputTokens             int64              `json:"max_output_tokens,omitempty"`
 	OmitMaxOutputTokens         bool               `json:"omit_max_output_tokens,omitempty"`
 	OmitTextFormat              bool               `json:"omit_text_format,omitempty"`
@@ -178,6 +196,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			TokenLimit:           definition.tokenLimit(),
 			TokenTypes:           definition.TokenTypes,
 			TokenWindow:          definition.tokenWindow(),
+			TokenLimits:          definition.TokenLimits,
 			MaxOutputTokens:      definition.MaxOutputTokens,
 			OmitMaxOutputTokens:  definition.OmitMaxOutputTokens,
 			OmitTextFormat:       definition.OmitTextFormat,
@@ -231,6 +250,11 @@ func (definition providerDefinition) tokenWindow() quota.Window {
 }
 
 func validateProviderQuota(definition providerDefinition) error {
+	for index, limit := range definition.TokenLimits {
+		if err := limit.Validate(); err != nil {
+			return fmt.Errorf("provider %q token_limits[%d]: %w", definition.ID, index, err)
+		}
+	}
 	if definition.dailyLimit() > quota.MaximumInteger {
 		return fmt.Errorf("provider %q daily_token_limit exceeds the storage integer range", definition.ID)
 	}
@@ -254,6 +278,11 @@ func validateProviderQuota(definition providerDefinition) error {
 		}
 	}
 	return nil
+}
+
+// HasTokenLimit includes daily, generic, and additional accounting windows.
+func (provider ProviderConfig) HasTokenLimit() bool {
+	return provider.DailyTokenLimit > 0 || provider.TokenLimit > 0 || len(provider.TokenLimits) > 0
 }
 
 func validateProviderLimits(definition providerDefinition) error {
@@ -315,12 +344,8 @@ func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 		return nil, err
 	}
 	for index := range definitions {
-		if definitions[index].ReasoningEffort == "" {
-			definitions[index].ReasoningEffort = DefaultReasoningEffort
-		}
-		if definitions[index].API == "" {
-			definitions[index].API = ResponsesAPI
-		}
+		definitions[index].ReasoningEffort = ResolveReasoningEffort(definitions[index].ReasoningEffort)
+		definitions[index].API = ResolveProviderAPI(definitions[index].API)
 	}
 	return definitions, nil
 }

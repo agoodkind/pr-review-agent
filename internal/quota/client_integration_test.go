@@ -40,16 +40,21 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	configuration := struct {
 		URL       string `json:"PROVIDER_BUDGET_URL"`
 		Providers []struct {
-			ID    string `json:"id"`
-			Model string `json:"model"`
-			Limit int64  `json:"daily_token_limit"`
+			ID          string        `json:"id"`
+			Model       string        `json:"model"`
+			Limit       int64         `json:"daily_token_limit"`
+			TokenLimits []quota.Limit `json:"token_limits"`
 		} `json:"PROVIDERS"`
 	}{URL: url}
 	configuration.Providers = append(configuration.Providers, struct {
-		ID    string `json:"id"`
-		Model string `json:"model"`
-		Limit int64  `json:"daily_token_limit"`
-	}{ID: "operator_test", Model: "test_model", Limit: 1000})
+		ID          string        `json:"id"`
+		Model       string        `json:"model"`
+		Limit       int64         `json:"daily_token_limit"`
+		TokenLimits []quota.Limit `json:"token_limits"`
+	}{ID: "operator_test", Model: "test_model", Limit: 1000, TokenLimits: []quota.Limit{
+		{Limit: 100, TokenTypes: []quota.TokenType{quota.OutputTokens}, Window: quota.Window{Mode: quota.Rolling, Duration: "1m"}},
+		{Limit: 1000, TokenTypes: []quota.TokenType{quota.InputTokens}, Window: quota.Window{Mode: quota.Rolling, Duration: "24h"}},
+	}})
 	data, err := json.Marshal(configuration)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +74,11 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	}
 	var capture struct {
 		Counters []struct {
-			Legacy quota.DailySnapshot `json:"legacy_daily_snapshot"`
+			Legacy      quota.DailySnapshot `json:"legacy_daily_snapshot"`
+			TokenLimits []struct {
+				Snapshot quota.Snapshot      `json:"snapshot"`
+				History  quota.QueryResponse `json:"history"`
+			} `json:"token_limits"`
 		} `json:"counters"`
 	}
 	if err := json.Unmarshal(data, &capture); err != nil {
@@ -77,6 +86,12 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	}
 	if len(capture.Counters) != 1 || capture.Counters[0].Legacy.Used == nil || *capture.Counters[0].Legacy.Used != 300 || capture.Counters[0].Legacy.Remaining == nil || *capture.Counters[0].Legacy.Remaining != 700 {
 		t.Fatalf("operator CLI returned incorrect usage: %+v", capture)
+	}
+	limits := capture.Counters[0].TokenLimits
+	if len(limits) != 2 || limits[0].Snapshot.Allowed || limits[0].Snapshot.Used != 100 ||
+		limits[0].Snapshot.Remaining != 0 || limits[1].Snapshot.Used != 200 || limits[1].Snapshot.Remaining != 800 ||
+		len(limits[0].History.Events) != 1 || len(limits[1].History.Events) != 1 {
+		t.Fatal("operator CLI did not report each configured token window using the same stored usage")
 	}
 	operator, err := quota.NewOperatorClient(url, []byte("test-operator-token"), nil)
 	if err != nil {
