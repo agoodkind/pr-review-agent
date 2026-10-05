@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // provider is one model endpoint the client can send a completion to.
@@ -65,6 +67,7 @@ type Client struct {
 	providers               []provider
 	fallbackOnUsageExceeded bool
 	minimumImportance       int
+	ruleImportance          reviewrules.Importance
 	budgetURL               string
 	budgetSigningKey        []byte
 	httpClient              *http.Client
@@ -126,6 +129,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		providers:               make([]provider, 0, len(configuredProviders)),
 		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
 		minimumImportance:       cfg.MinimumImportance,
+		ruleImportance:          cfg.RuleImportance,
 		budgetURL:               "",
 		budgetSigningKey:        cfg.GitHubWebhookSecret,
 		httpClient:              httpClient,
@@ -188,23 +192,25 @@ func newProviderSDK(
 // Review requests one structured review completion and reports the model that
 // served it, which is the fallback model whenever the primary refused.
 func (client *Client) Review(ctx context.Context, prompt string) (review.Completion, error) {
+	schema, err := MarshalReviewSchema()
+	if err != nil {
+		return review.Completion{}, err
+	}
 	content, model, err := client.complete(
 		ctx,
 		prompt,
-		review.PolicyHeader(client.minimumImportance),
+		review.PolicyHeader(client.minimumImportance, client.ruleImportance),
 		reviewSchemaName,
-		reviewSchemaJSON,
+		schema,
 	)
 	if err != nil {
 		return review.Completion{}, err
 	}
-	var result domain.ReviewResult
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&result); err != nil {
-		return review.Completion{}, errors.New("decode structured output: " + err.Error())
-	}
-	if err := result.Validate(); err != nil {
-		return review.Completion{}, errors.New("validate review result: " + err.Error())
+	result, err := domain.UnmarshalReviewResult([]byte(content), client.ruleImportance)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Model review result was rejected")
+		return review.Completion{}, fmt.Errorf("decode model review result: %w", err)
 	}
 	return review.Completion{Result: result, Model: model}, nil
 }
@@ -377,7 +383,7 @@ func (client *Client) shouldUseFallback(err error) bool {
 	if !errors.As(err, &providerError) {
 		return false
 	}
-	return providerError.UsageExceeded()
+	return providerError.UsageExceeded() || providerError.ProviderUnavailable()
 }
 
 func completeWith(

@@ -99,7 +99,7 @@ func (service *Service) collectAndAdmit(
 		Chunks:      nil,
 	})
 	contextBytes := len(pullRequestPrompt(input.PullRequest, input.Files)) +
-		len(omissionPrompt(shortfall))
+		len(omissionPrompt(shortfall, input.Files))
 	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes-contextBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
@@ -112,7 +112,7 @@ func (service *Service) collectAndAdmit(
 	shortfall = classifyStructuralShortfall(work)
 	if shortfall.present() {
 		contextBytes = len(pullRequestPrompt(work.PullRequest, work.Files)) +
-			len(omissionPrompt(shortfall))
+			len(omissionPrompt(shortfall, work.Files))
 		chunks, err = diff.ChunkInput(input, config.MaximumPromptBytes-contextBytes)
 		if err != nil {
 			return empty, true, service.failCheck(

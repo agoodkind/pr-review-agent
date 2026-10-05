@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // ReviewSettings are the review tuning values one delivery carried with it.
@@ -140,11 +142,12 @@ func ParseResolution(value string) (Resolution, error) {
 
 // Finding is one validated review finding anchored to changed code.
 type Finding struct {
-	Path      string `json:"path"`
-	StartLine int    `json:"start_line"`
-	EndLine   int    `json:"end_line"`
-	Title     string `json:"title"`
-	Body      string `json:"body"`
+	RuleID    reviewrules.ID `json:"rule_id"`
+	Path      string         `json:"path"`
+	StartLine int            `json:"start_line"`
+	EndLine   int            `json:"end_line"`
+	Title     string         `json:"title"`
+	Body      string         `json:"body"`
 	// Evidence is the exact source line the finding relies on, copied verbatim
 	// from the code the model was shown. Publication drops a finding whose
 	// evidence does not appear in that source, so a claim about code the model
@@ -167,8 +170,8 @@ type Finding struct {
 // still reports a successful verdict, which reads as a pull request with no
 // defects rather than as a threshold nothing could clear.
 const (
-	MinimumFindingImportance = 1
-	MaximumFindingImportance = 10
+	MinimumFindingImportance = reviewrules.MinimumImportance
+	MaximumFindingImportance = reviewrules.MaximumImportance
 )
 
 // Validate rejects empty fields, invalid line ranges, and out-of-range importance.

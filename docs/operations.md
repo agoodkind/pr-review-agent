@@ -24,7 +24,7 @@ A model stops mid answer when it reaches its completion token budget, which reas
 
 Findings appear as inline comments on the changed lines they object to. A finding is published when it anchors to a changed line and meets the configured importance threshold, and every finding that does is published. The only thing that withholds one is a stable identity matching a finding the pull request already carries, so the same defect is raised once rather than once per push. Before publishing new findings, the service re-reads its own open threads and silently resolves the ones the new code fixed.
 
-The review treats verified writing defects in changed prose as importance `10`. This includes documentation, comments, strings, test names, and messages. These findings use the existing inline comment and requested-changes lifecycle.
+The service applies each finding's rule importance before deciding whether to publish it.
 
 The verdict is recomputed from scratch on every run, and its input is the service's own review threads. One of them still open requests changes. None open on a fully read head approves. No decision carries over from an earlier run, so a block never outlives the finding behind it. A reply or thread state change starts a refresh without a push and publishes a dedicated in-progress check while the verdict changes. A requested changes verdict directs the reader to the open inline findings. GitHub connects the review to those comments, and the collapsed details carry their thread identifiers and current counts.
 
@@ -58,6 +58,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDER_BUDGET_URL` | Worker endpoint that records reported usage after model requests |
 | `SERVICE_FAILURE_APPEARANCE` | Choose whether each service failure class blocks the check |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
+| `REVIEW_RULE_IMPORTANCE` | Fixed importance values indexed by stable rule ID |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
 | `REVIEW_CHUNK_TIMEOUT` | Timeout for one model request |
@@ -74,7 +75,7 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 List every configured provider ID once in `PROVIDER_PRIORITY`, including providers marked `disabled`. Put the preferred provider first. The service rejects incomplete providers and invalid priority lists at startup.
 
-The service tries the next enabled provider when the previous provider reports exhausted API usage or the app's configured token quota denies a request.
+The service tries the next enabled provider after exhausted API usage, an app quota denial, or a structured HTTP `5xx` failure. It does not retry the failed provider within that request.
 
 OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
 
@@ -104,9 +105,19 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Change review rules
 
-Edit [review-rules.md](../internal/review/review-rules.md). Its opening paragraph resolves scope and importance conflicts. Each heading introduces one review rule. The service includes the whole file in the model's review instructions. The Go build includes this file in the binary, so rule edits require a new release.
+1. Edit the instructions in the [rule catalog](../internal/reviewrules/rules.json). Preserve each rule's `id` when changing its title or instructions. The Go build includes the catalog in the binary.
+2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
-Run `go test ./internal/review ./internal/openai` and `make check`. Merge the change into `main`. The Release workflow builds an immutable image, deploys the Cloudflare Worker with that image, and checks the routed service. Inspect the Release run before claiming the new rules are live. Do not deploy the committed Cloudflare configuration directly: it contains an invalid image placeholder. For a manual deployment, set `PR_REVIEW_AGENT_IMAGE` to the verified image digest and run `npm run deploy` from `deploy/cloudflare`.
+   ```json
+   "REVIEW_RULE_IMPORTANCE": {
+     "shared_boundaries": 8
+   }
+   ```
+
+   Prose rules always receive importance `10`. The service rejects attempts to reduce their importance. A technical rule without an override uses the model's score. `REVIEW_MIN_IMPORTANCE` controls publication after these scores are applied.
+3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make check`, then merge the change to deploy it.
+
+4. Confirm that the Release workflow completed successfully. The committed Cloudflare configuration contains an invalid image placeholder. For a manual deployment, set `PR_REVIEW_AGENT_IMAGE` to the verified image digest and run `npm run deploy` from `deploy/cloudflare`.
 
 ## Resume reviews
 

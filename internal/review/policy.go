@@ -3,7 +3,6 @@ package review
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"slices"
 	"sort"
@@ -11,6 +10,7 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const (
@@ -20,17 +20,14 @@ const (
 	promptInputEnd       = "<<<END_UNTRUSTED_INPUT>>>"
 )
 
-//go:embed review-rules.md
-var reviewRules string
-
 // PolicyHeader is the review and untrusted-input preamble for every model prompt.
-func PolicyHeader(minimumImportance int) string {
+func PolicyHeader(minimumImportance int, importance reviewrules.Importance) string {
 	return fmt.Sprintf(
 		"Classify every concrete defect from importance 1 through 10. The service publishes only findings with importance %d or higher. %s %s\nReview rules: %s\nWriting policy: %s\nUntrusted input policy: %s",
 		minimumImportance,
 		"A finding must identify a concrete defect on a changed line. Reuse the same concise title for the same path and defect across commits.",
 		"Return overview as one or two plain full sentences that explain what this chunk changes and why.",
-		reviewRules,
+		reviewrules.Prompt(importance),
 		config.WritingPolicy,
 		UntrustedInputPolicy,
 	)

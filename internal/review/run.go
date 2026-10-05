@@ -732,7 +732,7 @@ func (service *Service) reviewOneChunk(
 		chunk,
 		pass.settings.minimumImportance,
 		pass.disputePrompt+pullRequestPrompt(pass.work.PullRequest, pass.work.Files)+
-			omissionPrompt(promptShortfall),
+			omissionPrompt(promptShortfall, pass.work.Files),
 		&models,
 		&requests,
 		service.now,

@@ -370,16 +370,14 @@ func (collector *Collector) collectFile(
 	}
 	if !changedFile.PatchPresent {
 		fileContext.markGap(CoverageGapPatchAbsent)
-		return fileContext, nil
-	}
-
-	if !fileContext.collectChangedLines() {
-		return fileContext, nil
-	}
-
-	parsed, err := parsePatch(changedFile.Patch)
-	if err != nil || !parsed.complete {
-		fileContext.markGap(CoverageGapPatchUnreadable)
+	} else {
+		if !fileContext.collectChangedLines() {
+			return fileContext, nil
+		}
+		parsed, err := parsePatch(changedFile.Patch)
+		if err != nil || !parsed.complete {
+			fileContext.markGap(CoverageGapPatchUnreadable)
+		}
 	}
 
 	if changedFile.Status == "removed" {
@@ -394,6 +392,10 @@ func (collector *Collector) collectFile(
 		pullRequest.Head,
 	)
 	if err != nil {
+		if fileContext.Gap == CoverageGapPatchAbsent {
+			slog.WarnContext(ctx, "load omitted file context", slog.String("path", changedFile.Path), slog.String("err", err.Error()))
+			return fileContext, nil
+		}
 		gap := contentGapFor(err)
 		if !gap.Recurs() {
 			slog.ErrorContext(ctx, "load file content", slog.String("path", changedFile.Path), slog.String("err", err.Error()))
