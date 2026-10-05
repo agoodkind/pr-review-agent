@@ -97,7 +97,8 @@ type providerDefinition struct {
 
 var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
-func loadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
+// LoadProviders requires normalized PROVIDER_<ID> credential variables.
+func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 	raw, _ := lookup("PROVIDERS")
 	definitions, err := unmarshalProviderDefinitions(raw)
 	if err != nil || len(definitions) == 0 {
