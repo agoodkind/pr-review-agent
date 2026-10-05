@@ -156,9 +156,9 @@
         {
           "path": "docs/reference.md",
           "status": "modified",
-          "patch": "@@ -3,0 +3,1 @@\n+Every xcodebuild invocation passes a workspace or project.\n",
-          "current_content": "# Review reference\n\nEvery xcodebuild invocation passes a workspace or project.\n\n```go\nfunc buildCommands() []string {\n    return []string{\"xcodebuild -version\", \"xcodebuild -workspace App.xcworkspace build\"}\n}\n```\n",
-          "source_sha256": "9f27e7bd2a2b741ecb1edcc881fbba5ba12f93167791548502f42e38843a3353"
+          "patch": "@@ -3,0 +3,1 @@\n+Every `xcodebuild` invocation passes a workspace or project.\n",
+          "current_content": "# Review reference\n\nEvery `xcodebuild` invocation passes a workspace or project.\n\n```go\nfunc buildCommands() []string {\n    return []string{\"xcodebuild -version\", \"xcodebuild -workspace App.xcworkspace build\"}\n}\n```\n",
+          "source_sha256": "5a6a1bd2aa2b156c6647ef4ffe37731294533b6f87cea0f8f5930de5eec88b55"
         }
       ],
       "expected": [
@@ -184,9 +184,9 @@
         {
           "path": "docs/reference.md",
           "status": "modified",
-          "patch": "@@ -3,0 +3,1 @@\n+Product builds select a workspace or project. The version probe runs xcodebuild -version.\n",
-          "current_content": "# Review reference\n\nProduct builds select a workspace or project. The version probe runs xcodebuild -version.\n\n```go\nfunc buildCommands() []string {\n    return []string{\"xcodebuild -version\", \"xcodebuild -workspace App.xcworkspace build\"}\n}\n```\n",
-          "source_sha256": "32faf9ed0f27c31755ebd590a87d0de327b968ba55e704bb176b50f5cc4abfa3"
+          "patch": "@@ -3,0 +3,1 @@\n+Product builds select a workspace or project. The version probe runs `xcodebuild -version`.\n",
+          "current_content": "# Review reference\n\nProduct builds select a workspace or project. The version probe runs `xcodebuild -version`.\n\n```go\nfunc buildCommands() []string {\n    return []string{\"xcodebuild -version\", \"xcodebuild -workspace App.xcworkspace build\"}\n}\n```\n",
+          "source_sha256": "6f6bcc2d77c9c28e2de7c2976081edae81c8a6126f45831226b83a6e840ffa0d"
         }
       ],
       "expected": []
@@ -291,25 +291,26 @@
         "repository": "",
         "revision": "",
         "url": "",
-        "description": "This case applies an approved prose requirement to a reference paragraph."
+        "description": "This case applies an approved prose requirement to a numbered how-to procedure."
       },
       "files": [
         {
-          "path": "docs/reference.md",
+          "path": "docs/formatting.md",
           "status": "modified",
-          "patch": "@@ -3,0 +3,1 @@\n+Format the retry value like `worker.go` does.\n",
-          "current_content": "# Review reference\n\nFormat the retry value like `worker.go` does.\n\n```go\nfunc retryValue(delay time.Duration) string {\n    return strconv.FormatInt(delay.Milliseconds(), 10)\n}\n```\n",
-          "source_sha256": "832ee885ceac4314117daa789152af9ae4fb262c1ff0ae0b5e5dc4caba0cbff4"
+          "patch": "@@ -5,0 +5,1 @@\n+1. Format the retry value like `worker.go` does.\n",
+          "current_content": "# Format a retry delay\n\nThe retry delay is a `time.Duration` value.\n\n1. Format the retry value like `worker.go` does.\n\n   ```go\n   func retryValue(delay time.Duration) string {\n       return strconv.FormatInt(delay.Milliseconds(), 10)\n   }\n   ```\n",
+          "source_sha256": "c5a1ce0c4f8d10f9b68d15160a3d3a6f61dbfe5381089b83e986516cb60704f1"
         }
       ],
       "expected": [
         {
           "rule_ids": [
-            "explicit_values_and_transformations"
+            "explicit_values_and_transformations",
+            "necessary_links"
           ],
-          "path": "docs/reference.md",
-          "start_line": 3,
-          "end_line": 3
+          "path": "docs/formatting.md",
+          "start_line": 5,
+          "end_line": 5
         }
       ]
     },
@@ -319,15 +320,15 @@
         "repository": "",
         "revision": "",
         "url": "",
-        "description": "This case applies an approved prose requirement to a reference paragraph."
+        "description": "This case applies an approved prose requirement to a numbered how-to procedure."
       },
       "files": [
         {
-          "path": "docs/reference.md",
+          "path": "docs/formatting.md",
           "status": "modified",
-          "patch": "@@ -3,0 +3,1 @@\n+Write the retry delay as decimal milliseconds.\n",
-          "current_content": "# Review reference\n\nWrite the retry delay as decimal milliseconds.\n\n```go\nfunc retryValue(delay time.Duration) string {\n    return strconv.FormatInt(delay.Milliseconds(), 10)\n}\n```\n",
-          "source_sha256": "1a01050052d42e018fc454eca31cef11ae3b8d30fa76737719f9ed5ff219ea0b"
+          "patch": "@@ -5,0 +5,1 @@\n+1. Write the retry delay as a base-10 integer in milliseconds.\n",
+          "current_content": "# Format a retry delay\n\nThe retry delay is a `time.Duration` value.\n\n1. Write the retry delay as a base-10 integer in milliseconds.\n\n   ```go\n   func retryValue(delay time.Duration) string {\n       return strconv.FormatInt(delay.Milliseconds(), 10)\n   }\n   ```\n",
+          "source_sha256": "3ffd381c53006fe4f07b1cbfa4e6ab61a202acea6ed2d3db09f0b0e82ef65ebc"
         }
       ],
       "expected": []
