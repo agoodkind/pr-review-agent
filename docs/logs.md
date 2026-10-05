@@ -1,6 +1,6 @@
-# Read logs, metrics, and quota counters
+# Inspect service diagnostics
 
-Run [pragent-ops](../cmd/pragent-ops/main.go) from the repository root to collect Cloudflare logs, summarize saved records, or inspect provider counters. Go must be installed.
+Run [pragent-ops](../cmd/pragent-ops/main.go) from the repository root to collect logs, summarize saved records, inspect counters, or test one provider. Go must be installed.
 
 ## Collect historical logs
 
@@ -58,6 +58,19 @@ The summary distinguishes app quota denials, provider API exhaustion, and unclas
 The operator token permits counter reads. Usage reports and reservations require the existing webhook signature. The CLI also accepts `--signing-key-file` for signed counter reads; supply only one authentication file.
 
 Provider API balances and subscription allowances are separate from the app's counters. Counter reports include the measured time bounds; newly collected timestamped history cannot reconstruct earlier daily totals.
+
+## Test one provider
+
+1. Provide a private file containing the selected provider's existing API credential.
+2. Send one review request using its configured model, API, output limit, and structured-response format:
+
+   ```bash
+   go run ./cmd/pragent-ops probe --provider gemini \
+       --credential-file /path/to/provider-key
+   ```
+
+   Use `--prompt-file` to test a saved review input. The command uses the production client with one selected provider and performs no retries or fallback. It preserves configured app quotas; capped providers also require `--signing-key-file`.
+3. Inspect the printed private output directory. SDK logs and error response bodies remain in private files. Standard output contains the configured provider, model, request outcome, and artifact paths.
 
 ## Watch new events
 

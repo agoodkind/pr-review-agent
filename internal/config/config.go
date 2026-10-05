@@ -274,7 +274,7 @@ func Load(lookup LookupEnv) (Config, error) {
 	}
 	cfg.ServiceFailureAppearance = appearances
 	if _, configured := lookup("PROVIDERS"); configured {
-		providers, err := loadProviders(lookup)
+		providers, err := LoadProviders(lookup)
 		if err != nil {
 			return Config{}, err
 		}
