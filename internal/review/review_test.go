@@ -25,6 +25,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/openai"
+	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/review"
 )
@@ -491,16 +492,16 @@ func (multiHunkCollector) CollectRange(
 	_ domain.HeadSHA,
 ) (diff.ReviewInput, error) {
 	patch := strings.Join([]string{
-		"@@ -1,2 +1,3 @@",
+		"@@ -1,1 +1,2 @@",
 		" package main",
 		"+added1",
-		"@@ -20,2 +21,3 @@",
+		"@@ -20,1 +21,2 @@",
 		" func b() {}",
 		"+added2",
-		"@@ -40,2 +41,3 @@",
+		"@@ -40,1 +42,2 @@",
 		" func c() {}",
 		"+added3",
-		"@@ -60,2 +61,3 @@",
+		"@@ -60,1 +63,2 @@",
 		" func d() {}",
 		"+added4",
 	}, "\n")
@@ -508,13 +509,18 @@ func (multiHunkCollector) CollectRange(
 	if err != nil {
 		return diff.ReviewInput{}, err
 	}
+	content := make([]string, 64)
+	content[0], content[1] = "package main", "added1"
+	content[20], content[21] = "func b() {}", "added2"
+	content[41], content[42] = "func c() {}", "added3"
+	content[62], content[63] = "func d() {}", "added4"
 	return diff.ReviewInput{
 		PullRequest: pullRequest,
 		Files: []diff.FileContext{{
 			Path:              "main.go",
 			Status:            "modified",
 			Patch:             patch,
-			CurrentContent:    "package main\nadded1\nadded2\nadded3\nadded4\n",
+			CurrentContent:    strings.Join(content, "\n") + "\n",
 			ChangedRightLines: changed,
 			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
@@ -675,10 +681,10 @@ func (twoChunkSameFileCollector) CollectRange(
 	_ domain.HeadSHA,
 ) (diff.ReviewInput, error) {
 	patch := strings.Join([]string{
-		"@@ -1,2 +1,3 @@",
+		"@@ -1,1 +1,2 @@",
 		" package main",
 		"+added1",
-		"@@ -100,2 +101,3 @@",
+		"@@ -100,1 +101,2 @@",
 		" func other() {}",
 		"+added2",
 	}, "\n")
@@ -692,12 +698,22 @@ func (twoChunkSameFileCollector) CollectRange(
 			Path:              "main.go",
 			Status:            "modified",
 			Patch:             patch,
-			CurrentContent:    strings.Repeat("x\n", 20000),
+			CurrentContent:    sameFileChunkContent(),
 			ChangedRightLines: changed,
 			ChangedRightHunks: hunks,
 			CoverageComplete:  true,
 		}},
 	}, nil
+}
+
+func sameFileChunkContent() string {
+	lines := make([]string, 20000)
+	for index := range lines {
+		lines[index] = "x"
+	}
+	lines[0], lines[1] = "package main", "added1"
+	lines[100], lines[101] = "func other() {}", "added2"
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // One defect reported by two chunks is one comment, and a finding that does not
@@ -782,29 +798,6 @@ func TestTheChunkPromptClassifiesFindingsAndWrapsUntrustedInput(t *testing.T) {
 // one defect as many findings and every deterministic key downstream saw them
 // as different. The prompt now asks for one report per defect, at one anchor,
 // carrying one claim sentence the service can compare across wordings.
-func TestTheChunkPromptAsksForOneClaimPerDefect(t *testing.T) {
-	model := &sequenceModel{results: []domain.ReviewResult{{}}}
-	fixture := newServiceFixture(t, serviceFixtureOptions{minimumImportance: 9, model: model})
-
-	if err := fixture.run(context.Background(), fixture.job()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if len(model.prompts) != 1 {
-		t.Fatalf("prompt count = %d, want 1", len(model.prompts))
-	}
-	prompt := model.prompts[0]
-	for _, want := range []string{
-		"Report each distinct defect exactly once",
-		"single best line range",
-		"Never restate one defect under a second title or at a second location",
-		"Return in claim one short sentence stating the defect independent of wording",
-		"Two reports of the same defect must carry the same claim",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt missing %q: %q", want, prompt)
-		}
-	}
-}
 
 // A model answer the schema rejects is a failed chunk like any other: it stays
 // pending, and the run blocks the head rather than approving what it never read.
@@ -2730,8 +2723,14 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	// approval event carries the meaning and the one top level comment carries
 	// the prose and the table, so any prose here renders a second Review box
 	// saying what the comment above it already said.
-	if body != marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionApprove) {
+	if strings.Split(body, "\n")[0] != marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionApprove) {
 		t.Fatalf("approving verdict body = %q, want the review marker alone", body)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && (!strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->")) {
+			t.Fatalf("approving verdict includes visible text: %q", line)
+		}
 	}
 	commentBody, ok := fixture.state.issueComments[0]["body"].(string)
 	if !ok || !strings.Contains(commentBody, "| Model | `"+testReviewModel+"` |") {
@@ -3396,7 +3395,6 @@ func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
 		finding.Body,
 		replyText,
 		"other-user",
-		"decide whether the current code and replies support it",
 	} {
 		if !strings.Contains(model.prompts[0], want) {
 			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])
@@ -3419,7 +3417,6 @@ func TestTheChunkPromptCarriesResolvedDiscussionsFromEarlierCommits(t *testing.T
 		"Resolved finding from an earlier commit",
 		answeredThreadFinding().Title,
 		replyText,
-		"It does not decide the current review by itself",
 	} {
 		if !strings.Contains(model.prompts[0], want) {
 			t.Fatalf("chunk prompt missing %q:\n%s", want, model.prompts[0])
@@ -6816,8 +6813,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		chunkTimeout,
 		options.failureAppearances,
 		testClock(8*time.Second),
-		slog.New(slog.NewTextHandler(logWriter, nil)), config.MaximumChunkConcurrency, config.MaximumPromptBytes,
-	)
+		slog.New(slog.NewTextHandler(logWriter, nil)), config.MaximumChunkConcurrency, config.MaximumPromptBytes, policytest.Load(t))
 
 	return &serviceFixture{
 		service:    service,

@@ -725,6 +725,10 @@ func TestChunkSplitCarriesIncompleteCoverage(t *testing.T) {
 	}
 }
 
+func (source *fakeSource) ListPullRequestCommits(context.Context, int64, domain.Repository, int) ([]githubapp.PullRequestCommit, error) {
+	return nil, errors.New("the existing file fixture does not provide commit metadata")
+}
+
 func testPullRequest() githubapp.PullRequest {
 	head, err := domain.ParseHeadSHA(testHeadSHA)
 	if err != nil {

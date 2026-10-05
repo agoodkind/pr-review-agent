@@ -43,7 +43,7 @@ func renderUsageDetails(usage UsageSummary) string {
 	if usage.PricedRequests < usage.ReportedRequests {
 		builder.WriteString("\nSome reported token usage has no configured price. The estimate excludes its cost.\n")
 	}
-	if len(usage.Models) > 0 {
+	if len(usage.Models) > 0 && len(usage.ProviderAttempts) == 0 {
 		builder.WriteString("\n| Requested model | Reported model | Requests | Input | Cached input | Output | Total | Estimated cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 		for _, model := range usage.Models {
 			cost := "unknown"

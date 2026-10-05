@@ -45,6 +45,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // maximumDisputeBytes bounds the reviewer context added to one chunk prompt.
@@ -238,20 +239,11 @@ func formatDisputeSection(
 // The instruction sits outside the untrusted delimiters because it is this
 // service speaking. The threads and the replies sit inside them, because a
 // reply is text a stranger wrote on a public pull request.
-func (disputes disputeContext) promptSection() string {
+func (disputes disputeContext) promptSection(policy reviewrules.Policy) (string, error) {
 	if len(disputes.sections) == 0 {
-		return ""
+		return "", nil
 	}
-	var builder strings.Builder
-	builder.WriteString(
-		"These are the current inline discussions and replies on the pull request. " +
-			"A resolved finding from this exact commit is settled and must not be raised again. " +
-			"A resolved finding from an earlier commit is context to reconsider against the current code and replies. It does not decide the current review by itself. " +
-			"Before raising a concern already discussed, decide whether the current code and replies support it. Do not repeat it when the discussion correctly answers it. " +
-			"Weigh each reply by who wrote it and whether the current code bears it out. " +
-			"If a reply is factually wrong, quote it and say why it is wrong; do not restate the original claim as though it were unanswered.\n",
-	)
-	builder.WriteString(WrapUntrusted(strings.Join(disputes.sections, "\n\n")))
-	builder.WriteString("\n")
-	return builder.String()
+	var data reviewrules.PromptData
+	data.Input = policy.WrapUntrusted(strings.Join(disputes.sections, "\n\n"))
+	return renderPrompt(policy, "disputes.input", data)
 }

@@ -40,6 +40,8 @@ type Summary struct {
 	Eligible          []domain.Finding
 	Published         []domain.Finding
 	Fallback          []domain.Finding
+	Metadata          []domain.Finding
+	MetadataRevision  string
 	Omissions         []unreadHunk
 	PriorReviews      []reviewTrace
 	Threads           []threadTrace
@@ -62,6 +64,9 @@ func (summary Summary) Verdict() string {
 	}
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
 		return "This review found no severe defects."
+	}
+	if len(summary.Metadata) > 0 {
+		return "Correct the prose findings below."
 	}
 	return "Resolve the open inline findings."
 }
@@ -114,7 +119,9 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	for _, row := range rows {
 		fmt.Fprintf(&builder, "| %s | %s |\n", row[0], row[1])
 	}
-	if providerAttempts := renderProviderStatuses(statuses); providerAttempts != "" {
+	if providerDetails := renderProviderDetails(summary.Usage); providerDetails != "" {
+		builder.WriteString(providerDetails)
+	} else if providerAttempts := renderProviderStatuses(statuses); providerAttempts != "" {
 		builder.WriteString("\n" + providerAttempts + "\n")
 	}
 	builder.WriteString(renderUsageDetails(summary.Usage))
@@ -138,7 +145,6 @@ func RenderBody(summary Summary) string {
 }
 
 func renderReportSummary(report Report) string {
-	report = SanitizeReport(report)
 	value := sanitizeReportText(report.Summary)
 	if value != "" {
 		return value
@@ -147,7 +153,6 @@ func renderReportSummary(report Report) string {
 }
 
 func renderWalkthrough(report Report) string {
-	report = SanitizeReport(report)
 	lines := make([]string, 0, len(report.Walkthrough))
 	for _, item := range report.Walkthrough {
 		if value := sanitizeReportText(item); value != "" {
@@ -174,6 +179,9 @@ const (
 
 func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
 	parts := []string{verdictSectionStart, "### Verdict", verdictLead(summary)}
+	if metadata := renderMetadataFindings(summary.Metadata); metadata != "" {
+		parts = append(parts, metadata)
+	}
 	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
 		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
 	}
@@ -241,6 +249,9 @@ func RenderVerdictBody(summary Summary) string {
 	if reason := encodeDecisionReasonMarker(summary.DecisionReason); reason != "" {
 		parts = append(parts, reason)
 	}
+	if summary.MetadataRevision != "" {
+		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
+	}
 	return strings.Join(parts, "\n")
 }
 
@@ -279,7 +290,7 @@ func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 	parts = append(
 		parts,
 		RenderDetails(summary),
-		marker.Summary()+"\n"+marker.Review(summary.Head, summary.Decision),
+		marker.Summary()+"\n"+RenderVerdictBody(summary),
 	)
 	return strings.Join(parts, "\n\n")
 }
@@ -438,6 +449,12 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 		summary.Decision = domain.ReviewDecisionComment
 		parts = append(parts, renderVerdictSection(summary, false), RenderVerdictBody(summary))
 	}
+	if metadata := renderMetadataFindings(summary.Metadata); metadata != "" {
+		parts = append(parts, metadata)
+	}
+	if summary.MetadataRevision != "" {
+		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
+	}
 	parts = append(parts, RenderDetails(summary), marker.Summary())
 	return strings.Join(parts, "\n\n")
 }
@@ -583,6 +600,12 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 			parts = append(parts, trimmed)
 		}
 	}
+	if metadata := renderMetadataFindings(summary.Metadata); metadata != "" {
+		parts = append(parts, metadata)
+	}
+	if summary.MetadataRevision != "" {
+		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
+	}
 	parts = append(parts, RenderDetails(summary, statuses...))
 	return strings.Join(parts, "\n\n")
 }
@@ -635,16 +658,19 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 		// source line they already have beside the comment, and no label the
 		// model wrote for the service rather than for them.
 		body, err := marker.EncodeFindingBody(head, domain.Finding{
-			RuleID:     finding.RuleID,
-			Path:       normalizedPath,
-			StartLine:  finding.StartLine,
-			EndLine:    finding.EndLine,
-			Title:      sanitizeProse(finding.Title),
-			Body:       sanitizeProse(finding.Body),
-			Evidence:   finding.Evidence,
-			Claim:      finding.Claim,
-			Suggestion: finding.Suggestion,
-			Importance: finding.Importance,
+			Surface:          domain.FindingFile,
+			CommitSHA:        "",
+			CorrectionAction: finding.CorrectionAction,
+			RuleID:           finding.RuleID,
+			Path:             normalizedPath,
+			StartLine:        finding.StartLine,
+			EndLine:          finding.EndLine,
+			Title:            sanitizeProse(finding.Title),
+			Body:             sanitizeProse(finding.Body),
+			Evidence:         finding.Evidence,
+			Claim:            finding.Claim,
+			Suggestion:       finding.Suggestion,
+			Importance:       finding.Importance,
 		})
 		if err != nil {
 			slog.Error("encode finding body", slog.String("err", err.Error()))

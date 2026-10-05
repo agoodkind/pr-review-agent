@@ -21,9 +21,10 @@ type pullRequestResponse struct {
 	Base struct {
 		SHA string `json:"sha"`
 	} `json:"base"`
-	Draft bool   `json:"draft"`
-	Title string `json:"title"`
-	Body  string `json:"body"`
+	Draft   bool   `json:"draft"`
+	Title   string `json:"title"`
+	Body    string `json:"body"`
+	Commits int    `json:"commits"`
 }
 
 type changedFileResponse struct {
@@ -92,13 +93,41 @@ func (client *Client) GetPullRequest(
 	}
 
 	return PullRequest{
-		Number: response.Number,
-		Head:   head,
-		Base:   base,
-		Draft:  response.Draft,
-		Title:  response.Title,
-		Body:   response.Body,
+		Number:      response.Number,
+		Head:        head,
+		Base:        base,
+		Draft:       response.Draft,
+		Title:       response.Title,
+		Body:        response.Body,
+		CommitCount: response.Commits,
 	}, nil
+}
+
+// ListPullRequestCommits follows pagination without truncating commit messages.
+func (client *Client) ListPullRequestCommits(ctx context.Context, installationID int64, repo domain.Repository, number int) ([]PullRequestCommit, error) {
+	var commits []PullRequestCommit
+	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/commits?per_page=100", number))
+	err := client.doRESTPaginated(ctx, installationID, path, func(body []byte) (int, error) {
+		var page []struct {
+			SHA    string `json:"sha"`
+			Commit struct {
+				Message string `json:"message"`
+			} `json:"commit"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			client.logger.WarnContext(ctx, "Decode pull request commits failed", "err", err)
+			return 0, fmt.Errorf("decode pull request commits: %w", err)
+		}
+		for _, item := range page {
+			sha, err := parseHeadSHA(item.SHA)
+			if err != nil {
+				return 0, err
+			}
+			commits = append(commits, PullRequestCommit{SHA: sha, Message: item.Commit.Message})
+		}
+		return len(page), nil
+	})
+	return commits, err
 }
 
 // ListChangedFiles returns every file changed on one pull request.

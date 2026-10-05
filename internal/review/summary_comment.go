@@ -124,7 +124,7 @@ func findSummaryComment(comments []githubapp.IssueComment, botLogin string) (git
 		if comment.Author != botLogin {
 			continue
 		}
-		if marker.HasState(comment.Body) {
+		if marker.HasState(comment.Body) || marker.HasSummary(comment.Body) {
 			return comment, true
 		}
 	}

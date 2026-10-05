@@ -14,6 +14,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // GitHub loads review threads and resolves owned findings.
@@ -37,12 +38,13 @@ type Service struct {
 	botLogin           string
 	logger             *slog.Logger
 	maximumPromptBytes int
+	policy             reviewrules.Policy
 }
 
 var errHeadChanged = errors.New("head changed during reconciliation")
 
 // NewService constructs a reconciliation service.
-func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger, maximumPromptBytes int) *Service {
+func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger, maximumPromptBytes int, policy reviewrules.Policy) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -52,6 +54,7 @@ func NewService(github GitHub, model Model, botLogin string, logger *slog.Logger
 		botLogin:           botLogin,
 		logger:             logger,
 		maximumPromptBytes: maximumPromptBytes,
+		policy:             policy,
 	}
 }
 
@@ -192,9 +195,15 @@ func (service *Service) reconcilePrepared(
 	}
 
 	for batchIndex, batch := range batches {
+		prompt, promptErr := buildBatchPrompt(batch, batchIndex+1, len(batches), pullRequest, service.policy)
+		if promptErr != nil {
+			logger.ErrorContext(ctx, "Reconciliation prompt rendering failed", "err", promptErr)
+			reconcileErrors = append(reconcileErrors, promptErr)
+			continue
+		}
 		resolutions, err := service.model.Reconcile(
 			ctx,
-			buildBatchPrompt(batch, batchIndex+1, len(batches), pullRequest),
+			prompt,
 		)
 		if err != nil {
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile batch %d/%d: %w", batchIndex+1, len(batches), err))
@@ -567,7 +576,7 @@ func formatThreadSection(
 		builder.WriteString(contextText.originalAnchor)
 		fmt.Fprintf(&builder, "\nOriginal finding source still appears verbatim in the complete current file: %t\n", contextText.originalAnchorPresent)
 	} else {
-		builder.WriteString("\nOriginal finding source could not be reconstructed. Decide from the current source and discussion.\n")
+		builder.WriteString("\nOriginal finding source could not be reconstructed.\n")
 	}
 	if len(thread.Replies) > 0 {
 		// The replies are not labelled as the author's. Anyone who can comment on
@@ -585,9 +594,9 @@ func formatThreadSection(
 			builder.WriteString(line)
 		}
 	}
-	builder.WriteString("\n\nCurrent file context (the original line numbers may have shifted):\nThe following source is authoritative for the current head.\n")
+	builder.WriteString("\n\nCurrent file context (the original line numbers may have shifted):\n")
 	builder.WriteString(contextText.currentContent)
-	builder.WriteString("\n\nLatest pull request diff for this file:\nThis diff records historical changes. Minus lines were removed. Plus lines exist in the current head. Space lines are unchanged context.\n")
+	builder.WriteString("\n\nLatest pull request diff for this file:\n")
 	builder.WriteString(contextText.currentDiff)
 	return builder.String()
 }
@@ -642,11 +651,8 @@ func buildBatchPrompt(
 	index int,
 	total int,
 	pullRequest githubapp.PullRequest,
-) string {
-	var builder strings.Builder
-	builder.WriteString("Review unresolved inline findings against the pull request as it exists now. Batch ")
-	fmt.Fprintf(&builder, "%d/%d", index, total)
-	builder.WriteString(". Resolve a thread when the latest pull request no longer has its defect, or when a reply correctly disproves it. Keep it open only when the finding still applies to current source. The current file content establishes what exists now. A minus-prefixed diff line and the original finding describe historical source; neither establishes a defect in the current file. Resolve a wording finding when its offending prose was removed or corrected and no equivalent violation remains in current source. Absence of the original wording does not prove that a behavioral defect was fixed. Use uncertain only when the current pull request and discussion cannot decide.\n")
+	policy reviewrules.Policy,
+) (string, error) {
 	var body strings.Builder
 	body.WriteString("Latest pull request title: ")
 	body.WriteString(pullRequest.Title)
@@ -656,8 +662,16 @@ func buildBatchPrompt(
 		body.WriteString("\n\n")
 		body.WriteString(item.text)
 	}
-	builder.WriteString(review.WrapUntrusted(body.String()))
-	return builder.String()
+	var data reviewrules.PromptData
+	data.Input = policy.WrapUntrusted(body.String())
+	data.Index = index
+	data.Total = total
+	prompt, err := policy.Render("reconcile.input", data)
+	if err != nil {
+		slog.Warn("Reconciliation prompt rendering failed", "err", err)
+		return "", fmt.Errorf("render reconciliation prompt: %w", err)
+	}
+	return prompt, nil
 }
 
 func indexResolutions(resolutions []domain.ThreadResolution) map[string]domain.ThreadResolution {

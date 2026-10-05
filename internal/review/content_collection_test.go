@@ -19,6 +19,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/review"
 )
@@ -81,10 +82,8 @@ func newContentCollectionFixture(t *testing.T, model *sequenceModel) (*serviceFi
 		GitHubAppID: testGitHubAppID, GitHubPrivateKey: serviceTestPrivateKey(t),
 		GitHubBotLogin: testBotLogin, GitHubAPIBaseURL: apiURL, GitHubGraphQLURL: graphqlURL,
 	}, server.Client(), func() time.Time { return time.Unix(1_700_000_000, 0) }, logger)
-	fixture.service = review.NewService(client, diff.NewCollector(client), model, fixture.reconciler,
-		queue.NewKeyedLocker(), testBotLogin, testMinimumImportance,
-		config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks,
-		config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, config.MaximumChunkConcurrency, config.MaximumPromptBytes)
+	fixture.service = review.NewService(client, diff.NewCollector(client), model, fixture.reconciler, queue.NewKeyedLocker(), testBotLogin, testMinimumImportance, config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks, config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, config.MaximumChunkConcurrency, config.MaximumPromptBytes, policytest.Load(t))
+
 	return fixture, contentStatus
 }
 

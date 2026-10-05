@@ -142,14 +142,49 @@ func ParseResolution(value string) (Resolution, error) {
 	}
 }
 
-// Finding is one validated review finding anchored to changed code.
+// FindingSurface distinguishes repository lines from pull request metadata.
+type FindingSurface string
+
+const (
+	// FindingFile requires an actual changed repository path.
+	FindingFile FindingSurface = "file"
+	// FindingPullRequestTitle uses the title's single source line.
+	FindingPullRequestTitle FindingSurface = "pull_request_title"
+	// FindingPullRequestDescription uses description line numbers.
+	FindingPullRequestDescription FindingSurface = "pull_request_description"
+	// FindingCommitMessage requires the commit's immutable identifier.
+	FindingCommitMessage FindingSurface = "commit_message"
+)
+
+// CorrectionAction distinguishes an unavailable correction from an empty deletion.
+type CorrectionAction string
+
+const (
+	// CorrectionNone permits a file finding without an exact edit.
+	CorrectionNone CorrectionAction = "none"
+	// CorrectionReplace includes the complete replacement for the selected lines.
+	CorrectionReplace CorrectionAction = "replace"
+	// CorrectionDelete removes the selected lines without replacement text.
+	CorrectionDelete CorrectionAction = "delete"
+)
+
+// FindingTarget identifies a metadata field without assigning a file path.
+type FindingTarget struct {
+	Surface   FindingSurface `json:"surface"`
+	CommitSHA HeadSHA        `json:"commit_sha"`
+}
+
+// Finding includes the source coordinates and the proposed correction.
 type Finding struct {
-	RuleID    reviewrules.ID `json:"rule_id"`
-	Path      string         `json:"path"`
-	StartLine int            `json:"start_line"`
-	EndLine   int            `json:"end_line"`
-	Title     string         `json:"title"`
-	Body      string         `json:"body"`
+	Surface          FindingSurface   `json:"surface"`
+	CommitSHA        HeadSHA          `json:"commit_sha"`
+	CorrectionAction CorrectionAction `json:"correction_action"`
+	RuleID           reviewrules.ID   `json:"rule_id"`
+	Path             string           `json:"path"`
+	StartLine        int              `json:"start_line"`
+	EndLine          int              `json:"end_line"`
+	Title            string           `json:"title"`
+	Body             string           `json:"body"`
 	// Evidence is the exact source line the finding relies on, copied verbatim
 	// from the code the model was shown. Publication drops a finding whose
 	// evidence does not appear in that source, so a claim about code the model
@@ -178,8 +213,27 @@ const (
 
 // Validate rejects empty fields, invalid line ranges, and out-of-range importance.
 func (finding Finding) Validate() error {
-	if strings.TrimSpace(finding.Path) == "" {
-		return errors.New("finding path is required")
+	if err := finding.validateSurface(); err != nil {
+		return err
+	}
+	switch finding.CorrectionAction {
+	case "", CorrectionNone, CorrectionReplace, CorrectionDelete:
+	default:
+		return errors.New("finding correction_action is invalid")
+	}
+	if finding.EffectiveSurface() != FindingFile {
+		if finding.CorrectionAction != CorrectionReplace && finding.CorrectionAction != CorrectionDelete {
+			return errors.New("metadata prose findings require an exact replacement or deletion")
+		}
+		if finding.CorrectionAction == CorrectionReplace && strings.TrimSpace(finding.Suggestion) == "" {
+			return errors.New("metadata prose replacement is empty")
+		}
+	}
+	if finding.CorrectionAction == CorrectionDelete && finding.Suggestion != "" {
+		return errors.New("a deletion cannot include replacement text")
+	}
+	if finding.EffectiveSurface() == FindingPullRequestTitle && finding.CorrectionAction == CorrectionDelete {
+		return errors.New("a pull request title requires a replacement")
 	}
 	if strings.TrimSpace(finding.Title) == "" {
 		return errors.New("finding title is required")
@@ -187,7 +241,7 @@ func (finding Finding) Validate() error {
 	if strings.TrimSpace(finding.Body) == "" {
 		return errors.New("finding body is required")
 	}
-	if strings.Contains(finding.Suggestion, "```") {
+	if finding.EffectiveSurface() == FindingFile && strings.Contains(finding.Suggestion, "```") {
 		return errors.New("finding suggestion contains a markdown fence")
 	}
 	if finding.StartLine < 1 {
@@ -200,6 +254,42 @@ func (finding Finding) Validate() error {
 		return errors.New("finding importance must be between 1 and 10")
 	}
 	return nil
+}
+
+func (finding Finding) validateSurface() error {
+	switch finding.EffectiveSurface() {
+	case FindingFile:
+		if strings.TrimSpace(finding.Path) == "" || finding.CommitSHA != "" {
+			return errors.New("file findings require a path and no commit_sha")
+		}
+	case FindingPullRequestTitle, FindingPullRequestDescription:
+		if finding.Path != "" || finding.CommitSHA != "" {
+			return errors.New("pull request prose findings cannot set path or commit_sha")
+		}
+	case FindingCommitMessage:
+		if finding.Path != "" {
+			return errors.New("commit prose findings cannot set path")
+		}
+		if _, err := ParseHeadSHA(string(finding.CommitSHA)); err != nil {
+			return errors.New("commit prose findings require a valid commit_sha")
+		}
+	default:
+		return errors.New("finding surface is invalid")
+	}
+	return nil
+}
+
+// EffectiveSurface recognizes file markers published before metadata review existed.
+func (finding Finding) EffectiveSurface() FindingSurface {
+	if finding.Surface == "" {
+		return FindingFile
+	}
+	return finding.Surface
+}
+
+// Target scopes commit prose to one immutable commit.
+func (finding Finding) Target() FindingTarget {
+	return FindingTarget{Surface: finding.EffectiveSurface(), CommitSHA: finding.CommitSHA}
 }
 
 // ReviewResult is the structured model output for one review pass.
@@ -230,7 +320,9 @@ func (result ReviewResult) Validate() error {
 
 func findingKey(finding Finding) string {
 	return fmt.Sprintf(
-		"%s:%d:%d:%s:%s:%d",
+		"%s:%s:%s:%d:%d:%s:%s:%d",
+		finding.EffectiveSurface(),
+		finding.CommitSHA,
 		finding.Path,
 		finding.StartLine,
 		finding.EndLine,

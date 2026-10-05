@@ -12,6 +12,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/policytest"
 )
 
 // internalTestHeadSHA is the head every internal test in this package uses.
@@ -249,6 +250,7 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		&selection,
 		collectDisputes(nil, summaryCommentTestBotLogin, postHead),
 		nil,
+		"",
 	)
 	service := &Service{
 		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
@@ -265,7 +267,7 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		context.Background(),
 		summaryCommentTestJob(),
 		postHead,
-		"context\n+two\n+three\n",
+		diff.Chunk{Text: "context\n+two\n+three\n"},
 		findings,
 		pass,
 	)
@@ -369,13 +371,14 @@ func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
 	const carried = 12 * time.Second
 	const booted = 30 * time.Minute
 	model := &deadlineRecordingModel{consolidateDeadline: time.Time{}, sawConsolidate: false}
-	service := &Service{model: model, chunkTimeout: booted}
+	service := &Service{model: model, chunkTimeout: booted, reviewPolicy: policytest.Load(t)}
 	pass := newChunkPass(
 		deltaWork{Files: nil, Chunks: nil},
 		reviewSettings{minimumImportance: 1, maxFiles: 10, maxChunks: 10, chunkTimeout: carried},
 		&publicationState{},
 		disputeContext{},
 		nil,
+		"",
 	)
 	candidates := []domain.Finding{
 		{Path: "a.go", StartLine: 1, EndLine: 1, Title: "one", Body: "b", Evidence: "e", Importance: 8},

@@ -20,6 +20,8 @@ type reviewProgress struct {
 	observed          []domain.Finding
 	eligible          []domain.Finding
 	published         []domain.Finding
+	metadata          []domain.Finding
+	metadataRevision  string
 	priorReviews      []reviewTrace
 	threads           []threadTrace
 	usage             *UsageRecorder
@@ -45,6 +47,8 @@ func newReviewProgress(
 		observed:          nil,
 		eligible:          nil,
 		published:         nil,
+		metadata:          nil,
+		metadataRevision:  "",
 		priorReviews:      nil,
 		threads:           nil,
 		usage:             nil,
@@ -100,13 +104,15 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		// Findings post while the review runs, so a failed run can still leave
 		// comments on the page. Reporting none here would contradict what the
 		// reader sees on the same pull request.
-		Published:    progress.published,
-		Fallback:     nil,
-		Omissions:    nil,
-		PriorReviews: progress.priorReviews,
-		Threads:      progress.threads,
-		Reached:      progress.stage,
-		Failed:       true,
-		Forced:       progress.forced,
+		Published:        progress.published,
+		Fallback:         nil,
+		Metadata:         progress.metadata,
+		MetadataRevision: progress.metadataRevision,
+		Omissions:        nil,
+		PriorReviews:     progress.priorReviews,
+		Threads:          progress.threads,
+		Reached:          progress.stage,
+		Failed:           true,
+		Forced:           progress.forced,
 	}
 }

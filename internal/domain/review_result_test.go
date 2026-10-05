@@ -5,11 +5,13 @@ import (
 	"testing"
 
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 func TestRuleImportanceDeterminesPublishedReviewDecision(t *testing.T) {
+	catalog := policytest.Load(t).Catalog()
 	cases := []struct {
 		name               string
 		rule               reviewrules.ID
@@ -34,7 +36,7 @@ func TestRuleImportanceDeterminesPublishedReviewDecision(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := domain.UnmarshalReviewResult(encoded, item.overrides)
+			result, err := domain.UnmarshalReviewResult(encoded, catalog, item.overrides)
 			if err != nil {
 				t.Fatal(err)
 			}

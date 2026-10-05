@@ -32,7 +32,7 @@
       "reasoning_effort": "high",
       "api_kind": "gemini",
       "api_key_binding": "GEMINI_API_KEY",
-      "max_output_tokens": 8000
+      "max_output_tokens": 16384
     },
     {
       "id": "openrouter",
@@ -92,6 +92,8 @@
     "technical_comments": 10,
     "actionable_instructions": 10
   },
+  "REVIEW_RULES_FILE": "config/review-rules.json",
+  "REVIEW_PROMPTS_FILE": "config/review-prompts.json",
   "REVIEW_MODEL_PRICING": {
     "gemini-3.5-flash-lite": {
       "input_per_million_tokens": 0.30,

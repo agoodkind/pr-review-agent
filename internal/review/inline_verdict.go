@@ -25,6 +25,14 @@ func (service *Service) validateInlineVerdict(
 	if summary.Decision != domain.ReviewDecisionRequestChanges && summary.Decision != domain.ReviewDecisionComment {
 		return nil
 	}
+	if summary.Decision == domain.ReviewDecisionRequestChanges && len(summary.Metadata) > 0 {
+		for _, finding := range summary.Metadata {
+			if finding.EffectiveSurface() == domain.FindingFile || finding.Validate() != nil {
+				return errors.New("the metadata prose finding is not actionable")
+			}
+		}
+		return nil
+	}
 	logger := gklog.L(ctx)
 	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {

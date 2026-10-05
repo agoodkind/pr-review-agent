@@ -24,6 +24,7 @@ func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
 			Path:   hostile,
 			Header: "@@ -1,1 +1,2 @@ `evil`",
 			Reason: oversizedHunkReason,
+			Target: nil,
 		}}},
 		0,
 	)
@@ -46,6 +47,7 @@ func TestUnreadHunkTruncationKeepsAWholeRune(t *testing.T) {
 		Path:   strings.Repeat("界", maximumUnreadHunkLabelBytes),
 		Header: "",
 		Reason: "",
+		Target: nil,
 	})
 
 	if !utf8.ValidString(label) {
@@ -67,6 +69,7 @@ func TestALongUnreadListIsBoundedAndSaysHowManyItOmitted(t *testing.T) {
 			Path:   fmt.Sprintf("pkg/%s%d.go", strings.Repeat("deep/", 40), index),
 			Header: "@@ -1,1 +1,2 @@",
 			Reason: oversizedHunkReason,
+			Target: nil,
 		})
 	}
 
@@ -100,6 +103,7 @@ func TestANoticeWithPendingChunksDoesNotClaimTheRestWasReviewed(t *testing.T) {
 		Path:   "a.go",
 		Header: "@@ -1,1 +1,2 @@",
 		Reason: oversizedHunkReason,
+		Target: nil,
 	}}}
 
 	withPending := structuralShortfallNotice(domain.HeadSHA(noticeTestHead), shortfall, 3)

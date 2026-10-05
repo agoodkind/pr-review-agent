@@ -17,6 +17,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/openai"
+	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/telemetry"
 )
@@ -75,7 +76,7 @@ func TestChatCompletionsReview(t *testing.T) {
 	fallbackServer := newProviderServer(fallbackState)
 	defer fallbackServer.Close()
 	client := openai.NewClient(config.Config{
-		Providers: []config.ProviderConfig{
+		ReviewPolicy: policytest.Load(t), Providers: []config.ProviderConfig{
 			{
 				ID: "gemini", BaseURL: mustParseURL(t, geminiServer.URL), APIKey: testAPIKeyValue(),
 				Model: "fixture-gemini", API: config.ChatCompletionsAPI,
@@ -120,7 +121,7 @@ func TestRoutersReportSelectedModel(t *testing.T) {
 				autoRouterCostTier = config.AutoRouterCostLow
 			}
 			client := openai.NewClient(config.Config{
-				Providers: []config.ProviderConfig{{
+				ReviewPolicy: policytest.Load(t), Providers: []config.ProviderConfig{{
 					ID: "openrouter", BaseURL: mustParseURL(t, server.URL), APIKey: testAPIKeyValue(),
 					Model: routerModel, AutoRouterCostTier: autoRouterCostTier,
 				}},
@@ -192,18 +193,12 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("instructions = %v, want string", body["instructions"])
 	}
-	if !strings.Contains(systemContent, review.PolicyHeader(7, nil)) {
-		t.Fatalf("system message missing configured review rules")
+	configuredPolicy, err := review.PolicyHeader(policytest.Load(t), 7, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, excludedWritingPolicy := range []string{
-		"Ask the user",
-		"document placement",
-		"local editing",
-		"rewrite verification",
-	} {
-		if strings.Contains(systemContent, excludedWritingPolicy) {
-			t.Fatalf("system message contains local workflow rule %q", excludedWritingPolicy)
-		}
+	if !strings.Contains(systemContent, configuredPolicy) {
+		t.Fatalf("system message missing configured review rules")
 	}
 	if !strings.Contains(systemContent, "importance 7 or higher") {
 		t.Fatalf("system message missing configured importance")
@@ -690,7 +685,7 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 			OmitTextFormat:      index == 2,
 		})
 	}
-	client := openai.NewClient(config.Config{Providers: providers, MinimumImportance: 7}, nil)
+	client := openai.NewClient(config.Config{ReviewPolicy: policytest.Load(t), Providers: providers, MinimumImportance: 7}, nil)
 	completion, err := client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
@@ -728,7 +723,7 @@ func TestDisabledProviderReceivesNoRequests(t *testing.T) {
 		t.Cleanup(server.Close)
 	}
 	client := openai.NewClient(config.Config{
-		MinimumImportance: 7,
+		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
 		Providers: []config.ProviderConfig{
 			{ID: "primary", BaseURL: mustParseURL(t, servers[0].URL), Model: "primary-model", APIKey: testAPIKeyValue()},
 			{ID: "clyde", BaseURL: mustParseURL(t, servers[1].URL), Model: "clyde-model", APIKey: testFallbackAPIKeyValue(), Disabled: true},
@@ -790,7 +785,7 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 	t.Cleanup(budgetServer.Close)
 
 	client := openai.NewClient(config.Config{
-		MinimumImportance:   7,
+		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
 		GitHubWebhookSecret: signingKey, // gitleaks:allow
 		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
 		Providers: []config.ProviderConfig{
@@ -806,8 +801,8 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 		t.Fatalf("model = %q, primary requests = %d, secondary requests = %d, reservations = %d", completion.Model, primaryState.requestCount, secondaryState.requestCount, reservationCount)
 	}
 	cappedClient := openai.NewClient(config.Config{
-		GitHubWebhookSecret: signingKey, // gitleaks:allow
-		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
+		ReviewPolicy: policytest.Load(t), GitHubWebhookSecret: signingKey, // gitleaks:allow
+		ProviderBudgetURL: mustParseURL(t, budgetServer.URL),
 		Providers: []config.ProviderConfig{{
 			ID: "capped", BaseURL: mustParseURL(t, primaryServer.URL), Model: testPrimaryModel,
 			APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000,
@@ -879,7 +874,7 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 	t.Cleanup(budgetServer.Close)
 
 	client := openai.NewClient(config.Config{
-		MinimumImportance:   7,
+		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
 		GitHubWebhookSecret: signingKey, // gitleaks:allow
 		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
 		Providers: []config.ProviderConfig{{
@@ -1267,7 +1262,7 @@ func TestReviewRecordsFailedRequestWithoutReportedUsage(t *testing.T) {
 	usage := recorder.Summary()
 	if usage.Requests != 1 || usage.ReportedRequests != 0 || usage.PricedRequests != 0 ||
 		usage.TotalTokens != 0 || usage.EstimatedCostUSD != 0 || len(usage.Models) != 1 ||
-		usage.Models[0].RequestedModel != testPrimaryModel || usage.Models[0].Model != testPrimaryModel ||
+		usage.Models[0].RequestedModel != testPrimaryModel || usage.Models[0].Model != "" ||
 		usage.Models[0].Priced {
 		t.Fatalf("usage = %+v, want one failed request without reported tokens", usage)
 	}
@@ -1290,8 +1285,8 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 	state := &testServerState{completionContent: validReviewContent()}
 	server := newProviderServer(state)
 	cfg := config.Config{
-		MinimumImportance: 7,
-		ReviewModel:       testPrimaryModel,
+		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
+		ReviewModel: testPrimaryModel,
 		ReviewModelPricing: map[string]config.ModelPricing{
 			testPrimaryModel: {
 				InputPerMillionTokens:       1,
@@ -1326,7 +1321,7 @@ func newFallbackTestClient(t *testing.T, withAccessHeaders bool) *fallbackFixtur
 	t.Cleanup(fallbackServer.Close)
 
 	cfg := config.Config{
-		MinimumImportance:       7,
+		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
 		ReviewModel:             testPrimaryModel,
 		ClydeBaseURL:            mustParseURL(t, primaryServer.URL),
 		ClydeAPIKey:             testAPIKeyValue(),

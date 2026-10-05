@@ -27,7 +27,6 @@ import (
 )
 
 const probeErrorBodyLimit = 32 * 1024
-const probeDefaultPrompt = "Review only this changed source line in example.go. The function returns the input integer unchanged. Report only evidence-backed defects, or return no findings.\n@@ -1 +1 @@\n-func identity(value int) int { return value }\n+func identity(input int) int { return input }\n"
 
 type probeRuntime struct {
 	Providers   []json.RawMessage              `json:"PROVIDERS"`
@@ -38,6 +37,8 @@ type probeRuntime struct {
 	Timeout     string                         `json:"REVIEW_CHUNK_TIMEOUT"`
 	Concurrency *string                        `json:"REVIEW_CHUNK_CONCURRENCY"`
 	PromptBytes *string                        `json:"REVIEW_MAX_PROMPT_BYTES"`
+	RulesFile   string                         `json:"REVIEW_RULES_FILE"`
+	PromptsFile string                         `json:"REVIEW_PROMPTS_FILE"`
 }
 
 type probeHTTPError struct {
@@ -137,11 +138,15 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	}, &cfg); err != nil {
 		return cfg, err
 	}
+	cfg.ReviewPolicy, err = reviewrules.LoadPolicy(runtime.RulesFile, runtime.PromptsFile)
+	if err != nil {
+		return cfg, err
+	}
 	cfg.MinimumImportance, err = strconv.Atoi(runtime.Minimum)
 	if err != nil || cfg.MinimumImportance < reviewrules.MinimumImportance || cfg.MinimumImportance > reviewrules.MaximumImportance {
 		return cfg, errors.New("runtime REVIEW_MIN_IMPORTANCE must be an integer in 1..10")
 	}
-	if err = reviewrules.ValidateImportance(runtime.Importance); err != nil {
+	if err = cfg.ReviewPolicy.Catalog().ValidateImportance(runtime.Importance); err != nil {
 		return cfg, err
 	}
 	cfg.RuleImportance = runtime.Importance
@@ -196,14 +201,10 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	defer func() { _ = logFile.Close() }()
 	logger := slog.New(slog.NewJSONHandler(logFile, nil))
 	ctx = gklog.WithLogger(ctx, logger)
-	data, err := os.ReadFile(runtimePath)
+	runtime, err := ReadProbeRuntime(runtimePath)
 	if err != nil {
 		logger.WarnContext(ctx, "Public runtime configuration read failed", "path", runtimePath)
 		return fmt.Errorf("read public runtime configuration: %w", err)
-	}
-	var runtime probeRuntime
-	if err = json.Unmarshal(data, &runtime); err != nil {
-		return errors.New("runtime configuration is invalid")
 	}
 	credential, err := cloudflareops.ReadCredential(credentialPath)
 	if err != nil {
@@ -213,13 +214,18 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	if err != nil {
 		return err
 	}
-	prompt := probeDefaultPrompt
+	prompt := ""
 	if promptPath != "" {
 		data, err := os.ReadFile(promptPath)
 		if err != nil {
 			return fmt.Errorf("read prompt file: %w", err)
 		}
 		prompt = string(data)
+	} else {
+		prompt, err = cfg.ReviewPolicy.Render("probe.user", reviewrules.PromptData{})
+		if err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(prompt) == "" || len(prompt) > cfg.PromptBytes() {
 		return errors.New("probe prompt must be nonempty and within the configured maximum prompt size")
@@ -259,4 +265,21 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 		return errors.New("provider probe failed; the diagnostic directory contains the response details")
 	}
 	return nil
+}
+
+func ReadProbeRuntime(path string) (probeRuntime, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return probeRuntime{}, err
+	}
+	var runtime probeRuntime
+	if err = json.Unmarshal(data, &runtime); err != nil {
+		return runtime, errors.New("runtime configuration is invalid")
+	}
+	for _, reference := range []*string{&runtime.RulesFile, &runtime.PromptsFile} {
+		if *reference != "" && !filepath.IsAbs(*reference) {
+			*reference = filepath.Join(filepath.Dir(path), *reference)
+		}
+	}
+	return runtime, nil
 }

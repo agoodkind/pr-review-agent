@@ -11,6 +11,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // recordOverview retains every answer from one chunk, including answers from
@@ -110,23 +111,25 @@ func (service *Service) generateReport(
 	pullRequest githubapp.PullRequest,
 	pass *chunkPass,
 ) (Report, bool) {
-	fallback := SanitizeReport(fallbackReport(pass.overviews()))
+	fallback := SanitizeReport(fallbackReport(pass.overviews()), service.reviewPolicy.Limits())
 	reporter, ok := service.model.(Reporter)
 	if !ok {
 		return fallback, false
 	}
 	reportCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
 	defer cancel()
-	completion, err := reporter.Report(
-		reportCtx,
-		reportPrompt(pullRequest, pass.overviews(), pass.settings.maximumPromptBytes),
-	)
+	prompt, err := reportPrompt(pullRequest, pass.overviews(), pass.settings.maximumPromptBytes, service.reviewPolicy)
+	if err != nil {
+		gklog.L(ctx).ErrorContext(ctx, "Final report prompt rendering failed", "err", err)
+		return fallback, false
+	}
+	completion, err := reporter.Report(reportCtx, prompt)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "write final review report", slog.String("err", err.Error()))
 		return fallback, true
 	}
 	pass.recordReportModel(completion.Model)
-	report := SanitizeReport(completion.Report)
+	report := SanitizeReport(completion.Report, service.reviewPolicy.Limits())
 	if err := report.Validate(); err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "validate final review report", slog.String("err", err.Error()))
 		return fallback, true
@@ -138,23 +141,23 @@ func reportPrompt(
 	pullRequest githubapp.PullRequest,
 	overviews []string,
 	maximumBytes int,
-) string {
-	const instruction = "Write the final report for the single top-level review comment. " +
-		"Write at most two short summary sentences that state why the pull request exists and its resulting behavior. " +
-		"Write at most four walkthrough items. Each item must state one distinct behavior that the summary does not already state. " +
-		"Do not repeat the verdict, findings, coverage, omissions, file list, or inline discussions. " +
-		"Use plain language before code names. Each sentence must name its subject and make sense without another sentence.\n"
+	policy reviewrules.Policy,
+) (string, error) {
 	var body strings.Builder
 	fmt.Fprintf(&body, "Current title: %s\nCurrent description: %s\n\nReviewed change overviews:", pullRequest.Title, pullRequest.Body)
 	for _, overview := range overviews {
 		body.WriteString("\n- ")
 		body.WriteString(overview)
 	}
-	input := strings.ReplaceAll(body.String(), promptInputBegin, "<UNTRUSTED_INPUT>")
-	input = strings.ReplaceAll(input, promptInputEnd, "<END_UNTRUSTED_INPUT>")
-	maximumInput := maximumBytes - len(instruction) - len(promptInputBegin) -
-		len(promptInputEnd) - 2
-	return instruction + WrapUntrusted(truncateUTF8(input, max(maximumInput, 0)))
+	var data reviewrules.PromptData
+	data.Input = policy.WrapUntrusted("")
+	prefix, err := renderPrompt(policy, "report.input", data)
+	if err != nil {
+		return "", err
+	}
+	input := policy.EscapeUntrusted(body.String())
+	data.Input = policy.WrapUntrusted(truncateUTF8(input, max(maximumBytes-len(prefix), 0)))
+	return renderPrompt(policy, "report.input", data)
 }
 
 func fallbackReport(overviews []string) Report {

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
@@ -94,6 +95,29 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		)
 		return true, nil
 	}
+	current, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		return false, fmt.Errorf("read current pull request prose: %w", err)
+	}
+	if current.Head != job.Head {
+		return true, nil
+	}
+	metadata, recorded, err := decodeMetadataRecord(inputs.verdict.Body)
+	if err != nil {
+		return false, err
+	}
+	if !recorded {
+		metadata, recorded, err = service.readMetadataRecord(ctx, job)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !recorded || metadata.Head != job.Head || metadata.Revision != diff.PullRequestRevision(current) {
+		metadata, err = service.reviewCurrentMetadata(ctx, job, current, settings)
+		if err != nil {
+			return false, err
+		}
+	}
 	// How much of the head was reviewed is recovered from the review that named
 	// this head, because that is the run that knew. What the pull request
 	// currently shows is a separate question, answered by the newest verdict
@@ -119,6 +143,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		omissionsAccepted = accepted
 	}
 	decisionReason := decodeDecisionReasonMarker(inputs.verdict.Body)
+	omissions, omissionsAccepted, decisionReason = updateMetadataOmissions(omissions, omissionsAccepted, decisionReason, metadata)
 	if len(omissions) > 0 && !omissionsAccepted {
 		if decisionReason == "" {
 			decisionReason = "The unread changes listed below need review before approval."
@@ -127,6 +152,9 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	approvalAllowed := headFullyReviewed && (len(omissions) == 0 || omissionsAccepted) &&
 		!strings.Contains(inputs.verdict.Body, approvalWithheldMarker)
 	decision := reviewerDecision(inputs.threads, service.botLogin, approvalAllowed)
+	if len(metadata.Findings) > 0 {
+		decision = domain.ReviewDecisionRequestChanges
+	}
 	err = service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
 		decision:          decision,
 		decisionReason:    decisionReason,
@@ -138,6 +166,8 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		settings:          settings,
 		omissions:         omissions,
 		omissionsAccepted: omissionsAccepted,
+		metadata:          metadata.Findings,
+		metadataRevision:  metadata.Revision,
 	})
 	return decision == domain.ReviewDecisionComment, err
 }
@@ -308,6 +338,8 @@ type refreshedVerdict struct {
 	settings          reviewSettings
 	omissions         []unreadHunk
 	omissionsAccepted bool
+	metadata          []domain.Finding
+	metadataRevision  string
 }
 
 // mayPublish reports whether the refresh may submit the verdict it computed.
@@ -377,6 +409,9 @@ func (service *Service) applyRefreshedVerdict(
 		logger.InfoContext(ctx, "verdict refresh skipped", slog.String("reason", "head_moved"))
 		return nil
 	}
+	if diff.PullRequestRevision(currentPullRequest) != refreshed.metadataRevision {
+		return errMetadataChanged
+	}
 
 	blocking := blockingReasons(
 		refreshed.threads, service.botLogin, job.PullRequestRef,
@@ -402,6 +437,8 @@ func (service *Service) applyRefreshedVerdict(
 		Eligible:          nil,
 		Published:         nil,
 		Fallback:          nil,
+		Metadata:          refreshed.metadata,
+		MetadataRevision:  refreshed.metadataRevision,
 		Omissions:         refreshed.omissions,
 		OmissionsAccepted: refreshed.omissionsAccepted,
 		PriorReviews:      nil,

@@ -20,7 +20,6 @@ func completeGemini(
 	target provider,
 	prompt string,
 	policy string,
-	schemaName string,
 	schema json.RawMessage,
 	report func(responses.ResponseUsage),
 ) (string, string, error) {
@@ -41,13 +40,13 @@ func completeGemini(
 		logger.WarnContext(ctx, "Gemini client creation failed")
 		return "", "", fmt.Errorf("create Gemini client: %w", err)
 	}
-	params, err := newGeminiParams(target, policy, schemaName, schema)
+	params, err := newGeminiParams(target, policy, schema)
 	if err != nil {
 		return "", "", err
 	}
 
 	var content strings.Builder
-	model := target.model
+	model := ""
 	usage := responses.ResponseUsage{}
 	hasUsage := false
 	finishReason := genai.FinishReasonUnspecified
@@ -86,6 +85,9 @@ func completeGemini(
 	if result == "" {
 		return "", "", errors.New("gemini completion missing message content")
 	}
+	if model == "" {
+		return result, target.model, nil
+	}
 	return result, model, nil
 }
 
@@ -100,13 +102,13 @@ func appendGeminiContent(builder *strings.Builder, content *genai.Content) {
 	}
 }
 
-func newGeminiParams(target provider, policy string, schemaName string, schema json.RawMessage) (*genai.GenerateContentConfig, error) {
+func newGeminiParams(target provider, policy string, schema json.RawMessage) (*genai.GenerateContentConfig, error) {
 	level, err := geminiThinkingLevel(target.reasoningEffort)
 	if err != nil {
 		return nil, err
 	}
 	params := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(structuredOutputPrompt(policy, schemaName, schema), genai.RoleUser),
+		SystemInstruction: genai.NewContentFromText(policy, genai.RoleUser),
 		ThinkingConfig:    &genai.ThinkingConfig{ThinkingLevel: level},
 	}
 	if !target.omitMaxOutputTokens {

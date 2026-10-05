@@ -250,7 +250,7 @@ func metrics(opts options, output io.Writer) error {
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		_, err := fmt.Fprintln(stdout, "pragent-ops logs --since 7d --account-token-file PATH\npragent-ops metrics --input CAPTURE/events.ndjson\npragent-ops counters --runtime runtime.json --operator-token-file PATH\npragent-ops operator-token --account-token-file PATH\npragent-ops probe --provider ID --credential-file PATH\nEach subcommand accepts --help. Raw telemetry is saved only in private files.")
+		_, err := fmt.Fprintln(stdout, "pragent-ops logs --since 7d --account-token-file PATH\npragent-ops metrics --input CAPTURE/events.ndjson\npragent-ops counters --runtime runtime.json --operator-token-file PATH\npragent-ops operator-token --account-token-file PATH\npragent-ops probe --provider ID --credential-file PATH\npragent-ops prose-eval --dataset testdata/prose-eval.json --provider ID --credential-file PATH\nEach subcommand accepts --help. Raw telemetry is saved only in private files.")
 		return err
 	}
 	if args[0] == "counters" {
@@ -261,6 +261,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	if args[0] == "probe" {
 		return probe(ctx, args[1:], stdout, stderr)
+	}
+	if args[0] == "prose-eval" {
+		return proseEval(ctx, args[1:], stdout, stderr)
 	}
 	opts, err := flags(args[0], args[1:], stderr)
 	if errors.Is(err, flag.ErrHelp) {
@@ -275,7 +278,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	case metricsCommand:
 		return metrics(opts, stdout)
 	default:
-		return errors.New("command must be logs, metrics, counters, operator-token, or probe")
+		return errors.New("command must be logs, metrics, counters, operator-token, probe, or prose-eval")
 	}
 }
 

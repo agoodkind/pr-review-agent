@@ -3,11 +3,15 @@ package review
 import (
 	"context"
 	"sync"
+
+	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // ModelUsage records one model request and any usage the provider reported.
 // The same shape represents one request and one model's aggregate.
 type ModelUsage struct {
+	ProviderID                  string
 	RequestedModel              string
 	Model                       string
 	Priced                      bool
@@ -47,32 +51,81 @@ type UsageSummary struct {
 	EstimatedOutputCostUSD      float64
 	EstimatedCostUSD            float64
 	Models                      []ModelUsage
+	ProviderAttempts            []ProviderAttempt
+	ProviderColumns             []reviewrules.ProviderDetailColumn
+}
+
+// ProviderAttempt records request settings and the observed attempt outcome.
+type ProviderAttempt struct {
+	Status           ProviderStatus
+	API              config.ProviderAPI
+	ReasoningEffort  config.ReasoningEffort
+	MaxOutputTokens  int64
+	OutputCapOmitted bool
+	Completed        bool
+	Fallback         bool
+	HTTPStatus       int
+	ErrorCode        string
+	Count            int
+	Sequence         int
 }
 
 type usageRecorderContextKey struct{}
 
 type usageModelKey struct {
+	providerID     string
 	requestedModel string
 	model          string
 	priced         bool
 }
 
+// RecordProviderAttempt records admission refusals as well as actual API calls.
+func RecordProviderAttempt(ctx context.Context, attempt ProviderAttempt, columns []reviewrules.ProviderDetailColumn) {
+	recorder, ok := ctx.Value(usageRecorderContextKey{}).(*UsageRecorder)
+	if !ok || recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	recorder.totals.ProviderColumns = append([]reviewrules.ProviderDetailColumn(nil), columns...)
+	recorder.sequence++
+	attempt.Sequence = recorder.sequence
+	for index, previous := range recorder.totals.ProviderAttempts {
+		if sameProviderAttempt(previous, attempt) {
+			attempt.Count += previous.Count
+			recorder.totals.ProviderAttempts[index] = attempt
+			return
+		}
+	}
+	recorder.totals.ProviderAttempts = append(recorder.totals.ProviderAttempts, attempt)
+}
+
+func sameProviderAttempt(left, right ProviderAttempt) bool {
+	return left.Status.ProviderID == right.Status.ProviderID && left.Status.Model == right.Status.Model &&
+		left.Status.Cause == right.Status.Cause && left.API == right.API && left.ReasoningEffort == right.ReasoningEffort &&
+		left.MaxOutputTokens == right.MaxOutputTokens && left.OutputCapOmitted == right.OutputCapOmitted &&
+		left.Completed == right.Completed && left.Fallback == right.Fallback &&
+		left.HTTPStatus == right.HTTPStatus && left.ErrorCode == right.ErrorCode
+}
+
 // UsageRecorder safely aggregates concurrent model requests in one review run.
 type UsageRecorder struct {
-	mu      sync.Mutex
-	totals  UsageSummary
-	models  map[usageModelKey]ModelUsage
-	ordered []usageModelKey
+	mu       sync.Mutex
+	totals   UsageSummary
+	models   map[usageModelKey]ModelUsage
+	ordered  []usageModelKey
+	sequence int
 }
 
 // WithUsageRecorder attaches a new usage recorder to a context.
 func WithUsageRecorder(ctx context.Context) (context.Context, *UsageRecorder) {
 	var totals UsageSummary
 	recorder := &UsageRecorder{
-		mu:      sync.Mutex{},
-		totals:  totals,
-		models:  make(map[usageModelKey]ModelUsage),
-		ordered: nil,
+		mu:       sync.Mutex{},
+		totals:   totals,
+		models:   make(map[usageModelKey]ModelUsage),
+		ordered:  nil,
+		sequence: 0,
 	}
 	return context.WithValue(ctx, usageRecorderContextKey{}, recorder), recorder
 }
@@ -106,12 +159,14 @@ func (recorder *UsageRecorder) record(usage ModelUsage) {
 	}
 	addModelUsage(&recorder.totals, usage)
 	key := usageModelKey{
+		providerID:     usage.ProviderID,
 		requestedModel: usage.RequestedModel,
 		model:          usage.Model,
 		priced:         usage.Priced,
 	}
 	model, found := recorder.models[key]
 	if !found {
+		model.ProviderID = usage.ProviderID
 		model.RequestedModel = usage.RequestedModel
 		model.Model = usage.Model
 		model.Priced = usage.Priced
@@ -131,6 +186,8 @@ func (recorder *UsageRecorder) Summary() UsageSummary {
 	defer recorder.mu.Unlock()
 
 	summary := recorder.totals
+	summary.ProviderAttempts = append([]ProviderAttempt(nil), recorder.totals.ProviderAttempts...)
+	summary.ProviderColumns = append([]reviewrules.ProviderDetailColumn(nil), recorder.totals.ProviderColumns...)
 	summary.Models = make([]ModelUsage, 0, len(recorder.ordered))
 	for _, key := range recorder.ordered {
 		summary.Models = append(summary.Models, recorder.models[key])

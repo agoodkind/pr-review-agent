@@ -4,7 +4,10 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -472,6 +475,8 @@ func TestLoadRuntimeUsesFileSettingsAndEnvironmentSecrets(t *testing.T) {
 		"REVIEW_MIN_IMPORTANCE": "8",
 		"REVIEW_WORKERS": "4",
 		"REVIEW_MODEL": "gpt-6-luna",
+		"REVIEW_RULES_FILE": "../../config/review-rules.json",
+		"REVIEW_PROMPTS_FILE": "../../config/review-prompts.json",
 		"REVIEW_MODEL_PRICING": {
 			"gpt-6-luna": {
 				"input_per_million_tokens": 0.10,
@@ -613,6 +618,26 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
 	}))
+	runtimePath := filepath.Join("..", "..", "runtime.json")
+	runtimeData, err := os.ReadFile(runtimePath)
+	if err != nil {
+		return nil, err
+	}
+	var policyFiles struct {
+		RulesFile   string `json:"REVIEW_RULES_FILE"`
+		PromptsFile string `json:"REVIEW_PROMPTS_FILE"`
+	}
+	if err := json.Unmarshal(runtimeData, &policyFiles); err != nil {
+		return nil, err
+	}
+	rulesFile, err := filepath.Abs(filepath.Join(filepath.Dir(runtimePath), policyFiles.RulesFile))
+	if err != nil {
+		return nil, err
+	}
+	promptsFile, err := filepath.Abs(filepath.Join(filepath.Dir(runtimePath), policyFiles.PromptsFile))
+	if err != nil {
+		return nil, err
+	}
 
 	values := map[string]string{
 		"GITHUB_APP_ID":           "12345",
@@ -626,6 +651,8 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 		"REVIEW_MIN_IMPORTANCE":   "7",
 		"REVIEW_WORKERS":          "4",
 		"REVIEW_MODEL":            "fixture-primary-model",
+		"REVIEW_RULES_FILE":       rulesFile,
+		"REVIEW_PROMPTS_FILE":     promptsFile,
 	}
 	for key, value := range overrides {
 		values[key] = value
