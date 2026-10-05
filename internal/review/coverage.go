@@ -218,29 +218,44 @@ func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext) str
 	if !shortfall.present() {
 		return "Set omissions_acceptable to true because no changed content was omitted. Set decision_reason to an empty string.\n"
 	}
+	const instruction = "The service did not read the changes listed below. Apply the review rule for deciding whether unread content is necessary. Set omissions_acceptable to true when every omission is acceptable, or false when at least one omission prevents a decision. Set decision_reason to one or two short sentences explaining the decision from the available evidence. For a false answer, state the specific unresolved question and the evidence needed to answer it. If unread changes are not listed, do not assume they are unnecessary. Set omissions_acceptable to false when the available evidence cannot establish whether those changes are necessary. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n"
+	const omittedFormat = "Unread changes not listed: %d (the request size limit prevented listing their details).\n\n"
+	metadataBudget := config.MaximumPromptBytes/4 - len(instruction) - len(WrapUntrusted("")) - 1
+	hunks := sortedUnreadHunks(shortfall.Hunks)
+	omittedNoticeBudget := len(fmt.Sprintf(omittedFormat, len(hunks)))
 	var metadata strings.Builder
+	listed := 0
+	for _, hunk := range hunks {
+		row := fmt.Sprintf("Path: %s\nHunk: %s\nReason: %s\n\n",
+			escapeOmissionPromptText(hunk.Path), escapeOmissionPromptText(hunk.Header), escapeOmissionPromptText(hunk.Reason))
+		if metadata.Len()+len(row)+omittedNoticeBudget > metadataBudget {
+			break
+		}
+		metadata.WriteString(row)
+		listed++
+	}
+	if listed < len(hunks) {
+		fmt.Fprintf(&metadata, omittedFormat, len(hunks)-listed)
+	}
 	fileIndex := buildFileIndex(files)
-	previewBudget := config.MaximumPromptBytes / 4
 	seen := make(map[string]bool)
-	for _, hunk := range sortedUnreadHunks(shortfall.Hunks) {
-		fmt.Fprintf(
-			&metadata,
-			"Path: %s\nHunk: %s\nReason: %s\n\n",
-			escapeOmissionPromptText(hunk.Path),
-			escapeOmissionPromptText(hunk.Header),
-			escapeOmissionPromptText(hunk.Reason),
-		)
+	for _, hunk := range hunks[:listed] {
 		file, found := fileIndex[hunk.Path]
-		if !found || file.CurrentContent == "" || seen[hunk.Path] || previewBudget <= 0 {
+		if !found || file.CurrentContent == "" || seen[hunk.Path] {
 			continue
 		}
 		seen[hunk.Path] = true
+		header := fmt.Sprintf("Current content excerpt for %s (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n", escapeOmissionPromptText(hunk.Path), len(file.CurrentContent))
+		previewBudget := metadataBudget - metadata.Len() - len(header) - len("\n\n")
+		if previewBudget <= 0 {
+			break
+		}
 		preview := omissionContentPreview(file.CurrentContent, min(maximumPullRequestDescriptionBytes, previewBudget))
-		previewBudget -= len(preview)
-		fmt.Fprintf(&metadata, "Current content excerpt (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n%s\n\n", len(file.CurrentContent), preview)
+		metadata.WriteString(header)
+		metadata.WriteString(preview)
+		metadata.WriteString("\n\n")
 	}
-	return "The service did not read the changes listed below. Apply the review rule for deciding whether unread content is necessary. Set omissions_acceptable to true when every omission is acceptable, or false when at least one omission prevents a decision. Set decision_reason to one or two short sentences explaining the decision from the available evidence. For a false answer, state the specific unresolved question and the evidence needed to answer it. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n" +
-		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
+	return instruction + WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
 }
 
 func omissionContentPreview(content string, maximumBytes int) string {
