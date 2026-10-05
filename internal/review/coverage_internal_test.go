@@ -76,7 +76,7 @@ func TestALongUnreadListIsBoundedAndSaysHowManyItOmitted(t *testing.T) {
 		0,
 	)
 
-	if !strings.Contains(notice, hunkCount(maximumListedUnreadHunks+extra)+" this service cannot read") {
+	if !strings.Contains(notice, "The review did not read "+hunkCount(maximumListedUnreadHunks+extra)) {
 		t.Fatalf("the sentence lost the exact count:\n%s", notice)
 	}
 	if !strings.Contains(notice, fmt.Sprintf("This list omits %d more unread changes.", extra)) {

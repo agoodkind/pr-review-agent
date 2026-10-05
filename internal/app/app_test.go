@@ -2268,6 +2268,7 @@ func defectiveReviewContent(finding domain.Finding) string {
 	}
 	payload := map[string]any{
 		"findings": []map[string]any{{
+			"rule_id":    "ground_findings",
 			"path":       finding.Path,
 			"start_line": finding.StartLine,
 			"end_line":   finding.EndLine,
@@ -2289,7 +2290,7 @@ func approveReviewContent() string {
 }
 
 func typographicReviewContent() string {
-	return `{"summary":"Issue — details","findings":[{"path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","evidence":"// missing validation","importance":9}]}`
+	return `{"summary":"Issue — details","findings":[{"rule_id":"ground_findings","path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","evidence":"// missing validation","importance":9}]}`
 }
 
 func buildChangedFiles(count int) []map[string]any {

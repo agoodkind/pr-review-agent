@@ -64,6 +64,21 @@
   "REVIEW_MAX_CHUNKS": "60",
   "REVIEW_MAX_FILES": "100",
   "REVIEW_MIN_IMPORTANCE": "7",
+  "REVIEW_RULE_IMPORTANCE": {
+    "changed_documentation": 10,
+    "review_comment_writing": 10,
+    "all_prose_surfaces": 10,
+    "technical_relationships": 10,
+    "precise_relationship_verbs": 10,
+    "complete_sentences": 10,
+    "process_narration": 10,
+    "repetition_and_filler": 10,
+    "document_purpose": 10,
+    "authoritative_documentation": 10,
+    "necessary_links": 10,
+    "technical_comments": 10,
+    "actionable_instructions": 10
+  },
   "REVIEW_MODEL_PRICING": {
     "gemini-3.5-flash-lite": {
       "input_per_million_tokens": 0.30,

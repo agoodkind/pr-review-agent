@@ -214,22 +214,64 @@ func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 
 // omissionPrompt gives the existing review call enough metadata to decide
 // whether a structural omission prevents a reliable verdict.
-func omissionPrompt(shortfall structuralShortfall) string {
+func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext) string {
 	if !shortfall.present() {
 		return "Set omissions_acceptable to true because no changed content was omitted. Set decision_reason to an empty string.\n"
 	}
+	const instruction = "The service did not read the changes listed below. Apply the review rule for deciding whether unread content is necessary. Set omissions_acceptable to true when every omission is acceptable, or false when at least one omission prevents a decision. Set decision_reason to one or two short sentences explaining the decision from the available evidence. For a false answer, state the specific unresolved question and the evidence needed to answer it. If unread changes are not listed, do not assume they are unnecessary. Set omissions_acceptable to false when the available evidence cannot establish whether those changes are necessary. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n"
+	const omittedFormat = "Unread changes not listed: %d (the request size limit prevented listing their details).\n\n"
+	metadataBudget := config.MaximumPromptBytes/4 - len(instruction) - len(WrapUntrusted("")) - 1
+	hunks := sortedUnreadHunks(shortfall.Hunks)
+	omittedNoticeBudget := len(fmt.Sprintf(omittedFormat, len(hunks)))
 	var metadata strings.Builder
-	for _, hunk := range sortedUnreadHunks(shortfall.Hunks) {
-		fmt.Fprintf(
-			&metadata,
-			"Path: %s\nHunk: %s\nReason: %s\n\n",
-			escapeOmissionPromptText(hunk.Path),
-			escapeOmissionPromptText(hunk.Header),
-			escapeOmissionPromptText(hunk.Reason),
-		)
+	listed := 0
+	for _, hunk := range hunks {
+		row := fmt.Sprintf("Path: %s\nHunk: %s\nReason: %s\n\n",
+			escapeOmissionPromptText(hunk.Path), escapeOmissionPromptText(hunk.Header), escapeOmissionPromptText(hunk.Reason))
+		if metadata.Len()+len(row)+omittedNoticeBudget > metadataBudget {
+			break
+		}
+		metadata.WriteString(row)
+		listed++
 	}
-	return "The service did not read the changes listed below. Apply the review rule for deciding whether unread content is necessary. Set omissions_acceptable to true when every omission is acceptable, or false when at least one omission prevents a decision. Set decision_reason to one or two short sentences explaining the decision from the available evidence. For a false answer, state the specific unresolved question and the evidence needed to answer it. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n" +
-		WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
+	if listed < len(hunks) {
+		fmt.Fprintf(&metadata, omittedFormat, len(hunks)-listed)
+	}
+	fileIndex := buildFileIndex(files)
+	seen := make(map[string]bool)
+	for _, hunk := range hunks[:listed] {
+		file, found := fileIndex[hunk.Path]
+		if !found || file.CurrentContent == "" || seen[hunk.Path] {
+			continue
+		}
+		seen[hunk.Path] = true
+		header := fmt.Sprintf("Current content excerpt for %s (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n", escapeOmissionPromptText(hunk.Path), len(file.CurrentContent))
+		previewBudget := metadataBudget - metadata.Len() - len(header) - len("\n\n")
+		if previewBudget <= 0 {
+			break
+		}
+		preview := omissionContentPreview(file.CurrentContent, min(maximumPullRequestDescriptionBytes, previewBudget))
+		metadata.WriteString(header)
+		metadata.WriteString(preview)
+		metadata.WriteString("\n\n")
+	}
+	return instruction + WrapUntrusted(strings.TrimSpace(metadata.String())) + "\n"
+}
+
+func omissionContentPreview(content string, maximumBytes int) string {
+	content = escapeOmissionPromptText(content)
+	if len(content) <= maximumBytes {
+		return content
+	}
+	const omitted = "\n[The middle of the current file is not shown.]\n"
+	if maximumBytes <= len(omitted) {
+		return truncateUTF8(content, maximumBytes)
+	}
+	available := maximumBytes - len(omitted)
+	headBytes := available / 2
+	tailBytes := available - headBytes
+	return truncateUTF8(content, headBytes) + omitted +
+		strings.ToValidUTF8(content[len(content)-tailBytes:], "")
 }
 
 // decideUnreadableHunks asks one compact question after a chunk answer was cut
@@ -253,7 +295,7 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 		"Return no findings because this call supplies no changed lines. " +
 		"A false omissions_acceptable answer withholds approval; it does not request changes without an actionable finding. " +
 		"Use the unread change list before the supporting context.\n"
-	required := instruction + omissionPrompt(shortfall)
+	required := instruction + omissionPrompt(shortfall, pass.work.Files)
 	contextText := pullRequestPrompt(pass.work.PullRequest, pass.work.Files) +
 		pass.disputePrompt + "The readable parts were summarized as follows:\n" +
 		WrapUntrusted(reviewed.String())
@@ -469,6 +511,9 @@ func (service *Service) concludeStructurallyIncomplete(
 	summary.Report = report
 	summary.Models = pass.analysis().Models
 	summary.Usage = UsageFromContext(ctx)
+	failures := pass.unreadChunks()
+	statuses := providerStatuses(failures)
+	addAttemptedModels(&summary, statuses)
 	if reportCalled {
 		current, err := service.github.GetPullRequest(
 			ctx, job.InstallationID, job.Repository, job.Number,
@@ -483,10 +528,16 @@ func (service *Service) concludeStructurallyIncomplete(
 		}
 	}
 	notice := structuralShortfallNotice(summary.Head, shortfall, len(state.Pending))
+	if reason := chunkFailureReason(failures); reason != "" {
+		notice = reason + "\n\n" + notice
+	}
+	if len(failures) > 0 {
+		notice += "\n\n" + publicFailureDetail(job)
+	}
 	publicationCtx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
 	if err := service.upsertSummaryComment(publicationCtx, job, summaryCommentContent{
-		Prose: RenderUnreadableBody(summary, notice),
+		Prose: RenderUnreadableBody(summary, notice, statuses...),
 		State: state,
 	}); err != nil {
 		return service.failCheck(
@@ -500,7 +551,7 @@ func (service *Service) concludeStructurallyIncomplete(
 		checkRun.ID,
 		checkConclusionDeclined,
 		unreadableCheckTitle(len(shortfall.Hunks)),
-		notice+"\n\n"+RenderDetails(summary),
+		notice+"\n\n"+RenderDetails(summary, statuses...),
 	); err != nil {
 		return err
 	}
@@ -520,52 +571,27 @@ func (service *Service) concludeStructurallyIncomplete(
 // It says the count and no more. Every path is in the summary below it, where
 // length is not a constraint and a long path cannot crowd out the sentence.
 func unreadableCheckTitle(count int) string {
-	return hunkCount(count) + " cannot be reviewed by this service"
+	return fmt.Sprintf("The review has not decided whether %s may be omitted.", hunkCount(count))
 }
 
-// structuralShortfallNotice is the prose the check run and the visible comment
-// both carry: what went unread, why, and what a person has to do about it.
-//
-// It never says the next push covers this. The whole point of the class is that
-// the next push finds the same hunk and falls short the same way, so promising
-// otherwise is how a pull request sat blocked waiting for a run that was never
-// going to happen.
 func structuralShortfallNotice(
 	head domain.HeadSHA,
 	shortfall structuralShortfall,
 	pending int,
 ) string {
-	count := len(shortfall.Hunks)
 	return strings.Join([]string{
-		fmt.Sprintf(
-			"`%s` carries %s this service cannot read, and a later run reaches the same limit on %s.",
-			shortHead(head),
-			hunkCount(count),
-			hunkPronoun(count),
-		),
+		fmt.Sprintf("The review did not read %s on `%s`.", hunkCount(len(shortfall.Hunks)), shortHead(head)),
 		renderUnreadHunks(shortfall.Hunks),
-		"Read " + hunkPronoun(count) + " yourself, or split the pull request so every change is " +
-			"small enough to review.",
+		"The review has not decided whether these unread changes are necessary for its verdict.",
 		remainingWorkSentence(pending),
 	}, "\n\n")
 }
 
-// remainingWorkSentence says what this run still owes beyond the hunks above.
-//
-// It used to claim that everything else on the head was reviewed whatever else
-// had happened, which is false the moment a chunk is left pending: those chunks
-// were not read either, and a reader told the rest was covered has no reason to
-// wait for the run that covers them.
 func remainingWorkSentence(pending int) string {
 	if pending == 0 {
 		return "Everything else on this head was reviewed, and anything found there is already inline."
 	}
-	return fmt.Sprintf(
-		"%s went unread as well and a later run retries %s, so the rest of this head is not covered yet. "+
-			"Anything found so far is already inline.",
-		chunkCount(pending),
-		chunkPronoun(pending),
-	)
+	return fmt.Sprintf("%s went unread as well. Apply the `%s` label to review the unfinished chunks.", chunkCount(pending), domain.RerunReviewLabel)
 }
 
 // maximumListedUnreadHunks bounds the list a notice prints.
@@ -639,21 +665,13 @@ func hunkCount(count int) string {
 	return fmt.Sprintf("%d hunks", count)
 }
 
-// hunkPronoun matches hunkCount, so the sentence around it agrees.
-func hunkPronoun(count int) string {
-	if count == 1 {
-		return "it"
-	}
-	return "them"
-}
-
 // RenderUnreadableBody renders the visible comment for a head this service
 // cannot read whole.
 //
 // It carries no review marker, for the same reason the progress body carries
 // none: that marker means this head was reviewed, and this comment says the
 // opposite.
-func RenderUnreadableBody(summary Summary, notice string) string {
+func RenderUnreadableBody(summary Summary, notice string, statuses ...ProviderStatus) string {
 	parts := []string{
 		"## Review",
 		"### Summary\n\n" + renderReportSummary(summary.Report),
@@ -661,11 +679,11 @@ func RenderUnreadableBody(summary Summary, notice string) string {
 		"### Omissions\n\n" + notice,
 		verdictSectionStart,
 		"### Verdict",
-		"This review did not submit a verdict because the unread changes listed above prevent a complete review.",
+		"The review submitted no verdict.",
 	}
 	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
 		parts = append(parts, fallback)
 	}
-	parts = append(parts, verdictSectionEnd, RenderDetails(summary))
+	parts = append(parts, verdictSectionEnd, RenderDetails(summary, statuses...))
 	return strings.Join(parts, "\n\n")
 }

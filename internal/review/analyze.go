@@ -445,9 +445,7 @@ func (set *modelSet) add(name string) {
 func buildPrompt(chunk diff.Chunk, minimumImportance int, disputes string) string {
 	var builder strings.Builder
 	builder.WriteString(disputes)
-	builder.WriteString("Review changed lines. Return every concrete defect and assign importance from 1 through 10. ")
-	builder.WriteString("Reserve 9 and 10 for defects that plausibly enable a security compromise, irreversible data loss or corruption, or a broad production outage. ")
-	builder.WriteString("Rate bounded crashes, incorrect responses, maintainability problems, performance costs, and localized failures 8 or lower unless the diff proves severe impact. ")
+	builder.WriteString("Review changed lines. Return every concrete defect with its rule_id and apply the importance policy defined by that rule. ")
 	builder.WriteString("Put every code reference in backticks. Return suggestion as the exact replacement for the anchored changed line range only when it is complete and safe; otherwise return an empty string. ")
 	builder.WriteString("Copy into evidence one line from the supplied source, verbatim and unmodified, that the finding relies on. A finding whose evidence does not appear in the supplied source is discarded. ")
 	builder.WriteString("Report each distinct defect exactly once, anchored at the single best line range. Never restate one defect under a second title or at a second location. ")

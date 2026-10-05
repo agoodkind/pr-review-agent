@@ -318,6 +318,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 
 	finding := domain.Finding{
+		RuleID:    "",
 		Path:      comment.Path,
 		StartLine: comment.StartLine,
 		EndLine:   comment.EndLine,

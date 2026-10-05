@@ -204,7 +204,7 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("instructions = %v, want string", body["instructions"])
 	}
-	if !strings.Contains(systemContent, review.PolicyHeader(7)) {
+	if !strings.Contains(systemContent, review.PolicyHeader(7, nil)) {
 		t.Fatalf("system message missing configured review rules")
 	}
 	for _, excludedWritingPolicy := range []string{
@@ -301,14 +301,14 @@ func TestReviewDecodesTheClaimAndAcceptsAnAnswerWithoutOne(t *testing.T) {
 	}{
 		{
 			name: "answer carrying a claim",
-			content: `{"coverage_complete":true,"findings":[{"path":"main.go","start_line":2,` +
+			content: `{"coverage_complete":true,"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
 				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
 				`"evidence":"cache[key] = value","claim":"` + claim + `","suggestion":"","importance":8}]}`,
 			want: claim,
 		},
 		{
 			name: "answer from the older schema",
-			content: `{"coverage_complete":true,"findings":[{"path":"main.go","start_line":2,` +
+			content: `{"coverage_complete":true,"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
 				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
 				`"evidence":"cache[key] = value","suggestion":"","importance":8}]}`,
 			want: "",

@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const (
@@ -124,6 +126,7 @@ var runtimeConfigKeys = map[string]struct{}{
 	"REVIEW_MAX_CHUNKS":          {},
 	"REVIEW_MAX_FILES":           {},
 	"REVIEW_MIN_IMPORTANCE":      {},
+	"REVIEW_RULE_IMPORTANCE":     {},
 	"REVIEW_MODEL":               {},
 	"REVIEW_MODEL_PRICING":       {},
 	"REVIEW_WORKERS":             {},
@@ -153,6 +156,7 @@ type Config struct {
 	// call, and no clock spans two of them.
 	ReviewChunkTimeout           time.Duration
 	MinimumImportance            int
+	RuleImportance               reviewrules.Importance
 	GitHubAppID                  int64
 	GitHubPrivateKey             *rsa.PrivateKey
 	GitHubWebhookSecret          []byte
@@ -229,7 +233,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
-		if name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" {
+		if name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
 			values[name] = string(raw)
 			continue
 		}
@@ -259,6 +263,11 @@ func Load(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ReviewModelPricing = pricing
+	ruleImportance, err := loadRuleImportance(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.RuleImportance = ruleImportance
 	appearances, err := loadFailureAppearances(lookup)
 	if err != nil {
 		return Config{}, err
@@ -298,6 +307,26 @@ func Load(lookup LookupEnv) (Config, error) {
 	cfg.GitHubGraphQLURL = graphqlURL
 
 	return cfg, nil
+}
+
+func loadRuleImportance(lookup LookupEnv) (reviewrules.Importance, error) {
+	raw, configured := lookup("REVIEW_RULE_IMPORTANCE")
+	var importance reviewrules.Importance
+	if configured {
+		decoder := json.NewDecoder(strings.NewReader(raw))
+		if err := decoder.Decode(&importance); err != nil || importance == nil {
+			return nil, errors.New("REVIEW_RULE_IMPORTANCE must be a JSON object of integer importance values")
+		}
+		var trailing json.RawMessage
+		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+			return nil, errors.New("REVIEW_RULE_IMPORTANCE must contain one JSON object")
+		}
+	}
+	if err := reviewrules.ValidateImportance(importance); err != nil {
+		slog.Error("validate review rule importance", "error", err)
+		return nil, fmt.Errorf("validate REVIEW_RULE_IMPORTANCE: %w", err)
+	}
+	return importance, nil
 }
 
 func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
@@ -500,7 +529,7 @@ func loadMinimumImportance(lookup LookupEnv) (int, bool) {
 		return 0, false
 	}
 	importance, err := strconv.Atoi(value)
-	if err != nil || importance < 1 || importance > 10 {
+	if err != nil || importance < reviewrules.MinimumImportance || importance > reviewrules.MaximumImportance {
 		return 0, false
 	}
 	return importance, true

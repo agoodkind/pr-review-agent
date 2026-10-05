@@ -616,14 +616,6 @@ func chunkCount(count int) string {
 	return fmt.Sprintf("%d chunks", count)
 }
 
-// chunkPronoun matches chunkCount, so the sentence around it agrees.
-func chunkPronoun(count int) string {
-	if count == 1 {
-		return "it"
-	}
-	return "them"
-}
-
 // RenderInline renders anchored findings as GitHub inline review comments.
 func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.InlineComment, error) {
 	sorted := append([]domain.Finding{}, findings...)
@@ -643,6 +635,7 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 		// source line they already have beside the comment, and no label the
 		// model wrote for the service rather than for them.
 		body, err := marker.EncodeFindingBody(head, domain.Finding{
+			RuleID:     finding.RuleID,
 			Path:       normalizedPath,
 			StartLine:  finding.StartLine,
 			EndLine:    finding.EndLine,
