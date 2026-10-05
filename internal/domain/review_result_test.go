@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -46,6 +47,50 @@ func TestRuleImportanceDeterminesPublishedReviewDecision(t *testing.T) {
 			decision := review.DecisionFor(result.Findings, item.minimum)
 			if decision != item.expectedDecision {
 				t.Fatalf("The published decision is %s; expected %s.", decision, item.expectedDecision)
+			}
+		})
+	}
+}
+
+func TestMetadataFeedbackWithoutAnExactCorrectionRequestsChanges(t *testing.T) {
+	policy := policytest.Load(t)
+	for _, target := range []domain.FindingTarget{
+		{Surface: domain.FindingPullRequestTitle},
+		{Surface: domain.FindingPullRequestDescription},
+		{Surface: domain.FindingCommitMessage, CommitSHA: "cbb5fe583ff3098e64d36b3174cad83ad9ac0348"},
+	} {
+		t.Run(string(target.Surface), func(t *testing.T) {
+			finding := domain.Finding{
+				Surface: target.Surface, CommitSHA: target.CommitSHA,
+				CorrectionAction: domain.CorrectionNone, RuleID: "process_narration",
+				StartLine: 1, EndLine: 1, Title: "Remove process narration",
+				Body:     "The selected source line narrates work instead of explaining the change.",
+				Evidence: "I am checking CI, then merging and deploying.",
+				Claim:    "The source line contains process narration.", Importance: 1,
+			}
+			encoded, err := json.Marshal(domain.ReviewResult{
+				Overview:            "The review identified process narration.",
+				OmissionsAcceptable: true, Findings: []domain.Finding{finding},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := domain.UnmarshalReviewResult(encoded, policy.Catalog(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision := review.DecisionFor(result.Findings, 10)
+			if decision != domain.ReviewDecisionRequestChanges {
+				t.Fatalf("metadata feedback produced %s instead of requested changes", decision)
+			}
+			body := review.RenderBody(review.Summary{
+				Decision: decision, Metadata: result.Findings,
+			})
+			if !strings.Contains(body, finding.Body) || !strings.Contains(body, "Correct the prose findings below.") {
+				t.Fatalf("the published summary omitted metadata feedback: %s", body)
+			}
+			if strings.Contains(body, "Replace those lines with:") || strings.Contains(body, "Delete lines") {
+				t.Fatalf("the published summary invented an unavailable correction: %s", body)
 			}
 		})
 	}
