@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"goodkind.io/pr-review-agent/internal/domain"
 )
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
@@ -51,6 +53,88 @@ func ChangedRightLines(patch string) (map[int]struct{}, map[int]int, error) {
 		return nil, nil, err
 	}
 	return result.changedLines, result.lineHunks, nil
+}
+
+// ValidatePatchContent excludes deletion rows because they refer to the previous file.
+func ValidatePatchContent(patch string, content string) error {
+	parsed, err := parsePatch(patch)
+	if err != nil {
+		return err
+	}
+	if !parsed.complete || len(parsed.hunks) == 0 {
+		return errors.New("patch coverage is incomplete")
+	}
+	lines := strings.Split(content, "\n")
+	for _, hunk := range parsed.hunks {
+		lineNumber := hunk.coordinates.newStart
+		for _, row := range strings.Split(hunk.text, "\n")[1:] {
+			if !strings.HasPrefix(row, " ") && !strings.HasPrefix(row, "+") {
+				continue
+			}
+			if lineNumber < 1 || lineNumber > len(lines) || lines[lineNumber-1] != row[1:] {
+				return fmt.Errorf("patch right line %d does not match current content", lineNumber)
+			}
+			lineNumber++
+		}
+	}
+	return nil
+}
+
+// ChangedSourceRow uses original file coordinates or line numbers within one metadata field.
+type ChangedSourceRow struct {
+	Surface   domain.FindingSurface `json:"surface"`
+	CommitSHA domain.HeadSHA        `json:"commit_sha"`
+	Path      string                `json:"path"`
+	RightLine int                   `json:"right_line"`
+	Text      string                `json:"text"`
+}
+
+// ChangedSourceRows reads original patch coordinates independently of the display format.
+func ChangedSourceRows(chunk Chunk) ([]ChangedSourceRow, error) {
+	rows := make([]ChangedSourceRow, 0)
+	for _, piece := range chunk.Pieces {
+		if !piece.CoverageComplete || piece.Oversized {
+			continue
+		}
+		if piece.Metadata != nil {
+			source := piece.Metadata
+			for index, text := range strings.Split(source.Text, "\n") {
+				rows = append(rows, ChangedSourceRow{
+					Surface: source.Surface, CommitSHA: source.CommitSHA, Path: "",
+					RightLine: source.StartLine + index, Text: text,
+				})
+			}
+			continue
+		}
+		parsed, err := parsePatch(piece.Patch)
+		if err != nil {
+			return nil, err
+		}
+		if !parsed.complete {
+			return nil, errors.New("changed source rows require complete patch hunks")
+		}
+		for _, hunk := range parsed.hunks {
+			rows = append(rows, changedHunkRows(piece.Path, hunk)...)
+		}
+	}
+	return rows, nil
+}
+
+func changedHunkRows(path string, hunk parsedHunk) []ChangedSourceRow {
+	rows := make([]ChangedSourceRow, 0)
+	lineNumber := hunk.coordinates.newStart
+	for _, row := range strings.Split(hunk.text, "\n")[1:] {
+		if strings.HasPrefix(row, "+") {
+			rows = append(rows, ChangedSourceRow{
+				Surface: domain.FindingFile, CommitSHA: "", Path: path,
+				RightLine: lineNumber, Text: row[1:],
+			})
+		}
+		if strings.HasPrefix(row, " ") || strings.HasPrefix(row, "+") {
+			lineNumber++
+		}
+	}
+	return rows
 }
 
 // ValidRange reports whether every line in the inclusive range is a changed right-side line

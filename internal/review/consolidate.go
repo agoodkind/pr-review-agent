@@ -30,9 +30,9 @@ import (
 	"strings"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // minimumConsolidationCandidates is how many candidates a chunk must hold to be
@@ -123,11 +123,8 @@ func (consolidation Consolidation) Validate(candidateCount int) error {
 }
 
 // ConsolidationPolicy is the instruction for grouping one chunk's candidates.
-func ConsolidationPolicy() string {
-	return "Group findings that state one defect, however differently each is worded and wherever each is anchored. " +
-		"Two findings are one defect when fixing one fixes the other. Leave findings that need separate fixes ungrouped. " +
-		"Never invent a finding number and never place one number in two groups.\nWriting policy: " +
-		config.WritingPolicy + "\nUntrusted input policy: " + UntrustedInputPolicy
+func ConsolidationPolicy(policy reviewrules.Policy) (string, error) {
+	return outputPolicy(policy, "consolidate.system")
 }
 
 // chunkPosts turns one chunk's answer into the comments to post.
@@ -138,11 +135,11 @@ func ConsolidationPolicy() string {
 func (service *Service) chunkPosts(
 	ctx context.Context,
 	head domain.HeadSHA,
-	chunkText string,
+	chunk diff.Chunk,
 	findings []domain.Finding,
 	pass *chunkPass,
 ) []postCandidate {
-	candidates := pass.chunkCandidates(ctx, chunkText, findings)
+	candidates := pass.chunkCandidates(ctx, chunk, findings)
 	candidates = service.consolidateChunk(ctx, candidates, pass)
 	for {
 		pass.publicationMu.Lock()
@@ -156,7 +153,7 @@ func (service *Service) chunkPosts(
 		pass.publicationMu.Unlock()
 
 		consolidated := service.consolidateAcrossChunks(
-			ctx, candidates, selected, pass, chunkText,
+			ctx, candidates, selected, pass, chunk.Text,
 		)
 		pass.publicationMu.Lock()
 		if len(pass.selection.findings) != selectedCount {
@@ -182,7 +179,7 @@ func (service *Service) consolidateAcrossChunks(
 		return candidates
 	}
 	prompt, ok := buildAcrossChunkConsolidationPrompt(
-		candidates, selected, pass.work, chunkText, pass.disputePrompt, pass.settings.maximumPromptBytes,
+		candidates, selected, pass.work, chunkText, pass.disputePrompt, pass.settings.maximumPromptBytes, service.reviewPolicy,
 	)
 	if !ok {
 		return candidates
@@ -212,15 +209,15 @@ func (service *Service) consolidateAcrossChunks(
 // one candidate per claim.
 func (pass *chunkPass) chunkCandidates(
 	ctx context.Context,
-	chunkText string,
+	chunk diff.Chunk,
 	findings []domain.Finding,
 ) []domain.Finding {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 
 	pass.collector.collect(findings)
-	grounded := groundedFindings(ctx, findings, pass.collector.fileIndex, chunkText)
-	eligible := eligibleFindings(grounded, pass.collector.fileIndex, pass.collector.minimumImportance)
+	grounded := GroundedFindings(ctx, findings, pass.collector.fileIndex, BuildMetadataIndex(chunk.Metadata), chunk.Text)
+	eligible := EligibleFindings(grounded, pass.collector.fileIndex, pass.collector.metadataIndex, pass.collector.minimumImportance)
 	return collapseChunkCandidates(ctx, unansweredCandidates(ctx, eligible, pass))
 }
 
@@ -279,9 +276,15 @@ func (service *Service) consolidateChunk(
 	// to the service would be timed by whatever the process booted with, which
 	// is the staleness the carrying exists to end.
 	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	prompt, err := buildConsolidationPrompt(candidates, pass.disputePrompt, service.reviewPolicy)
+	if err != nil {
+		cancel()
+		gklog.L(ctx).ErrorContext(ctx, "Consolidation prompt rendering failed", "err", err)
+		return candidates
+	}
 	answer, err := service.model.Consolidate(
 		callCtx,
-		buildConsolidationPrompt(candidates, pass.disputePrompt),
+		prompt,
 	)
 	cancel()
 	pass.recordConsolidationRequest()
@@ -384,17 +387,11 @@ func strongestCandidate(numbers []int, candidates []domain.Finding) int {
 // decides what these findings add to it. The instruction is outside the
 // untrusted delimiters because this service wrote it; the findings and the
 // threads sit inside them, because both are model output and stranger prose.
-func buildConsolidationPrompt(candidates []domain.Finding, disputes string) string {
-	var builder strings.Builder
-	builder.WriteString(disputes)
-	builder.WriteString("These numbered findings all came from one review chunk. ")
-	builder.WriteString("Return a group for every set of numbers that state one defect between them. ")
-	builder.WriteString(
-		"Set restates_open_thread on a group that states what an open finding or a resolved finding from this commit already states. ",
-	)
-	builder.WriteString("A finding that repeats nothing belongs in no group.\n")
-	builder.WriteString(WrapUntrusted(formatConsolidationCandidates(candidates)))
-	return builder.String()
+func buildConsolidationPrompt(candidates []domain.Finding, disputes string, policy reviewrules.Policy) (string, error) {
+	var data reviewrules.PromptData
+	data.Disputes = disputes
+	data.Input = policy.WrapUntrusted(formatConsolidationCandidates(candidates))
+	return renderPrompt(policy, "consolidate.input", data)
 }
 
 // buildAcrossChunkConsolidationPrompt asks whether new candidates restate a
@@ -408,17 +405,17 @@ func buildAcrossChunkConsolidationPrompt(
 	chunkText string,
 	disputes string,
 	maximumBytes int,
+	policy reviewrules.Policy,
 ) (string, bool) {
-	const instruction = "Decide only whether each new candidate is the same underlying defect as a finding already selected. " +
-		"Use the current pull request, related current source, tests in that source, and inline discussions. " +
-		"Do not drop a candidate merely because its wording or effect sounds similar. " +
-		"Set restates_open_thread only when one fix resolves both findings. " +
-		"Return a group for each set of new candidate numbers that state one defect. " +
-		"A candidate that repeats nothing belongs in no group.\n"
+	var data reviewrules.PromptData
+	data.Input = policy.WrapUntrusted("")
+	prefix, err := renderPrompt(policy, "consolidate.across.input", data)
+	if err != nil {
+		return "", false
+	}
 	findings := "Findings already selected:\n" + formatConsolidationCandidates(carried) +
 		"\n\nNew candidates:\n" + formatConsolidationCandidates(candidates)
-	minimumLength := len(instruction) + len(promptInputBegin) + len(promptInputEnd) +
-		len(findings) + 4
+	minimumLength := len(prefix) + len(findings) + 2
 	if minimumLength >= maximumBytes {
 		return "", false
 	}
@@ -426,9 +423,9 @@ func buildAcrossChunkConsolidationPrompt(
 	contextText := formatAcrossChunkContext(work, chunkText, disputes, carried)
 	contextText = truncateUTF8(contextText, contextBudget)
 	input := contextText + "\n\n" + findings
-	input = strings.ReplaceAll(input, promptInputBegin, "<UNTRUSTED_INPUT>")
-	input = strings.ReplaceAll(input, promptInputEnd, "<END_UNTRUSTED_INPUT>")
-	return instruction + WrapUntrusted(input), true
+	data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(input))
+	prompt, err := renderPrompt(policy, "consolidate.across.input", data)
+	return prompt, err == nil
 }
 
 func formatAcrossChunkContext(
@@ -482,8 +479,10 @@ func formatConsolidationCandidates(candidates []domain.Finding) string {
 	sections := make([]string, 0, len(candidates))
 	for index, candidate := range candidates {
 		sections = append(sections, fmt.Sprintf(
-			"Finding %d\nPath: %s\nLines: %d-%d\nTitle: %s\nClaim: %s\nBody: %s\nEvidence: %s",
+			"Finding %d\nSurface: %s\nCommit SHA: %s\nPath: %s\nLines: %d-%d\nTitle: %s\nClaim: %s\nBody: %s\nEvidence: %s",
 			index+1,
+			candidate.EffectiveSurface(),
+			candidate.CommitSHA,
 			candidate.Path,
 			candidate.StartLine,
 			candidate.EndLine,

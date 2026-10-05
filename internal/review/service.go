@@ -16,6 +16,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/queue"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 	"goodkind.io/pr-review-agent/internal/runlog"
 )
 
@@ -87,6 +88,7 @@ type Service struct {
 	reviewMaxChunks    int
 	chunkConcurrency   int
 	maximumPromptBytes int
+	reviewPolicy       reviewrules.Policy
 	// chunkTimeout is the only clock over a model call, and the only clock in
 	// a review at all. A run is bounded by admission instead, so a large diff
 	// cannot run out of time part way through and lose what it already read.
@@ -115,6 +117,7 @@ func NewService(
 	logger *slog.Logger,
 	chunkConcurrency int,
 	maximumPromptBytes int,
+	reviewPolicy reviewrules.Policy,
 ) *Service {
 	if logger == nil {
 		logger = slog.Default()
@@ -147,6 +150,7 @@ func NewService(
 		reviewMaxChunks:        reviewMaxChunks,
 		chunkConcurrency:       chunkConcurrency,
 		maximumPromptBytes:     maximumPromptBytes,
+		reviewPolicy:           reviewPolicy,
 		chunkTimeout:           chunkTimeout,
 		failureAppearances:     failureAppearances,
 		checkCompletionTimeout: completionBudget,
@@ -408,6 +412,13 @@ func (service *Service) reviewOwedWork(
 	// writes its own account of why. One of them announcing a start first would
 	// leave the comment saying a review is under way that nobody is having, and
 	// a declined delta would say it twice and contradict itself.
+	var retainedMetadata []domain.Finding
+	if !fromScratch && hasState && len(state.Completed) > 0 {
+		retainedMetadata, state.Completed, err = service.restoreCompletedMetadata(ctx, job, pullRequest, work.Chunks, state.Completed)
+		if err != nil {
+			return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
+		}
+	}
 	service.announceStart(ctx, job, head)
 
 	threads, err := service.reconcileThreads(ctx, job, checkRun.ID, progress)
@@ -420,7 +431,15 @@ func (service *Service) reviewOwedWork(
 	// call.
 	selection := collectPublicationState(reviews, threads, service.botLogin)
 	disputes := collectDisputes(threads, service.botLogin, head)
-	pass := newChunkPass(work, settings, &selection, disputes, openThreadLocations(threads, service.botLogin))
+	disputePrompt, err := disputes.promptSection(service.reviewPolicy)
+	if err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
+	pass := newChunkPass(work, settings, &selection, disputes, openThreadLocations(threads, service.botLogin), disputePrompt)
+	for _, finding := range retainedMetadata {
+		pass.metadata = append(pass.metadata, finding)
+		pass.metadataSeen[metadataFindingKey(finding)] = struct{}{}
+	}
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {
@@ -441,6 +460,8 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	posted, failed, _ := pass.delivery()
 	progress.applyAnalysis(analysis)
 	progress.applyPublished(pass.publishedFindings())
+	progress.metadata = pass.metadataFindings()
+	progress.metadataRevision = diff.PullRequestRevision(pass.work.PullRequest)
 	logChunkFailures(ctx, unread, len(pass.work.Chunks), pass.requestCount())
 	logger.InfoContext(
 		ctx,
@@ -470,35 +491,6 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 // It asks the resolution rather than repeating its rules, because a second copy
 // of them drifts: the importance ceiling was added in one place and this list
 // went on naming a refused value as carried.
-func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
-	carried := make([]string, 0, 6)
-	unsettled := job
-	unsettled.Settings = domain.ReviewSettings{
-		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
-		ChunkConcurrency: 0, MaxPromptBytes: 0,
-	}
-	empty := service.settingsFor(unsettled)
-	resolved := service.settingsFor(job)
-	if resolved.minimumImportance != empty.minimumImportance {
-		carried = append(carried, "minimum_importance")
-	}
-	if resolved.maxFiles != empty.maxFiles {
-		carried = append(carried, "max_files")
-	}
-	if resolved.maxChunks != empty.maxChunks {
-		carried = append(carried, "max_chunks")
-	}
-	if resolved.chunkTimeout != empty.chunkTimeout {
-		carried = append(carried, "chunk_timeout")
-	}
-	if resolved.chunkConcurrency != empty.chunkConcurrency {
-		carried = append(carried, "chunk_concurrency")
-	}
-	if resolved.maximumPromptBytes != empty.maximumPromptBytes {
-		carried = append(carried, "max_prompt_bytes")
-	}
-	return carried
-}
 
 // reviewSettings are the tuning values one run is bound by, after the values the
 // delivery carried are laid over the ones this process was configured with.
@@ -773,12 +765,16 @@ func (service *Service) publish(
 	if currentPullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+	if diff.PullRequestRevision(currentPullRequest) != diff.PullRequestRevision(pass.work.PullRequest) {
+		return service.cancelCheck(ctx, job, checkRun.ID)
+	}
 	progress.reached("the head refresh")
 
 	// Findings either reached the diff or were retained for the summary, so the
 	// review submitted here carries the verdict alone.
 	analysis := pass.analysis()
 	published := pass.publishedFindings()
+	metadata := pass.metadataFindings()
 	posted, failed, fallback := pass.delivery()
 	logPublishedFindings(ctx, analysis.Anchored, published, posted, failed)
 	progress.reached("finding selection")
@@ -798,6 +794,9 @@ func (service *Service) publish(
 		(analysis.CoverageComplete || omissionsDecided) && failed == len(fallback)
 	approvalAllowed := headFullyReviewed && (!omissionsDecided || omissionsAccepted) && len(fallback) == 0
 	decision := reviewerDecision(threads, service.botLogin, approvalAllowed)
+	if len(metadata) > 0 {
+		decision = domain.ReviewDecisionRequestChanges
+	}
 	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef)
 	summary := Summary{
 		Head:             head,
@@ -820,6 +819,8 @@ func (service *Service) publish(
 		Eligible:          analysis.Anchored,
 		Published:         published,
 		Fallback:          fallback,
+		Metadata:          metadata,
+		MetadataRevision:  diff.PullRequestRevision(pass.work.PullRequest),
 		PriorReviews:      traceReviews(reviews, service.botLogin),
 		Threads:           traceThreads(threads, service.botLogin),
 		Reached:           "",

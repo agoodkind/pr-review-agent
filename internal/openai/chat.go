@@ -27,7 +27,7 @@ func completeChat(
 		Model:           target.model,
 		ReasoningEffort: shared.ReasoningEffort(target.reasoningEffort),
 		Messages: []openaigo.ChatCompletionMessageParamUnion{
-			openaigo.SystemMessage(structuredOutputPrompt(policy, schemaName, schema)),
+			openaigo.SystemMessage(policy),
 			openaigo.UserMessage(prompt),
 		},
 		StreamOptions: openaigo.ChatCompletionStreamOptionsParam{IncludeUsage: openaigo.Bool(true)},

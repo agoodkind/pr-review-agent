@@ -62,6 +62,7 @@ func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admi
 type deltaWork struct {
 	PullRequest githubapp.PullRequest
 	Files       []diff.FileContext
+	Metadata    []diff.MetadataSource
 	Chunks      []diff.Chunk
 }
 
@@ -95,10 +96,14 @@ func (service *Service) collectAndAdmit(
 	shortfall := classifyStructuralShortfall(deltaWork{
 		PullRequest: input.PullRequest,
 		Files:       input.Files,
+		Metadata:    input.Metadata,
 		Chunks:      nil,
 	})
-	contextBytes := len(pullRequestPrompt(input.PullRequest, input.Files)) +
-		len(omissionPrompt(shortfall, input.Files, settings.maximumPromptBytes))
+	promptContext, err := reviewContext(input.PullRequest, input.Files, shortfall, settings.maximumPromptBytes, service.reviewPolicy)
+	if err != nil {
+		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
+	contextBytes := len(promptContext)
 	chunks, err := diff.ChunkInput(input, settings.maximumPromptBytes-contextBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
@@ -107,11 +112,19 @@ func (service *Service) collectAndAdmit(
 			checkFailureDiff, fmt.Errorf("chunk input: %w", err),
 		)
 	}
-	work := deltaWork{PullRequest: input.PullRequest, Files: input.Files, Chunks: chunks}
+	work := deltaWork{PullRequest: input.PullRequest, Files: input.Files, Metadata: input.Metadata, Chunks: chunks}
+	work.Chunks, err = BoundReviewChunks(work.Chunks, work.Files, settings.minimumImportance, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
+	if err != nil {
+		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
+	chunks = work.Chunks
 	shortfall = classifyStructuralShortfall(work)
 	if shortfall.present() {
-		contextBytes = len(pullRequestPrompt(work.PullRequest, work.Files)) +
-			len(omissionPrompt(shortfall, work.Files, settings.maximumPromptBytes))
+		promptContext, err = reviewContext(work.PullRequest, work.Files, shortfall, settings.maximumPromptBytes, service.reviewPolicy)
+		if err != nil {
+			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		}
+		contextBytes = len(promptContext)
 		chunks, err = diff.ChunkInput(input, settings.maximumPromptBytes-contextBytes)
 		if err != nil {
 			return empty, true, service.failCheck(
@@ -120,6 +133,11 @@ func (service *Service) collectAndAdmit(
 			)
 		}
 		work.Chunks = chunks
+		work.Chunks, err = BoundReviewChunks(work.Chunks, work.Files, settings.minimumImportance, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
+		if err != nil {
+			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		}
+		chunks = work.Chunks
 	}
 
 	verdict := admitDelta(len(input.Files), len(chunks), settings.maxFiles, settings.maxChunks)

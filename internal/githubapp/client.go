@@ -27,12 +27,19 @@ const (
 
 // PullRequest is the pull request metadata required for review work.
 type PullRequest struct {
-	Number int
-	Head   domain.HeadSHA
-	Base   domain.HeadSHA
-	Draft  bool
-	Title  string
-	Body   string
+	Number      int
+	Head        domain.HeadSHA
+	Base        domain.HeadSHA
+	Draft       bool
+	Title       string
+	Body        string
+	CommitCount int
+}
+
+// PullRequestCommit includes the immutable identifier required for message findings.
+type PullRequestCommit struct {
+	SHA     domain.HeadSHA
+	Message string
 }
 
 // ChangedFile is one file changed on a pull request or compare result.

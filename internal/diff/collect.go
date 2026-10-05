@@ -120,6 +120,7 @@ func (file *FileContext) collectChangedLines() bool {
 type ReviewInput struct {
 	PullRequest githubapp.PullRequest
 	Files       []FileContext
+	Metadata    []MetadataSource
 	// MergeBase is the commit the patches are measured from, which is not always
 	// the commit the range was asked for: GitHub compares from where two commits
 	// last agreed. It is empty when the whole pull request was listed rather than
@@ -130,8 +131,10 @@ type ReviewInput struct {
 
 // Piece is one rendered diff hunk, the smallest unit a chunk can carry.
 type Piece struct {
-	Path string
-	Text string
+	Path     string
+	Text     string
+	Patch    string
+	Metadata *MetadataSource
 	// Header is the hunk's "@@ -a,b +c,d @@" coordinates, without the trailing
 	// source line git appends to them. It is what names this piece to a reader
 	// when nobody could read it.
@@ -152,6 +155,7 @@ type Chunk struct {
 	Text             string
 	Pieces           []Piece
 	Paths            []string
+	Metadata         []MetadataSource
 	CoverageComplete bool
 }
 
@@ -175,6 +179,7 @@ func emptyChunk() Chunk {
 		Text:             "",
 		Pieces:           nil,
 		Paths:            nil,
+		Metadata:         nil,
 		CoverageComplete: true,
 	}
 }
@@ -199,6 +204,7 @@ func chunkFromPieces(pieces []Piece, index int, total int) Chunk {
 // Source loads changed files and repository content for diff collection.
 type Source interface {
 	ListChangedFiles(context.Context, int64, domain.Repository, int) ([]githubapp.ChangedFile, error)
+	ListPullRequestCommits(context.Context, int64, domain.Repository, int) ([]githubapp.PullRequestCommit, error)
 	GetFile(context.Context, int64, domain.Repository, string, domain.HeadSHA) ([]byte, error)
 	Compare(context.Context, int64, domain.Repository, domain.HeadSHA, domain.HeadSHA) (githubapp.Comparison, error)
 }
@@ -234,9 +240,14 @@ func (collector *Collector) Collect(
 	if err != nil {
 		return ReviewInput{}, err
 	}
+	metadata, err := collector.collectMetadata(ctx, ref, pullRequest)
+	if err != nil {
+		return ReviewInput{}, err
+	}
 	return ReviewInput{
 		PullRequest: pullRequest,
 		Files:       files,
+		Metadata:    metadata,
 		// Listing the whole pull request compares nothing, so there is no commit
 		// the patches were measured from to report.
 		MergeBase: "",
@@ -301,11 +312,32 @@ func (collector *Collector) CollectRange(
 	if err != nil {
 		return ReviewInput{}, err
 	}
+	metadata, err := collector.collectMetadata(ctx, ref, pullRequest)
+	if err != nil {
+		return ReviewInput{}, err
+	}
 	return ReviewInput{
 		PullRequest: pullRequest,
 		Files:       files,
 		MergeBase:   changedFiles.MergeBase,
+		Metadata:    metadata,
 	}, nil
+}
+
+func (collector *Collector) collectMetadata(ctx context.Context, ref domain.PullRequestRef, pullRequest githubapp.PullRequest) ([]MetadataSource, error) {
+	var commits []githubapp.PullRequestCommit
+	if pullRequest.CommitCount > 0 {
+		var err error
+		commits, err = collector.source.ListPullRequestCommits(ctx, ref.InstallationID, ref.Repository, ref.Number)
+		if err != nil {
+			slog.WarnContext(ctx, "Load commit prose failed", "err", err)
+			return nil, fmt.Errorf("load commit prose: %w", err)
+		}
+		if len(commits) != pullRequest.CommitCount {
+			return nil, fmt.Errorf("GitHub returned %d of %d pull request commit messages", len(commits), pullRequest.CommitCount)
+		}
+	}
+	return PullRequestMetadata(pullRequest, commits), nil
 }
 
 // baseUnreachable reports whether GitHub refused a comparison because the base
@@ -451,6 +483,8 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 			}
 			pieces = append(pieces, Piece{
 				Path:             file.Path,
+				Patch:            hunk.text,
+				Metadata:         nil,
 				Text:             text,
 				Header:           hunkCoordinates(hunk.header),
 				CoverageComplete: coverageComplete,
@@ -459,6 +493,10 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 		}
 	}
 
+	for _, metadata := range input.Metadata {
+		fragments := metadataPieces(metadata, maxSize)
+		pieces = append(pieces, fragments...)
+	}
 	if len(pieces) == 0 {
 		return nil, nil
 	}
@@ -502,6 +540,7 @@ type chunkBuilder struct {
 	text             string
 	pieces           []Piece
 	paths            []string
+	metadata         []MetadataSource
 	coverageComplete bool
 	pathSeen         map[string]struct{}
 }
@@ -511,6 +550,7 @@ func newChunkBuilder() *chunkBuilder {
 		text:             "",
 		pieces:           make([]Piece, 0),
 		paths:            make([]string, 0),
+		metadata:         nil,
 		coverageComplete: true,
 		pathSeen:         make(map[string]struct{}),
 	}
@@ -530,6 +570,9 @@ func (builder *chunkBuilder) appendText(text string) {
 
 func (builder *chunkBuilder) addPiece(piece Piece) {
 	builder.pieces = append(builder.pieces, piece)
+	if piece.Metadata != nil {
+		builder.metadata = append(builder.metadata, *piece.Metadata)
+	}
 }
 
 func (builder *chunkBuilder) markIncomplete(incomplete bool) {
@@ -539,6 +582,9 @@ func (builder *chunkBuilder) markIncomplete(incomplete bool) {
 }
 
 func (builder *chunkBuilder) addPath(path string) {
+	if path == "" {
+		return
+	}
 	if _, ok := builder.pathSeen[path]; ok {
 		return
 	}
@@ -554,6 +600,7 @@ func (builder *chunkBuilder) build() (Chunk, bool) {
 			Text:             "",
 			Pieces:           nil,
 			Paths:            nil,
+			Metadata:         nil,
 			CoverageComplete: true,
 		}, false
 	}
@@ -563,6 +610,7 @@ func (builder *chunkBuilder) build() (Chunk, bool) {
 		Text:             builder.text,
 		Pieces:           builder.pieces,
 		Paths:            builder.paths,
+		Metadata:         builder.metadata,
 		CoverageComplete: builder.coverageComplete,
 	}, true
 }

@@ -1,42 +1,29 @@
+
 # Operations
 
-The service reviews the commits pushed since the commit it last reviewed, and reports one verdict for the current head.
+The service reviews changed repository content, pull request titles and descriptions, and commit messages. It reports a verdict for the current head and current metadata revision.
 
 ## Review lifecycle
 
-The service accepts `opened`, `reopened`, `ready_for_review`, and `synchronize` pull request events. It ignores draft pull requests until they become ready. Each accepted review request receives a `PR-Agent Review` check.
+The service accepts `opened`, `reopened`, `ready_for_review`, `synchronize`, and `edited` pull request events. Draft pull requests require a `ready_for_review` event. An edit starts a fresh review even when the head is unchanged. Each admitted review receives a `PR-Agent Review` check.
 
-Mention `@goodkind-io-pr-agent` in a new top level pull request comment to request a full review of the current head. The service also processes replies to its inline findings and changes to review thread resolution. These discussion events refresh the existing verdict without a push. The GitHub App must subscribe to `issue_comment`, `pull_request_review_comment`, and `pull_request_review_thread` in addition to `pull_request`.
+Mention `@goodkind-io-pr-agent` in a new top-level pull request comment to request a full review. A review label also requests a full review. Replies to the service's inline findings and changes to thread resolution refresh the verdict. The GitHub App requires `issue_comment`, `pull_request_review_comment`, `pull_request_review_thread`, and `pull_request` subscriptions.
 
-Ordinary push reviews examine everything changed between the last reviewed commit and the current head. The first review examines the whole pull request. A tagged comment or review label requests another full review of the current head.
+Ordinary push reviews examine the changes since the last reviewed commit. The first review examines the whole pull request. The service updates one summary comment with the purpose, changes, verdict, and actionable metadata findings. File findings appear inline. Title, description, and commit-message findings include exact field replacements or deletions in the summary. Collapsed details report models, duration, usage, estimated cost, coverage, and thread identifiers.
 
-The service owns one top level comment per pull request, created once and edited in place forever. It posts no other issue comment, and no progress message, reply, or command. The visible comment states the pull request purpose, its distinct changes, and the verdict once. Findings stay in their inline comments. The collapsed review details carry the models, duration, token usage, estimated cost, head, coverage, finding counts, and thread identifiers. The check run renders the same details from the same values, so the two cannot report different numbers.
+The hidden state marker records the last reviewed commit, pending and completed chunks, run identifier, and status. Every summary update includes the marker. Resumed reviews reuse completed file chunks. Completed metadata chunks require a matching head and metadata revision. When the cached metadata record does not match, the service reviews the current metadata chunks again before approval.
 
-Below the prose, hidden from the reader, the comment carries a state marker. It records the commit last reviewed, the chunks still owed, the chunks already read since that commit, the run identifier, and the run's status. That marker is what the next run resumes from, so it neither repeats a chunk that answered nor skips one that did not. Every write to the comment carries it, failure and skip notices included, because a body written without it makes the next run miss the comment and open a second one.
+The service declines a delta that exceeds its configured admission limits before sending model requests. The summary reports the measured size. The check concludes `action_required`, and the last reviewed commit does not advance. Subsequent pushes include the unreviewed range until a review completes or the pull request is split.
 
-Before any model call, the service measures the delta and declines one that is over budget. The comment says the review was skipped and names the measured size, and no review object changes. The check concludes `action_required`, which stops short of any conclusion GitHub counts as passing, so an entirely unreviewed delta cannot merge on the strength of having been declined. A declined delta also leaves the last reviewed commit where it was. That oversized range therefore appears in every later delta and is declined again, however small the later pushes are. The way out is a person's: split the pull request, raise its budget, or ask for the review.
+Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work and existing review decisions. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
 
-The service reads an admitted delta in chunks, one model request each, several chunks at a time. Every request carries its own timeout, so no clock spans two of them and a slow chunk takes nothing from the chunks beside it. A chunk's findings post as soon as that chunk answers, and only then is the chunk recorded as read, so an interrupted run loses only the chunks in flight.
+The service measures the complete rendered input against its configured prompt budget. It trims surplus file context and splits chunks when needed. A provider response that stops at its output limit also triggers splitting. A single hunk that cannot fit or finish requires a decision about whether its unread content is necessary for the verdict.
 
-A chunk the service could not read stays pending, and the comment says how many are left. Nothing is retried inside one run: the next push reviews what is still owed along with whatever it adds. A run that leaves anything pending does not move the last reviewed commit and touches no review object, because a failure to read is not a finding and requesting changes over one would let a provider outage block every open pull request with objections nobody raised. The merge gate holds anyway: the check concludes `action_required`, which GitHub does not count as passing, so a head with unread chunks cannot merge in a repository that requires the check. A comment GitHub answers and refuses is different, because no later attempt can change that answer: its chunk is recorded as read so the next run does not retry a post that can never land.
+Each finding requires source evidence and a valid target. The loaded rule policy determines importance before the publication threshold applies. Duplicate identities suppress repeated findings. The service reconciles its existing threads against current source before publication.
 
-A model stops mid answer when it reaches its completion token budget, which reasoning and findings share, so a chunk yielding many findings can exhaust it. The service then splits that chunk in half and reviews each half, repeating while answers keep stopping early. A chunk holding one diff hunk cannot split, so the service skips it and reports incomplete coverage in the review details. One truncated answer never fails the whole review.
+An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-Findings appear as inline comments on the changed lines they object to. A finding is published when it anchors to a changed line and meets the configured importance threshold, and every finding that does is published. The only thing that withholds one is a stable identity matching a finding the pull request already carries, so the same defect is raised once rather than once per push. Before publishing new findings, the service re-reads its own open threads and silently resolves the ones the new code fixed.
-
-The service applies each finding's rule importance before deciding whether to publish it.
-
-The verdict is recomputed from scratch on every run, and its input is the service's own review threads. One of them still open requests changes. None open on a fully read head approves. No decision carries over from an earlier run, so a block never outlives the finding behind it. A reply or thread state change starts a refresh without a push and publishes a dedicated in-progress check while the verdict changes. A requested changes verdict directs the reader to the open inline findings. GitHub connects the review to those comments, and the collapsed details carry their thread identifiers and current counts.
-
-Both inputs to that verdict are read after this run's findings are on the page. Threads read earlier would omit the ones the same run just opened, and a run would approve over defects it had raised minutes before. A head that moved while the run was working ends the run with no verdict at all, and the push that moved it gets the review.
-
-A run that fails touches no review object. It has no verdict to publish and has not earned the right to withdraw the one standing, so it turns the check red and writes the cause into the comment, leaving the last reviewed commit and the pending chunks exactly as it found them. The next run neither repeats work already done nor skips work never done.
-
-Neither the check nor the comment reprints what the failure said. A model provider error can carry the request it failed on, an internal endpoint, or a credential, and a check run is as public and as permanent as a comment. Both name the class of failure the service recognized and carry the run identifier instead. When the model provider reports no remaining usage, both say so rather than naming a stage.
-
-The check also publishes the run's own log, every line and every field. A field's value is printed only when that field is one the service vouched for as its own measurement, identifier, or wording. Every other value is withheld, and the field says so where the value would be. Read the withheld values from the service log for that run identifier, following [logs.md](logs.md).
-
-An incomplete review puts each provider attempt, configured model, remaining app quota, and API refusal in the collapsed details. A failed run reports the last completed stage. The detail table also reports findings published before a later stage failed.
+A failed review changes no standing review verdict. The summary and check report the recognized failure class and run identifier. Raw provider messages remain in the private service log. Public log fields are limited to service-defined measurements, identifiers, and wording. Inspect the private records using [logs.md](logs.md).
 
 ## Configure the service
 
@@ -60,6 +47,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `SERVICE_FAILURE_APPEARANCE` | Choose whether each service failure class blocks the check |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_RULE_IMPORTANCE` | Fixed importance values indexed by stable rule ID |
+| `REVIEW_RULES_FILE` | Required path to the external rule catalog |
+| `REVIEW_PROMPTS_FILE` | Required path to the external stage prompt templates |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
 | `REVIEW_CHUNK_TIMEOUT` | Timeout for one model request |
@@ -108,7 +97,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Change review rules
 
-1. Edit the instructions in the [rule catalog](../internal/reviewrules/rules.json). Preserve each rule's `id` when changing its title or instructions. The Go build includes the catalog in the binary.
+1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. The service reads both files at startup. The binary contains no default rules or prompts.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json
@@ -117,8 +106,8 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
    }
    ```
 
-   Prose rules always receive importance `10`. The service rejects attempts to reduce their importance. A technical rule without an override uses the model's score. `REVIEW_MIN_IMPORTANCE` controls publication after these scores are applied.
-3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make check`, then merge the change to deploy it.
+   The catalog's category settings define fixed importance and which rules apply to generated review text. The shipped prose category requires importance `10`. A rule without fixed category importance or an override uses the model's score. `REVIEW_MIN_IMPORTANCE` controls publication after these scores are applied.
+3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make check`. Verify findings and corrections with the live procedure in [acceptance.md](acceptance.md), then merge the change to deploy it.
 
 4. Confirm that the Release workflow completed successfully. The committed Cloudflare configuration contains an invalid image placeholder. For a manual deployment, set `PR_REVIEW_AGENT_IMAGE` to the verified image digest and run `npm run deploy` from `deploy/cloudflare`.
 

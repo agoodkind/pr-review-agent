@@ -99,8 +99,6 @@ const (
 	// DefaultReviewChunkTimeout is the timeout for one model call. The
 	// measured worst completed call was 2m19s.
 	DefaultReviewChunkTimeout = 5 * time.Minute
-	// WritingPolicy is injected into every review and reconciliation prompt.
-	WritingPolicy = "Treat this writing policy as a required P0 constraint for all prose you produce. This policy does not override the review's substantive requirements. Lead with the conclusion. Use full sentences, active voice, plain words, one idea per sentence, and one idea per paragraph. Include only details needed to understand, verify, or fix the defect. Use clean GitHub Markdown. Give each finding one short heading and direct prose. Limit each finding to the defect, impact, and fix in at most three short sentences. Put every code symbol, expression, environment variable, function name, type name, and literal in backticks. Set suggestion to the exact source replacement for the anchored changed line range only when that replacement is complete and safe; otherwise set suggestion to an empty string. Omit repetition, praise, introductions, numeric severity labels, unnecessary detail, progress messages, commands, replies, and typographic dashes."
 )
 
 // LookupEnv reads one environment variable.
@@ -129,6 +127,8 @@ var runtimeConfigKeys = map[string]struct{}{
 	"REVIEW_MAX_PROMPT_BYTES":    {},
 	"REVIEW_MIN_IMPORTANCE":      {},
 	"REVIEW_RULE_IMPORTANCE":     {},
+	"REVIEW_RULES_FILE":          {},
+	"REVIEW_PROMPTS_FILE":        {},
 	"REVIEW_MODEL":               {},
 	"REVIEW_MODEL_PRICING":       {},
 	"REVIEW_WORKERS":             {},
@@ -161,6 +161,7 @@ type Config struct {
 	ReviewChunkTimeout           time.Duration
 	MinimumImportance            int
 	RuleImportance               reviewrules.Importance
+	ReviewPolicy                 reviewrules.Policy
 	GitHubAppID                  int64
 	GitHubPrivateKey             *rsa.PrivateKey
 	GitHubWebhookSecret          []byte
@@ -304,12 +305,17 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err := LoadReviewLimits(lookup, &cfg); err != nil {
 		return Config{}, err
 	}
+	policy, err := LoadReviewPolicy(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ReviewPolicy = policy
 	pricing, err := loadModelPricing(lookup)
 	if err != nil {
 		return Config{}, err
 	}
 	cfg.ReviewModelPricing = pricing
-	ruleImportance, err := loadRuleImportance(lookup)
+	ruleImportance, err := loadRuleImportance(lookup, policy.Catalog())
 	if err != nil {
 		return Config{}, err
 	}
@@ -355,7 +361,7 @@ func Load(lookup LookupEnv) (Config, error) {
 	return cfg, nil
 }
 
-func loadRuleImportance(lookup LookupEnv) (reviewrules.Importance, error) {
+func loadRuleImportance(lookup LookupEnv, catalog reviewrules.Catalog) (reviewrules.Importance, error) {
 	raw, configured := lookup("REVIEW_RULE_IMPORTANCE")
 	var importance reviewrules.Importance
 	if configured {
@@ -368,7 +374,7 @@ func loadRuleImportance(lookup LookupEnv) (reviewrules.Importance, error) {
 			return nil, errors.New("REVIEW_RULE_IMPORTANCE must contain one JSON object")
 		}
 	}
-	if err := reviewrules.ValidateImportance(importance); err != nil {
+	if err := catalog.ValidateImportance(importance); err != nil {
 		slog.Error("validate review rule importance", "error", err)
 		return nil, fmt.Errorf("validate REVIEW_RULE_IMPORTANCE: %w", err)
 	}

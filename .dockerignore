@@ -2,3 +2,5 @@
 !dist/
 !dist/**
 !runtime.json
+!config/
+!config/**

@@ -281,7 +281,7 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 		"### " + title,
 		body,
 	}
-	if finding.Suggestion != "" {
+	if finding.Suggestion != "" || finding.CorrectionAction == domain.CorrectionDelete {
 		parts = append(parts, suggestionPrefix+finding.Suggestion+suggestionSuffix)
 	}
 	parts = append(parts, markerText)
@@ -318,18 +318,26 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 
 	finding := domain.Finding{
-		RuleID:    "",
-		Path:      comment.Path,
-		StartLine: comment.StartLine,
-		EndLine:   comment.EndLine,
-		Title:     title,
-		Body:      body,
+		Surface:          domain.FindingFile,
+		CommitSHA:        "",
+		CorrectionAction: domain.CorrectionNone,
+		RuleID:           "",
+		Path:             comment.Path,
+		StartLine:        comment.StartLine,
+		EndLine:          comment.EndLine,
+		Title:            title,
+		Body:             body,
 		// The published comment never carries evidence or the claim sentence,
 		// only their hashes, so a decoded finding has neither to recover.
 		Evidence:   "",
 		Claim:      "",
 		Suggestion: suggestion,
 		Importance: marker.Importance,
+	}
+	if suggestion != "" {
+		finding.CorrectionAction = domain.CorrectionReplace
+	} else if strings.Contains(withoutMarker, suggestionPrefix+suggestionSuffix) {
+		finding.CorrectionAction = domain.CorrectionDelete
 	}
 	if err := finding.Validate(); err != nil {
 		return "", domain.Finding{}, errors.New("invalid finding")

@@ -17,8 +17,6 @@ package review
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -58,22 +56,8 @@ var errCommentRefused = errors.New("github refused a review comment")
 // run re-derives the delta, and position does not survive that: a new commit
 // shifts every index. The digest of the chunk text does survive, so a chunk
 // left pending is recognized again exactly when its text is unchanged.
-func chunkID(chunk diff.Chunk) string {
-	digest := sha256.Sum256([]byte(chunk.Text))
-	return hex.EncodeToString(digest[:])[:chunkIDLength]
-}
 
 // removeChunkID drops one id from a pending list, keeping the rest in order.
-func removeChunkID(pending []string, id string) []string {
-	remaining := make([]string, 0, len(pending))
-	for _, item := range pending {
-		if item == id {
-			continue
-		}
-		remaining = append(remaining, item)
-	}
-	return remaining
-}
 
 // chunkPass accumulates what one pass over the chunks learned, so the run can
 // report the same detail table a single shot analysis used to report.
@@ -107,6 +91,8 @@ type chunkPass struct {
 	models          modelSet
 	overviewByChunk map[int][]string
 	published       []domain.Finding
+	metadata        []domain.Finding
+	metadataSeen    map[string]struct{}
 	fallback        []domain.Finding
 	failures        []chunkFailure
 	// unreadable names hunks this service could not get a whole answer about.
@@ -150,20 +136,23 @@ func newChunkPass(
 	selection *publicationState,
 	disputes disputeContext,
 	carried []string,
+	disputePrompt string,
 ) *chunkPass {
 	return &chunkPass{
 		work:            work,
 		settings:        settings,
 		selection:       selection,
 		disputes:        disputes,
-		disputePrompt:   disputes.promptSection(),
+		disputePrompt:   disputePrompt,
 		carried:         carried,
 		publicationMu:   sync.Mutex{},
 		mu:              sync.Mutex{},
-		collector:       newFindingCollector(work.Files, settings.minimumImportance),
+		collector:       newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
 		models:          modelSet{names: nil, seen: nil},
 		overviewByChunk: make(map[int][]string),
 		published:       make([]domain.Finding, 0),
+		metadata:        nil,
+		metadataSeen:    make(map[string]struct{}),
 		fallback:        make([]domain.Finding, 0),
 		failures:        make([]chunkFailure, 0),
 		unreadable:      make([]unreadHunk, 0),
@@ -365,6 +354,7 @@ func (service *Service) reviewDelta(
 			Text:             "No changed lines were available to review.",
 			Pieces:           nil,
 			Paths:            nil,
+			Metadata:         nil,
 			CoverageComplete: true,
 		}}
 	}
@@ -691,7 +681,12 @@ func (service *Service) checkpoint(
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderProgressBody(head, len(tracker.unfinished), waiting),
+		Prose: RenderProgressBody(head, len(tracker.unfinished), waiting) + "\n\n" +
+			renderMetadataFindings(pass.metadataFindings()) + "\n" +
+			encodeMetadataRecord(metadataReviewRecord{
+				Head: head, Revision: diff.PullRequestRevision(pass.work.PullRequest), Findings: pass.metadataFindings(),
+				Omissions: metadataOmissions(pass.structuralShortfall().Hunks), OmissionsAccepted: pass.acceptsOmissions(), DecisionReason: pass.decisionReason(),
+			}),
 		State: tracker.state,
 	})
 	if err != nil {
@@ -725,13 +720,27 @@ func (service *Service) reviewOneChunk(
 	nothing := chunkOutcome{unread: false, shortfall: false}
 	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
 	promptShortfall := pass.structuralShortfall()
+	pullRequestContext, err := pullRequestPrompt(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
+	if err != nil {
+		cancel()
+		gklog.L(ctx).ErrorContext(ctx, "Pull request prompt rendering failed", "err", err)
+		return nothing, err
+	}
+	omissions, err := omissionPrompt(promptShortfall, pass.work.Files, pass.settings.maximumPromptBytes, service.reviewPolicy)
+	if err != nil {
+		cancel()
+		gklog.L(ctx).ErrorContext(ctx, "Unread content prompt rendering failed", "err", err)
+		return nothing, err
+	}
 	analysis, err := reviewChunk(
 		callCtx,
 		service.model,
 		chunk,
 		pass.settings.minimumImportance,
-		pass.disputePrompt+pullRequestPrompt(pass.work.PullRequest, pass.work.Files)+
-			omissionPrompt(promptShortfall, pass.work.Files, pass.settings.maximumPromptBytes),
+		service.reviewPolicy,
+		pass.settings.maximumPromptBytes,
+		pass.work.Files,
+		pass.disputePrompt+pullRequestContext+omissions,
 		&models,
 		&requests,
 		service.now,
@@ -753,7 +762,7 @@ func (service *Service) reviewOneChunk(
 	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
 	shortfall := len(analysis.Unreadable) > 0 && !unread
 	return chunkOutcome{unread: unread, shortfall: shortfall},
-		service.postChunkFindings(ctx, job, head, chunk.Text, findings, pass)
+		service.postChunkFindings(ctx, job, head, chunk, findings, pass)
 }
 
 // postCandidate pairs one finding with its rendered comment, so ordering
@@ -776,12 +785,12 @@ func (service *Service) postChunkFindings(
 	ctx context.Context,
 	job domain.ReviewJob,
 	head domain.HeadSHA,
-	chunkText string,
+	chunk diff.Chunk,
 	findings []domain.Finding,
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
-	posts := service.chunkPosts(ctx, head, chunkText, findings, pass)
+	posts := service.chunkPosts(ctx, head, chunk, findings, pass)
 	if len(posts) == 0 {
 		return nil
 	}
@@ -915,6 +924,14 @@ func (service *Service) renderChunkFindings(
 
 	posts := make([]postCandidate, 0, len(candidates))
 	for _, finding := range unansweredCandidates(ctx, candidates, pass) {
+		if finding.EffectiveSurface() != domain.FindingFile {
+			key := metadataFindingKey(finding)
+			if _, found := pass.metadataSeen[key]; !found {
+				pass.metadataSeen[key] = struct{}{}
+				pass.metadata = append(pass.metadata, finding)
+			}
+			continue
+		}
 		rendered, err := RenderInline(head, []domain.Finding{finding})
 		if err != nil {
 			// One finding that cannot be rendered says nothing about the others
@@ -956,6 +973,10 @@ func unansweredCandidates(
 ) []domain.Finding {
 	unanswered := make([]domain.Finding, 0, len(eligible))
 	for _, finding := range eligible {
+		if finding.EffectiveSurface() != domain.FindingFile {
+			unanswered = append(unanswered, finding)
+			continue
+		}
 		if match, answered := pass.disputes.answered(finding); answered {
 			logSuppressed(ctx, layerOpenThreads, finding, match)
 			continue
@@ -977,19 +998,3 @@ func unansweredCandidates(
 // moved. An expired context is not that case: the writes that follow would all
 // fail while the findings stayed admitted as objections nobody can see, so a
 // dead context is reported as the failure it is.
-func (service *Service) confirmHead(ctx context.Context, job domain.ReviewJob, head domain.HeadSHA) error {
-	logger := gklog.L(ctx)
-	pullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		logger.ErrorContext(ctx, "confirm head before posting findings", slog.String("err", ctxErr.Error()))
-		return fmt.Errorf("confirm head: %w", ctxErr)
-	}
-	if err != nil {
-		logger.ErrorContext(ctx, "read head before posting findings", slog.String("err", err.Error()))
-		return nil
-	}
-	if pullRequest.Head != head {
-		return errHeadMoved
-	}
-	return nil
-}

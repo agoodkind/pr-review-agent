@@ -73,6 +73,7 @@ type Client struct {
 	fallbackOnUsageExceeded bool
 	minimumImportance       int
 	ruleImportance          reviewrules.Importance
+	reviewPolicy            reviewrules.Policy
 	budgetURL               string
 	budgetSigningKey        []byte
 	httpClient              *http.Client
@@ -139,6 +140,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
 		minimumImportance:       cfg.MinimumImportance,
 		ruleImportance:          cfg.RuleImportance,
+		reviewPolicy:            cfg.ReviewPolicy,
 		budgetURL:               "",
 		budgetSigningKey:        cfg.GitHubWebhookSecret,
 		httpClient:              httpClient,
@@ -208,21 +210,27 @@ func newProviderSDK(
 // Review requests one structured review completion and reports the model that
 // served it, which is the fallback model whenever the primary refused.
 func (client *Client) Review(ctx context.Context, prompt string) (review.Completion, error) {
-	schema, err := MarshalReviewSchema()
+	schema, err := MarshalReviewSchema(client.reviewPolicy)
 	if err != nil {
 		return review.Completion{}, err
+	}
+	policy, err := review.PolicyHeader(client.reviewPolicy, client.minimumImportance, client.ruleImportance)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Review policy rendering failed")
+		return review.Completion{}, fmt.Errorf("render review policy: %w", err)
 	}
 	content, model, err := client.complete(
 		ctx,
 		prompt,
-		review.PolicyHeader(client.minimumImportance, client.ruleImportance),
+		policy,
 		reviewSchemaName,
 		schema,
 	)
 	if err != nil {
 		return review.Completion{}, err
 	}
-	result, err := domain.UnmarshalReviewResult([]byte(content), client.ruleImportance)
+	result, err := domain.UnmarshalReviewResult([]byte(content), client.reviewPolicy.Catalog(), client.ruleImportance)
 	if err != nil {
 		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "Model review result was rejected")
@@ -233,12 +241,18 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 
 // Report requests the final prose for a completed deterministic review.
 func (client *Client) Report(ctx context.Context, prompt string) (review.ReportCompletion, error) {
+	policy, err := review.ReportPolicy(client.reviewPolicy)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Report policy rendering failed")
+		return review.ReportCompletion{}, fmt.Errorf("render report policy: %w", err)
+	}
 	content, model, err := client.complete(
 		ctx,
 		prompt,
-		review.ReportPolicy(),
+		policy,
 		reportSchemaName,
-		reportSchemaJSON,
+		MarshalReportSchema(client.reviewPolicy),
 	)
 	if err != nil {
 		return review.ReportCompletion{}, err
@@ -248,7 +262,7 @@ func (client *Client) Report(ctx context.Context, prompt string) (review.ReportC
 	if err := decoder.Decode(&report); err != nil {
 		return review.ReportCompletion{}, errors.New("decode structured output: " + err.Error())
 	}
-	report = review.SanitizeReport(report)
+	report = review.SanitizeReport(report, client.reviewPolicy.Limits())
 	if err := report.Validate(); err != nil {
 		return review.ReportCompletion{}, errors.New("validate review report: " + err.Error())
 	}
@@ -257,10 +271,16 @@ func (client *Client) Report(ctx context.Context, prompt string) (review.ReportC
 
 // Reconcile requests one structured thread reconciliation completion.
 func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.ThreadResolution, error) {
+	policy, err := review.ReconciliationPolicy(client.reviewPolicy)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Reconciliation policy rendering failed")
+		return nil, fmt.Errorf("render reconciliation policy: %w", err)
+	}
 	content, _, err := client.complete(
 		ctx,
 		prompt,
-		review.ReconciliationPolicy(),
+		policy,
 		reconcileSchemaName,
 		reconcileSchemaJSON,
 	)
@@ -282,10 +302,16 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 
 // Consolidate requests one structured grouping of a chunk's own findings.
 func (client *Client) Consolidate(ctx context.Context, prompt string) (review.Consolidation, error) {
+	policy, err := review.ConsolidationPolicy(client.reviewPolicy)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Consolidation policy rendering failed")
+		return review.Consolidation{}, fmt.Errorf("render consolidation policy: %w", err)
+	}
 	content, _, err := client.complete(
 		ctx,
 		prompt,
-		review.ConsolidationPolicy(),
+		policy,
 		consolidateSchemaName,
 		consolidateSchemaJSON,
 	)
@@ -320,6 +346,10 @@ func (client *Client) complete(
 	schemaName string,
 	schema json.RawMessage,
 ) (string, string, error) {
+	instructions, err := structuredOutputPrompt(ctx, client.reviewPolicy, policy, schemaName, schema)
+	if err != nil {
+		return "", "", err
+	}
 	var failures []error
 	for index, target := range client.providers {
 		budget, err := client.checkBudget(ctx, target)
@@ -331,11 +361,11 @@ func (client *Client) complete(
 			}
 			switch target.api {
 			case config.GeminiAPI:
-				content, model, err = completeGemini(ctx, target, prompt, policy, schemaName, schema, report)
+				content, model, err = completeGemini(ctx, target, prompt, instructions, schema, report)
 			case config.ChatCompletionsAPI:
-				content, model, err = completeChat(ctx, target, prompt, policy, schemaName, schema, report)
+				content, model, err = completeChat(ctx, target, prompt, instructions, schemaName, schema, report)
 			case config.ResponsesAPI:
-				content, model, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
+				content, model, err = completeWith(ctx, target, prompt, instructions, schemaName, schema, report)
 			}
 		}
 		if err == nil {
@@ -511,7 +541,7 @@ func newResponseParams(
 ) (responses.ResponseNewParams, error) {
 	params := responses.ResponseNewParams{
 		Model:        target.model,
-		Instructions: openaigo.String(structuredOutputPrompt(policy, schemaName, schema)),
+		Instructions: openaigo.String(policy),
 		Input: responses.ResponseNewParamsInputUnion{
 			OfString: openaigo.String(prompt),
 		},
@@ -636,8 +666,16 @@ func responseFailure(model string, code string, message string) error {
 	return &StreamError{Model: model, Cause: errors.New(message), Provider: providerError}
 }
 
-func structuredOutputPrompt(policy string, schemaName string, schema json.RawMessage) string {
-	return policy +
-		"\n\nReturn only JSON. Do not use Markdown fences or add prose. " +
-		"The JSON must validate against schema " + schemaName + ":\n" + string(schema)
+func structuredOutputPrompt(ctx context.Context, configuration reviewrules.Policy, policy string, schemaName string, schema json.RawMessage) (string, error) {
+	var data reviewrules.PromptData
+	data.Input = policy
+	data.SchemaName = schemaName
+	data.Schema = string(schema)
+	output, err := configuration.Render("structured.output", data)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Structured output template rendering failed")
+		return "", fmt.Errorf("render structured output template: %w", err)
+	}
+	return output, nil
 }

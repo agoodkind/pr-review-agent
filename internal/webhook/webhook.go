@@ -99,6 +99,7 @@ const (
 	actionReopened       pullRequestAction = "reopened"
 	actionReadyForReview pullRequestAction = "ready_for_review"
 	actionSynchronize    pullRequestAction = "synchronize"
+	actionEdited         pullRequestAction = "edited"
 	// actionLabeled is supported only for the labels this service owns. Every
 	// other label a person adds is answered and ignored, which is decided in
 	// ParsePullRequest because the action alone cannot tell them apart.
@@ -107,7 +108,7 @@ const (
 
 func (action pullRequestAction) supported() bool {
 	switch action {
-	case actionOpened, actionReopened, actionReadyForReview, actionSynchronize, actionLabeled:
+	case actionOpened, actionReopened, actionReadyForReview, actionSynchronize, actionLabeled, actionEdited:
 		return true
 	default:
 		return false
@@ -292,7 +293,7 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 	// A label is only a trigger when it is one of this service's own. Any other
 	// label on any pull request would otherwise start a review, which is the
 	// opposite of what a person adding a label expects.
-	forced := false
+	forced := action == actionEdited
 	if action == actionLabeled {
 		if !domain.ForcesReview(payload.Label.Name) {
 			return emptyEvent(), false, nil

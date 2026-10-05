@@ -28,6 +28,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/policytest"
 )
 
 const (
@@ -1879,6 +1880,7 @@ func wireAppFixture(
 	}
 
 	cfg := config.Config{
+		ReviewPolicy:  policytest.Load(t),
 		Port:          "0",
 		ReviewWorkers: 4,
 		ReviewModel:   testReviewModel,
@@ -3402,8 +3404,14 @@ func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	if blocking {
 		decision = domain.ReviewDecisionRequestChanges
 	}
-	if strings.TrimSpace(body) != marker.Review(domain.HeadSHA(head), decision) {
+	if strings.TrimSpace(strings.Split(body, "\n")[0]) != marker.Review(domain.HeadSHA(head), decision) {
 		t.Fatalf("verdict body creates a third visible comment: %q", body)
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && (!strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->")) {
+			t.Fatalf("verdict body includes visible text: %q", line)
+		}
 	}
 	// The marker records the decision because a dismissal erases GitHub's own
 	// record of it, and the withheld-block rule reads it back from here.
