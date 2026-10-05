@@ -29,7 +29,6 @@ import (
 	"sync"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
@@ -348,7 +347,7 @@ func (service *Service) reviewDelta(
 		"review model analysis started",
 		slog.Int("chunks", len(pass.work.Chunks)),
 		slog.Int("pending", len(work.owed)),
-		slog.Int("concurrency", min(config.MaximumChunkConcurrency, len(work.owed))),
+		slog.Int("concurrency", min(pass.settings.chunkConcurrency, len(work.owed))),
 	)
 
 	tracker := &pendingTracker{
@@ -541,7 +540,7 @@ func (service *Service) reviewChunksConcurrently(
 	pass *chunkPass,
 	tracker *pendingTracker,
 ) error {
-	limit := min(config.MaximumChunkConcurrency, len(chunks))
+	limit := min(pass.settings.chunkConcurrency, len(chunks))
 	if limit < 1 {
 		return nil
 	}
@@ -732,7 +731,7 @@ func (service *Service) reviewOneChunk(
 		chunk,
 		pass.settings.minimumImportance,
 		pass.disputePrompt+pullRequestPrompt(pass.work.PullRequest, pass.work.Files)+
-			omissionPrompt(promptShortfall, pass.work.Files),
+			omissionPrompt(promptShortfall, pass.work.Files, pass.settings.maximumPromptBytes),
 		&models,
 		&requests,
 		service.now,

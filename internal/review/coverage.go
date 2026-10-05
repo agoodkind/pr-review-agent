@@ -25,7 +25,6 @@ import (
 	"unicode/utf8"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
@@ -214,13 +213,13 @@ func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 
 // omissionPrompt gives the existing review call enough metadata to decide
 // whether a structural omission prevents a reliable verdict.
-func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext) string {
+func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, maximumBytes int) string {
 	if !shortfall.present() {
 		return "Set omissions_acceptable to true because no changed content was omitted. Set decision_reason to an empty string.\n"
 	}
 	const instruction = "The service did not read the changes listed below. Apply the review rule for deciding whether unread content is necessary. Set omissions_acceptable to true when every omission is acceptable, or false when at least one omission prevents a decision. Set decision_reason to one or two short sentences explaining the decision from the available evidence. For a false answer, state the specific unresolved question and the evidence needed to answer it. If unread changes are not listed, do not assume they are unnecessary. Set omissions_acceptable to false when the available evidence cannot establish whether those changes are necessary. Use everyday words. Do not use the terms omission metadata, structural shortfall, material risk, reliable verdict, or coverage.\n"
 	const omittedFormat = "Unread changes not listed: %d (the request size limit prevented listing their details).\n\n"
-	metadataBudget := config.MaximumPromptBytes/4 - len(instruction) - len(WrapUntrusted("")) - 1
+	metadataBudget := maximumBytes/4 - len(instruction) - len(WrapUntrusted("")) - 1
 	hunks := sortedUnreadHunks(shortfall.Hunks)
 	omittedNoticeBudget := len(fmt.Sprintf(omittedFormat, len(hunks)))
 	var metadata strings.Builder
@@ -295,14 +294,14 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 		"Return no findings because this call supplies no changed lines. " +
 		"A false omissions_acceptable answer withholds approval; it does not request changes without an actionable finding. " +
 		"Use the unread change list before the supporting context.\n"
-	required := instruction + omissionPrompt(shortfall, pass.work.Files)
+	required := instruction + omissionPrompt(shortfall, pass.work.Files, pass.settings.maximumPromptBytes)
 	contextText := pullRequestPrompt(pass.work.PullRequest, pass.work.Files) +
 		pass.disputePrompt + "The readable parts were summarized as follows:\n" +
 		WrapUntrusted(reviewed.String())
-	if len(required) > config.MaximumPromptBytes {
-		required = truncateUTF8(required, config.MaximumPromptBytes)
+	if len(required) > pass.settings.maximumPromptBytes {
+		required = truncateUTF8(required, pass.settings.maximumPromptBytes)
 	}
-	maximumContext := max(config.MaximumPromptBytes-len(required), 0)
+	maximumContext := max(pass.settings.maximumPromptBytes-len(required), 0)
 	prompt := required + truncateUTF8(contextText, maximumContext)
 
 	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)

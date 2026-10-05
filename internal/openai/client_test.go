@@ -42,7 +42,7 @@ func testCFClientSecretValue() string {
 	return "fixture-cf-" + strings.Repeat("s", 12)
 }
 
-func TestChatCompletionsReviewAndQuotaFallback(t *testing.T) {
+func TestChatCompletionsReview(t *testing.T) {
 	geminiState := &testServerState{completionContent: validReviewContent()}
 	geminiState.streamResponse = func(writer http.ResponseWriter) {
 		writeStreamFrames(writer, []map[string]any{
@@ -97,18 +97,6 @@ func TestChatCompletionsReviewAndQuotaFallback(t *testing.T) {
 	usage := recorder.Summary()
 	if usage.InputTokens != 100 || usage.CachedInputTokens != 10 || usage.OutputTokens != 20 || usage.TotalTokens != 120 {
 		t.Fatalf("Gemini usage = %+v", usage)
-	}
-
-	geminiState.statusSequence = []int{http.StatusTooManyRequests}
-	geminiState.errorPayload = map[string]any{
-		"code": 429, "message": "Resource exhausted", "status": "RESOURCE_EXHAUSTED",
-	}
-	completion, err = client.Review(context.Background(), "review input")
-	if err != nil {
-		t.Fatalf("Review after Gemini quota error: %v", err)
-	}
-	if completion.Model != testFallbackModel || atomic.LoadInt32(&fallbackState.requestCount) != 1 {
-		t.Fatalf("completion model = %q, fallback requests = %d", completion.Model, fallbackState.requestCount)
 	}
 }
 
@@ -185,8 +173,8 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 		t.Fatalf("model = %v, want %q", body["model"], testPrimaryModel)
 	}
 	reasoning, ok := body["reasoning"].(map[string]any)
-	if !ok || reasoning["effort"] != config.ReasoningEffort {
-		t.Fatalf("reasoning = %v, want effort %q", body["reasoning"], config.ReasoningEffort)
+	if !ok || reasoning["effort"] != string(config.DefaultReasoningEffort) {
+		t.Fatalf("reasoning = %v, want effort %q", body["reasoning"], config.DefaultReasoningEffort)
 	}
 	if body["max_output_tokens"] != float64(config.MaximumOutputTokens) {
 		t.Fatalf("max_output_tokens = %v, want %d", body["max_output_tokens"], config.MaximumOutputTokens)

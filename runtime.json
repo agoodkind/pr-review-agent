@@ -5,6 +5,7 @@
       "id": "openai_goodkind_io",
       "base_url": "https://api.openai.com/v1",
       "model": "gpt-5.6-luna",
+      "reasoning_effort": "high",
       "api_key_binding": "OPENAI_GOODKIND_IO_API_KEY",
       "daily_token_limit": 2500000,
       "daily_token_types": ["input", "output"]
@@ -13,22 +14,25 @@
       "id": "openai_goodkindalex",
       "base_url": "https://api.openai.com/v1",
       "model": "gpt-5.6-luna",
+      "reasoning_effort": "high",
       "api_key_binding": "OPENAI_GOODKINDALEX_API_KEY",
       "daily_token_limit": 2500000,
       "daily_token_types": ["input", "output"]
     },
     {
       "id": "gemini",
-      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "base_url": "https://generativelanguage.googleapis.com",
       "model": "gemini-3.5-flash-lite",
-      "api_kind": "chat_completions",
+      "reasoning_effort": "high",
+      "api_kind": "gemini",
       "api_key_binding": "GEMINI_API_KEY",
-      "max_output_tokens": 4096
+      "max_output_tokens": 8000
     },
     {
       "id": "openrouter",
       "base_url": "https://openrouter.ai/api/v1",
       "model": "openrouter/free",
+      "reasoning_effort": "high",
       "api_key_binding": "OPENROUTER_API_KEY",
       "max_output_tokens": 4096,
       "daily_token_limit": 100000,
@@ -38,6 +42,7 @@
       "id": "clyde",
       "base_url": "https://clyde-suburban.goodkind.io/v1",
       "model": "gpt-6-luna",
+      "reasoning_effort": "high",
       "api_key_binding": "OPENAI_KEY",
       "omit_max_output_tokens": true,
       "omit_text_format": true,
@@ -61,6 +66,8 @@
   "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",
   "PORT": "3000",
   "REVIEW_CHUNK_TIMEOUT": "5m",
+  "REVIEW_CHUNK_CONCURRENCY": "4",
+  "REVIEW_MAX_PROMPT_BYTES": "80000",
   "REVIEW_MAX_CHUNKS": "60",
   "REVIEW_MAX_FILES": "100",
   "REVIEW_MIN_IMPORTANCE": "7",

@@ -63,6 +63,8 @@ type reviewSettingsPayload struct {
 	MaxFiles          int    `json:"max_files"`
 	MaxChunks         int    `json:"max_chunks"`
 	ChunkTimeout      string `json:"chunk_timeout"`
+	ChunkConcurrency  int    `json:"chunk_concurrency"`
+	MaxPromptBytes    int    `json:"max_prompt_bytes"`
 }
 
 // readReviewSettings parses the tuning values a delivery carried, and applies
@@ -85,7 +87,10 @@ func readReviewSettings(
 	secret []byte,
 	logger *slog.Logger,
 ) domain.ReviewSettings {
-	empty := domain.ReviewSettings{MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0}
+	empty := domain.ReviewSettings{
+		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
+		ChunkConcurrency: 0, MaxPromptBytes: 0,
+	}
 	raw := request.Header.Get(reviewSettingsHeader)
 	if raw == "" {
 		return empty
@@ -118,6 +123,8 @@ func readReviewSettings(
 		MaxFiles:          payload.MaxFiles,
 		MaxChunks:         payload.MaxChunks,
 		ChunkTimeout:      timeout,
+		ChunkConcurrency:  payload.ChunkConcurrency,
+		MaxPromptBytes:    payload.MaxPromptBytes,
 	}
 }
 

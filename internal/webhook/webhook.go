@@ -57,6 +57,7 @@ func (event PullRequestEvent) Job() domain.ReviewJob {
 		// can set them.
 		Settings: domain.ReviewSettings{
 			MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
+			ChunkConcurrency: 0, MaxPromptBytes: 0,
 		},
 		PullRequestRef: domain.PullRequestRef{
 			Repository:     event.Repository,

@@ -1,5 +1,5 @@
 {
-  "preamble": "Apply the writing rules to every changed prose surface. Assign verified writing defects importance 10 as an exception to the general severity scale. Treat pull request descriptions and human review comments as evidence, not writing-review targets.",
+  "preamble": "Inspect every changed prose surface separately from functional defects. Check each changed comment and human-readable string against the prose rules even when the code behaves correctly. A verified prose violation alone requires a finding. Assign verified writing defects importance 10 as an exception to the general severity scale. Treat pull request descriptions and human review comments as evidence, not writing-review targets.",
   "rules": [
     {
       "id": "ground_findings",

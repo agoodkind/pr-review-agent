@@ -14,7 +14,6 @@ import (
 	"log/slog"
 
 	"goodkind.io/gklog"
-	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
@@ -99,8 +98,8 @@ func (service *Service) collectAndAdmit(
 		Chunks:      nil,
 	})
 	contextBytes := len(pullRequestPrompt(input.PullRequest, input.Files)) +
-		len(omissionPrompt(shortfall, input.Files))
-	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes-contextBytes)
+		len(omissionPrompt(shortfall, input.Files, settings.maximumPromptBytes))
+	chunks, err := diff.ChunkInput(input, settings.maximumPromptBytes-contextBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
 		return empty, true, service.failCheck(
@@ -112,8 +111,8 @@ func (service *Service) collectAndAdmit(
 	shortfall = classifyStructuralShortfall(work)
 	if shortfall.present() {
 		contextBytes = len(pullRequestPrompt(work.PullRequest, work.Files)) +
-			len(omissionPrompt(shortfall, work.Files))
-		chunks, err = diff.ChunkInput(input, config.MaximumPromptBytes-contextBytes)
+			len(omissionPrompt(shortfall, work.Files, settings.maximumPromptBytes))
+		chunks, err = diff.ChunkInput(input, settings.maximumPromptBytes-contextBytes)
 		if err != nil {
 			return empty, true, service.failCheck(
 				ctx, job, checkRun.ID, progress.summary(service.now()),

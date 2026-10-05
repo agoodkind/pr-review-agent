@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/url"
 	"regexp"
 	"strings"
@@ -22,11 +23,33 @@ type AutoRouterCostTier string
 // ProviderAPI selects the request and response protocol for a provider.
 type ProviderAPI string
 
+// ReasoningEffort selects an analysis level supported by the configured model.
+type ReasoningEffort string
+
+const (
+	// ReasoningNone disables analysis and is rejected by native Gemini configuration.
+	ReasoningNone ReasoningEffort = "none"
+	// ReasoningMinimal requests the least intensive supported analysis level.
+	ReasoningMinimal ReasoningEffort = "minimal"
+	// ReasoningLow favors shorter reasoning over additional analysis.
+	ReasoningLow ReasoningEffort = "low"
+	// ReasoningMedium requests more analysis than low effort.
+	ReasoningMedium ReasoningEffort = "medium"
+	// ReasoningHigh requests additional analysis before the answer.
+	ReasoningHigh ReasoningEffort = "high"
+	// ReasoningXHigh is rejected by native Gemini configuration.
+	ReasoningXHigh ReasoningEffort = "xhigh"
+	// DefaultReasoningEffort applies when a provider omits reasoning_effort.
+	DefaultReasoningEffort = ReasoningHigh
+)
+
 const (
 	// ResponsesAPI uses the Responses API.
 	ResponsesAPI ProviderAPI = "responses"
 	// ChatCompletionsAPI uses the Chat Completions API.
 	ChatCompletionsAPI ProviderAPI = "chat_completions"
+	// GeminiAPI uses Google's native GenerateContent API.
+	GeminiAPI ProviderAPI = "gemini"
 )
 
 const (
@@ -58,6 +81,7 @@ type ProviderConfig struct {
 	ID                   string
 	BaseURL              *url.URL
 	Model                string
+	ReasoningEffort      ReasoningEffort
 	APIKey               string
 	DailyTokenLimit      int64
 	DailyTokenTypes      []TokenType
@@ -79,6 +103,7 @@ type providerDefinition struct {
 	ID                          string             `json:"id"`
 	BaseURL                     string             `json:"base_url"`
 	Model                       string             `json:"model"`
+	ReasoningEffort             ReasoningEffort    `json:"reasoning_effort,omitempty"`
 	APIKeyBinding               string             `json:"api_key_binding"`
 	DailyTokenLimit             *int64             `json:"daily_token_limit,omitempty"`
 	DailyTokenTypes             []TokenType        `json:"daily_token_types,omitempty"`
@@ -146,6 +171,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			ID:                   definition.ID,
 			BaseURL:              baseURL,
 			Model:                definition.Model,
+			ReasoningEffort:      definition.ReasoningEffort,
 			APIKey:               apiKey,
 			DailyTokenLimit:      definition.dailyLimit(),
 			DailyTokenTypes:      definition.DailyTokenTypes,
@@ -231,13 +257,21 @@ func validateProviderQuota(definition providerDefinition) error {
 }
 
 func validateProviderLimits(definition providerDefinition) error {
+	switch definition.ReasoningEffort {
+	case ReasoningNone, ReasoningMinimal, ReasoningLow, ReasoningMedium, ReasoningHigh, ReasoningXHigh:
+	default:
+		return fmt.Errorf("provider %q reasoning_effort must be none, minimal, low, medium, high, or xhigh", definition.ID)
+	}
 	if err := validateProviderQuota(definition); err != nil {
 		return err
 	}
-	if definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI {
-		return fmt.Errorf("provider %q api_kind must be responses or chat_completions", definition.ID)
+	if definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI && definition.API != GeminiAPI {
+		return fmt.Errorf("provider %q api_kind must be responses, chat_completions, or gemini", definition.ID)
 	}
-	if definition.API == ChatCompletionsAPI && definition.AutoRouterCostTier != "" {
+	if definition.API == GeminiAPI && (definition.ReasoningEffort == ReasoningNone || definition.ReasoningEffort == ReasoningXHigh) {
+		return fmt.Errorf("provider %q Gemini reasoning_effort must be minimal, low, medium, or high", definition.ID)
+	}
+	if definition.API != ResponsesAPI && definition.AutoRouterCostTier != "" {
 		return fmt.Errorf("provider %q auto_router_cost_tier requires the Responses API", definition.ID)
 	}
 	if definition.AutoRouterCostTier != "" {
@@ -250,8 +284,8 @@ func validateProviderLimits(definition providerDefinition) error {
 			return fmt.Errorf("provider %q auto_router_cost_tier must be low, medium, high, xhigh, or max", definition.ID)
 		}
 	}
-	if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > MaximumOutputTokens {
-		return fmt.Errorf("provider %q max_output_tokens must be between 1 and %d when set", definition.ID, MaximumOutputTokens)
+	if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > math.MaxInt32 {
+		return fmt.Errorf("provider %q max_output_tokens must be positive when set and fit a 32-bit signed integer", definition.ID)
 	}
 	if definition.MaxOutputTokens != 0 && definition.OmitMaxOutputTokens {
 		return fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
@@ -281,6 +315,9 @@ func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 		return nil, err
 	}
 	for index := range definitions {
+		if definitions[index].ReasoningEffort == "" {
+			definitions[index].ReasoningEffort = DefaultReasoningEffort
+		}
 		if definitions[index].API == "" {
 			definitions[index].API = ResponsesAPI
 		}

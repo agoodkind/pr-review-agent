@@ -182,7 +182,7 @@ func (service *Service) consolidateAcrossChunks(
 		return candidates
 	}
 	prompt, ok := buildAcrossChunkConsolidationPrompt(
-		candidates, selected, pass.work, chunkText, pass.disputePrompt,
+		candidates, selected, pass.work, chunkText, pass.disputePrompt, pass.settings.maximumPromptBytes,
 	)
 	if !ok {
 		return candidates
@@ -407,6 +407,7 @@ func buildAcrossChunkConsolidationPrompt(
 	work deltaWork,
 	chunkText string,
 	disputes string,
+	maximumBytes int,
 ) (string, bool) {
 	const instruction = "Decide only whether each new candidate is the same underlying defect as a finding already selected. " +
 		"Use the current pull request, related current source, tests in that source, and inline discussions. " +
@@ -418,10 +419,10 @@ func buildAcrossChunkConsolidationPrompt(
 		"\n\nNew candidates:\n" + formatConsolidationCandidates(candidates)
 	minimumLength := len(instruction) + len(promptInputBegin) + len(promptInputEnd) +
 		len(findings) + 4
-	if minimumLength >= config.MaximumPromptBytes {
+	if minimumLength >= maximumBytes {
 		return "", false
 	}
-	contextBudget := config.MaximumPromptBytes - minimumLength
+	contextBudget := maximumBytes - minimumLength
 	contextText := formatAcrossChunkContext(work, chunkText, disputes, carried)
 	contextText = truncateUTF8(contextText, contextBudget)
 	input := contextText + "\n\n" + findings

@@ -30,12 +30,14 @@ const probeErrorBodyLimit = 32 * 1024
 const probeDefaultPrompt = "Review only this changed source line in example.go. The function returns the input integer unchanged. Report only evidence-backed defects, or return no findings.\n@@ -1 +1 @@\n-func identity(value int) int { return value }\n+func identity(input int) int { return input }\n"
 
 type probeRuntime struct {
-	Providers  []json.RawMessage              `json:"PROVIDERS"`
-	Minimum    string                         `json:"REVIEW_MIN_IMPORTANCE"`
-	Importance reviewrules.Importance         `json:"REVIEW_RULE_IMPORTANCE"`
-	Pricing    map[string]config.ModelPricing `json:"REVIEW_MODEL_PRICING"`
-	BudgetURL  string                         `json:"PROVIDER_BUDGET_URL"`
-	Timeout    string                         `json:"REVIEW_CHUNK_TIMEOUT"`
+	Providers   []json.RawMessage              `json:"PROVIDERS"`
+	Minimum     string                         `json:"REVIEW_MIN_IMPORTANCE"`
+	Importance  reviewrules.Importance         `json:"REVIEW_RULE_IMPORTANCE"`
+	Pricing     map[string]config.ModelPricing `json:"REVIEW_MODEL_PRICING"`
+	BudgetURL   string                         `json:"PROVIDER_BUDGET_URL"`
+	Timeout     string                         `json:"REVIEW_CHUNK_TIMEOUT"`
+	Concurrency *string                        `json:"REVIEW_CHUNK_CONCURRENCY"`
+	PromptBytes *string                        `json:"REVIEW_MAX_PROMPT_BYTES"`
 }
 
 type probeHTTPError struct {
@@ -122,6 +124,19 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 		return cfg, err
 	}
 	cfg.Providers = providers
+	reviewLimitValues := make(map[string]string)
+	if runtime.Concurrency != nil {
+		reviewLimitValues["REVIEW_CHUNK_CONCURRENCY"] = *runtime.Concurrency
+	}
+	if runtime.PromptBytes != nil {
+		reviewLimitValues["REVIEW_MAX_PROMPT_BYTES"] = *runtime.PromptBytes
+	}
+	if err = config.LoadReviewLimits(func(name string) (string, bool) {
+		value, configured := reviewLimitValues[name]
+		return value, configured
+	}, &cfg); err != nil {
+		return cfg, err
+	}
 	cfg.MinimumImportance, err = strconv.Atoi(runtime.Minimum)
 	if err != nil || cfg.MinimumImportance < reviewrules.MinimumImportance || cfg.MinimumImportance > reviewrules.MaximumImportance {
 		return cfg, errors.New("runtime REVIEW_MIN_IMPORTANCE must be an integer in 1..10")
@@ -206,7 +221,7 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 		}
 		prompt = string(data)
 	}
-	if strings.TrimSpace(prompt) == "" || len(prompt) > config.MaximumPromptBytes {
+	if strings.TrimSpace(prompt) == "" || len(prompt) > cfg.PromptBytes() {
 		return errors.New("probe prompt must be nonempty and within the configured maximum prompt size")
 	}
 	ctx, cancel := context.WithTimeout(ctx, cfg.ReviewChunkTimeout)
@@ -218,12 +233,13 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	result := struct {
 		Provider        string              `json:"provider"`
 		ConfiguredModel string              `json:"configured_model"`
+		ReasoningEffort config.ReasoningEffort `json:"reasoning_effort"`
 		Success         bool                `json:"success"`
 		Completion      review.Completion   `json:"completion"`
 		Usage           review.UsageSummary `json:"usage"`
 		HTTPStatuses    map[int]int         `json:"http_statuses"`
 		Error           string              `json:"error,omitempty"`
-	}{Provider: providerID, ConfiguredModel: cfg.Providers[0].Model, Success: reviewErr == nil, Completion: completion, Usage: recorder.Summary(), HTTPStatuses: transport.statuses}
+	}{Provider: providerID, ConfiguredModel: cfg.Providers[0].Model, ReasoningEffort: cfg.Providers[0].ReasoningEffort, Success: reviewErr == nil, Completion: completion, Usage: recorder.Summary(), HTTPStatuses: transport.statuses}
 	if reviewErr != nil {
 		result.Error = reviewErr.Error()
 	}

@@ -30,6 +30,10 @@ type provider struct {
 	id                  string
 	sdk                 openaigo.Client
 	model               string
+	reasoningEffort     config.ReasoningEffort
+	apiKey              string
+	baseURL             *url.URL
+	httpClient          *http.Client
 	dailyTokenLimit     int64
 	dailyTokenTypes     []config.TokenType
 	tokenLimit          int64
@@ -88,6 +92,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			BaseURL:              cfg.ClydeBaseURL,
 			APIKey:               cfg.ClydeAPIKey,
 			Model:                cfg.ReviewModel,
+			ReasoningEffort:      config.DefaultReasoningEffort,
 			DailyTokenLimit:      0,
 			DailyTokenTypes:      nil,
 			TokenLimit:           0,
@@ -108,6 +113,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				BaseURL:              cfg.FallbackBaseURL,
 				APIKey:               cfg.FallbackAPIKey,
 				Model:                cfg.FallbackModel,
+				ReasoningEffort:      config.DefaultReasoningEffort,
 				DailyTokenLimit:      0,
 				DailyTokenTypes:      nil,
 				TokenLimit:           0,
@@ -142,10 +148,22 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		if configured.Disabled {
 			continue
 		}
+		reasoningEffort := configured.ReasoningEffort
+		if reasoningEffort == "" {
+			reasoningEffort = config.DefaultReasoningEffort
+		}
+		apiKind := configured.API
+		if apiKind == "" {
+			apiKind = config.ResponsesAPI
+		}
 		client.providers = append(client.providers, provider{
 			id:                  configured.ID,
 			sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
 			model:               configured.Model,
+			reasoningEffort:     reasoningEffort,
+			apiKey:              configured.APIKey,
+			baseURL:             configured.BaseURL,
+			httpClient:          httpClient,
 			dailyTokenLimit:     configured.DailyTokenLimit,
 			dailyTokenTypes:     configured.DailyTokenTypes,
 			tokenLimit:          configured.TokenLimit,
@@ -155,7 +173,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
 			omitTextFormat:      configured.OmitTextFormat,
 			autoRouterCostTier:  configured.AutoRouterCostTier,
-			api:                 configured.API,
+			api:                 apiKind,
 			pricingByModel:      cfg.ReviewModelPricing,
 		})
 	}
@@ -313,9 +331,12 @@ func (client *Client) complete(
 			report := func(usage responses.ResponseUsage) {
 				client.reportBudget(ctx, target, budget, usage)
 			}
-			if target.api == config.ChatCompletionsAPI {
+			switch target.api {
+			case config.GeminiAPI:
+				content, model, err = completeGemini(ctx, target, prompt, policy, schemaName, schema, report)
+			case config.ChatCompletionsAPI:
 				content, model, err = completeChat(ctx, target, prompt, policy, schemaName, schema, report)
-			} else {
+			case config.ResponsesAPI:
 				content, model, err = completeWith(ctx, target, prompt, policy, schemaName, schema, report)
 			}
 		}
@@ -491,7 +512,7 @@ func newResponseParams(
 		Input: responses.ResponseNewParamsInputUnion{
 			OfString: openaigo.String(prompt),
 		},
-		Reasoning: shared.ReasoningParam{Effort: shared.ReasoningEffort(config.ReasoningEffort)},
+		Reasoning: shared.ReasoningParam{Effort: shared.ReasoningEffort(target.reasoningEffort)},
 		Store:     openaigo.Bool(false),
 	}
 	if !target.omitMaxOutputTokens {

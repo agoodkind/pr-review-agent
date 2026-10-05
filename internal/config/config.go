@@ -21,8 +21,6 @@ import (
 )
 
 const (
-	// ReasoningEffort is the OpenAI reasoning effort for every completion.
-	ReasoningEffort = "low"
 	// FallbackOnUsageExceeded is the only supported fallback trigger. It sends
 	// the request to the fallback provider when the primary reports that it has
 	// no remaining usage.
@@ -123,8 +121,10 @@ var runtimeConfigKeys = map[string]struct{}{
 	"LOG_FORWARD_URL":            {},
 	"PORT":                       {},
 	"REVIEW_CHUNK_TIMEOUT":       {},
+	"REVIEW_CHUNK_CONCURRENCY":   {},
 	"REVIEW_MAX_CHUNKS":          {},
 	"REVIEW_MAX_FILES":           {},
+	"REVIEW_MAX_PROMPT_BYTES":    {},
 	"REVIEW_MIN_IMPORTANCE":      {},
 	"REVIEW_RULE_IMPORTANCE":     {},
 	"REVIEW_MODEL":               {},
@@ -150,8 +150,10 @@ type Config struct {
 	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
 	// timer, is what keeps a review finishable, so these are the only limits
 	// on how much work one invocation accepts.
-	ReviewMaxFiles  int
-	ReviewMaxChunks int
+	ReviewMaxFiles         int
+	ReviewMaxChunks        int
+	ReviewChunkConcurrency int
+	ReviewMaxPromptBytes   int
 	// ReviewChunkTimeout is the only clock in a review. It bounds one model
 	// call, and no clock spans two of them.
 	ReviewChunkTimeout           time.Duration
@@ -185,6 +187,45 @@ type Config struct {
 // HasFallback reports whether a fallback model provider is configured.
 func (cfg Config) HasFallback() bool {
 	return cfg.FallbackBaseURL != nil && cfg.FallbackModel != "" && cfg.FallbackAPIKey != ""
+}
+
+// ChunkConcurrency supplies the default when a directly constructed Config omits the limit.
+func (cfg Config) ChunkConcurrency() int {
+	if cfg.ReviewChunkConcurrency == 0 {
+		return MaximumChunkConcurrency
+	}
+	return cfg.ReviewChunkConcurrency
+}
+
+// PromptBytes supplies the default when a directly constructed Config omits the limit.
+func (cfg Config) PromptBytes() int {
+	if cfg.ReviewMaxPromptBytes == 0 {
+		return MaximumPromptBytes
+	}
+	return cfg.ReviewMaxPromptBytes
+}
+
+// LoadReviewLimits validates optional runtime limits shared by service and diagnostic callers.
+func LoadReviewLimits(lookup LookupEnv, cfg *Config) error {
+	var err error
+	cfg.ReviewChunkConcurrency, err = loadPositiveSetting(lookup, "REVIEW_CHUNK_CONCURRENCY", MaximumChunkConcurrency)
+	if err != nil {
+		return err
+	}
+	cfg.ReviewMaxPromptBytes, err = loadPositiveSetting(lookup, "REVIEW_MAX_PROMPT_BYTES", MaximumPromptBytes)
+	return err
+}
+
+func loadPositiveSetting(lookup LookupEnv, name string, defaultValue int) (int, error) {
+	value, configured := lookup(name)
+	if !configured {
+		return defaultValue, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return parsed, nil
 }
 
 // PricingForModel returns the exact or longest prefix pricing match for a model.
@@ -257,6 +298,9 @@ func Load(lookup LookupEnv) (Config, error) {
 	cfg, missing := loadBase(lookup)
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+	if err := LoadReviewLimits(lookup, &cfg); err != nil {
+		return Config{}, err
 	}
 	pricing, err := loadModelPricing(lookup)
 	if err != nil {
