@@ -718,7 +718,7 @@ func (service *Service) reviewOneChunk(
 	var models modelSet
 	requests := 0
 	nothing := chunkOutcome{unread: false, shortfall: false}
-	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	promptShortfall := pass.structuralShortfall()
 	pullRequestContext, err := pullRequestPrompt(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
 	if err != nil {

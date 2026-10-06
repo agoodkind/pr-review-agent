@@ -21,6 +21,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
@@ -369,7 +370,7 @@ func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCas
 		}
 		result.PromptSHA256 = append(result.PromptSHA256, proseSHA256([]byte(prompt)))
 		result.PromptBytes = append(result.PromptBytes, len(prompt))
-		requestCtx, cancel := context.WithTimeout(ctx, cfg.ReviewChunkTimeout)
+		requestCtx, cancel := modelrequest.WithTimeout(ctx, client, cfg.ReviewChunkTimeout)
 		completion, requestErr := client.Review(requestCtx, prompt)
 		cancel()
 		if requestErr != nil {

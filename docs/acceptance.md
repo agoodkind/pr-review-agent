@@ -22,6 +22,16 @@ deployed image digest before testing.
 
    The test checks minute-limit denial, fallback, recovery after expiry, and one usage record per response in real local Cloudflare storage.
 
+5. Verify unexpected-error fallback with an enabled provider that has no app quota:
+
+   ```bash
+   go test -tags=integration ./cmd/pragent-ops \
+       -run 'TestLiveUnexpectedFailureSelectsNextProvider|TestLiveProviderTimeoutSelectsNextProvider|TestCancelledRequestStartsNoProvider' \
+       -count=1
+   ```
+
+   The tests verify fallback after authentication errors across all review stages and after a provider timeout. Parent cancellation must stop provider selection. The fallback must receive a response from the configured endpoint; a quota error satisfies that request assertion. These tests do not establish review completion when the provider has exhausted its allowance.
+
 ## Verify prose findings and corrections
 
 1. Select an enabled provider and its existing private credential file.

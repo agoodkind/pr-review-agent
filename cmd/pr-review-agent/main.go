@@ -23,9 +23,8 @@ import (
 
 const (
 	githubHTTPTimeout = 30 * time.Second
-	openaiHTTPTimeout = 610 * time.Second
 	// Cloudflare sends SIGKILL 15 minutes after a rollout's SIGTERM.
-	shutdownTimeout   = 14 * time.Minute
+	shutdownTimeout = 14 * time.Minute
 )
 
 func main() {
@@ -116,7 +115,7 @@ func run(
 		slog.String("github_bot_login", cfg.GitHubBotLogin),
 	)
 	githubHTTP := &http.Client{Timeout: githubHTTPTimeout}
-	openaiHTTP := &http.Client{Timeout: openaiHTTPTimeout}
+	openaiHTTP := &http.Client{}
 	application := app.New(cfg, githubHTTP, openaiHTTP, logger)
 
 	ctx, stop := notifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

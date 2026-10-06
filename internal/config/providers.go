@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"goodkind.io/pr-review-agent/internal/quota"
 )
@@ -98,6 +99,7 @@ type ProviderConfig struct {
 	BaseURL              *url.URL
 	Model                string
 	ReasoningEffort      ReasoningEffort
+	RequestTimeout       time.Duration
 	APIKey               string
 	DailyTokenLimit      int64
 	DailyTokenTypes      []TokenType
@@ -121,6 +123,7 @@ type providerDefinition struct {
 	BaseURL                     string             `json:"base_url"`
 	Model                       string             `json:"model"`
 	ReasoningEffort             ReasoningEffort    `json:"reasoning_effort,omitempty"`
+	RequestTimeout              string             `json:"request_timeout,omitempty"`
 	APIKeyBinding               string             `json:"api_key_binding"`
 	DailyTokenLimit             *int64             `json:"daily_token_limit,omitempty"`
 	DailyTokenTypes             []TokenType        `json:"daily_token_types,omitempty"`
@@ -163,7 +166,8 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		if definition.dailyLimit() < 0 {
 			return nil, fmt.Errorf("provider %q daily_token_limit must not be negative", definition.ID)
 		}
-		if err := validateProviderLimits(definition); err != nil {
+		requestTimeout, err := validateProviderLimits(definition)
+		if err != nil {
 			return nil, err
 		}
 		if _, exists := configured[definition.ID]; exists {
@@ -190,6 +194,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			BaseURL:              baseURL,
 			Model:                definition.Model,
 			ReasoningEffort:      definition.ReasoningEffort,
+			RequestTimeout:       requestTimeout,
 			APIKey:               apiKey,
 			DailyTokenLimit:      definition.dailyLimit(),
 			DailyTokenTypes:      definition.DailyTokenTypes,
@@ -285,39 +290,39 @@ func (provider ProviderConfig) HasTokenLimit() bool {
 	return provider.DailyTokenLimit > 0 || provider.TokenLimit > 0 || len(provider.TokenLimits) > 0
 }
 
-func validateProviderLimits(definition providerDefinition) error {
+func validateProviderLimits(definition providerDefinition) (time.Duration, error) {
 	switch definition.ReasoningEffort {
 	case ReasoningNone, ReasoningMinimal, ReasoningLow, ReasoningMedium, ReasoningHigh, ReasoningXHigh:
 	default:
-		return fmt.Errorf("provider %q reasoning_effort must be none, minimal, low, medium, high, or xhigh", definition.ID)
+		return 0, fmt.Errorf("provider %q reasoning_effort must be none, minimal, low, medium, high, or xhigh", definition.ID)
 	}
 	if err := validateProviderQuota(definition); err != nil {
-		return err
+		return 0, err
 	}
 	if definition.API != ResponsesAPI && definition.API != ChatCompletionsAPI && definition.API != GeminiAPI {
-		return fmt.Errorf("provider %q api_kind must be responses, chat_completions, or gemini", definition.ID)
+		return 0, fmt.Errorf("provider %q api_kind must be responses, chat_completions, or gemini", definition.ID)
 	}
 	if definition.API == GeminiAPI && (definition.ReasoningEffort == ReasoningNone || definition.ReasoningEffort == ReasoningXHigh) {
-		return fmt.Errorf("provider %q Gemini reasoning_effort must be minimal, low, medium, or high", definition.ID)
+		return 0, fmt.Errorf("provider %q Gemini reasoning_effort must be minimal, low, medium, or high", definition.ID)
 	}
 	if definition.API != ResponsesAPI && definition.AutoRouterCostTier != "" {
-		return fmt.Errorf("provider %q auto_router_cost_tier requires the Responses API", definition.ID)
+		return 0, fmt.Errorf("provider %q auto_router_cost_tier requires the Responses API", definition.ID)
 	}
 	if definition.AutoRouterCostTier != "" {
 		if definition.Model != AutoRouterModel {
-			return fmt.Errorf("provider %q auto_router_cost_tier requires openrouter/auto", definition.ID)
+			return 0, fmt.Errorf("provider %q auto_router_cost_tier requires openrouter/auto", definition.ID)
 		}
 		switch definition.AutoRouterCostTier {
 		case AutoRouterCostLow, AutoRouterCostMedium, AutoRouterCostHigh, AutoRouterCostXHigh, AutoRouterCostMax:
 		default:
-			return fmt.Errorf("provider %q auto_router_cost_tier must be low, medium, high, xhigh, or max", definition.ID)
+			return 0, fmt.Errorf("provider %q auto_router_cost_tier must be low, medium, high, xhigh, or max", definition.ID)
 		}
 	}
 	if definition.MaxOutputTokens < 0 || definition.MaxOutputTokens > math.MaxInt32 {
-		return fmt.Errorf("provider %q max_output_tokens must be positive when set and fit a 32-bit signed integer", definition.ID)
+		return 0, fmt.Errorf("provider %q max_output_tokens must be positive when set and fit a 32-bit signed integer", definition.ID)
 	}
 	if definition.MaxOutputTokens != 0 && definition.OmitMaxOutputTokens {
-		return fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
+		return 0, fmt.Errorf("provider %q cannot set both max_output_tokens and omit_max_output_tokens", definition.ID)
 	}
 	tokenTypes := definition.DailyTokenTypes
 	if definition.TokenLimit != nil {
@@ -326,11 +331,11 @@ func validateProviderLimits(definition providerDefinition) error {
 	seen := make(map[TokenType]bool, len(tokenTypes))
 	for _, tokenType := range tokenTypes {
 		if tokenType != InputTokens && tokenType != OutputTokens || seen[tokenType] {
-			return fmt.Errorf("provider %q token types must contain input and/or output once", definition.ID)
+			return 0, fmt.Errorf("provider %q token types must contain input and/or output once", definition.ID)
 		}
 		seen[tokenType] = true
 	}
-	return nil
+	return providerRequestTimeout(definition)
 }
 
 func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {

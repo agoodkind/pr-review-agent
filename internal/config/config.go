@@ -114,6 +114,7 @@ var runtimeConfigKeys = map[string]struct{}{
 	"FALLBACK_ON":                {},
 	"PROVIDERS":                  {},
 	"PROVIDER_PRIORITY":          {},
+	"PROVIDER_FAILURE_POLICY":    {},
 	"PROVIDER_BUDGET_URL":        {},
 	"SERVICE_FAILURE_APPEARANCE": {},
 	"GITHUB_APP_ID":              {},
@@ -143,12 +144,13 @@ type ModelPricing struct {
 
 // Config holds validated service configuration.
 type Config struct {
-	Port               string
-	ReviewWorkers      int
-	ReviewModel        string
-	ReviewModelPricing map[string]ModelPricing
-	Providers          []ProviderConfig
-	ProviderBudgetURL  *url.URL
+	Port                  string
+	ReviewWorkers         int
+	ReviewModel           string
+	ReviewModelPricing    map[string]ModelPricing
+	Providers             []ProviderConfig
+	ProviderFailurePolicy ProviderFailurePolicy
+	ProviderBudgetURL     *url.URL
 	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
 	// timer, is what keeps a review finishable, so these are the only limits
 	// on how much work one invocation accepts.
@@ -325,6 +327,11 @@ func Load(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ServiceFailureAppearance = appearances
+	failurePolicy, err := LoadProviderFailurePolicy(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ProviderFailurePolicy = failurePolicy
 	if _, configured := lookup("PROVIDERS"); configured {
 		providers, err := LoadProviders(lookup)
 		if err != nil {
