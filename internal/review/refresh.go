@@ -182,11 +182,19 @@ func (service *Service) refreshReviewedCheck(
 	withheld, err := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
 	if err != nil {
 		logger.ErrorContext(ctx, "refresh reviewed check", slog.String("err", err.Error()))
+		var statuses []ProviderStatus
+		collectProviderStatuses(err, &statuses)
+		recordAssessment(ctx, domain.AssessmentFailed, nil, failureNames(err), quotaRecovery(statuses))
 		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
 			"failure", "Review refresh failed", "The review could not verify the current inline findings. The previous verdict was not replaced.")
+		var progress Summary
+		progress.Head = job.Head
+		progress.Failed = true
+		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", publicFailureDetail(job))
 		return errors.Join(err, completionErr)
 	}
 	if withheld {
+		recordAssessment(ctx, domain.AssessmentDeclined, nil, nil, 0)
 		return service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
 			checkConclusionDeclined, "Review needs attention", "Approval remains withheld. The review summary explains what needs attention.")
 	}
@@ -477,13 +485,18 @@ func (service *Service) applyRefreshedVerdict(
 			}
 		}
 		return summaryCommentContent{
-			Prose: refreshVerdictProse(existingBody, summary, refreshed.blockWithdrawn),
+			Prose: refreshVerdictProse(stripReassessmentNotice(existingBody), summary, refreshed.blockWithdrawn),
 			State: state,
 		}
 	}); err != nil {
 		logger.ErrorContext(ctx, "update summary after verdict refresh", slog.String("err", err.Error()))
 		return fmt.Errorf("update summary after verdict refresh: %w", err)
 	}
+	disposition := domain.AssessmentCompleted
+	if summary.Decision == domain.ReviewDecisionComment {
+		disposition = domain.AssessmentDeclined
+	}
+	recordAssessment(ctx, disposition, &summary, nil, 0)
 	return nil
 }
 

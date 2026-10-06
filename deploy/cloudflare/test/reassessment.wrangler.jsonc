@@ -1,0 +1,9 @@
+{
+  "name": "pr-agent-reassessment-test",
+  "main": "reassessment-fixture.js",
+  "compatibility_date": "2026-08-12",
+  "durable_objects": {
+    "bindings": [{ "name": "REPLAY_QUEUE", "class_name": "WebhookReplayQueue" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WebhookReplayQueue"] }]
+}

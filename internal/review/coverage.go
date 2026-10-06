@@ -537,6 +537,15 @@ func (service *Service) concludeStructurallyIncomplete(
 	summary.Usage = UsageFromContext(ctx)
 	failures := pass.unreadChunks()
 	statuses := providerStatuses(failures)
+	disposition := domain.AssessmentDeclined
+	var classes []string
+	if len(failures) > 0 {
+		disposition = domain.AssessmentIncomplete
+		for _, class := range chunkFailureClasses(failures) {
+			classes = append(classes, string(class))
+		}
+	}
+	recordAssessment(ctx, disposition, &summary, classes, quotaRecovery(statuses))
 	addAttemptedModels(&summary, statuses)
 	conclusion := checkConclusionDeclined
 	if !pass.decidedOmissions() || pass.acceptsOmissions() {
@@ -564,8 +573,11 @@ func (service *Service) concludeStructurallyIncomplete(
 	}
 	publicationCtx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
+	if _, err := persistAssessment(publicationCtx, checkRun.ID); err != nil {
+		return err
+	}
 	if err := service.upsertSummaryComment(publicationCtx, job, summaryCommentContent{
-		Prose: RenderUnreadableBody(summary, notice, statuses...),
+		Prose: RenderUnreadableBody(summary, notice, statuses...) + reassessmentNotice(ctx),
 		State: state,
 	}); err != nil {
 		return service.failCheck(

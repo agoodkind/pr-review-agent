@@ -50,9 +50,17 @@ func (service *Service) concludeIncomplete(
 	unread := pass.unreadChunks()
 	reason := chunkFailureReason(unread)
 	statuses := providerStatuses(unread)
+	classes := make([]string, 0)
+	for _, class := range chunkFailureClasses(unread) {
+		classes = append(classes, string(class))
+	}
+	recordAssessment(ctx, domain.AssessmentIncomplete, &summary, classes, quotaRecovery(statuses))
 	addAttemptedModels(&summary, statuses)
+	if _, err := persistAssessment(ctx, checkRun.ID); err != nil {
+		return err
+	}
 	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderIncompleteBody(summary, pending, reason, publicFailureDetail(job), statuses...),
+		Prose: RenderIncompleteBody(summary, pending, reason, publicFailureDetail(job), statuses...) + reassessmentNotice(ctx),
 		State: state,
 	}); err != nil {
 		return service.failCheck(

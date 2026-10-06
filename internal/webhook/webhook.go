@@ -45,6 +45,7 @@ type PullRequestEvent struct {
 // Job converts the webhook event into a review job.
 func (event PullRequestEvent) Job() domain.ReviewJob {
 	return domain.ReviewJob{
+		AutomaticReassessment: false, ReassessmentID: "", ReassessmentGeneration: "",
 		DeliveryID:          event.DeliveryID,
 		CheckRunID:          0,
 		CheckRunStatus:      "",
@@ -93,6 +94,12 @@ func VerifySHA256(signatureHeader string, secret []byte, body []byte) error {
 }
 
 type pullRequestAction string
+
+// RestartsQueue requests lifecycle evaluation after reopening or leaving draft.
+func (event PullRequestEvent) RestartsQueue() bool {
+	action := pullRequestAction(event.Action)
+	return action == actionReopened || action == actionReadyForReview
+}
 
 const (
 	actionOpened         pullRequestAction = "opened"

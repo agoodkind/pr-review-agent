@@ -169,7 +169,7 @@ func NewService(
 // The run carries no deadline of its own. Admission is what bounds it, and the
 // only clock inside it is the per chunk timeout, so a review can never run out
 // of time part way through and lose the chunks it already read.
-func (service *Service) Run(parent context.Context, job domain.ReviewJob) error {
+func (service *Service) run(parent context.Context, job domain.ReviewJob) error {
 	recorder := runlog.NewRecorder()
 	logger := slog.New(runlog.Tee(service.logger.Handler(), recorder)).With(
 		slog.String("delivery_id", job.DeliveryID),
@@ -201,7 +201,9 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 
 	unlock := service.locker.Lock(job.Key())
 	defer unlock()
+	var outcome domain.AssessmentOutcome
 	checkRun := githubapp.CheckRun{
+		Outcome:    outcome,
 		ID:         job.CheckRunID,
 		Name:       service.checkName,
 		Head:       job.Head,
@@ -309,7 +311,7 @@ func (service *Service) runLocked(
 	// redoing that run is the whole point. Admission gives it its own check run,
 	// so this is normally not a completed check at all; the guard keeps that
 	// true if a forced job ever reaches here carrying one.
-	if !job.Forced && service.checkAlreadySucceeded(ctx, checkRun) {
+	if !job.Forced && !job.AutomaticReassessment && service.checkAlreadySucceeded(ctx, checkRun) {
 		// A prior successful check does not override a refreshed withheld verdict.
 		return service.refreshReviewedCheck(ctx, job, nil, settings)
 	}
@@ -325,8 +327,17 @@ func (service *Service) runLocked(
 	if pullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+	if job.AutomaticReassessment && (!pullRequest.EligibilityKnown || !pullRequest.MetadataKnown) {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, errors.New("current pull request response is incomplete"))
+	}
+	if job.AutomaticReassessment && (pullRequest.State != "open" || pullRequest.Merged || pullRequest.Draft) {
+		return service.cancelCheck(ctx, job, checkRun.ID)
+	}
 	progress.reached("the pull request")
 
+	if job.AutomaticReassessment && job.RefreshVerdict {
+		return service.refreshReviewedCheck(ctx, job, nil, settings)
+	}
 	reviews, reviewed, err := service.loadReviewHistory(ctx, job, head, progress)
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err)
@@ -666,7 +677,7 @@ func (service *Service) loadReviewHistory(
 	)
 	// A forced run reviews this head again on purpose, so the marker an earlier
 	// run left is exactly what it is asked to look past.
-	if !job.Forced && hasBotReviewMarker(reviews, service.botLogin, head) {
+	if !job.Forced && !job.AutomaticReassessment && hasBotReviewMarker(reviews, service.botLogin, head) {
 		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
 		return reviews, true, nil
 	}
@@ -944,8 +955,10 @@ func (service *Service) publishVerdict(
 	}
 
 	if summary.Decision == domain.ReviewDecisionComment {
+		recordAssessment(ctx, domain.AssessmentDeclined, &summary, nil, 0)
 		return service.completeCheckRun(ctx, job.InstallationID, job.Repository, checkRun.ID, checkConclusionDeclined, summary.Title(), RenderDetails(summary))
 	}
+	recordAssessment(ctx, domain.AssessmentCompleted, &summary, nil, 0)
 	if err := service.succeed(ctx, job, checkRun.ID, summary.Title(), RenderDetails(summary)); err != nil {
 		return err
 	}

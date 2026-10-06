@@ -36,13 +36,17 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	dispatcher.Start(ctx)
+	defer func() {
+		if err := dispatcher.Shutdown(ctx); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	}()
 
 	body := []byte(`{"action":"opened","installation":{"id":1},"repository":{"name":"repo","owner":{"login":"owner"}},"pull_request":{"number":1,"draft":false,"head":{"sha":"a3c4f1cac7f595bc824704b9d2a1f1191630dc32"}}}`)
 	post := func(deliveryID string) *http.Response {
-		request, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/github_webhooks", stringsReader(body))
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/v1/github_webhooks", stringsReader(body))
 		if err != nil {
 			t.Fatalf("NewRequest: %v", err)
 		}
@@ -62,26 +66,30 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 	}
 	_ = first.Body.Close()
 
-	fill := post("delivery-blocked-2")
-	if fill.StatusCode != http.StatusAccepted {
-		t.Fatalf("fill status = %d, want 202", fill.StatusCode)
-	}
-	_ = fill.Body.Close()
-
 	third := post("delivery-blocked-3")
 	if third.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("third status = %d, want 503", third.StatusCode)
 	}
 	_ = third.Body.Close()
+	repeated := post("delivery-blocked-3")
+	if repeated.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("repeated status = %d, want 503 while the queue remains full", repeated.StatusCode)
+	}
+	_ = repeated.Body.Close()
 
 	close(releaseJob)
-	time.Sleep(200 * time.Millisecond)
-
-	retry := post("delivery-blocked-3")
-	if retry.StatusCode != http.StatusAccepted {
-		t.Fatalf("retry status = %d, want 202 after claim release", retry.StatusCode)
+	dispatcher.Start(ctx)
+	for {
+		retry := post("delivery-blocked-3")
+		status := retry.StatusCode
+		_ = retry.Body.Close()
+		if status == http.StatusAccepted {
+			break
+		}
+		if status != http.StatusServiceUnavailable {
+			t.Fatalf("retry status = %d, want 202 after capacity becomes available", status)
+		}
 	}
-	_ = retry.Body.Close()
 }
 
 type blockingRunner struct {

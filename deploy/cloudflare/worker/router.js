@@ -6,11 +6,15 @@ import {
 } from "./configuration.js";
 import { BUDGET_PATH, handleProviderBudget } from "./budget.js";
 import { deliverySettled, entryFromDelivery, forwardFailed } from "./replaylogic.js";
+import { REASSESSMENT_PATH, handleReassessments } from "./reassessment.js";
 import { isRecoveryTestEvent } from "./recovery-test.js";
 import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
 
 export async function routeRequest(request, env) {
   const url = new URL(request.url);
+  if (url.pathname === REASSESSMENT_PATH) {
+    return handleReassessments(request, env);
+  }
   if (request.method === "GET" && url.pathname === "/health") {
     return Response.json({ status: "ok" });
   }

@@ -107,6 +107,7 @@ type LookupEnv func(string) (string, bool)
 const runtimeConfigPath = "/runtime.json"
 
 var runtimeConfigKeys = map[string]struct{}{
+	"REASSESSMENT":               {},
 	"CLYDE_BASE_URL":             {},
 	"CONTAINER_SLEEP_AFTER":      {},
 	"FALLBACK_BASE_URL":          {},
@@ -144,6 +145,7 @@ type ModelPricing struct {
 
 // Config holds validated service configuration.
 type Config struct {
+	Reassessment          Reassessment
 	Port                  string
 	ReviewWorkers         int
 	ReviewModel           string
@@ -279,7 +281,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
-		if name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
+		if name == "REASSESSMENT" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
 			values[name] = string(raw)
 			continue
 		}
@@ -327,6 +329,10 @@ func Load(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ServiceFailureAppearance = appearances
+	cfg.Reassessment, err = loadReassessment(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	failurePolicy, err := LoadProviderFailurePolicy(lookup)
 	if err != nil {
 		return Config{}, err

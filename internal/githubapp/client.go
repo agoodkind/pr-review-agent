@@ -27,13 +27,17 @@ const (
 
 // PullRequest is the pull request metadata required for review work.
 type PullRequest struct {
-	Number      int
-	Head        domain.HeadSHA
-	Base        domain.HeadSHA
-	Draft       bool
-	Title       string
-	Body        string
-	CommitCount int
+	EligibilityKnown bool
+	MetadataKnown    bool
+	State            string
+	Merged           bool
+	Number           int
+	Head             domain.HeadSHA
+	Base             domain.HeadSHA
+	Draft            bool
+	Title            string
+	Body             string
+	CommitCount      int
 }
 
 // PullRequestCommit includes the immutable identifier required for message findings.
@@ -80,6 +84,7 @@ type SubmitReviewRequest struct {
 
 // CheckRun is one GitHub check run tied to a head commit.
 type CheckRun struct {
+	Outcome    domain.AssessmentOutcome
 	ID         int64
 	Name       string
 	Head       domain.HeadSHA

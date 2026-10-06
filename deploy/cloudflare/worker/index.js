@@ -7,6 +7,7 @@ import { ProviderBudget } from "./budget-do.js";
 import { containerLifecycleEvent, containerStoppedEvent } from "./lifecycle.js";
 import { WebhookReplayQueue } from "./replay.js";
 import { routeRequest } from "./router.js";
+import { scheduledReassessment } from "./reassessment.js";
 
 export { WebhookReplayQueue };
 export { ProviderBudget };
@@ -42,4 +43,4 @@ export class PrAgentContainer extends Container {
 
 }
 
-export default { fetch: routeRequest };
+export default { fetch: routeRequest, scheduled: scheduledReassessment };
