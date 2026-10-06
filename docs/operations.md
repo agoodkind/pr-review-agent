@@ -15,7 +15,7 @@ The hidden state marker records the last reviewed commit, pending and completed 
 
 The service declines a delta that exceeds its configured admission limits before sending model requests. The summary reports the measured size. The check concludes `action_required`, and the last reviewed commit does not advance. Subsequent pushes include the unreviewed range until a review completes or the pull request is split.
 
-Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work and existing review decisions. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
+Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
 
 Automatic reassessment queues failed reviews, unread chunks, and failed discussion refreshes. The queue persists one record per pull request across container restarts. Each retry reads the current head and metadata before checking that the pull request remains open, unmerged, and ready for review. The retry resumes completed chunk checkpoints without forcing another full review.
 
@@ -35,7 +35,11 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-A failed review changes no standing review verdict. The summary and check report the recognized failure class and run identifier. Raw provider messages remain in the private service log. Public log fields are limited to service-defined measurements, identifiers, and wording. Inspect the private records using [logs.md](logs.md).
+An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
+
+Caller cancellation, exhausted quota, and rate limits do not withdraw the verdict. A successful provider fallback does not count as a terminal failure.
+
+The summary and check report the recognized failure class and run identifier. Collapsed failure details report the failing provider, model, HTTP status, and recognized error code. The private service log stores raw provider messages. Public log fields use service-defined measurements, identifiers, and wording. Inspect the private records using [logs.md](logs.md).
 
 ## Configure the service
 
@@ -59,6 +63,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDERS[].disabled` | Keep the provider configured without sending it requests |
 | `PROVIDER_BUDGET_URL` | Worker endpoint that records reported usage after model requests |
 | `SERVICE_FAILURE_APPEARANCE` | Choose whether each service failure class blocks the check |
+| `SERVICE_FAILURE_VERDICT_POLICY` | `dismiss_latest_block` withdraws the latest bot rejection after an unexpected terminal failure; `preserve` retains that rejection |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_RULE_IMPORTANCE` | Fixed importance values indexed by stable rule ID |
 | `REVIEW_RULES_FILE` | Required path to the external rule catalog |
@@ -120,7 +125,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Change review rules
 
-1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. The service reads both files at startup. The binary contains no default rules or prompts.
+1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json

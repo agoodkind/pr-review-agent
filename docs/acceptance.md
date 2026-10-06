@@ -155,43 +155,45 @@ Expect:
   the oversized range in every later delta. The way out is a person's: split
   the pull request, raise its budget, or ask for the review
 
-## 6. A failed chunk costs one chunk and no verdict
+## 6. Verify checkpoint recovery after a failed chunk
 
-Force one chunk to fail: exhaust the provider's usage, or point one run at an
-unreachable provider. A real provider outage returning HTTP 502 ran this proof
-unprompted on 2026-08-30.
+1. Select a test pull request with multiple chunks. Cause a provider request to fail after another chunk completes.
+2. Confirm that the summary marker records unread chunks in `pending` and reviewed chunks in `completed`. Check the conclusion against `SERVICE_FAILURE_APPEARANCE`.
+3. Confirm that the service submits no new approval or rejection after the failure. An unexpected failure must dismiss only the latest bot rejection. Quota and rate-limit failures must retain that decision.
+4. Restore the provider and trigger reassessment. Require reuse of completed chunks, review of pending chunks, and no duplicate findings.
+5. Confirm that public diagnostics contain the provider and recognized error details without raw provider messages or credentials.
 
-Expect:
 
-- the comment names how many chunks went unread and says the next push reviews
-  them; the marker keeps them in `pending` and the chunks already read in
-  `completed`
-- the check concludes `action_required` so the gate holds
-- NO review object is touched. A failure to read is not a finding: the outage
-  build submitted `CHANGES_REQUESTED` here, and every open pull request grew a
-  blocking review nobody had asked for
-- the raw provider error appears in the logs and NOWHERE on the pull request:
-  not the comment, not the check title, not the check's run log, which
-  publishes only fields the service vouched for and escapes line breaks in
-  them
-- push again with the provider healthy: the pending chunks are reviewed, the
-  completed ones are not re-analyzed, and no finding posts twice
+## 7. Verify dismissal after an unexpected failure
 
-## 7. A failed read preserves earlier reviews
+The live test dismisses the selected bot rejection and publishes a failed check. Use an open, non-draft test pull request with another reviewer's submitted decision.
 
-Make a run fail outside the chunks, for example by breaking the GitHub token
-briefly.
+1. Set the explicit test inputs.
 
-Expect: a red check and a comment that both name the stage and the run
-identifier, a sanitized cause, and every review object exactly as the reader
-last saw it. One live failure rewrote an older blocking review's body while
-leaving its state standing, so an infrastructure outage read as a code
-verdict.
+   | Variable | Required input |
+   | --- | --- |
+   | `PR_AGENT_LIVE_REPOSITORY` | Repository in `owner/repo` format |
+   | `PR_AGENT_LIVE_PULL_REQUEST` | Test pull request number |
+   | `PR_AGENT_LIVE_FAILURE_REVIEW_ID` | Latest bot rejection's review ID |
+   | `PR_AGENT_LIVE_INSTALLATION_ID` | GitHub App installation ID for the repository |
+   | `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` | Matching GitHub App private-key file |
+   | `PR_AGENT_LIVE_FAILURE_PROVIDER_ID` | Runtime provider ID without Cloudflare Access requirements |
 
-Resolve the last inline finding during final report generation. Expect no new
-verdict and a failed check. When a fresh thread read confirms no actionable
-finding remains, expect the service to dismiss its unsupported earlier rejection.
-It must preserve other reviewers' decisions and must not guess an approval.
+2. Run the production service against GitHub and the selected provider with an invalid test credential.
+
+   ```bash
+   PR_AGENT_LIVE_FAILURE_VERDICT_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveUnexpectedFailureDismissesLatestOwnRejection -count=1
+   ```
+
+   Require a real provider authentication or request error, dismissal of the expected review ID, unchanged decisions from other reviewers, a safe failure summary, and the failed assessment receipt.
+
+3. Set `PR_AGENT_LIVE_FAILURE_APPROVAL_PULL_REQUEST` and `PR_AGENT_LIVE_FAILURE_APPROVAL_REVIEW_ID` to a separate fixture with an earlier bot rejection and a later bot approval. Verify that failure preserves both decisions.
+
+   ```bash
+   PR_AGENT_LIVE_FAILURE_VERDICT_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveUnexpectedFailurePreservesLaterOwnApproval -count=1
+   ```
 
 ## 8. A lost delivery is replayed, not dropped
 

@@ -1,13 +1,5 @@
 package review
 
-// This file handles what a failed review leaves behind on the pull request.
-//
-// A review that fails has no verdict, and it has also not earned the right to
-// withdraw one. It reports the cause in two places a reader already looks: the
-// red check run, and the one top level comment. It touches no review object at
-// all, because a run that could not finish knows nothing new about the head,
-// and a verdict it invented or withdrew there would be a judgment nobody made.
-
 import (
 	"context"
 	"errors"
@@ -27,13 +19,6 @@ const (
 	checkFailureMixedRateLimit = "Review stopped: an app token limit was exhausted, and a provider temporarily limited the request rate."
 )
 
-// failCheck ends one run with its cause reported and no review object touched.
-//
-// The check run and the comment now say the same amount, because they are
-// equally public. Both name what stopped, in wording this service wrote, and
-// point at the run identifier. Neither reprints the sentence the provider
-// supplied: that sentence is text nobody here has read, and a check run
-// outlives the run exactly as a comment does.
 func (service *Service) failCheck(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -73,8 +58,13 @@ func (service *Service) reportFailedCheck(
 	var statuses []ProviderStatus
 	collectProviderStatuses(cause, &statuses)
 	recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(cause), quotaRecovery(statuses))
+	var dismissErr error
+	if conclusion != checkConclusionCancelled {
+		dismissErr = service.dismissFailureVerdict(ctx, job, cause)
+	}
 	title := failureTitle(stage, cause)
-	checkSummary := publicFailureDetail(job) + "\n\n" + RenderDetails(progress)
+	detail := service.terminalFailureDetail(ctx, job, cause)
+	checkSummary := detail + "\n\n" + RenderDetails(progress)
 	var completeErr error
 	if checkRunID != 0 {
 		completeErr = service.completeCheckRun(
@@ -90,12 +80,12 @@ func (service *Service) reportFailedCheck(
 			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
 		}
 	}
-	service.writeFailureSummary(ctx, job, progress, title, publicFailureDetail(job))
+	service.writeFailureSummary(ctx, job, progress, title, detail)
 	if completeErr != nil {
-		return fmt.Errorf("complete check run: %w", completeErr)
+		return errors.Join(cause, dismissErr, fmt.Errorf("complete check run: %w", completeErr))
 	}
 	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
-	return cause
+	return &reportedFailureError{cause: errors.Join(cause, dismissErr)}
 }
 
 // failureTitle names why a review stopped, in the one line a reader sees in the

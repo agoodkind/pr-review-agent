@@ -73,6 +73,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		cfg.PromptBytes(),
 		cfg.ReviewPolicy,
 	)
+	reviewService.SetFailureVerdictPolicy(cfg.FailureVerdictPolicy)
 
 	cache := queue.NewDeliveryCache(
 		config.DeliveryCacheCapacity,

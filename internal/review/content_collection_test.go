@@ -82,6 +82,7 @@ func newContentCollectionFixture(t *testing.T, model *sequenceModel) (*serviceFi
 		GitHubAppID: testGitHubAppID, GitHubPrivateKey: serviceTestPrivateKey(t),
 		GitHubBotLogin: testBotLogin, GitHubAPIBaseURL: apiURL, GitHubGraphQLURL: graphqlURL,
 	}, server.Client(), func() time.Time { return time.Unix(1_700_000_000, 0) }, logger)
+	fixture.github = client
 	fixture.service = review.NewService(client, diff.NewCollector(client), model, fixture.reconciler, queue.NewKeyedLocker(), testBotLogin, testMinimumImportance, config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks, config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, config.MaximumChunkConcurrency, config.MaximumPromptBytes, policytest.Load(t))
 
 	return fixture, contentStatus
@@ -105,7 +106,7 @@ func TestContentCollectionSubmoduleCleanRunApproves(t *testing.T) {
 	}
 }
 
-func TestContentCollectionFailurePreservesReviewAndRetryRecovers(t *testing.T) {
+func TestContentCollectionFailureDismissesRejectionAndRetryRecovers(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture, contentStatus := newContentCollectionFixture(t, model)
 	prior := marker.State{LastReviewed: domain.HeadSHA(coveragePriorHead), RunID: "delivery-0", Status: marker.StateDone, Pending: []string{"pending-chunk"}, Completed: []string{"completed-chunk"}}
@@ -115,8 +116,8 @@ func TestContentCollectionFailurePreservesReviewAndRetryRecovers(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run succeeded after GitHub content fetch returned 502")
 	}
-	if fixture.state.lastSubmitReview != nil || fixture.state.lastUpdateReview != nil || len(fixture.state.dismissals) != 0 {
-		t.Fatalf("failed read mutated review: submit=%v update=%v dismissals=%v", fixture.state.lastSubmitReview, fixture.state.lastUpdateReview, fixture.state.dismissals)
+	if fixture.state.lastSubmitReview != nil || fixture.state.lastUpdateReview != nil || len(fixture.state.dismissals) != 1 || fixture.state.dismissals[0]["review_id"] != "4100" {
+		t.Fatalf("failed read did not withdraw only the previous rejection: submit=%v update=%v dismissals=%v", fixture.state.lastSubmitReview, fixture.state.lastUpdateReview, fixture.state.dismissals)
 	}
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed != prior.LastReviewed || !reflect.DeepEqual(state.Pending, prior.Pending) || !reflect.DeepEqual(state.Completed, prior.Completed) {
