@@ -380,6 +380,73 @@
         }
       ],
       "expected": []
+    },
+    {
+      "id": "commit_subject_imperative_compliant",
+      "provenance": {
+        "repository": "agoodkind/swift-makefile",
+        "revision": "58346708e7a5838fdfcc12d1688bfea885c96ae9",
+        "url": "https://github.com/agoodkind/swift-makefile/pull/251"
+      },
+      "files": [],
+      "metadata": [
+        {
+          "surface": "commit_message",
+          "commit_sha": "58346708e7a5838fdfcc12d1688bfea885c96ae9",
+          "text": "Correct GateProof diagnostic and fallback comments\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "commit_subject_declarative_bad",
+      "provenance": {
+        "repository": "agoodkind/swift-makefile",
+        "revision": "58346708e7a5838fdfcc12d1688bfea885c96ae9",
+        "url": "https://github.com/agoodkind/swift-makefile/pull/251"
+      },
+      "files": [],
+      "metadata": [
+        {
+          "surface": "commit_message",
+          "commit_sha": "58346708e7a5838fdfcc12d1688bfea885c96ae9",
+          "text": "The commit corrects GateProof diagnostic and fallback comments.\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
+          "start_line": 1,
+          "end_line": 3
+        }
+      ],
+      "expected": [
+        {
+          "surface": "commit_message",
+          "commit_sha": "58346708e7a5838fdfcc12d1688bfea885c96ae9",
+          "rule_ids": [
+            "commit_subject_format"
+          ],
+          "path": "",
+          "start_line": 1,
+          "end_line": 1
+        }
+      ]
+    },
+    {
+      "id": "pr_title_imperative_compliant",
+      "provenance": {
+        "repository": "agoodkind/swift-makefile",
+        "url": "https://github.com/agoodkind/swift-makefile/pull/256"
+      },
+      "files": [],
+      "metadata": [
+        {
+          "surface": "pull_request_title",
+          "commit_sha": "",
+          "text": "Correct reusable CI workflow comments",
+          "start_line": 1,
+          "end_line": 1
+        }
+      ],
+      "expected": []
     }
-  ]
+]
 }
