@@ -508,14 +508,8 @@ func fileGapReason(gap diff.CoverageGap) string {
 	}
 }
 
-// concludeStructurallyIncomplete ends a pass over a head this service cannot
-// read whole.
-//
-// No review object is touched. A verdict here would be a judgment on code
-// nobody read, and the blocking one this used to publish left a person holding
-// a requested-changes review that no push could clear and only a manual
-// dismissal could remove. The check holds the gate instead, and says what has
-// to happen for the pull request to move.
+// concludeStructurallyIncomplete preserves an undecided verdict after provider failure.
+// A validated negative omission decision remains blocking.
 func (service *Service) concludeStructurallyIncomplete(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -544,6 +538,10 @@ func (service *Service) concludeStructurallyIncomplete(
 	failures := pass.unreadChunks()
 	statuses := providerStatuses(failures)
 	addAttemptedModels(&summary, statuses)
+	conclusion := checkConclusionDeclined
+	if !pass.decidedOmissions() || pass.acceptsOmissions() {
+		conclusion = service.presentedConclusion(chunkFailureClasses(failures), conclusion)
+	}
 	if reportCalled {
 		current, err := service.github.GetPullRequest(
 			ctx, job.InstallationID, job.Repository, job.Number,
@@ -579,7 +577,7 @@ func (service *Service) concludeStructurallyIncomplete(
 		job.InstallationID,
 		job.Repository,
 		checkRun.ID,
-		checkConclusionDeclined,
+		conclusion,
 		unreadableCheckTitle(len(shortfall.Hunks)),
 		notice+"\n\n"+RenderDetails(summary, statuses...),
 	); err != nil {
