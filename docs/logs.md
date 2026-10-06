@@ -1,6 +1,23 @@
 # Inspect service diagnostics
 
-Run [pragent-ops](../cmd/pragent-ops/main.go) from the repository root to collect logs, summarize saved records, inspect counters, or test one provider. Go must be installed.
+Run [pragent-ops](../cmd/pragent-ops/main.go) from the repository root to audit reviews, collect logs, inspect counters, or test one provider. Go and an authenticated GitHub CLI must be installed for review audits.
+
+## Audit failures and unresolved reviews
+
+1. Collect the desired interval and current GitHub review state:
+
+   ```bash
+   go run ./cmd/pragent-ops stats --since 24h \
+       --account-token-file /path/to/account-token
+   ```
+
+   Use `--owner` to select another repository owner. The default is the authenticated GitHub account. Use `--exclude owner/repository#number` to exclude a test pull request from the report.
+2. Read the printed tables and private report. The report separates provider attempts, delivery identifiers, executions, incomplete coverage, standing reviews, and unresolved findings.
+3. Inspect the evidence identifiers for each review without a recorded reassessment. A later trigger establishes an opportunity to reassess. A returned thread decision or validated verdict establishes reassessment. An unresolved finding can remain valid after reassessment.
+
+Use `--input /path/to/capture/events.ndjson` to reuse a saved Cloudflare capture while refreshing GitHub state. Use `--operator-token-file /path/to/operator-token` to include current app quota counters. The report records the requested interval and each source's capture time.
+
+GitHub state reflects the capture time. Cloudflare telemetry can omit earlier events within the requested interval. The report distinguishes missing evidence from a measured zero. A provider failure during fallback does not establish that the review failed. Historical rejecting reviews do not establish a standing rejection after a newer approval.
 
 ## Collect historical logs
 

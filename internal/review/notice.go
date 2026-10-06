@@ -70,6 +70,9 @@ func (service *Service) reportFailedCheck(
 ) error {
 	logger := gklog.L(ctx)
 	progress.Failed = true
+	var statuses []ProviderStatus
+	collectProviderStatuses(cause, &statuses)
+	recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(cause), quotaRecovery(statuses))
 	title := failureTitle(stage, cause)
 	checkSummary := publicFailureDetail(job) + "\n\n" + RenderDetails(progress)
 	var completeErr error
@@ -323,6 +326,7 @@ func (service *Service) writeFailureSummary(
 
 	logger := gklog.L(ctx)
 	prose := RenderFailureBody(progress, title, detail)
+	prose += reassessmentNotice(ctx)
 	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, _ string) summaryCommentContent {
 		return summaryCommentContent{
 			Prose: prose,

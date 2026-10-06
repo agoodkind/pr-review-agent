@@ -30,6 +30,7 @@ type QuotaSnapshot struct {
 // Attempt stores classified metadata without provider error payloads.
 type Attempt struct {
 	Timestamp  time.Time      `json:"timestamp"`
+	Message    string         `json:"message"`
 	RunID      string         `json:"run_id,omitempty"`
 	Repository string         `json:"repository,omitempty"`
 	Provider   string         `json:"provider,omitempty"`
@@ -43,19 +44,26 @@ type Attempt struct {
 
 // Run stores one aggregate usage summary per delivery identifier.
 type Run struct {
-	ID              string    `json:"id"`
-	Repository      string    `json:"repository,omitempty"`
-	PullRequest     int64     `json:"pull_request,omitempty"`
-	Head            string    `json:"head,omitempty"`
-	First           time.Time `json:"first"`
-	Last            time.Time `json:"last"`
-	Records         int       `json:"records"`
-	FailureObserved bool      `json:"failure_observed"`
-	Classes         []string  `json:"classes"`
-	FailedChunks    int64     `json:"failed_chunks,omitempty"`
-	UsageReported   bool      `json:"usage_reported"`
-	InputTokens     int64     `json:"input_tokens,omitempty"`
-	OutputTokens    int64     `json:"output_tokens,omitempty"`
+	ID                 string           `json:"id"`
+	Repository         string           `json:"repository,omitempty"`
+	PullRequest        int64            `json:"pull_request,omitempty"`
+	Head               string           `json:"head,omitempty"`
+	First              time.Time        `json:"first"`
+	Last               time.Time        `json:"last"`
+	Records            int              `json:"records"`
+	FailureObserved    bool             `json:"failure_observed"`
+	Classes            []string         `json:"classes"`
+	FailedChunks       int64            `json:"failed_chunks,omitempty"`
+	UsageReported      bool             `json:"usage_reported"`
+	InputTokens        int64            `json:"input_tokens,omitempty"`
+	OutputTokens       int64            `json:"output_tokens,omitempty"`
+	StartedExecutions  int              `json:"started_executions"`
+	FailedExecutions   int              `json:"failed_executions"`
+	ProviderFailures   int              `json:"provider_failures"`
+	IncompleteObserved bool             `json:"incomplete_observed"`
+	CompletionObserved bool             `json:"completion_observed"`
+	SkipObserved       bool             `json:"skip_observed"`
+	Lifecycle          []LifecycleEvent `json:"lifecycle"`
 }
 
 // Counts uses null token totals when explicit measured usage is unavailable.
@@ -63,6 +71,16 @@ type Counts struct {
 	Records                 int            `json:"records"`
 	Runs                    int            `json:"runs"`
 	RunsWithFailureObserved int            `json:"runs_with_failure_observed"`
+	StartedExecutions       int            `json:"started_executions"`
+	FailedExecutions        int            `json:"failed_executions"`
+	StartedRuns             int            `json:"started_runs"`
+	FailedExecutionRuns     int            `json:"failed_execution_runs"`
+	ProviderFailureRuns     int            `json:"provider_failure_runs"`
+	IncompleteRuns          int            `json:"incomplete_runs"`
+	CompletedRuns           int            `json:"completed_runs"`
+	SkippedRuns             int            `json:"skipped_runs"`
+	AttemptFailures         int            `json:"attempt_failures"`
+	FallbackEngagements     int            `json:"fallback_engagements"`
 	FailureClasses          map[string]int `json:"failure_classes"`
 	AttemptClasses          map[string]int `json:"attempt_classes"`
 	RunsReportingUsage      int            `json:"runs_reporting_usage"`
@@ -94,6 +112,14 @@ func newCounts() Counts {
 
 type providerCause string
 
+type providerAPICode string
+
+const (
+	apiCodeInsufficientQuota providerAPICode = "insufficient_quota"
+	apiCodeUsageLimitReached providerAPICode = "usage_limit_reached"
+	apiCodeRateLimitExceeded providerAPICode = "rate_limit_exceeded"
+)
+
 const (
 	appBudgetDenied        providerCause = "app_budget_denied"
 	appBudgetUnavailable   providerCause = "app_budget_unavailable"
@@ -114,10 +140,13 @@ func classify(fields map[string]json.RawMessage) (string, string) {
 	case providerRateLimited:
 		return "transient_rate_limit", "structured"
 	case providerRequestFailed:
-		if text(fields, "api_code") == "rate_limit_exceeded" {
-			return "transient_rate_limit", "structured"
+		if class := apiFailureClass(fields); class != "" {
+			return class, "structured"
 		}
 		return "provider_request_failed", "structured"
+	}
+	if class := apiFailureClass(fields); class != "" {
+		return class, "structured"
 	}
 	errorText := strings.ToLower(text(fields, "err") + " " + text(fields, "error") + " " + text(fields, "causes"))
 	app := strings.Contains(errorText, "daily token limit exhausted") || strings.Contains(errorText, "app token limit exhausted")
@@ -131,13 +160,27 @@ func classify(fields map[string]json.RawMessage) (string, string) {
 	if api {
 		return "provider_api_exhausted", "legacy_error_text"
 	}
-	if strings.Contains(errorText, "rate_limit_exceeded") || strings.Contains(errorText, "too many requests") {
+	if isAttempt(text(fields, "message")) && (strings.Contains(errorText, "rate_limit_exceeded") || strings.Contains(errorText, "too many requests")) {
 		return "transient_rate_limit", "legacy_error_text"
 	}
 	if strings.Contains(errorText, "refusal") || strings.Contains(errorText, "model refused") {
 		return "model_refusal", "legacy_error_text"
 	}
 	return "source_unknown", "unclassified"
+}
+
+func apiFailureClass(fields map[string]json.RawMessage) string {
+	switch providerAPICode(text(fields, "api_code")) {
+	case apiCodeInsufficientQuota, apiCodeUsageLimitReached:
+		return "provider_api_exhausted"
+	case apiCodeRateLimitExceeded:
+		return "transient_rate_limit"
+	}
+	status, known := number(fields, "api_status")
+	if known && status >= 400 && status <= 599 {
+		return "provider_request_failed"
+	}
+	return ""
 }
 
 func failureRecord(message string) bool {
@@ -159,6 +202,8 @@ func Summarize(events []Event, manifest Manifest) (Metrics, error) {
 	metrics.Attempts = []Attempt{}
 	metrics.Limitations = []string{"Telemetry exhaustion does not prove full runtime log retention or unsampled history.", "Legacy error text classification is separate from structured provider attempts.", "Missing usage reports represent unknown usage; app-denied requests do not imply API token use.", "Only explicit run usage summaries are counted. Request and budget reports are excluded from run totals."}
 	metrics.Limitations = append(metrics.Limitations, "Failure class counts overlap when one run contains failures from multiple classes.")
+	metrics.Limitations = append(metrics.Limitations, "Execution counts use explicit job start and failure events. Run outcome counts use distinct delivery identifiers with observed outcomes and can overlap after retries.")
+	metrics.Limitations = append(metrics.Limitations, "Daily run totals use each delivery's first captured day. Daily execution totals use source log dates when valid.")
 	collector := metricCollector{metrics: &metrics, seen: make(map[string]struct{}), runs: make(map[string]*Run)}
 	for _, event := range events {
 		if err := collector.record(event); err != nil {
@@ -232,10 +277,30 @@ func (collector *metricCollector) record(event Event) error {
 		collector.metrics.Total.AttemptClasses[attempt.Class]++
 		daily.AttemptClasses[attempt.Class]++
 		repositoryCounts.AttemptClasses[attempt.Class]++
+		addAttempt(&collector.metrics.Total, attempt)
+		addAttempt(&daily, attempt)
+		addAttempt(&repositoryCounts, attempt)
 	}
 	collector.metrics.Days[day] = daily
 	collector.metrics.Repositories[repository] = repositoryCounts
+	collector.recordExecutionDay(event)
 	return nil
+}
+
+func (collector *metricCollector) recordExecutionDay(event Event) {
+	message := text(event.Source, "message")
+	if message != "review job started" && message != "review job failed" {
+		return
+	}
+	day := sourceTimestamp(event).Format(time.DateOnly)
+	counts := collector.day(day)
+	if message == "review job started" {
+		counts.StartedExecutions++
+	}
+	if message == "review job failed" {
+		counts.FailedExecutions++
+	}
+	collector.metrics.Days[day] = counts
 }
 
 func (collector *metricCollector) day(key string) Counts {
@@ -265,6 +330,7 @@ func (collector *metricCollector) run(id string, repository string, timestamp ti
 		run.First = timestamp
 		run.Last = timestamp
 		run.Classes = []string{}
+		run.Lifecycle = []LifecycleEvent{}
 		collector.runs[key] = run
 	}
 	return run
@@ -286,6 +352,7 @@ func updateRun(run *Run, event Event) {
 		run.Head = head
 	}
 	message := text(event.Source, "message")
+	updateLifecycle(run, event)
 	if failureRecord(message) {
 		run.FailureObserved = true
 		class, _ := classify(event.Source)
@@ -309,7 +376,8 @@ func updateRun(run *Run, event Event) {
 
 func providerAttempt(event Event, run *Run) Attempt {
 	var attempt Attempt
-	attempt.Timestamp = time.UnixMilli(event.Timestamp).UTC()
+	attempt.Timestamp = sourceTimestamp(event)
+	attempt.Message = text(event.Source, "message")
 	attempt.RunID = run.ID
 	attempt.Repository = run.Repository
 	attempt.Provider = text(event.Source, "provider_id")
@@ -349,6 +417,24 @@ func quotaSnapshot(source map[string]json.RawMessage, attempt Attempt) *QuotaSna
 
 func addRun(counts *Counts, run *Run) {
 	counts.Runs++
+	if run.StartedExecutions > 0 {
+		counts.StartedRuns++
+	}
+	if run.FailedExecutions > 0 {
+		counts.FailedExecutionRuns++
+	}
+	if run.ProviderFailures > 0 {
+		counts.ProviderFailureRuns++
+	}
+	if run.IncompleteObserved {
+		counts.IncompleteRuns++
+	}
+	if run.CompletionObserved {
+		counts.CompletedRuns++
+	}
+	if run.SkipObserved {
+		counts.SkippedRuns++
+	}
 	if run.FailureObserved {
 		counts.RunsWithFailureObserved++
 		for _, class := range run.Classes {
@@ -368,14 +454,30 @@ func addRun(counts *Counts, run *Run) {
 	}
 }
 
+func addAttempt(counts *Counts, attempt Attempt) {
+	if attempt.Message == "model provider attempt failed" {
+		counts.AttemptFailures++
+	}
+	if attempt.Message == "model provider fallback engaged" {
+		counts.FallbackEngagements++
+	}
+}
+
 func (collector *metricCollector) finishRun(run *Run) {
+	sort.SliceStable(run.Lifecycle, func(first, second int) bool {
+		return run.Lifecycle[first].Timestamp.Before(run.Lifecycle[second].Timestamp)
+	})
 	addRun(&collector.metrics.Total, run)
+	collector.metrics.Total.StartedExecutions += run.StartedExecutions
+	collector.metrics.Total.FailedExecutions += run.FailedExecutions
 	day := run.First.Format(time.DateOnly)
 	daily := collector.day(day)
 	addRun(&daily, run)
 	collector.metrics.Days[day] = daily
 	repositoryCounts := collector.repository(run.Repository)
 	addRun(&repositoryCounts, run)
+	repositoryCounts.StartedExecutions += run.StartedExecutions
+	repositoryCounts.FailedExecutions += run.FailedExecutions
 	collector.metrics.Repositories[run.Repository] = repositoryCounts
 	collector.metrics.Runs = append(collector.metrics.Runs, *run)
 }

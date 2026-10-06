@@ -17,6 +17,10 @@ The service declines a delta that exceeds its configured admission limits before
 
 Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work and existing review decisions. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
 
+Automatic reassessment queues failed reviews, unread chunks, and failed discussion refreshes. The queue persists one record per pull request across container restarts. Each retry reads the current head and metadata before checking that the pull request remains open, unmerged, and ready for review. The retry resumes completed chunk checkpoints without forcing another full review.
+
+The queue waits for measured app quota availability. Other operational failures use exponential backoff. A successful check does not end retry when the assessment remains incomplete. A completed assessment ends retry even when an unresolved finding requires changes. The summary reports the scheduled retry time and reassessment identifier.
+
 The service measures the complete rendered input against its configured prompt budget. It trims surplus file context and splits chunks when needed. A provider response that stops at its output limit also triggers splitting. A single hunk that cannot fit or finish requires a decision about whether its unread content is necessary for the verdict.
 
 Each finding requires source evidence and a valid target. The loaded rule policy determines importance before the publication threshold applies. Duplicate identities suppress repeated findings. The service reconciles its existing threads against current source before publication.
@@ -60,6 +64,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PORT` | Sets the container listener port and the Worker connection port |
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
+| `REASSESSMENT` | Enables persistent automatic retries and configures `queue_url`, `initial_delay`, `maximum_delay`, `maximum_attempts`, `ttl`, `terminal_retention`, and `retry_declined` |
 
 The usage estimate uses configured paid list rates. It does not subtract free-tier usage or [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown. The token limit applies to the provider's requests from this service.
 
@@ -85,7 +90,9 @@ The shipped configuration treats app quota exhaustion and provider allowance exh
 
 The selected appearance changes only the check conclusion. The check title and the summary comment still report the recognized failure class. The run publishes no review verdict.
 
-Unread chunks stay pending. The next push reviews those chunks and any new changes.
+Unread chunks stay pending. Automatic reassessment retries those chunks when enabled. A later push includes the pending chunks and new changes.
+
+The shipped reassessment configuration imposes no attempt or age limit. Set a positive `maximum_attempts` or `ttl` to impose a limit. Set `retry_declined` to retry admission after a size or review-limit change. A declined review does not count as completed coverage.
 
 Configure each provider's quota fields using the [quota reference](quotas.md). Select input and output when matching OpenAI's complimentary data-sharing allowance. Keep the quota endpoint and its Durable Object binding configured when any provider has a cap.
 

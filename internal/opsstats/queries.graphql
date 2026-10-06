@@ -1,0 +1,50 @@
+{{define "reviews"}}id databaseId state submittedAt commit { oid } author { login } body{{end}}
+{{define "comments"}}id databaseId author { login } createdAt updatedAt body{{end}}
+{{define "threadComments"}}{{template "comments"}} path pullRequestReview { id databaseId }{{end}}
+{{define "page"}}totalCount pageInfo { hasNextPage endCursor }{{end}}
+{{define "threads"}}
+id isResolved isOutdated
+comments(first: 100) { {{template "page"}} nodes { {{template "threadComments"}} } }
+{{end}}
+{{define "checks"}}
+... on CheckRun {
+    id databaseId name status conclusion startedAt completedAt detailsUrl externalId
+    checkSuite { app { slug } }
+}
+{{end}}
+{{define "connection"}}
+{
+    node(id: {{.ID}}) {
+        ... on {{.Kind}} {
+            {{.Connection}}(first: 100, after: {{.Cursor}}) {
+                {{template "page"}} nodes { {{.Selection}} }
+            }
+        }
+    }
+}
+{{end}}
+{{define "search"}}
+{
+    search(query: {{.Search}}, type: ISSUE, first: 100, after: {{.Cursor}}) {
+        issueCount pageInfo { hasNextPage endCursor }
+        nodes { ... on PullRequest { number updatedAt repository { nameWithOwner } } }
+    }
+}
+{{end}}
+{{define "pullRequest"}}
+{
+    repository(owner: {{.Owner}}, name: {{.Repository}}) {
+        pullRequest(number: {{.Number}}) {
+            id number repository { nameWithOwner } url state isDraft headRefOid baseRefName
+            reviewDecision mergeable mergeStateStatus updatedAt mergedAt
+            reviews(first: 100) { {{template "page"}} nodes { {{template "reviews"}} } }
+            latestOpinionatedReviews(first: 100) { {{template "page"}} nodes { {{template "reviews"}} } }
+            reviewThreads(first: 100) { {{template "page"}} nodes { {{template "threads"}} } }
+            comments(first: 100) { {{template "page"}} nodes { {{template "comments"}} } }
+            statusCheckRollup {
+                id state contexts(first: 100) { {{template "page"}} nodes { {{template "checks"}} } }
+            }
+        }
+    }
+}
+{{end}}

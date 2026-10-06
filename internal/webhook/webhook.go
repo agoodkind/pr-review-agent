@@ -45,6 +45,7 @@ type PullRequestEvent struct {
 // Job converts the webhook event into a review job.
 func (event PullRequestEvent) Job() domain.ReviewJob {
 	return domain.ReviewJob{
+		AutomaticReassessment: false, ReassessmentID: "", ReassessmentGeneration: "",
 		DeliveryID:          event.DeliveryID,
 		CheckRunID:          0,
 		CheckRunStatus:      "",

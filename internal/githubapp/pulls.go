@@ -14,7 +14,9 @@ import (
 )
 
 type pullRequestResponse struct {
-	Number int `json:"number"`
+	State  string `json:"state"`
+	Merged bool   `json:"merged"`
+	Number int    `json:"number"`
 	Head   struct {
 		SHA string `json:"sha"`
 	} `json:"head"`
@@ -93,6 +95,8 @@ func (client *Client) GetPullRequest(
 	}
 
 	return PullRequest{
+		State:       response.State,
+		Merged:      response.Merged,
 		Number:      response.Number,
 		Head:        head,
 		Base:        base,

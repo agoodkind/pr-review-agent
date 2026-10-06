@@ -1,5 +1,15 @@
 {
   "CONTAINER_SLEEP_AFTER": "11m",
+  "REASSESSMENT": {
+    "enabled": true,
+    "queue_url": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/reassessments",
+    "initial_delay": "5m",
+    "maximum_delay": "1h",
+    "maximum_attempts": 0,
+    "ttl": "0s",
+    "terminal_retention": "168h",
+    "retry_declined": false
+  },
   "PROVIDERS": [
     {
       "id": "openai_goodkind_io",

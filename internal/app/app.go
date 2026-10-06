@@ -10,12 +10,14 @@ import (
 	"time"
 
 	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/clock"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/queue"
+	"goodkind.io/pr-review-agent/internal/reassessment"
 	"goodkind.io/pr-review-agent/internal/reconcile"
 	"goodkind.io/pr-review-agent/internal/review"
 )
@@ -77,13 +79,20 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		config.DeliveryCacheTTL,
 		time.Now,
 	)
+	coordinator := &reassessment.Coordinator{
+		Clock:    clock.System,
+		Settings: cfg.Reassessment,
+		Store:    &reassessment.Client{URL: cfg.Reassessment.QueueURL, SigningKey: cfg.GitHubWebhookSecret, HTTP: githubHTTP},
+		GitHub:   githubClient, Providers: openaiClient, Logger: logger,
+	}
 	dispatcher := queue.NewDispatcher(
 		config.QueueCapacity,
 		cfg.ReviewWorkers,
-		reviewRunner{service: reviewService, cache: cache},
+		reviewRunner{service: reviewService, cache: cache, reassessment: coordinator},
 		logger,
 	)
 	httpHandler := newHandler(cfg, cache, dispatcher, reviewService, githubClient, logger)
+	httpHandler.reassessment = coordinator
 
 	return &App{
 		cfg:        cfg,
@@ -145,14 +154,23 @@ func (application *App) Shutdown(ctx context.Context) error {
 }
 
 type reviewRunner struct {
-	service *review.Service
-	cache   *queue.DeliveryCache
+	reassessment *reassessment.Coordinator
+	service      *review.Service
+	cache        *queue.DeliveryCache
 }
 
 func (runner reviewRunner) Run(ctx context.Context, job domain.ReviewJob) error {
 	logger := gklog.L(ctx)
-	if err := runner.service.Run(ctx, job); err != nil {
-		runner.cache.Release(job.DeliveryID)
+	if runner.reassessment != nil {
+		ctx = review.WithOutcomeSink(ctx, runner.reassessment.Observe)
+	}
+	outcome, err := runner.service.RunWithOutcome(ctx, job)
+	if err != nil {
+		if outcome.ReassessmentID != "" {
+			runner.cache.Settle(job.DeliveryID)
+		} else {
+			runner.cache.Release(job.DeliveryID)
+		}
 		logger.ErrorContext(ctx, "review job", slog.String("err", err.Error()))
 		return fmt.Errorf("review job: %w", err)
 	}
