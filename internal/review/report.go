@@ -116,7 +116,7 @@ func (service *Service) generateReport(
 	if !ok {
 		return fallback, false
 	}
-	reportCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	reportCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	defer cancel()
 	prompt, err := reportPrompt(pullRequest, pass.overviews(), pass.settings.maximumPromptBytes, service.reviewPolicy)
 	if err != nil {

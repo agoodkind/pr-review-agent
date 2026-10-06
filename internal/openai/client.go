@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	openaigo "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -46,6 +47,7 @@ type provider struct {
 	autoRouterCostTier  config.AutoRouterCostTier
 	api                 config.ProviderAPI
 	pricingByModel      map[string]config.ModelPricing
+	requestTimeout      time.Duration
 }
 
 type (
@@ -71,6 +73,8 @@ const (
 type Client struct {
 	providers               []provider
 	fallbackOnUsageExceeded bool
+	providerFailurePolicy   config.ProviderFailurePolicy
+	requestTimeout          time.Duration
 	minimumImportance       int
 	ruleImportance          reviewrules.Importance
 	reviewPolicy            reviewrules.Policy
@@ -109,6 +113,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			CFAccessClientID:     cfg.CFAccessClientID,
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 			Disabled:             false,
+			RequestTimeout:       0,
 		}}
 		if cfg.HasFallback() {
 			configuredProviders = append(configuredProviders, config.ProviderConfig{
@@ -131,6 +136,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				CFAccessClientID:     cfg.FallbackCFAccessClientID,
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 				Disabled:             false,
+				RequestTimeout:       0,
 			})
 		}
 		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
@@ -138,6 +144,8 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	client := &Client{
 		providers:               make([]provider, 0, len(configuredProviders)),
 		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
+		providerFailurePolicy:   config.ResolveProviderFailurePolicy(cfg.ProviderFailurePolicy),
+		requestTimeout:          resolveRequestTimeout(cfg.ReviewChunkTimeout),
 		minimumImportance:       cfg.MinimumImportance,
 		ruleImportance:          cfg.RuleImportance,
 		reviewPolicy:            cfg.ReviewPolicy,
@@ -175,6 +183,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			autoRouterCostTier:  configured.AutoRouterCostTier,
 			api:                 apiKind,
 			pricingByModel:      cfg.ReviewModelPricing,
+			requestTimeout:      configured.RequestTimeout,
 		})
 	}
 	return client
@@ -220,21 +229,25 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 		logger.WarnContext(ctx, "Review policy rendering failed")
 		return review.Completion{}, fmt.Errorf("render review policy: %w", err)
 	}
-	content, model, err := client.complete(
+	var result domain.ReviewResult
+	model, err := client.complete(
 		ctx,
 		prompt,
 		policy,
 		reviewSchemaName,
 		schema,
+		func(content string) error {
+			candidate, decodeErr := domain.UnmarshalReviewResult([]byte(content), client.reviewPolicy.Catalog(), client.ruleImportance)
+			if decodeErr != nil {
+				gklog.L(ctx).WarnContext(ctx, "Model review result was rejected")
+				return fmt.Errorf("decode model review result: %w", decodeErr)
+			}
+			result = candidate
+			return nil
+		},
 	)
 	if err != nil {
 		return review.Completion{}, err
-	}
-	result, err := domain.UnmarshalReviewResult([]byte(content), client.reviewPolicy.Catalog(), client.ruleImportance)
-	if err != nil {
-		logger := gklog.L(ctx)
-		logger.WarnContext(ctx, "Model review result was rejected")
-		return review.Completion{}, fmt.Errorf("decode model review result: %w", err)
 	}
 	return review.Completion{Result: result, Model: model}, nil
 }
@@ -247,24 +260,28 @@ func (client *Client) Report(ctx context.Context, prompt string) (review.ReportC
 		logger.WarnContext(ctx, "Report policy rendering failed")
 		return review.ReportCompletion{}, fmt.Errorf("render report policy: %w", err)
 	}
-	content, model, err := client.complete(
+	var report review.Report
+	model, err := client.complete(
 		ctx,
 		prompt,
 		policy,
 		reportSchemaName,
 		MarshalReportSchema(client.reviewPolicy),
+		func(content string) error {
+			var candidate review.Report
+			if decodeErr := json.Unmarshal([]byte(content), &candidate); decodeErr != nil {
+				return errors.New("decode structured output: " + decodeErr.Error())
+			}
+			candidate = review.SanitizeReport(candidate, client.reviewPolicy.Limits())
+			if validateErr := candidate.Validate(); validateErr != nil {
+				return errors.New("validate review report: " + validateErr.Error())
+			}
+			report = candidate
+			return nil
+		},
 	)
 	if err != nil {
 		return review.ReportCompletion{}, err
-	}
-	var report review.Report
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&report); err != nil {
-		return review.ReportCompletion{}, errors.New("decode structured output: " + err.Error())
-	}
-	report = review.SanitizeReport(report, client.reviewPolicy.Limits())
-	if err := report.Validate(); err != nil {
-		return review.ReportCompletion{}, errors.New("validate review report: " + err.Error())
 	}
 	return review.ReportCompletion{Report: report, Model: model}, nil
 }
@@ -277,116 +294,99 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 		logger.WarnContext(ctx, "Reconciliation policy rendering failed")
 		return nil, fmt.Errorf("render reconciliation policy: %w", err)
 	}
-	content, _, err := client.complete(
+	var resolutions []domain.ThreadResolution
+	_, err = client.complete(
 		ctx,
 		prompt,
 		policy,
 		reconcileSchemaName,
 		reconcileSchemaJSON,
+		func(content string) error {
+			var response struct {
+				Resolutions []domain.ThreadResolution `json:"resolutions"`
+			}
+			if decodeErr := json.Unmarshal([]byte(content), &response); decodeErr != nil {
+				return errors.New("decode structured output: " + decodeErr.Error())
+			}
+			if validateErr := domain.ValidateThreadResolutions(response.Resolutions); validateErr != nil {
+				return errors.New("validate thread resolutions: " + validateErr.Error())
+			}
+			resolutions = response.Resolutions
+			return nil
+		},
 	)
 	if err != nil {
 		return nil, err
 	}
-	var response struct {
-		Resolutions []domain.ThreadResolution `json:"resolutions"`
-	}
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&response); err != nil {
-		return nil, errors.New("decode structured output: " + err.Error())
-	}
-	if err := domain.ValidateThreadResolutions(response.Resolutions); err != nil {
-		return nil, errors.New("validate thread resolutions: " + err.Error())
-	}
-	return response.Resolutions, nil
+	return resolutions, nil
 }
 
 // Consolidate requests one structured grouping of a chunk's own findings.
 func (client *Client) Consolidate(ctx context.Context, prompt string) (review.Consolidation, error) {
+	logger := gklog.L(ctx)
 	policy, err := review.ConsolidationPolicy(client.reviewPolicy)
 	if err != nil {
-		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "Consolidation policy rendering failed")
 		return review.Consolidation{}, fmt.Errorf("render consolidation policy: %w", err)
 	}
-	content, _, err := client.complete(
-		ctx,
-		prompt,
-		policy,
-		consolidateSchemaName,
-		consolidateSchemaJSON,
-	)
-	if err != nil {
-		return review.Consolidation{}, err
-	}
 	var consolidation review.Consolidation
-	decoder := json.NewDecoder(strings.NewReader(content))
-	if err := decoder.Decode(&consolidation); err != nil {
-		return review.Consolidation{}, errors.New("decode structured output: " + err.Error())
-	}
-	// Only the shape is checkable here, and it is checked for the same reason a
-	// review result and a set of thread resolutions are: a malformed answer is
-	// refused while the provider that produced it is still in view. Whether a
-	// candidate number is inside the range depends on how many candidates the
-	// caller showed, which lives in the prompt rather than in anything this
-	// client holds, so the caller tests that before it merges anything.
-	if err := consolidation.ValidateShape(); err != nil {
-		return review.Consolidation{}, errors.New("validate consolidation: " + err.Error())
+	_, err = client.complete(ctx, prompt, policy, consolidateSchemaName, consolidateSchemaJSON, func(content string) error {
+		var candidate review.Consolidation
+		if decodeErr := json.Unmarshal([]byte(content), &candidate); decodeErr != nil {
+			return errors.New("decode structured output: " + decodeErr.Error())
+		}
+		if validateErr := candidate.ValidateShape(); validateErr != nil {
+			return errors.New("validate consolidation: " + validateErr.Error())
+		}
+		consolidation = candidate
+		return nil
+	})
+	if err != nil {
+		logger.WarnContext(ctx, "Consolidation provider selection failed")
+		return review.Consolidation{}, err
 	}
 	return consolidation, nil
 }
 
-// complete sends one request to the primary provider and repeats it against the
-// fallback when the primary refusal matches the declared fallback condition.
-// It returns the content and the model that produced it. It keeps no memory of
-// a refusal, so the primary is used again as soon as it recovers.
+// complete validates each provider response before selecting its result.
 func (client *Client) complete(
 	ctx context.Context,
 	prompt string,
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-) (string, string, error) {
+	accept func(string) error,
+) (string, error) {
+	logger := gklog.L(ctx)
 	instructions, err := structuredOutputPrompt(ctx, client.reviewPolicy, policy, schemaName, schema)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	var failures []error
 	for index, target := range client.providers {
-		budget, err := client.checkBudget(ctx, target)
-		content := ""
-		model := target.model
-		if err == nil {
-			report := func(usage responses.ResponseUsage) {
-				client.reportBudget(ctx, target, budget, usage)
-			}
-			switch target.api {
-			case config.GeminiAPI:
-				content, model, err = completeGemini(ctx, target, prompt, instructions, schema, report)
-			case config.ChatCompletionsAPI:
-				content, model, err = completeChat(ctx, target, prompt, instructions, schemaName, schema, report)
-			case config.ResponsesAPI:
-				content, model, err = completeWith(ctx, target, prompt, instructions, schemaName, schema, report)
-			}
+		if parentErr := ctx.Err(); parentErr != nil {
+			logger.WarnContext(ctx, "Model provider selection cancelled")
+			return "", errors.Join(append(failures, parentErr)...)
 		}
-		if err == nil {
+		_, model, budget, attemptErr := client.attemptCompletion(ctx, target, prompt, instructions, schemaName, schema, accept)
+		if attemptErr == nil {
 			client.recordProviderAttempt(ctx, target, budget, nil, false)
-			return content, model, nil
+			return model, nil
 		}
-		failure := &providerAttemptError{provider: target, budget: budget, cause: err}
-		fallback := index < len(client.providers)-1 && client.shouldUseFallback(err)
-		client.recordProviderAttempt(ctx, target, budget, err, fallback)
+		failure := &providerAttemptError{provider: target, budget: budget, cause: attemptErr}
+		fallback := ctx.Err() == nil && index < len(client.providers)-1 && client.shouldUseFallback(attemptErr)
+		client.recordProviderAttempt(ctx, target, budget, attemptErr, fallback)
 		logProviderAttempt(ctx, failure)
 		failures = append(failures, failure)
 		if !fallback {
-			if len(failures) == 1 {
-				return "", "", failure
+			if parentErr := ctx.Err(); parentErr != nil {
+				failures = append(failures, parentErr)
 			}
-			combined := errors.Join(failures...)
-			gklog.L(ctx).WarnContext(ctx, "model providers failed", slog.String("error", combined.Error()))
-			return "", "", combined
+			logger.WarnContext(ctx, "Model provider selection failed")
+			return "", errors.Join(failures...)
 		}
 	}
-	return "", "", errors.New("no model providers configured")
+	return "", errors.New("no model providers configured")
 }
 
 func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
@@ -429,6 +429,9 @@ func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 // shouldUseFallback reports whether this failure is the declared condition for
 // sending the request to the fallback provider.
 func (client *Client) shouldUseFallback(err error) bool {
+	if client.providerFailurePolicy == config.ProviderAnyFailure {
+		return true
+	}
 	if !client.fallbackOnUsageExceeded {
 		return false
 	}

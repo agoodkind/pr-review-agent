@@ -38,6 +38,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDERS[].api_kind` | Select `responses`, `chat_completions`, or Google's native `gemini` API |
 | `PROVIDERS[].reasoning_effort` | Reasoning effort for every review stage sent to that provider; select a level supported by the configured model |
 | `PROVIDER_PRIORITY` | Provider IDs in request order |
+| `PROVIDER_FAILURE_POLICY` | `any_failure` selects the next provider after any unsuccessful attempt; `recoverable` selects it only for quota, rate-limit, or availability errors |
+| `PROVIDERS[].request_timeout` | Positive duration for one provider attempt; omit it to use the review timeout |
 | `PROVIDERS[].max_output_tokens` | Maximum output tokens per request for one provider; omit or set `0` to use 8,000 |
 | `PROVIDERS[].omit_max_output_tokens` | Omit the output token limit for a backend that rejects it |
 | `PROVIDERS[].omit_text_format` | Omit JSON schema enforcement for a backend that rejects it; the system prompt still requests JSON matching the schema |
@@ -67,7 +69,7 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 List every configured provider ID once in `PROVIDER_PRIORITY`, including providers marked `disabled`. Put the preferred provider first. The service rejects incomplete providers and invalid priority lists at startup.
 
-The service tries the next enabled provider after exhausted API usage, an app quota denial, a provider rate limit, or a structured server failure. It does not retry the failed provider within that request.
+The configured `any_failure` policy selects the next enabled provider after an unsuccessful request, timeout, invalid response, or provider adapter panic. Each provider receives one attempt with a separate timeout. Parent cancellation stops provider selection. The service accepts a provider response after the stage's decoding and validation succeed.
 
 OpenAI bills requests outside its complimentary data-sharing allowance at normal API rates.
 
@@ -78,6 +80,8 @@ Set `SERVICE_FAILURE_APPEARANCE` to choose whether each service failure class bl
 Set a class to `fail` to preserve the existing blocking conclusion. An aborted run concludes with `failure`. A run with unread chunks concludes with `action_required`.
 
 Set a class to `pass` to conclude the check with `success`. Every failure class in the run must be set to `pass`. One passing class cannot hide a blocking class. An omitted class remains blocking.
+
+The shipped configuration treats app quota exhaustion and provider allowance exhaustion as nonblocking. An incomplete review publishes no approval.
 
 The selected appearance changes only the check conclusion. The check title and the summary comment still report the recognized failure class. The run publishes no review verdict.
 

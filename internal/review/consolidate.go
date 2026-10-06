@@ -184,7 +184,7 @@ func (service *Service) consolidateAcrossChunks(
 	if !ok {
 		return candidates
 	}
-	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	answer, err := service.model.Consolidate(callCtx, prompt)
 	cancel()
 	pass.recordConsolidationRequest()
@@ -275,7 +275,7 @@ func (service *Service) consolidateChunk(
 	// value this delivery carried binds the whole run, and a call reaching back
 	// to the service would be timed by whatever the process booted with, which
 	// is the staleness the carrying exists to end.
-	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	prompt, err := buildConsolidationPrompt(candidates, pass.disputePrompt, service.reviewPolicy)
 	if err != nil {
 		cancel()

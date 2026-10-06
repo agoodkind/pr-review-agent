@@ -321,7 +321,7 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 	maximumContext := max(pass.settings.maximumPromptBytes-len(required), 0)
 	prompt := required + truncateUTF8(contextText, maximumContext)
 
-	callCtx, cancel := context.WithTimeout(ctx, pass.settings.chunkTimeout)
+	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	defer cancel()
 	completion, err := service.model.Review(callCtx, prompt)
 	models := modelSet{names: nil, seen: nil}

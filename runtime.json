@@ -63,7 +63,9 @@
     }
   ],
   "PROVIDER_PRIORITY": ["openai_goodkind_io", "openai_goodkindalex", "gemini", "openrouter", "clyde"],
+  "PROVIDER_FAILURE_POLICY": "any_failure",
   "SERVICE_FAILURE_APPEARANCE": {
+    "daily_budget": "pass",
     "usage_exceeded": "pass"
   },
   "PROVIDER_BUDGET_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/provider_budget",

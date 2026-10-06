@@ -21,6 +21,7 @@ import (
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/cloudflareops"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
@@ -29,16 +30,17 @@ import (
 const probeErrorBodyLimit = 32 * 1024
 
 type probeRuntime struct {
-	Providers   []json.RawMessage              `json:"PROVIDERS"`
-	Minimum     string                         `json:"REVIEW_MIN_IMPORTANCE"`
-	Importance  reviewrules.Importance         `json:"REVIEW_RULE_IMPORTANCE"`
-	Pricing     map[string]config.ModelPricing `json:"REVIEW_MODEL_PRICING"`
-	BudgetURL   string                         `json:"PROVIDER_BUDGET_URL"`
-	Timeout     string                         `json:"REVIEW_CHUNK_TIMEOUT"`
-	Concurrency *string                        `json:"REVIEW_CHUNK_CONCURRENCY"`
-	PromptBytes *string                        `json:"REVIEW_MAX_PROMPT_BYTES"`
-	RulesFile   string                         `json:"REVIEW_RULES_FILE"`
-	PromptsFile string                         `json:"REVIEW_PROMPTS_FILE"`
+	Providers     []json.RawMessage              `json:"PROVIDERS"`
+	FailurePolicy config.ProviderFailurePolicy   `json:"PROVIDER_FAILURE_POLICY"`
+	Minimum       string                         `json:"REVIEW_MIN_IMPORTANCE"`
+	Importance    reviewrules.Importance         `json:"REVIEW_RULE_IMPORTANCE"`
+	Pricing       map[string]config.ModelPricing `json:"REVIEW_MODEL_PRICING"`
+	BudgetURL     string                         `json:"PROVIDER_BUDGET_URL"`
+	Timeout       string                         `json:"REVIEW_CHUNK_TIMEOUT"`
+	Concurrency   *string                        `json:"REVIEW_CHUNK_CONCURRENCY"`
+	PromptBytes   *string                        `json:"REVIEW_MAX_PROMPT_BYTES"`
+	RulesFile     string                         `json:"REVIEW_RULES_FILE"`
+	PromptsFile   string                         `json:"REVIEW_PROMPTS_FILE"`
 }
 
 type probeHTTPError struct {
@@ -125,6 +127,12 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 		return cfg, err
 	}
 	cfg.Providers = providers
+	cfg.ProviderFailurePolicy, err = config.LoadProviderFailurePolicy(func(name string) (string, bool) {
+		return string(runtime.FailurePolicy), name == "PROVIDER_FAILURE_POLICY"
+	})
+	if err != nil {
+		return cfg, err
+	}
 	reviewLimitValues := make(map[string]string)
 	if runtime.Concurrency != nil {
 		reviewLimitValues["REVIEW_CHUNK_CONCURRENCY"] = *runtime.Concurrency
@@ -230,11 +238,11 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	if strings.TrimSpace(prompt) == "" || len(prompt) > cfg.PromptBytes() {
 		return errors.New("probe prompt must be nonempty and within the configured maximum prompt size")
 	}
-	ctx, cancel := context.WithTimeout(ctx, cfg.ReviewChunkTimeout)
-	defer cancel()
 	ctx, recorder := review.WithUsageRecorder(ctx)
 	transport := &probeTransport{base: http.DefaultTransport, statuses: make(map[int]int)}
 	client := openai.NewClient(cfg, &http.Client{Transport: transport})
+	ctx, cancel := modelrequest.WithTimeout(ctx, client, cfg.ReviewChunkTimeout)
+	defer cancel()
 	completion, reviewErr := client.Review(ctx, prompt)
 	result := struct {
 		Provider        string                 `json:"provider"`
