@@ -59,14 +59,17 @@ func (service *Service) concludeIncomplete(
 		logger.WarnContext(ctx, "complete incomplete review check", slog.String("err", err.Error()))
 		return errors.Join(err, dismissErr)
 	}
-	markFailureReported(ctx)
 	logger.InfoContext(
 		ctx,
 		"review job left chunks pending",
 		slog.Int("pending", pending),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
-	return dismissErr
+	if dismissErr != nil {
+		logger.WarnContext(ctx, "incomplete review withdrawal failed", slog.String("err", dismissErr.Error()))
+		return &reportedFailureError{cause: dismissErr}
+	}
+	return nil
 }
 
 // incompleteCheckDetail is what the check run says about a run that could not

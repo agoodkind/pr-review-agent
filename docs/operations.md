@@ -35,7 +35,11 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. Human dismissals remain withdrawn. Missing dismissal evidence defers reassessment. Caller cancellation, exhausted quota, and rate limits do not withdraw the verdict. A successful provider fallback does not count as a terminal failure. The summary and check report the recognized failure class and run identifier. Collapsed failure details report the failing provider, model, HTTP status, and recognized error code. Raw provider messages remain in the private service log. Public log fields are limited to service-defined measurements, identifiers, and wording. Inspect the private records using [logs.md](logs.md).
+An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
+
+Caller cancellation, exhausted quota, and rate limits do not withdraw the verdict. A successful provider fallback does not count as a terminal failure.
+
+The summary and check report the recognized failure class and run identifier. Collapsed failure details report the failing provider, model, HTTP status, and recognized error code. The private service log stores raw provider messages. Public log fields use service-defined measurements, identifiers, and wording. Inspect the private records using [logs.md](logs.md).
 
 ## Configure the service
 
@@ -121,7 +125,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Change review rules
 
-1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. The service reads both files at startup. The binary contains no default rules or prompts.
+1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json

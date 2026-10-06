@@ -18,6 +18,8 @@ type (
 	ID string
 	// Importance selects publication scores for categories without a fixed score.
 	Importance map[ID]int
+	// FailureCode identifies an API error code allowed in public diagnostics.
+	FailureCode string
 )
 
 const (
@@ -58,6 +60,7 @@ type promptsFile struct {
 	Limits           FormattingLimits       `json:"limits"`
 	Templates        map[string]string      `json:"templates"`
 	ProviderDetails  []ProviderDetailColumn `json:"provider_details"`
+	FailureCodes     []FailureCode          `json:"failure_codes"`
 }
 
 // FormattingLimits bounds generated reports using the loaded configuration.
@@ -102,6 +105,7 @@ type Policy struct {
 	untrustedMarkers untrustedMarkers
 	limits           FormattingLimits
 	providerDetails  []ProviderDetailColumn
+	failureCodes     []FailureCode
 }
 
 // LoadPolicy requires both configuration files and rejects malformed templates.
@@ -157,6 +161,7 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		catalog: Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
 		untrustedMarkers: prompts.UntrustedMarkers, limits: prompts.Limits,
 		providerDetails: prompts.ProviderDetails,
+		failureCodes:    prompts.FailureCodes,
 	}, nil
 }
 
@@ -248,6 +253,11 @@ func (policy Policy) Limits() FormattingLimits { return policy.limits }
 // ProviderDetails returns the configured collapsed table columns.
 func (policy Policy) ProviderDetails() []ProviderDetailColumn {
 	return slices.Clone(policy.providerDetails)
+}
+
+// RecognizesFailureCode requires an exact match in the configured public diagnostic policy.
+func (policy Policy) RecognizesFailureCode(code string) bool {
+	return slices.Contains(policy.failureCodes, FailureCode(code))
 }
 
 // WrapUntrusted delimits source material using the configured protocol markers.

@@ -84,9 +84,8 @@ func (service *Service) reportFailedCheck(
 	if completeErr != nil {
 		return errors.Join(cause, dismissErr, fmt.Errorf("complete check run: %w", completeErr))
 	}
-	markFailureReported(ctx)
 	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
-	return errors.Join(cause, dismissErr)
+	return &reportedFailureError{cause: errors.Join(cause, dismissErr)}
 }
 
 // failureTitle names why a review stopped, in the one line a reader sees in the

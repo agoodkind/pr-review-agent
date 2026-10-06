@@ -69,8 +69,5 @@ func (client *Client) FindReviewDismissal(ctx context.Context, installationID in
 	if err != nil {
 		return result, false, err
 	}
-	if !found {
-		return result, false, errors.New("review dismissal event is not available")
-	}
 	return result, found, nil
 }

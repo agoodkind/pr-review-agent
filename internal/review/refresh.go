@@ -194,7 +194,7 @@ func (service *Service) refreshReviewedCheck(
 		progress.Failed = true
 		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
 		if completionErr == nil {
-			markFailureReported(ctx)
+			return &reportedFailureError{cause: errors.Join(err, dismissErr)}
 		}
 		return errors.Join(err, completionErr, dismissErr)
 	}

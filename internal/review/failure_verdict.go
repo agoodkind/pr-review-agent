@@ -18,10 +18,23 @@ import (
 
 type failureReviewState string
 
+type reportedFailureError struct{ cause error }
+
+func (failure *reportedFailureError) Error() string { return failure.cause.Error() }
+func (failure *reportedFailureError) Unwrap() error { return failure.cause }
+
+type (
+	joinedFailure          interface{ Unwrap() []error }
+	wrappedFailure         interface{ Unwrap() error }
+	providerFailureStatus  interface{ ProviderStatus() ProviderStatus }
+	providerFailureDetails interface{ ProviderFailureDetails() (int, string) }
+)
+
 const checkFailurePanic = "Review failed after an internal panic."
 
 func (service *Service) finalizeFailure(ctx context.Context, job domain.ReviewJob, checkRunID int64, progress *reviewProgress, runErr *error) {
-	if *runErr == nil || failureWasReported(ctx) || failureInterrupted(ctx, *runErr) {
+	var reported *reportedFailureError
+	if *runErr == nil || errors.As(*runErr, &reported) || failureInterrupted(ctx, *runErr) {
 		return
 	}
 	if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); ok && recorder.outcome.Disposition == domain.AssessmentInterrupted {
@@ -30,7 +43,7 @@ func (service *Service) finalizeFailure(ctx context.Context, job domain.ReviewJo
 	*runErr = service.reportFailedCheck(ctx, job, checkRunID, progress.summary(service.now()), checkFailurePublish, service.presentedConclusion(failureClassesOf(*runErr), "failure"), *runErr)
 }
 
-// SetFailureVerdictPolicy preserves the constructor default for older callers.
+// SetFailureVerdictPolicy treats an empty policy as dismiss_latest_block.
 func (service *Service) SetFailureVerdictPolicy(policy config.FailureVerdictPolicy) {
 	if policy == "" {
 		policy = config.DismissLatestFailureVerdict
@@ -55,12 +68,6 @@ func unexpectedFailureClass(class config.FailureClass) bool {
 func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.ReviewJob, cause error) error {
 	if cause == nil || failureInterrupted(ctx, cause) || !unexpectedFailure(cause) || service.failureVerdicts == config.PreserveFailureVerdict {
 		return nil
-	}
-	if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); ok {
-		if recorder.failureHandled {
-			return nil
-		}
-		recorder.failureHandled = true
 	}
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
@@ -96,7 +103,10 @@ func (service *Service) failureDismissalRecorded(ctx context.Context, job domain
 		logger.WarnContext(ctx, "read failure dismissal provenance", slog.String("err", err.Error()))
 		return false, fmt.Errorf("read failure dismissal provenance: %w", err)
 	}
-	return found && dismissal.ReviewID == review.ID && dismissal.Actor == service.botLogin && marker.HasFailureDismissal(dismissal.Message, review.ID), nil
+	if !found {
+		return false, errors.New("review dismissal event is not available")
+	}
+	return dismissal.ReviewID == review.ID && dismissal.Actor == service.botLogin && marker.HasFailureDismissal(dismissal.Message, review.ID), nil
 }
 
 func latestOwnDecision(reviews []githubapp.Review, botLogin string) githubapp.Review {
@@ -143,22 +153,22 @@ type terminalProviderFailure struct {
 }
 
 func collectTerminalProviderFailures(cause error, failures *[]terminalProviderFailure) {
-	if joined, ok := cause.(interface{ Unwrap() []error }); ok {
+	if joined, ok := cause.(joinedFailure); ok {
 		for _, child := range joined.Unwrap() {
 			collectTerminalProviderFailures(child, failures)
 		}
 		return
 	}
-	if reported, ok := cause.(interface{ ProviderStatus() ProviderStatus }); ok {
+	if reported, ok := cause.(providerFailureStatus); ok {
 		failure := terminalProviderFailure{status: reported.ProviderStatus(), class: failureClassOf(cause), httpStatus: 0, code: ""}
-		var details interface{ ProviderFailureDetails() (int, string) }
+		var details providerFailureDetails
 		if errors.As(cause, &details) {
 			failure.httpStatus, failure.code = details.ProviderFailureDetails()
 		}
 		*failures = append(*failures, failure)
 		return
 	}
-	if wrapped, ok := cause.(interface{ Unwrap() error }); ok {
+	if wrapped, ok := cause.(wrappedFailure); ok {
 		collectTerminalProviderFailures(wrapped.Unwrap(), failures)
 	}
 }
@@ -180,7 +190,7 @@ func (service *Service) terminalFailureDetail(ctx context.Context, job domain.Re
 	template := "failure.service"
 	for _, failure := range failures {
 		if failure.status.Cause == ProviderRequestFailed && unexpectedFailureClass(failure.class) {
-			data = terminalFailureData(failure)
+			data = service.terminalFailureData(failure)
 			template = "failure.provider"
 			break
 		}
@@ -189,7 +199,7 @@ func (service *Service) terminalFailureDetail(ctx context.Context, job domain.Re
 	visible := service.renderFailureTemplate(ctx, template, data)
 	var rows strings.Builder
 	for _, failure := range failures {
-		row := terminalFailureData(failure)
+		row := service.terminalFailureData(failure)
 		row.FailureClass = service.failureClassLabel(ctx, row.FailureClass)
 		rows.WriteString(service.renderFailureTemplate(ctx, "failure.row", row))
 	}
@@ -205,7 +215,7 @@ func (service *Service) failureClassLabel(ctx context.Context, class string) str
 	return service.renderFailureTemplate(ctx, "failure.class."+class, data)
 }
 
-func terminalFailureData(failure terminalProviderFailure) reviewrules.PromptData {
+func (service *Service) terminalFailureData(failure terminalProviderFailure) reviewrules.PromptData {
 	var data reviewrules.PromptData
 	data.Provider = usageModelCell(failure.status.ProviderID)
 	data.Model = usageModelCell(failure.status.Model)
@@ -214,7 +224,10 @@ func terminalFailureData(failure terminalProviderFailure) reviewrules.PromptData
 	if failure.httpStatus >= 100 && failure.httpStatus <= 599 {
 		data.FailureStatus = fmt.Sprintf("HTTP %d", failure.httpStatus)
 	}
-	data.FailureCode = safeFailureCode(failure.code)
+	data.FailureCode = "not reported"
+	if service.reviewPolicy.RecognizesFailureCode(failure.code) {
+		data.FailureCode = failure.code
+	}
 	return data
 }
 
@@ -224,15 +237,4 @@ func (service *Service) renderFailureTemplate(ctx context.Context, name string, 
 		gklog.L(ctx).WarnContext(ctx, "render failure details", slog.String("template", name), slog.String("err", err.Error()))
 	}
 	return text
-}
-
-type canonicalFailureCode string
-
-func safeFailureCode(value string) string {
-	switch canonicalFailureCode(value) {
-	case "server_error", "upstream_failed", "upstream_malformed_request", "invalid_request_error", "invalid_request", "invalid_api_key", "authentication_error", "permission_denied", "model_not_found", "context_length_exceeded", "missing_required_parameter", "unsupported_parameter", "unsupported_value", "request_failed", "insufficient_quota", "usage_limit_reached", "rate_limit_exceeded":
-		return value
-	default:
-		return "not reported"
-	}
 }

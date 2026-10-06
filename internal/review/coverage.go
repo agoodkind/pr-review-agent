@@ -599,9 +599,6 @@ func (service *Service) concludeStructurallyIncomplete(
 		logger.WarnContext(ctx, "complete unread-content review check", slog.String("err", err.Error()))
 		return errors.Join(err, dismissErr)
 	}
-	if len(failures) > 0 {
-		markFailureReported(ctx)
-	}
 	logger.InfoContext(
 		ctx,
 		"review head holds changes this service cannot read",
@@ -610,7 +607,11 @@ func (service *Service) concludeStructurallyIncomplete(
 		slog.Int("pending", len(state.Pending)),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
-	return dismissErr
+	if dismissErr != nil {
+		logger.WarnContext(ctx, "unread-content review withdrawal failed", slog.String("err", dismissErr.Error()))
+		return &reportedFailureError{cause: dismissErr}
+	}
+	return nil
 }
 
 // unreadableCheckTitle is the one line a reader sees in the checks list.
