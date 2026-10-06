@@ -217,7 +217,7 @@ func liveFailureRun(t *testing.T, fixture liveFailureFixture, expectedState stri
 	if err != nil {
 		t.Fatal("The fixture's current reviews could not be read with the GitHub app.")
 	}
-	latest := liveFailureLatestOwn(before, cfg.GitHubBotLogin)
+	latest := githubapp.LatestDecisionReview(before, cfg.GitHubBotLogin)
 	if latest.ID != fixture.expectedReview || latest.State != expectedState {
 		t.Fatal("The latest own opinionated review differs from the explicitly selected fixture.")
 	}
@@ -259,17 +259,6 @@ func liveFailureRun(t *testing.T, fixture liveFailureFixture, expectedState stri
 		t.Fatal("The fixture metadata changed during the live regression.")
 	}
 	t.Logf("Live failure regression retained check %d and verified review %d state transitions.", job.CheckRunID, fixture.expectedReview)
-}
-
-func liveFailureLatestOwn(items []githubapp.Review, bot string) githubapp.Review {
-	for index := len(items) - 1; index >= 0; index-- {
-		item := items[index]
-		if item.Author == bot && (item.State == "CHANGES_REQUESTED" || item.State == "APPROVED" || item.State == "DISMISSED") {
-			return item
-		}
-	}
-	var empty githubapp.Review
-	return empty
 }
 
 func liveFailureAssertProvider(t *testing.T, logPath, providerID, model string) {

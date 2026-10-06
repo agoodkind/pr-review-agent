@@ -287,11 +287,15 @@ func (service *Service) loadVerdictRefreshInputs(
 	}
 	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
 	if verdict.withdrawn && dismissedVerdictBlocked(verdict.review.Body) {
-		automatic, err := service.failureDismissalRecorded(ctx, job, verdict.review)
+		dismissal, found, err := service.github.FindReviewDismissal(ctx, job.InstallationID, job.Repository, job.Number, verdict.review.ID)
 		if err != nil {
-			return missing, err
+			logger.WarnContext(ctx, "read failure dismissal provenance", slog.String("err", err.Error()))
+			return missing, fmt.Errorf("read failure dismissal provenance: %w", err)
 		}
-		verdict.withdrawn = !automatic
+		if !found {
+			return missing, errors.New("review dismissal event is not available")
+		}
+		verdict.withdrawn = !automaticFailureDismissal(dismissal, service.botLogin, verdict.review.ID)
 	}
 	withheld, found, err := service.withheldSummaryVerdict(ctx, job)
 	if err != nil {

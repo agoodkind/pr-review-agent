@@ -16,8 +16,6 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-type failureReviewState string
-
 type reportedFailureError struct{ cause error }
 
 func (failure *reportedFailureError) Error() string { return failure.cause.Error() }
@@ -77,7 +75,7 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 		logger.WarnContext(ctx, "read standing verdict after failure", slog.String("err", err.Error()))
 		return fmt.Errorf("read standing verdict after failure: %w", err)
 	}
-	latest := latestOwnDecision(reviews, service.botLogin)
+	latest := githubapp.LatestDecisionReview(reviews, service.botLogin)
 	if latest.State != reviewStateChangesRequested {
 		return nil
 	}
@@ -96,30 +94,8 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 	return nil
 }
 
-func (service *Service) failureDismissalRecorded(ctx context.Context, job domain.ReviewJob, review githubapp.Review) (bool, error) {
-	logger := gklog.L(ctx)
-	dismissal, found, err := service.github.FindReviewDismissal(ctx, job.InstallationID, job.Repository, job.Number, review.ID)
-	if err != nil {
-		logger.WarnContext(ctx, "read failure dismissal provenance", slog.String("err", err.Error()))
-		return false, fmt.Errorf("read failure dismissal provenance: %w", err)
-	}
-	if !found {
-		return false, errors.New("review dismissal event is not available")
-	}
-	return dismissal.ReviewID == review.ID && dismissal.Actor == service.botLogin && marker.HasFailureDismissal(dismissal.Message, review.ID), nil
-}
-
-func latestOwnDecision(reviews []githubapp.Review, botLogin string) githubapp.Review {
-	for _, review := range slices.Backward(reviews) {
-		if review.Author != botLogin {
-			continue
-		}
-		switch failureReviewState(review.State) {
-		case reviewStateApproved, reviewStateChangesRequested, reviewStateDismissed:
-			return review
-		}
-	}
-	return emptyReview()
+func automaticFailureDismissal(dismissal githubapp.ReviewDismissal, botLogin string, reviewID int64) bool {
+	return dismissal.ReviewID == reviewID && dismissal.Actor == botLogin && marker.HasFailureDismissal(dismissal.Message, reviewID)
 }
 
 func joinedChunkFailures(ctx context.Context, failures []chunkFailure) error {

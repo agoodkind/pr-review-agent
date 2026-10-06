@@ -255,7 +255,7 @@ func (policy Policy) ProviderDetails() []ProviderDetailColumn {
 	return slices.Clone(policy.providerDetails)
 }
 
-// RecognizesFailureCode requires an exact match in the configured public diagnostic policy.
+// RecognizesFailureCode uses failure_codes from the prompt configuration.
 func (policy Policy) RecognizesFailureCode(code string) bool {
 	return slices.Contains(policy.failureCodes, FailureCode(code))
 }

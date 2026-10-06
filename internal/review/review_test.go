@@ -5993,24 +5993,40 @@ func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissI
 		reviewPages:  pages,
 		reconcileErr: errors.New("reconcile exploded"),
 	})
+	job := fixture.job()
+	before, err := fixture.github.ListReviews(context.Background(), job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		t.Fatalf("ListReviews before Run: %v", err)
+	}
 
-	err := fixture.run(context.Background(), fixture.job())
+	err = fixture.run(context.Background(), job)
 	if err == nil || !strings.Contains(err.Error(), "reconcile exploded") {
 		t.Fatalf("Run error = %v, want the failure surfaced", err)
 	}
 
-	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("submitted review = %v, want none", fixture.state.lastSubmitReview)
+	after, err := fixture.github.ListReviews(context.Background(), job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		t.Fatalf("ListReviews after Run: %v", err)
 	}
-	if fixture.state.lastUpdateReview != nil {
-		t.Fatalf("updated review = %v, want none", fixture.state.lastUpdateReview)
+	if len(after) != len(before) {
+		t.Fatalf("review count = %d, want the original %d", len(after), len(before))
 	}
-	if dismissID == "" {
-		if len(fixture.state.dismissals) != 0 {
-			t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
+	expected := make(map[int64]githubapp.Review, len(before))
+	for _, previous := range before {
+		if fmt.Sprint(previous.ID) == dismissID {
+			previous.State = "DISMISSED"
 		}
-	} else if len(fixture.state.dismissals) != 1 || fixture.state.dismissals[0]["review_id"] != dismissID {
-		t.Fatalf("dismissals = %v, want only review %s", fixture.state.dismissals, dismissID)
+		expected[previous.ID] = previous
+	}
+	for _, current := range after {
+		previous, found := expected[current.ID]
+		if !found || current != previous {
+			t.Fatalf("review = %+v, want unchanged identity and body with state %+v", current, previous)
+		}
+		delete(expected, current.ID)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("original reviews disappeared: %v", expected)
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
@@ -6218,6 +6234,7 @@ type serviceFixtureOptions struct {
 
 type serviceFixture struct {
 	service    *review.Service
+	github     *githubapp.Client
 	state      *serviceServerState
 	reconciler *recordingReconciler
 	model      review.Model
@@ -6828,6 +6845,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 
 	return &serviceFixture{
 		service:    service,
+		github:     client,
 		state:      state,
 		reconciler: reconciler,
 		model:      model,
@@ -7114,6 +7132,14 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			return
 		}
 		state.lastUpdateReview = body
+		reviewID := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]
+		for _, page := range append([][]map[string]any{state.submittedReviews}, state.reviewPages...) {
+			for _, item := range page {
+				if fmt.Sprintf("%.0f", item["id"]) == reviewID {
+					item["body"] = body["body"]
+				}
+			}
+		}
 		serviceWriteJSON(writer, http.StatusOK, map[string]any{
 			"id":        float64(42),
 			"commit_id": testHeadSHA,
