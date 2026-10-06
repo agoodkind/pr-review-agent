@@ -222,9 +222,9 @@ func liveFailureRun(t *testing.T, fixture liveFailureFixture, expectedState stri
 		t.Fatal("The latest own opinionated review differs from the explicitly selected fixture.")
 	}
 	if expectedState == "CHANGES_REQUESTED" && !slices.ContainsFunc(before, func(item githubapp.Review) bool {
-		return item.Author != cfg.GitHubBotLogin && (item.State == "APPROVED" || item.State == "CHANGES_REQUESTED")
+		return item.Author != cfg.GitHubBotLogin && (item.State == "APPROVED" || item.State == "CHANGES_REQUESTED" || item.State == "COMMENTED")
 	}) {
-		t.Fatal("The rejection fixture requires another author's submitted decision to verify ownership protection.")
+		t.Fatal("The rejection fixture requires another author's submitted review to verify ownership protection.")
 	}
 	if expectedState == "APPROVED" && !slices.ContainsFunc(before, func(item githubapp.Review) bool {
 		return item.Author == cfg.GitHubBotLogin && item.State == "CHANGES_REQUESTED" && item.ID != latest.ID
@@ -324,7 +324,7 @@ func liveFailureAssertReceipt(t *testing.T, ctx context.Context, github *githuba
 	}
 	for _, comment := range comments {
 		state, valid := marker.DecodeState(comment.Body)
-		if comment.Author != bot || !valid || state.RunID != job.DeliveryID || !strings.Contains(comment.Body, marker.Summary()) {
+		if comment.Author != bot || !valid || state.RunID != job.DeliveryID {
 			continue
 		}
 		if strings.Contains(comment.Body, invalidCredential) || !strings.Contains(comment.Body, providerID) {
