@@ -152,7 +152,7 @@ func writeStatsQueue(output io.Writer, report opsstats.Report) error {
 	for _, record := range queue.Records {
 		phases[record.Phase]++
 	}
-	if _, err := fmt.Fprintf(output, "Current reassessment queue has %d waiting records, %d running records, and %d terminal records.\n", phases["waiting"], phases["running"], phases["terminal"]); err != nil {
+	if _, err := fmt.Fprintf(output, "Current reassessment queue has %d waiting records, %d running records, %d confirming records, and %d terminal records.\n", phases["waiting"], phases["running"], phases["confirming"], phases["terminal"]); err != nil {
 		return err
 	}
 	for _, write := range []func(io.Writer, *opsstats.QueueSnapshot) error{writeRegistryDiagnostics, writeSweepDiagnostics, writeAlarmDiagnostics, writeTransitionDiagnostics} {

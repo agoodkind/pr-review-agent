@@ -116,9 +116,10 @@ func readTransitionCounts(snapshot *QueueSnapshot, value json.RawMessage) {
 type queuePhase string
 
 const (
-	queueWaiting  queuePhase = "waiting"
-	queueRunning  queuePhase = "running"
-	queueTerminal queuePhase = "terminal"
+	queueWaiting    queuePhase = "waiting"
+	queueRunning    queuePhase = "running"
+	queueConfirming queuePhase = "confirming"
+	queueTerminal   queuePhase = "terminal"
 )
 
 func queueMatches(item Revisit, record reassessment.Record) bool {
@@ -146,6 +147,8 @@ func applyQueueRecord(item *Revisit, record reassessment.Record) {
 		}
 	case queueRunning:
 		item.Status = "reassessment_running"
+	case queueConfirming:
+		item.Status = "reassessment_confirming"
 	case queueTerminal:
 		return
 	}
