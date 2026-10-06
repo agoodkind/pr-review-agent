@@ -84,6 +84,7 @@
     "daily_budget": "pass",
     "usage_exceeded": "pass"
   },
+  "SERVICE_FAILURE_VERDICT_POLICY": "dismiss_latest_block",
   "PROVIDER_BUDGET_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/provider_budget",
   "GITHUB_APP_ID": "4571682",
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",

@@ -185,13 +185,18 @@ func (service *Service) refreshReviewedCheck(
 		var statuses []ProviderStatus
 		collectProviderStatuses(err, &statuses)
 		recordAssessment(ctx, domain.AssessmentFailed, nil, failureNames(err), quotaRecovery(statuses))
+		dismissErr := service.dismissFailureVerdict(ctx, job, err)
+		detail := service.terminalFailureDetail(ctx, job, err)
 		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
-			"failure", "Review refresh failed", "The review could not verify the current inline findings. The previous verdict was not replaced.")
+			"failure", "Review refresh failed", detail)
 		var progress Summary
 		progress.Head = job.Head
 		progress.Failed = true
-		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", publicFailureDetail(job))
-		return errors.Join(err, completionErr)
+		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
+		if completionErr == nil {
+			markFailureReported(ctx)
+		}
+		return errors.Join(err, completionErr, dismissErr)
 	}
 	if withheld {
 		recordAssessment(ctx, domain.AssessmentDeclined, nil, nil, 0)
@@ -281,6 +286,13 @@ func (service *Service) loadVerdictRefreshInputs(
 		reviews = listed
 	}
 	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
+	if verdict.withdrawn && dismissedVerdictBlocked(verdict.review.Body) {
+		automatic, err := service.failureDismissalRecorded(ctx, job, verdict.review)
+		if err != nil {
+			return missing, err
+		}
+		verdict.withdrawn = !automatic
+	}
 	withheld, found, err := service.withheldSummaryVerdict(ctx, job)
 	if err != nil {
 		return missing, err

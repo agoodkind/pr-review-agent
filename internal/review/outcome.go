@@ -19,9 +19,22 @@ type (
 )
 
 type outcomeRecorder struct {
-	persisted bool
-	job       domain.ReviewJob
-	outcome   domain.AssessmentOutcome
+	failureHandled  bool
+	failureReported bool
+	persisted       bool
+	job             domain.ReviewJob
+	outcome         domain.AssessmentOutcome
+}
+
+func markFailureReported(ctx context.Context) {
+	if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); ok {
+		recorder.failureReported = true
+	}
+}
+
+func failureWasReported(ctx context.Context) bool {
+	recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder)
+	return ok && recorder.failureReported
 }
 
 // WithOutcomeSink applies persistence to ordinary reviews and automatic retries.
@@ -124,7 +137,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 
 // RunWithOutcome reports incomplete coverage separately from successful checks.
 func (service *Service) RunWithOutcome(parent context.Context, job domain.ReviewJob) (domain.AssessmentOutcome, error) {
-	recorder := &outcomeRecorder{persisted: false, job: job, outcome: domain.AssessmentOutcome{Nonce: "", Disposition: domain.AssessmentDeclined, Head: job.Head, CheckRunID: job.CheckRunID, MetadataRevision: "", FailureClasses: nil, AvailableAtMS: 0, CoverageComplete: false, ReassessmentID: "", RetryAtMS: 0}}
+	recorder := &outcomeRecorder{failureHandled: false, failureReported: false, persisted: false, job: job, outcome: domain.AssessmentOutcome{Nonce: "", Disposition: domain.AssessmentDeclined, Head: job.Head, CheckRunID: job.CheckRunID, MetadataRevision: "", FailureClasses: nil, AvailableAtMS: 0, CoverageComplete: false, ReassessmentID: "", RetryAtMS: 0}}
 	ctx := context.WithValue(parent, outcomeKey{}, recorder)
 	err := service.run(ctx, job)
 	if err != nil && recorder.outcome.Disposition == domain.AssessmentDeclined {

@@ -105,6 +105,38 @@ test("signed reassessment records survive restart and reject stale transitions",
     assert.equal(finished.record.outcome.check_run_id, 71);
     assert.equal(finished.record.phase, "confirming");
     assert.equal(finished.record.attempt_id, "attempt-b");
+    const completedNonce = randomUUID();
+    const completed = { ...finished.record.outcome, nonce: completedNonce, head: finished.record.head, coverage_complete: true };
+    const target = {
+      key, version: 0, job: { InstallationID: 123, Repository: { Owner: "agoodkind", Name: "example" }, Number: 9, Head: finished.record.head },
+      not_before_ms: finished.record.not_before_ms, private_outcome: completed,
+      private_nonce: completedNonce, private_delivery_id: finished.record.attempt_id, private_generation: finished.record.generation,
+      private_observed_at_ms: Date.now(), observation: {}, observed_at_ms: 0, failures: 0, confirmations: 0,
+    };
+    const receipt = await send(port, { action: "register_target", key, target });
+    assert.equal(receipt.target.private_outcome.disposition, "completed");
+    const failedNonce = randomUUID();
+    const failed = { ...completed, nonce: failedNonce, disposition: "failed" };
+    const replaced = await send(port, {
+      action: "write_target", key, expected_version: receipt.target.version,
+      expected_queue_version: finished.record.version, expected_queue_generation: finished.record.generation,
+      target: { ...receipt.target, private_outcome: failed, private_nonce: failedNonce, private_observed_at_ms: Date.now() },
+    });
+    assert.equal(replaced.applied, true);
+    const retried = await send(port, {
+      action: "transition", key, expected_version: finished.record.version,
+      record: { ...finished.record, phase: "waiting", reason: "failed", outcome: failed },
+    });
+    assert.equal(retried.applied, true);
+    const latest = await send(port, { action: "query", key: "" }, true);
+    assert.equal(latest.records[0].phase, "waiting");
+    assert.equal(latest.records[0].outcome.disposition, "failed");
+    assert.equal(latest.records[0].attempt_id, finished.record.attempt_id);
+    assert.equal(latest.records[0].generation, finished.record.generation);
+    assert.ok(latest.records[0].not_before_ms > Date.now());
+    assert.equal(latest.targets[0].private_outcome.disposition, "failed");
+    assert.equal(latest.targets[0].private_outcome.coverage_complete, true);
+    assert.equal(latest.targets[0].private_nonce, failedNonce);
   } finally {
     await stopRuntime(runtime);
     await rm(persistence, { recursive: true, force: true });

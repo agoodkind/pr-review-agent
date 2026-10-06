@@ -1884,16 +1884,7 @@ func TestAForcedDeliveryWhoseProcessDiedMidReviewIsResumed(t *testing.T) {
 	}
 }
 
-// A run publishes everything it found and records its position before it
-// completes its check, so a failure in that window leaves the check in progress
-// over work that is already on the pull request. The redelivery is admitted,
-// and has to be, because nothing short of a completed check says the request was
-// carried through.
-//
-// What it must not do is force the review a second time. The analysis was paid
-// for, the comments are posted, and repeating both spends the budget again to
-// say what the pull request already says.
-func TestAForcedDeliveryResumedAfterPublishingReviewsNothingAgain(t *testing.T) {
+func TestReassessmentAfterPublicationFailureReusesCompletedChunks(t *testing.T) {
 	model := newChunkScriptedModel("")
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:                  twoChunkCollector{},
@@ -1918,12 +1909,18 @@ func TestAForcedDeliveryResumedAfterPublishingReviewsNothingAgain(t *testing.T) 
 	if len(fixture.state.checkRuns) != 1 {
 		t.Fatalf("check runs = %d, want the one this delivery created", len(fixture.state.checkRuns))
 	}
-	if fixture.state.checkRuns[0]["status"] != "in_progress" {
-		t.Fatalf("check status = %v, want in_progress: the completion never landed",
+	if fixture.state.checkRuns[0]["status"] != "completed" || fixture.state.checkRuns[0]["conclusion"] != "failure" {
+		t.Fatalf("check status = %v, want completed failure after final publication failed",
 			fixture.state.checkRuns[0]["status"])
 	}
+	text, _ := checkOutput(t, fixture)["text"].(string)
+	if outcome := domain.DecodeAssessmentOutcome(text); outcome.Disposition != domain.AssessmentFailed {
+		t.Fatalf("assessment outcome = %s, want failed after final publication failed", outcome.Disposition)
+	}
 
-	// GitHub recovers and the same delivery arrives again.
+	job.DeliveryID = "reassessment-after-publication-failure"
+	job.AutomaticReassessment = true
+	job.Forced = false
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("redelivered Run: %v", err)
 	}
@@ -1938,25 +1935,20 @@ func TestAForcedDeliveryResumedAfterPublishingReviewsNothingAgain(t *testing.T) 
 		t.Fatalf("comments = %d, want one per finding: the resumed delivery reposted what was already there",
 			len(fixture.state.streamedComments))
 	}
-	if len(fixture.state.submittedReviews) != 1 {
-		t.Fatalf("submitted reviews = %d, want 1: the resumed delivery published the same verdict again",
+	if len(fixture.state.submittedReviews) != 2 {
+		t.Fatalf("submitted reviews = %d, want the dismissed rejection replaced after reassessment",
 			len(fixture.state.submittedReviews))
 	}
-	if len(fixture.state.checkRuns) != 1 {
-		t.Fatalf("check runs = %d, want 1: a redelivery is the same force request",
+	if len(fixture.state.checkRuns) != 2 {
+		t.Fatalf("check runs = %d, want a dedicated reassessment check",
 			len(fixture.state.checkRuns))
 	}
-	if fixture.state.checkRuns[0]["status"] != "completed" {
-		t.Fatalf("check status = %v, want completed: the resumed delivery must clear the check it inherited",
-			fixture.state.checkRuns[0]["status"])
+	if fixture.state.checkRuns[1]["status"] != "completed" {
+		t.Fatalf("reassessment check status = %v, want completed", fixture.state.checkRuns[1]["status"])
 	}
 }
 
-// A forced attempt that read some of its chunks and died records exactly that,
-// and the check it left in progress is what brings the delivery back. The
-// resumed attempt owes the chunks that went unread and nothing else: the ones
-// already read are on the pull request, paid for, and recorded as done.
-func TestAForcedDeliveryResumedMidReviewSkipsTheChunksItAlreadyRead(t *testing.T) {
+func TestReassessmentAfterPartialFailureReviewsOnlyPendingChunks(t *testing.T) {
 	model := newChunkScriptedModel("file1.go")
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:                  twoChunkCollector{},
@@ -1976,13 +1968,15 @@ func TestAForcedDeliveryResumedMidReviewSkipsTheChunksItAlreadyRead(t *testing.T
 	if len(partial.Completed) != 1 {
 		t.Fatalf("completed after the first delivery = %v, want the chunk that answered", partial.Completed)
 	}
-	if fixture.state.checkRuns[0]["status"] != "in_progress" {
-		t.Fatalf("check status = %v, want in_progress: the completion never landed",
+	if fixture.state.checkRuns[0]["status"] != "completed" || fixture.state.checkRuns[0]["conclusion"] != "failure" {
+		t.Fatalf("check status = %v, want completed failure after final publication failed",
 			fixture.state.checkRuns[0]["status"])
 	}
 
-	// The model recovers and the same delivery arrives again.
 	model.heal()
+	job.DeliveryID = "reassessment-after-partial-failure"
+	job.AutomaticReassessment = true
+	job.Forced = false
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("resumed Run: %v", err)
 	}
@@ -2005,8 +1999,8 @@ func TestAForcedDeliveryResumedMidReviewSkipsTheChunksItAlreadyRead(t *testing.T
 		t.Fatalf("comments = %d, want one per finding across both attempts",
 			len(fixture.state.streamedComments))
 	}
-	if fixture.state.checkRuns[0]["status"] != "completed" {
-		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	if len(fixture.state.checkRuns) != 2 || fixture.state.checkRuns[1]["status"] != "completed" {
+		t.Fatalf("reassessment checks = %v, want a new completed check", fixture.state.checkRuns)
 	}
 }
 
@@ -2066,20 +2060,7 @@ func TestAForcedDeliveryResumedBeforeRecordingAnythingStillReviewsFromScratch(t 
 	}
 }
 
-// A checkpoint records which chunks were read and never that the head was
-// reviewed. Only the write that follows a submitted verdict advances the
-// baseline, so a run that read every chunk and then stopped before submitting
-// leaves a marker that still owes the verdict.
-//
-// That ordering is load bearing rather than incidental, and this pins it. The
-// already reviewed exit asks whether the baseline names this head, and it takes
-// the answer as proof that a verdict was published there. Advancing the baseline
-// at checkpoint time would make that inference false: the next delivery would
-// find the head recorded as reviewed, clear the check, and leave the pull
-// request green with findings raised and no verdict ruling on them. Nothing else
-// in the service checks for that, so if the baseline write ever moves earlier,
-// this test is what catches it.
-func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
+func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing.T) {
 	model := newChunkScriptedModel("")
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:                  twoChunkCollector{},
@@ -2104,11 +2085,14 @@ func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
 		t.Fatalf("submitted reviews = %d, want none: the run stopped before submitting",
 			len(fixture.state.submittedReviews))
 	}
-	if fixture.state.checkRuns[0]["status"] != "in_progress" {
-		t.Fatalf("check status = %v, want in_progress", fixture.state.checkRuns[0]["status"])
+	if fixture.state.checkRuns[0]["status"] != "completed" || fixture.state.checkRuns[0]["conclusion"] != "failure" {
+		t.Fatalf("check status = %v, want completed failure", fixture.state.checkRuns[0]["status"])
 	}
 
 	fixture.state.listThreadsStatus = http.StatusOK
+	job.DeliveryID = "reassessment-after-final-publication-failure"
+	job.AutomaticReassessment = true
+	job.Forced = false
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("redelivered Run: %v", err)
 	}
@@ -2127,8 +2111,8 @@ func TestARunThatDiedBeforeSubmittingLeavesTheVerdictOwed(t *testing.T) {
 				path, times)
 		}
 	}
-	if fixture.state.checkRuns[0]["status"] != "completed" {
-		t.Fatalf("check status = %v, want completed", fixture.state.checkRuns[0]["status"])
+	if len(fixture.state.checkRuns) != 2 || fixture.state.checkRuns[1]["status"] != "completed" {
+		t.Fatalf("reassessment checks = %v, want a new completed check", fixture.state.checkRuns)
 	}
 }
 
@@ -4134,8 +4118,7 @@ func TestARefreshUpdatesThreadDetailsWhenTheVerdictDoesNotMove(t *testing.T) {
 	}
 }
 
-// A failed verdict refresh reports failure and preserves the previous review.
-func TestAFailedVerdictRefreshFailsTheCheckAndPreservesReviews(t *testing.T) {
+func TestAFailedVerdictRefreshFailsTheCheckAndDismissesItsRejection(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reviewPages:        blockingVerdictReviewPage(head, true),
@@ -4151,11 +4134,11 @@ func TestAFailedVerdictRefreshFailsTheCheckAndPreservesReviews(t *testing.T) {
 		t.Fatalf("conclusion = %v, want failure: the verdict refresh did not publish",
 			fixture.state.lastUpdateCheckRun["conclusion"])
 	}
-	if fixture.state.lastSubmitReview != nil || fixture.state.lastUpdateReview != nil || len(fixture.state.dismissals) != 0 {
-		t.Fatalf("failed refresh mutated reviews: submitted=%v updated=%v dismissed=%v", fixture.state.lastSubmitReview, fixture.state.lastUpdateReview, fixture.state.dismissals)
+	if fixture.state.lastSubmitReview != nil || fixture.state.lastUpdateReview != nil || len(fixture.state.dismissals) != 1 || fixture.state.dismissals[0]["review_id"] != "31" {
+		t.Fatalf("failed refresh did not withdraw only its rejection: submitted=%v updated=%v dismissed=%v", fixture.state.lastSubmitReview, fixture.state.lastUpdateReview, fixture.state.dismissals)
 	}
-	if fixture.state.reviewPages[0][0]["state"] != "CHANGES_REQUESTED" {
-		t.Fatalf("failed refresh changed previous review: %v", fixture.state.reviewPages[0][0])
+	if fixture.state.reviewPages[0][0]["state"] != "DISMISSED" {
+		t.Fatalf("failed refresh did not dismiss its previous rejection: %v", fixture.state.reviewPages[0][0])
 	}
 }
 
@@ -4286,6 +4269,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
+		"GET /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",
 		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/issues/comments/2000",
@@ -5978,17 +5962,35 @@ func botReviewPage(states ...string) [][]map[string]any {
 	return [][]map[string]any{page}
 }
 
-// A failed run knows nothing new about the head, so it touches no review
-// object at all: it submits none, edits none, and withdraws none. It says why
-// it stopped in the check run and in the one top level comment, which are the
-// two places that carry no verdict.
-//
-// The earlier behavior withdrew every standing verdict here, which turned one
-// provider outage into a pull request whose review history the service had
-// silently rewritten.
-func TestAFailedRunChangesNoReviewState(t *testing.T) {
+func TestAFailedRunWithdrawsOnlyTheLatestServiceRejection(t *testing.T) {
+	cases := []struct {
+		name        string
+		states      []string
+		otherAuthor bool
+		dismissID   string
+	}{
+		{"latest rejection", []string{"APPROVED", "CHANGES_REQUESTED"}, false, "501"},
+		{"newer approval", []string{"CHANGES_REQUESTED", "APPROVED"}, false, ""},
+		{"newer dismissal", []string{"CHANGES_REQUESTED", "DISMISSED"}, false, ""},
+		{"ordinary comment", []string{"CHANGES_REQUESTED", "COMMENTED"}, false, "500"},
+		{"older rejection", []string{"CHANGES_REQUESTED", "CHANGES_REQUESTED"}, false, "501"},
+		{"another author", []string{"CHANGES_REQUESTED", "CHANGES_REQUESTED"}, true, "500"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			pages := botReviewPage(testCase.states...)
+			if testCase.otherAuthor {
+				pages[0][len(pages[0])-1]["user"] = map[string]any{"login": "another-reviewer"}
+			}
+			assertFailedRunReviewState(t, pages, testCase.dismissID)
+		})
+	}
+}
+
+func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissID string) {
+	t.Helper()
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages:  botReviewPage("APPROVED", "CHANGES_REQUESTED"),
+		reviewPages:  pages,
 		reconcileErr: errors.New("reconcile exploded"),
 	})
 
@@ -6003,8 +6005,12 @@ func TestAFailedRunChangesNoReviewState(t *testing.T) {
 	if fixture.state.lastUpdateReview != nil {
 		t.Fatalf("updated review = %v, want none", fixture.state.lastUpdateReview)
 	}
-	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
+	if dismissID == "" {
+		if len(fixture.state.dismissals) != 0 {
+			t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
+		}
+	} else if len(fixture.state.dismissals) != 1 || fixture.state.dismissals[0]["review_id"] != dismissID {
+		t.Fatalf("dismissals = %v, want only review %s", fixture.state.dismissals, dismissID)
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
@@ -6020,8 +6026,6 @@ func TestAFailedRunChangesNoReviewState(t *testing.T) {
 		t.Fatalf("state status = %q, want %q", state.Status, marker.StateFailed)
 	}
 
-	// The cause is not lost, only private: both public surfaces point at the
-	// run identifier and neither reprints what the failure said.
 	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
 	if !ok {
 		t.Fatalf("check summary = %v, want string", checkOutput(t, fixture)["summary"])
@@ -6077,7 +6081,8 @@ func TestAFailedRunKeepsTheLastReviewedCommit(t *testing.T) {
 // very range this run could not read.
 func TestAnIncompleteRunKeepsTheLastReviewedCommit(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
-		model: &sequenceModel{err: errors.New("provider exploded")},
+		model:       &sequenceModel{err: errors.New("provider exploded")},
+		reviewPages: botReviewPage("CHANGES_REQUESTED"),
 	})
 	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
 		"id": float64(1),
@@ -6106,6 +6111,12 @@ func TestAnIncompleteRunKeepsTheLastReviewedCommit(t *testing.T) {
 	}
 	if state.RunID != "delivery-1" {
 		t.Fatalf("run id = %q, want this run's identifier", state.RunID)
+	}
+	if len(fixture.state.dismissals) != 1 || fixture.state.dismissals[0]["review_id"] != "500" {
+		t.Fatalf("dismissals = %v, want the latest service rejection withdrawn", fixture.state.dismissals)
+	}
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("submitted review = %v, want no new verdict after failure", fixture.state.lastSubmitReview)
 	}
 }
 
@@ -6881,6 +6892,33 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		writeServiceReviewPage(writer, request, state)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/timeline") {
+		events := make([]map[string]any, 0)
+		known := make(map[string]bool)
+		for _, dismissal := range state.dismissals {
+			reviewID := fmt.Sprint(dismissal["review_id"])
+			known[reviewID] = true
+			events = append(events, map[string]any{
+				"event":            "review_dismissed",
+				"actor":            map[string]any{"login": testBotLogin},
+				"dismissed_review": map[string]any{"review_id": reviewID, "dismissal_message": dismissal["message"]},
+			})
+		}
+		for _, page := range state.reviewPages {
+			for _, item := range page {
+				if item["state"] != "DISMISSED" || known[fmt.Sprintf("%.0f", item["id"])] {
+					continue
+				}
+				events = append(events, map[string]any{
+					"event":            "review_dismissed",
+					"actor":            map[string]any{"login": "fixture-reviewer"},
+					"dismissed_review": map[string]any{"review_id": item["id"], "dismissal_message": "The reviewer dismissed this decision."},
+				})
+			}
+		}
+		serviceWriteJSON(writer, http.StatusOK, events)
+		return
+	}
 
 	// The service's one top level comment lives under the issue comments
 	// endpoint, distinct from the inline review comments matched below.
@@ -7205,6 +7243,8 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		}
 		serviceWriteJSON(writer, http.StatusOK, map[string]any{
 			"number": float64(testPRNumber),
+			"state":  "open",
+			"merged": false,
 			"draft":  false,
 			"title":  "title",
 			"body":   "body",

@@ -34,7 +34,6 @@ const (
 	checkFailureThreads     = "Review failed while reading the open review threads."
 	checkFailureSummary     = "Review failed while updating the visible summary."
 	checkFailurePublish     = "Review failed while publishing the final decision."
-	checkFailurePanic       = "Review failed after an internal panic."
 	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
 	checkFailureDailyBudget = "Review stopped: the app's configured token limit was exhausted."
 	checkFailureUnavailable = "The model provider is unavailable. Wait for it to recover."
@@ -76,6 +75,7 @@ type Reconciler interface {
 
 // Service publishes one complete GitHub review per pull request head.
 type Service struct {
+	failureVerdicts    config.FailureVerdictPolicy
 	github             GitHub
 	collector          Collector
 	model              Model
@@ -138,6 +138,7 @@ func NewService(
 		chunkTimeout = config.DefaultReviewChunkTimeout
 	}
 	return &Service{
+		failureVerdicts:        config.DismissLatestFailureVerdict,
 		github:                 github,
 		collector:              collector,
 		model:                  model,
@@ -289,6 +290,7 @@ func (service *Service) runLocked(
 	startedAt := service.now()
 	progress := service.newProgress(job, settings, startedAt)
 	progress.usage = usage
+	defer service.finalizeFailure(ctx, job, checkRun.ID, progress, &runErr)
 	defer func() {
 		recovered := recover()
 		if recovered == nil {

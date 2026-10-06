@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -546,6 +547,7 @@ func (service *Service) concludeStructurallyIncomplete(
 		}
 	}
 	recordAssessment(ctx, disposition, &summary, classes, quotaRecovery(statuses))
+	cause := joinedChunkFailures(ctx, failures)
 	addAttemptedModels(&summary, statuses)
 	conclusion := checkConclusionDeclined
 	if !pass.decidedOmissions() || pass.acceptsOmissions() {
@@ -564,12 +566,13 @@ func (service *Service) concludeStructurallyIncomplete(
 			return service.cancelCheck(ctx, job, checkRun.ID)
 		}
 	}
+	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
 	notice := structuralShortfallNotice(summary.Head, shortfall, len(state.Pending))
 	if reason := chunkFailureReason(failures); reason != "" {
 		notice = reason + "\n\n" + notice
 	}
 	if len(failures) > 0 {
-		notice += "\n\n" + publicFailureDetail(job)
+		notice += "\n\n" + service.terminalFailureDetail(ctx, job, cause)
 	}
 	publicationCtx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
@@ -593,7 +596,11 @@ func (service *Service) concludeStructurallyIncomplete(
 		unreadableCheckTitle(len(shortfall.Hunks)),
 		notice+"\n\n"+RenderDetails(summary, statuses...),
 	); err != nil {
-		return err
+		logger.WarnContext(ctx, "complete unread-content review check", slog.String("err", err.Error()))
+		return errors.Join(err, dismissErr)
+	}
+	if len(failures) > 0 {
+		markFailureReported(ctx)
 	}
 	logger.InfoContext(
 		ctx,
@@ -603,7 +610,7 @@ func (service *Service) concludeStructurallyIncomplete(
 		slog.Int("pending", len(state.Pending)),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
-	return nil
+	return dismissErr
 }
 
 // unreadableCheckTitle is the one line a reader sees in the checks list.

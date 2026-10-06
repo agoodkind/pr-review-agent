@@ -51,6 +51,14 @@ func (attempt *providerAttemptError) Unwrap() error {
 	return attempt.cause
 }
 
+func (attempt *providerAttemptError) ProviderFailureDetails() (int, string) {
+	var providerError *ProviderError
+	if errors.As(attempt.cause, &providerError) {
+		return providerError.StatusCode, providerError.Code
+	}
+	return 0, ""
+}
+
 func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 	status := review.ProviderStatus{
 		ProviderID:    attempt.provider.id,

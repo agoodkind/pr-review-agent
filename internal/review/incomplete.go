@@ -1,16 +1,8 @@
 package review
 
-// This file is what a run that could not read every chunk leaves behind.
-//
-// It is neither a success nor a failure, and it is not a judgment. A failure to
-// read is not a finding: the run learned nothing about the code, so it has no
-// grounds to request changes and no grounds to approve. It touches no review
-// object at all. The two outputs that remain say what happened without ruling
-// on the head: the one top level comment names what is still owed, and the
-// check holds the merge gate without passing.
-
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -21,21 +13,6 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-// concludeIncomplete ends a pass that could not read every chunk.
-//
-// It submits no verdict. An earlier design submitted a blocking review here, so
-// a model provider outage turned every open pull request into a wall of
-// requested changes that nobody had requested, and each looked exactly like a
-// human reviewer objecting. The merge gate does not need the review: the check
-// concludes without passing, so a required check holds the head anyway, and a
-// repository that does not require the check has chosen not to gate on it.
-//
-// The check does not reach a passing conclusion. GitHub counts a required check
-// concluded neutral as satisfying the gate, exactly as it counts one concluded
-// skipped, so concluding either way would let a head with unread chunks merge
-// on the strength of a run that admitted it had not finished. The title still
-// separates "could not be reviewed" from "the review broke", so the reader
-// learns which happened without the gate opening.
 func (service *Service) concludeIncomplete(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -55,12 +32,15 @@ func (service *Service) concludeIncomplete(
 		classes = append(classes, string(class))
 	}
 	recordAssessment(ctx, domain.AssessmentIncomplete, &summary, classes, quotaRecovery(statuses))
+	cause := joinedChunkFailures(ctx, unread)
+	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
+	detail := service.terminalFailureDetail(ctx, job, cause)
 	addAttemptedModels(&summary, statuses)
 	if _, err := persistAssessment(ctx, checkRun.ID); err != nil {
 		return err
 	}
 	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderIncompleteBody(summary, pending, reason, publicFailureDetail(job), statuses...) + reassessmentNotice(ctx),
+		Prose: RenderIncompleteBody(summary, pending, reason, detail, statuses...) + reassessmentNotice(ctx),
 		State: state,
 	}); err != nil {
 		return service.failCheck(
@@ -74,17 +54,19 @@ func (service *Service) concludeIncomplete(
 		checkRun.ID,
 		service.presentedConclusion(chunkFailureClasses(unread), checkConclusionDeclined),
 		incompleteCheckTitle(pending, reason),
-		incompleteCheckDetail(unread, summary, job),
+		incompleteCheckDetail(unread, summary, detail),
 	); err != nil {
-		return err
+		logger.WarnContext(ctx, "complete incomplete review check", slog.String("err", err.Error()))
+		return errors.Join(err, dismissErr)
 	}
+	markFailureReported(ctx)
 	logger.InfoContext(
 		ctx,
 		"review job left chunks pending",
 		slog.Int("pending", pending),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
-	return nil
+	return dismissErr
 }
 
 // incompleteCheckDetail is what the check run says about a run that could not
@@ -97,7 +79,7 @@ func (service *Service) concludeIncomplete(
 // provider returned HTTP 400 Bad Request: invalid_request_error:
 // upstream_failed: upstream call failed: usage credits are exhausted", which is
 // text this service never read and cannot unpublish.
-func incompleteCheckDetail(failures []chunkFailure, summary Summary, job domain.ReviewJob) string {
+func incompleteCheckDetail(failures []chunkFailure, summary Summary, detail string) string {
 	parts := make([]string, 0, 4)
 	if numbers := unreadChunkNumbers(failures); numbers != "" {
 		parts = append(parts, "Chunks left unread: "+numbers+".")
@@ -108,7 +90,7 @@ func incompleteCheckDetail(failures []chunkFailure, summary Summary, job domain.
 	if statuses := renderProviderStatuses(providerStatuses(failures)); statuses != "" {
 		parts = append(parts, statuses)
 	}
-	parts = append(parts, publicFailureDetail(job), RenderDetails(summary))
+	parts = append(parts, detail, RenderDetails(summary))
 	return strings.Join(parts, "\n\n")
 }
 
