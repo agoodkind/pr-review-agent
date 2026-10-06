@@ -11,9 +11,20 @@ import (
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
 
+type callbackAction string
+
+const (
+	callbackPlan      callbackAction = "plan"
+	callbackExecute   callbackAction = "execute"
+	callbackReconcile callbackAction = "reconcile_target"
+	callbackInventory callbackAction = "inventory"
+)
+
 type reassessmentRequest struct {
-	Action string              `json:"action"`
-	Record reassessment.Record `json:"record"`
+	Target *reassessment.Target      `json:"target"`
+	Sweep  *reassessment.SweepCursor `json:"sweep"`
+	Action callbackAction            `json:"action"`
+	Record reassessment.Record       `json:"record"`
 }
 
 func (handler *handler) handleReassessment(writer http.ResponseWriter, request *http.Request) {
@@ -31,7 +42,11 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		http.Error(writer, "invalid record", http.StatusBadRequest)
 		return
 	}
-	if payload.Action == "plan" {
+	if payload.Action == callbackReconcile || payload.Action == callbackInventory {
+		handler.handleDriftReassessment(writer, request, payload)
+		return
+	}
+	if payload.Action == callbackPlan {
 		planned := handler.reassessment.Plan(request.Context(), payload.Record)
 		writer.Header().Set("Content-Type", "application/json")
 		if encodeErr := json.NewEncoder(writer).Encode(planned); encodeErr != nil {
@@ -40,7 +55,7 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		}
 		return
 	}
-	if payload.Action != "execute" || payload.Record.Phase != "running" {
+	if payload.Action != callbackExecute || payload.Record.Phase != "running" {
 		http.Error(writer, "invalid operation", http.StatusBadRequest)
 		return
 	}
@@ -83,11 +98,41 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 	writer.WriteHeader(http.StatusAccepted)
 }
 
-func (handler *handler) suppressScheduledDelivery(ctx context.Context, writer http.ResponseWriter, job domain.ReviewJob) bool {
+func (handler *handler) handleDriftReassessment(writer http.ResponseWriter, request *http.Request, payload reassessmentRequest) {
+	writer.Header().Set("Content-Type", "application/json")
+	if payload.Action == callbackInventory && payload.Sweep != nil {
+		result := handler.reassessment.Inventory(request.Context(), *payload.Sweep)
+		if err := json.NewEncoder(writer).Encode(result); err != nil {
+			handler.logger.WarnContext(request.Context(), "encode reassessment inventory", "err", err.Error())
+		}
+		return
+	}
+	if payload.Action == callbackReconcile && payload.Target != nil {
+		result := handler.reassessment.Reconcile(request.Context(), *payload.Target)
+		if err := json.NewEncoder(writer).Encode(result); err != nil {
+			handler.logger.WarnContext(request.Context(), "encode reassessment repair", "err", err.Error())
+		}
+		return
+	}
+	http.Error(writer, "reassessment payload is incomplete", http.StatusBadRequest)
+}
+
+func (handler *handler) suppressScheduledDelivery(ctx context.Context, writer http.ResponseWriter, job *domain.ReviewJob, restart bool) bool {
 	if handler.reassessment == nil {
 		return false
 	}
-	scheduled, err := handler.reassessment.DeliveryScheduled(ctx, job)
+	if trackErr := handler.reassessment.Track(ctx, *job); trackErr != nil {
+		handler.cache.Release(job.DeliveryID)
+		http.Error(writer, "target registry unavailable", http.StatusBadGateway)
+		return true
+	}
+	var scheduled bool
+	var err error
+	if restart {
+		scheduled, err = handler.reassessment.Reevaluate(ctx, *job)
+	} else {
+		scheduled, err = handler.reassessment.DeliveryScheduled(ctx, job)
+	}
 	if err != nil {
 		handler.cache.Release(job.DeliveryID)
 		http.Error(writer, "reassessment state unavailable", http.StatusBadGateway)

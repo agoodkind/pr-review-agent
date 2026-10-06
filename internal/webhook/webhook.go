@@ -95,6 +95,12 @@ func VerifySHA256(signatureHeader string, secret []byte, body []byte) error {
 
 type pullRequestAction string
 
+// RestartsQueue requests lifecycle evaluation after reopening or leaving draft.
+func (event PullRequestEvent) RestartsQueue() bool {
+	action := pullRequestAction(event.Action)
+	return action == actionReopened || action == actionReadyForReview
+}
+
 const (
 	actionOpened         pullRequestAction = "opened"
 	actionReopened       pullRequestAction = "reopened"

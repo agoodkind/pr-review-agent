@@ -152,6 +152,87 @@ func writeStatsQueue(output io.Writer, report opsstats.Report) error {
 	for _, record := range queue.Records {
 		phases[record.Phase]++
 	}
-	_, err := fmt.Fprintf(output, "Current reassessment queue has %d waiting records, %d running records, and %d terminal records.\n", phases["waiting"], phases["running"], phases["terminal"])
+	if _, err := fmt.Fprintf(output, "Current reassessment queue has %d waiting records, %d running records, and %d terminal records.\n", phases["waiting"], phases["running"], phases["terminal"]); err != nil {
+		return err
+	}
+	for _, write := range []func(io.Writer, *opsstats.QueueSnapshot) error{writeRegistryDiagnostics, writeSweepDiagnostics, writeAlarmDiagnostics, writeTransitionDiagnostics} {
+		if err := write(output, queue); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeRegistryDiagnostics(output io.Writer, queue *opsstats.QueueSnapshot) error {
+	if !queue.RegistryKnown {
+		_, err := fmt.Fprintln(output, "Registry diagnostics are unavailable.")
+		return err
+	}
+	privateOutcomes, eligibleKnown := 0, 0
+	for _, target := range queue.Targets {
+		if target.Version > 0 && target.PrivateNonce != "" && target.PrivateNonce == target.PrivateOutcome.Nonce {
+			privateOutcomes++
+		}
+		if target.Observation.EligibilityKnown {
+			eligibleKnown++
+		}
+	}
+	_, err := fmt.Fprintf(output, "The registry contains %d targets. %d targets include versioned private outcomes. %d targets record known eligibility.\n", len(queue.Targets), privateOutcomes, eligibleKnown)
 	return err
+}
+
+func writeSweepDiagnostics(output io.Writer, queue *opsstats.QueueSnapshot) error {
+	if !queue.SweepKnown {
+		_, err := fmt.Fprintln(output, "Inventory cursor diagnostics are unavailable.")
+		return err
+	}
+	if queue.Sweep == nil {
+		_, err := fmt.Fprintln(output, "The inventory sweep has no stored cursor.")
+		return err
+	}
+	cursor := queue.Sweep
+	if _, err := fmt.Fprintf(output, "Inventory stage\tCursor version\tInstallation page/index\tRepository page/index\tPull request page/index\n%d\t%d\t%d/%d\t%d/%d\t%d/%d\n", cursor.Stage, cursor.Version, cursor.InstallationPage, cursor.InstallationIndex, cursor.RepositoryPage, cursor.RepositoryIndex, cursor.PullRequestPage, cursor.PullRequestIndex); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(output, "Inventory failure history is unavailable.")
+	return err
+}
+
+func writeAlarmDiagnostics(output io.Writer, queue *opsstats.QueueSnapshot) error {
+	if !queue.AlarmKnown {
+		_, err := fmt.Fprintln(output, "The next alarm time is unavailable.")
+		return err
+	}
+	if queue.NextAlarmMS == nil {
+		_, err := fmt.Fprintln(output, "The Worker has no scheduled alarm.")
+		return err
+	}
+	_, err := fmt.Fprintf(output, "The next alarm is scheduled for %s.\n", time.UnixMilli(*queue.NextAlarmMS).UTC().Format(time.RFC3339))
+	return err
+}
+
+func writeTransitionDiagnostics(output io.Writer, queue *opsstats.QueueSnapshot) error {
+	if !queue.TransitionMetadataKnown {
+		_, err := fmt.Fprintln(output, "Accepted transition history is unavailable.")
+		return err
+	}
+	if queue.TransitionCounts == nil {
+		_, err := fmt.Fprintln(output, "The Worker has not initialized transition counters.")
+		return err
+	}
+	counts := queue.TransitionCounts
+	if _, err := fmt.Fprintf(output, "Accepted transition counters cover %s through %s.\nTransition\tAccepted count\n", time.UnixMilli(counts.SinceMS).UTC().Format(time.RFC3339), time.UnixMilli(counts.LastUpdateMS).UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(counts.Counts))
+	for key := range counts.Counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(output, "%s\t%d\n", statsField(key), counts.Counts[key]); err != nil {
+			return err
+		}
+	}
+	return nil
 }

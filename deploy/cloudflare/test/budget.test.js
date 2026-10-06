@@ -32,7 +32,7 @@ async function startRuntime(port, persistPath) {
   const operatorDigest = createHash("sha256").update("test-operator-token").digest("hex");
   const child = spawn(wrangler, [
     "dev", "--config", "test/budget.wrangler.jsonc", "--local",
-    "--port", String(port), "--persist-to", persistPath,
+    "--port", String(port), "--inspector-port", "0", "--persist-to", persistPath,
     "--var", `OPERATOR_TOKEN_SHA256:${operatorDigest}`,
   ], { cwd: cloudflareDirectory, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";

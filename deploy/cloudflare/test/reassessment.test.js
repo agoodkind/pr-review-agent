@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { durationMilliseconds } from "../worker/drift.js";
 
 const directory = fileURLToPath(new URL("..", import.meta.url));
 const signingMaterial = randomUUID();
@@ -23,7 +24,7 @@ async function unusedPort() {
 async function startRuntime(port, persistence) {
   const digest = createHash("sha256").update(operatorToken).digest("hex");
   const child = spawn(path.join(directory, "node_modules/.bin/wrangler"), [
-    "dev", "--config", "test/reassessment.wrangler.jsonc", "--local", "--port", String(port), "--persist-to", persistence,
+    "dev", "--config", "test/reassessment.wrangler.jsonc", "--local", "--port", String(port), "--inspector-port", "0", "--test-scheduled", "--persist-to", persistence,
     "--var", `OPERATOR_TOKEN_SHA256:${digest}`,
     "--var", `GITHUB_WEBHOOK_SECRET:${signingMaterial}`,
   ], { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
@@ -104,6 +105,87 @@ test("signed reassessment records survive restart and reject stale transitions",
     assert.equal(finished.record.outcome.check_run_id, 71);
     assert.equal(finished.record.phase, "confirming");
     assert.equal(finished.record.attempt_id, "attempt-b");
+  } finally {
+    await stopRuntime(runtime);
+    await rm(persistence, { recursive: true, force: true });
+  }
+});
+
+test("reconciliation intervals accept Go duration fractions", function () {
+  assert.equal(durationMilliseconds(".5h"), 1800000);
+  assert.equal(durationMilliseconds("+.5s"), 500);
+  assert.equal(durationMilliseconds("1.h30m"), 5400000);
+  assert.equal(durationMilliseconds("2µs"), 1);
+  for (const invalid of [".h", "-1s", "0s", "1m trailing"]) {
+    assert.throws(function parse() { durationMilliseconds(invalid); });
+  }
+});
+
+test("scheduled inventory and private outcomes survive restart without webhooks", async function () {
+  const persistence = await mkdtemp(path.join(os.tmpdir(), "pr-agent-registry-"));
+  const port = await unusedPort();
+  let runtime;
+  try {
+    runtime = await startRuntime(port, persistence);
+    const empty = await send(port, { action: "query", key: "" }, true);
+    assert.equal(empty.sweep, null);
+    assert.deepEqual(empty.targets, []);
+    const scheduled = await fetch(`http://127.0.0.1:${port}/__scheduled`);
+    assert.equal(scheduled.status, 200);
+    const initialized = await send(port, { action: "read_sweep" });
+    assert.ok(initialized.sweep.version > 0);
+    const delayed = { ...initialized.sweep, stage: 2, installation_ids: [123], repository_page: 3, not_before_ms: Date.now() + 86400000 };
+    const savedSweep = await send(port, { action: "write_sweep", expected_version: initialized.sweep.version, sweep: delayed });
+    assert.equal(savedSweep.applied, true);
+    const key = "123:example/repository#9";
+    const nonce = randomUUID();
+    const target = {
+      key, version: 0, job: { InstallationID: 123, Repository: { Owner: "example", Name: "repository" }, Number: 9, Head: "a".repeat(40) },
+      not_before_ms: Date.now() + 86400000, private_outcome: { disposition: "completed", nonce, check_run_id: 71 },
+      private_nonce: nonce, private_delivery_id: "delivery-owned", private_generation: "generation-a",
+      private_observed_at_ms: Date.now(), observation: {}, observed_at_ms: 0, failures: 0, confirmations: 2,
+    };
+    const inserted = await send(port, { action: "register_target", key, target });
+    assert.equal(inserted.target.version, 1);
+    const registered = await send(port, { action: "register_target", key, target: { ...target, private_nonce: "", private_outcome: {}, not_before_ms: 0 } });
+    assert.equal(registered.target.private_nonce, nonce);
+    assert.equal(registered.target.not_before_ms, target.not_before_ms);
+    const record = { id: "assessment-registry", key, generation: "generation-a", phase: "waiting", not_before_ms: target.not_before_ms, head: target.job.Head, attempts: 0 };
+    const repaired = await send(port, { action: "apply_reconciliation", key, expected_target_version: 2, expected_queue_version: 0, queue_version_known: true, target: registered.target, record, repair_kind: "missing_queue" });
+    assert.equal(repaired.applied, true);
+    assert.equal(repaired.record.version, 1);
+    const observed = await send(port, { action: "apply_reconciliation", key, expected_target_version: 3, expected_queue_version: 1, queue_version_known: true, target: repaired.target, record: null, repair_kind: "missing_queue" });
+    assert.equal(observed.applied, true);
+    assert.equal(observed.record.version, 1);
+    const reactivated = await send(port, { action: "transition", key, expected_version: 1, record: { ...record, generation: "generation-b", reason: "reactivated" } });
+    assert.equal(reactivated.applied, true);
+    const staleOutcome = await send(port, { action: "write_target", key, expected_version: observed.target.version, expected_queue_version: 1, expected_queue_generation: "generation-a", target: { ...observed.target, private_nonce: "obsolete" } });
+    assert.equal(staleOutcome.applied, false);
+    assert.equal(staleOutcome.target.private_nonce, nonce);
+    const staleRepair = await send(port, { action: "apply_reconciliation", key, expected_target_version: observed.target.version, expected_queue_version: 1, queue_version_known: true, target: observed.target, record: { ...record, phase: "terminal" }, repair_kind: "completed" });
+    assert.equal(staleRepair.applied, false);
+    const unchanged = await send(port, { action: "apply_reconciliation", key, expected_target_version: observed.target.version, expected_queue_version: 2, queue_version_known: true, target: observed.target, record: reactivated.record, repair_kind: "completed" });
+    assert.equal(unchanged.applied, true);
+    const deferred = await send(port, { action: "apply_reconciliation", key, expected_target_version: unchanged.target.version, expected_queue_version: 0, queue_version_known: false, target: { ...unchanged.target, failures: 1 }, record: null, repair_kind: "" });
+    assert.equal(deferred.applied, true);
+    assert.equal(deferred.target.failures, 1);
+    assert.equal(deferred.record.generation, "generation-b");
+    await send(port, { action: "apply_reconciliation", key, expected_target_version: deferred.target.version, expected_queue_version: 0, queue_version_known: false, target: deferred.target, record, repair_kind: "closed" }, false, 400);
+    await send(port, { action: "register_target", key, target }, true, 403);
+    await stopRuntime(runtime);
+    runtime = await startRuntime(port, persistence);
+    const snapshot = await send(port, { action: "query", key: "" }, true);
+    assert.equal(snapshot.targets.length, 1);
+    assert.equal(snapshot.targets[0].private_nonce, nonce);
+    assert.equal(snapshot.targets[0].private_outcome.check_run_id, 71);
+    assert.equal(snapshot.records[0].generation, "generation-b");
+    assert.equal(snapshot.sweep.repository_page, 3);
+    assert.ok(snapshot.next_alarm_ms > Date.now());
+    assert.equal(snapshot.transition_counts.counts.missing_queue, 1);
+    assert.equal(snapshot.transition_counts.counts.reactivated, 1);
+    assert.equal(snapshot.transition_counts.counts.completed, 0);
+    const sparse = await send(port, { action: "query_target", key: "absent" });
+    assert.equal(sparse.target, null);
   } finally {
     await stopRuntime(runtime);
     await rm(persistence, { recursive: true, force: true });

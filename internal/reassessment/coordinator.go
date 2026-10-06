@@ -18,6 +18,7 @@ import (
 
 // Record retains one generation and its stable attempt identity across restarts.
 type Record struct {
+	RebuildEvidence  bool                     `json:"rebuild_evidence"`
 	Dispatch         bool                     `json:"dispatch"`
 	SourceDeliveries []string                 `json:"source_deliveries"`
 	ID               string                   `json:"id"`
@@ -41,6 +42,7 @@ type Record struct {
 
 // GitHub rereads eligibility and check outcomes before retry admission.
 type GitHub interface {
+	ListIssueComments(context.Context, int64, domain.Repository, int) ([]githubapp.IssueComment, error)
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
 	FindCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, bool, error)
 	FindCheckRunByExternalID(context.Context, int64, domain.Repository, domain.HeadSHA, string, string) (githubapp.CheckRun, bool, error)
@@ -53,6 +55,8 @@ type Availability interface {
 
 // Coordinator resumes checkpointed review work without forcing another full review.
 type Coordinator struct {
+	BotLogin  string
+	Discovery InventoryGitHub
 	Clock     clock.Clock
 	Settings  config.Reassessment
 	Store     *Client
@@ -108,10 +112,13 @@ func (coordinator *Coordinator) Observe(ctx context.Context, job domain.ReviewJo
 	prior := response.Record
 	now := coordinator.Clock()
 	retry := outcome.Disposition == domain.AssessmentFailed || outcome.Disposition == domain.AssessmentIncomplete || outcome.Disposition == domain.AssessmentDeclined && coordinator.Settings.RetryDeclined
-	if !retry && prior == nil {
+	if job.AutomaticReassessment && prior == nil || prior != nil && !prior.AcceptsOutcome(job) {
 		return outcome, nil
 	}
-	if job.AutomaticReassessment && (prior == nil || prior.Generation != job.ReassessmentGeneration || prior.AttemptID != job.DeliveryID) {
+	if err := coordinator.recordPrivateOutcome(ctx, job, outcome, prior); err != nil {
+		return outcome, err
+	}
+	if !retry && prior == nil {
 		return outcome, nil
 	}
 	var record Record
@@ -158,15 +165,18 @@ func (coordinator *Coordinator) Observe(ctx context.Context, job domain.ReviewJo
 }
 
 // DeliveryScheduled prevents replay from bypassing a persisted retry delay.
-func (coordinator *Coordinator) DeliveryScheduled(ctx context.Context, job domain.ReviewJob) (bool, error) {
+func (coordinator *Coordinator) DeliveryScheduled(ctx context.Context, job *domain.ReviewJob) (bool, error) {
 	if !coordinator.Settings.Enabled || job.AutomaticReassessment {
 		return false, nil
 	}
-	response, err := coordinator.Store.Send(ctx, Mutation{Action: "query", Key: coordinator.key(job), ExpectedVersion: 0, Record: nil})
+	response, err := coordinator.Store.Send(ctx, Mutation{Action: "query", Key: coordinator.key(*job), ExpectedVersion: 0, Record: nil})
 	if err != nil {
 		return false, err
 	}
 	if response.Record != nil {
+		if response.Record.Phase != "terminal" {
+			job.ReassessmentGeneration = response.Record.Generation
+		}
 		if response.Record.OriginDeliveryID == job.DeliveryID {
 			return true, nil
 		}
@@ -182,21 +192,44 @@ func (coordinator *Coordinator) Plan(ctx context.Context, record Record) Record 
 	if !coordinator.Settings.Enabled {
 		return coordinator.terminal(record, "disabled", now)
 	}
-	pr, err := coordinator.GitHub.GetPullRequest(ctx, record.Job.InstallationID, record.Job.Repository, record.Job.Number)
+	target, err := coordinator.Store.ReadTarget(ctx, record.Key)
 	if err != nil {
-		return coordinator.deferAfterFailure(ctx, record, now, "pull_request", err)
+		return coordinator.deferAfterFailure(ctx, record, now, "target", err)
 	}
+	if target == nil {
+		if err := coordinator.Track(ctx, record.Job); err != nil {
+			return coordinator.deferAfterFailure(ctx, record, now, "target", err)
+		}
+		target, err = coordinator.Store.ReadTarget(ctx, record.Key)
+		if err != nil || target == nil {
+			return coordinator.deferAfterFailure(ctx, record, now, "target", errors.New("target registration could not be verified"))
+		}
+	}
+	live := coordinator.ReadLive(ctx, record.Job)
+	repair := coordinator.Repair(*target, &record, live, now)
+	applied, err := coordinator.Store.WriteTarget(ctx, repair.Target, repair.ExpectedTargetVersion, record.Version, record.Generation)
+	if err != nil {
+		return coordinator.deferAfterFailure(ctx, record, now, "target", err)
+	}
+	if !applied {
+		return coordinator.deferAfterFailure(ctx, record, now, "target", errors.New("target observation changed before persistence"))
+	}
+	if repair.Record != nil {
+		return *repair.Record
+	}
+	if repair.RepairKind != "consistent_pending" {
+		record.Reason = repair.RepairKind
+		record.NotBeforeMS = repair.Target.NotBeforeMS
+		return record
+	}
+	pr := live.PullRequest
 	var snapshot Snapshot
 	snapshot.PullRequest = pr
-	if pr.State != "open" || pr.Merged || pr.Draft {
-		return coordinator.Decide(record, snapshot, now)
+	snapshot.LatestCheck = live.Check
+	snapshot.LatestFound = live.CheckFound
+	if record.RebuildEvidence {
+		snapshot.LatestFound = false
 	}
-	latest, found, checkErr := coordinator.GitHub.FindCheckRun(ctx, record.Job.InstallationID, record.Job.Repository, pr.Head, config.ReviewCheckName)
-	if checkErr != nil {
-		return coordinator.deferAfterFailure(ctx, record, now, "latest_check", checkErr)
-	}
-	snapshot.LatestCheck = latest
-	snapshot.LatestFound = found
 	if record.Phase == "running" || record.Phase == "confirming" {
 		priorCheck, priorFound, priorErr := coordinator.GitHub.FindCheckRunByExternalID(ctx, record.Job.InstallationID, record.Job.Repository, record.Head, config.ReviewCheckName, record.Job.DeliveryID)
 		if priorErr != nil {
@@ -230,6 +263,11 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 		return coordinator.terminal(record, "disabled", now)
 	}
 	pr := snapshot.PullRequest
+	if !pr.EligibilityKnown || !pr.MetadataKnown {
+		record.Reason = "pull_request_unavailable"
+		record.NotBeforeMS = coordinator.delayed(now, record.Attempts).UnixMilli()
+		return record
+	}
 	if pr.State != "open" || pr.Merged || pr.Draft {
 		reason := "closed"
 		if pr.Merged {
@@ -281,6 +319,10 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 		}
 		return record
 	}
+	return coordinator.dispatchRecord(record, now)
+}
+
+func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Record {
 	if record.Phase != "running" && record.Phase != "confirming" {
 		record.AttemptID = "reassessment-" + rand.Text()
 		record.Attempts++

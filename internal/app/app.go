@@ -80,10 +80,12 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		time.Now,
 	)
 	coordinator := &reassessment.Coordinator{
-		Clock:    clock.System,
-		Settings: cfg.Reassessment,
-		Store:    &reassessment.Client{URL: cfg.Reassessment.QueueURL, SigningKey: cfg.GitHubWebhookSecret, HTTP: githubHTTP},
-		GitHub:   githubClient, Providers: openaiClient, Logger: logger,
+		BotLogin:  cfg.GitHubBotLogin,
+		Discovery: githubClient,
+		Clock:     clock.System,
+		Settings:  cfg.Reassessment,
+		Store:     &reassessment.Client{URL: cfg.Reassessment.QueueURL, SigningKey: cfg.GitHubWebhookSecret, HTTP: githubHTTP},
+		GitHub:    githubClient, Providers: openaiClient, Logger: logger,
 	}
 	dispatcher := queue.NewDispatcher(
 		config.QueueCapacity,

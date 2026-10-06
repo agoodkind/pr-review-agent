@@ -19,6 +19,14 @@ Each model request has a separate timeout. The service publishes a chunk's findi
 
 Automatic reassessment queues failed reviews, unread chunks, and failed discussion refreshes. The queue persists one record per pull request across container restarts. Each retry reads the current head and metadata before checking that the pull request remains open, unmerged, and ready for review. The retry resumes completed chunk checkpoints without forcing another full review.
 
+Reopening a pull request or marking a draft ready for review restarts queue evaluation for the current head and metadata. The new generation rejects delayed results from the earlier lifecycle. A current completed assessment can end evaluation without another model request.
+
+Periodic reconciliation retains a separate registry of known pull requests. Installation inventory discovers open pull requests through bounded pages. The registry remains available after terminal queue records expire. Live checkpoints and assessment outcomes determine whether a missing queue entry requires repair.
+
+GitHub transport errors, partial responses, and contradictory values defer evaluation. Repeated observations must confirm closure, draft status, merge status, or completion before the queue changes its terminal state. Completion requires matching private and GitHub assessment receipts for the current head and metadata. The private receipt persists before the service completes its GitHub check.
+
+Missing private completion evidence requires a new assessment after the configured read budget. The assessment uses a new dedicated check and writes a new private receipt. Valid chunk checkpoints prevent another full analysis of covered files. A missing or unusable checkpoint requires source analysis again.
+
 The queue waits for measured app quota availability. Other operational failures use exponential backoff. A successful check does not end retry when the assessment remains incomplete. A completed assessment ends retry even when an unresolved finding requires changes. The summary reports the scheduled retry time and reassessment identifier.
 
 The service measures the complete rendered input against its configured prompt budget. It trims surplus file context and splits chunks when needed. A provider response that stops at its output limit also triggers splitting. A single hunk that cannot fit or finish requires a decision about whether its unread content is necessary for the verdict.
@@ -65,6 +73,10 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
 | `REASSESSMENT` | Enables persistent automatic retries and configures `queue_url`, `initial_delay`, `maximum_delay`, `maximum_attempts`, `ttl`, `terminal_retention`, and `retry_declined` |
+| `REASSESSMENT.reconcile_interval` | Sets the interval between registry and installation inventory evaluations |
+| `REASSESSMENT.page_size`, `REASSESSMENT.batch_size` | Bound inventory pages and work per alarm |
+| `REASSESSMENT.state_confirmations`, `REASSESSMENT.confirmation_interval` | Require repeated matching GitHub observations before terminal decisions |
+| `REASSESSMENT.read_budget` | Bounds consistent completion disagreement before a new assessment rebuilds private evidence |
 
 The usage estimate uses configured paid list rates. It does not subtract free-tier usage or [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown. The token limit applies to the provider's requests from this service.
 

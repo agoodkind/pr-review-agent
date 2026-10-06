@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ func recordAssessment(ctx context.Context, disposition domain.AssessmentDisposit
 		return
 	}
 	recorder.outcome = domain.AssessmentOutcome{
+		Nonce:       rand.Text(),
 		Disposition: disposition, Head: recorder.job.Head,
 		MetadataRevision: "", CoverageComplete: false, ReassessmentID: "", RetryAtMS: 0,
 		FailureClasses: classes, AvailableAtMS: availableAt, CheckRunID: recorder.job.CheckRunID,
@@ -122,7 +124,7 @@ func (service *Service) Run(parent context.Context, job domain.ReviewJob) error 
 
 // RunWithOutcome reports incomplete coverage separately from successful checks.
 func (service *Service) RunWithOutcome(parent context.Context, job domain.ReviewJob) (domain.AssessmentOutcome, error) {
-	recorder := &outcomeRecorder{persisted: false, job: job, outcome: domain.AssessmentOutcome{Disposition: domain.AssessmentDeclined, Head: job.Head, CheckRunID: job.CheckRunID, MetadataRevision: "", FailureClasses: nil, AvailableAtMS: 0, CoverageComplete: false, ReassessmentID: "", RetryAtMS: 0}}
+	recorder := &outcomeRecorder{persisted: false, job: job, outcome: domain.AssessmentOutcome{Nonce: "", Disposition: domain.AssessmentDeclined, Head: job.Head, CheckRunID: job.CheckRunID, MetadataRevision: "", FailureClasses: nil, AvailableAtMS: 0, CoverageComplete: false, ReassessmentID: "", RetryAtMS: 0}}
 	ctx := context.WithValue(parent, outcomeKey{}, recorder)
 	err := service.run(ctx, job)
 	if err != nil && recorder.outcome.Disposition == domain.AssessmentDeclined {

@@ -1,6 +1,7 @@
 package githubapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -93,17 +94,26 @@ func (client *Client) GetPullRequest(
 	if err != nil {
 		return PullRequest{}, err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		client.logger.WarnContext(ctx, "read pull request field presence", slog.String("err", err.Error()))
+		return PullRequest{}, fmt.Errorf("read pull request field presence: %w", err)
+	}
+	eligibilityKnown := response.Number == number && (response.State == "open" || response.State == "closed") && (response.State != "open" || !response.Merged) && len(fields["draft"]) > 0 && len(fields["merged"]) > 0 && !bytes.Equal(bytes.TrimSpace(fields["draft"]), []byte("null")) && !bytes.Equal(bytes.TrimSpace(fields["merged"]), []byte("null"))
+	metadataKnown := strings.TrimSpace(response.Title) != "" && len(fields["body"]) > 0
 
 	return PullRequest{
-		State:       response.State,
-		Merged:      response.Merged,
-		Number:      response.Number,
-		Head:        head,
-		Base:        base,
-		Draft:       response.Draft,
-		Title:       response.Title,
-		Body:        response.Body,
-		CommitCount: response.Commits,
+		EligibilityKnown: eligibilityKnown,
+		MetadataKnown:    metadataKnown,
+		State:            response.State,
+		Merged:           response.Merged,
+		Number:           response.Number,
+		Head:             head,
+		Base:             base,
+		Draft:            response.Draft,
+		Title:            response.Title,
+		Body:             response.Body,
+		CommitCount:      response.Commits,
 	}, nil
 }
 

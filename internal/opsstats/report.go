@@ -21,11 +21,28 @@ type Proof struct {
 
 // QueueSnapshot distinguishes an unavailable endpoint from an empty queue.
 type QueueSnapshot struct {
-	CapturedAt        time.Time             `json:"captured_at"`
-	Known             bool                  `json:"known"`
-	HTTPStatus        int                   `json:"http_status,omitempty"`
-	UnavailableReason string                `json:"unavailable_reason,omitempty"`
-	Records           []reassessment.Record `json:"records,omitempty"`
+	CapturedAt              time.Time                 `json:"captured_at"`
+	Known                   bool                      `json:"known"`
+	HTTPStatus              int                       `json:"http_status,omitempty"`
+	UnavailableReason       string                    `json:"unavailable_reason,omitempty"`
+	Records                 []reassessment.Record     `json:"records,omitempty"`
+	RegistryKnown           bool                      `json:"registry_known"`
+	Targets                 []reassessment.Target     `json:"targets,omitempty"`
+	SweepKnown              bool                      `json:"sweep_known"`
+	Sweep                   *reassessment.SweepCursor `json:"sweep"`
+	AlarmKnown              bool                      `json:"alarm_known"`
+	NextAlarmMS             *int64                    `json:"next_alarm_ms"`
+	TransitionMetadataKnown bool                      `json:"transition_metadata_known"`
+	TransitionCounts        *QueueTransitionCounts    `json:"transition_counts"`
+	SweepFailureKnown       bool                      `json:"sweep_failure_known"`
+	UnknownFields           []string                  `json:"unknown_fields,omitempty"`
+}
+
+// QueueTransitionCounts covers accepted CAS transitions within the recorded counter epoch.
+type QueueTransitionCounts struct {
+	Counts       map[string]int64 `json:"counts"`
+	SinceMS      int64            `json:"since_ms"`
+	LastUpdateMS int64            `json:"last_update_ms"`
 }
 
 // Trigger counts an admitted delivery separately from repeated job executions.

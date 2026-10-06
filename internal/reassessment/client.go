@@ -77,7 +77,16 @@ func (client *Client) Send(ctx context.Context, mutation Mutation) (Response, er
 	if response.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("reassessment storage returned HTTP %d", response.StatusCode)
 	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&result); err != nil {
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+	if readErr != nil {
+		logger.WarnContext(ctx, "read reassessment record", slog.String("err", readErr.Error()))
+		return result, fmt.Errorf("read reassessment record: %w", readErr)
+	}
+	var fields map[string]json.RawMessage
+	if shapeErr := json.Unmarshal(data, &fields); shapeErr != nil || fields == nil || len(fields["record"]) == 0 || len(fields["applied"]) == 0 {
+		return result, fmt.Errorf("reassessment storage response is incomplete")
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
 		logger.WarnContext(ctx, "decode reassessment record", slog.String("err", err.Error()))
 		return result, fmt.Errorf("decode reassessment record: %w", err)
 	}

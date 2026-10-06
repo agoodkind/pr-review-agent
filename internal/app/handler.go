@@ -288,7 +288,7 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	// honor at any point in this function.
 	job := event.Job()
 	job.Settings = readReviewSettings(request, body, handler.webhookHMACKey, logger)
-	if handler.suppressScheduledDelivery(ctx, writer, job) {
+	if handler.suppressScheduledDelivery(ctx, writer, &job, event.RestartsQueue()) {
 		return
 	}
 	handler.admitWebhookReview(ctx, writer, job, logger)

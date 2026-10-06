@@ -2,8 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import runtime from "../../../runtime.json" with { type: "json" };
 
 import { deliverySettled, dueEntries, isOverdue, nextWakeAt, replayDelayMs } from "./replaylogic.js";
-import { REASSESSMENT_SIGNATURE, reassessmentSignature } from "./reassessment.js";
-import { REVIEW_SETTINGS_HEADER, REVIEW_SETTINGS_SIGNATURE_HEADER, createReviewSettingsHeader, signReviewSettings } from "./configuration.js";
+import { reassessmentCallback } from "./reassessment.js";
+import { countQueueTransition, driftMutation, driftSnapshot, nextDriftWake, reconcileDrift } from "./drift.js";
 
 const KEY_PREFIX = "delivery:";
 const REASSESSMENT_PREFIX = "reassessment:";
@@ -51,6 +51,7 @@ export class WebhookReplayQueue extends DurableObject {
 
   async alarm() {
     const now = Date.now();
+    await reconcileDrift(this.ctx.storage, this.env, now);
     const entries = [...(await this.ctx.storage.list({ prefix: KEY_PREFIX })).values()];
     for (const entry of dueEntries(entries, now)) {
       await this.replayOne(entry, now);
@@ -122,6 +123,10 @@ export class WebhookReplayQueue extends DurableObject {
         wakeAt = due;
       }
     }
+    const driftWake = await nextDriftWake(this.ctx.storage);
+    if (driftWake !== null && (wakeAt === null || driftWake < wakeAt)) {
+      wakeAt = driftWake;
+    }
     if (wakeAt === null) {
       await this.ctx.storage.deleteAlarm();
       return;
@@ -130,10 +135,17 @@ export class WebhookReplayQueue extends DurableObject {
   }
 
   async reassessmentMutation(payload) {
+    const drift = await driftMutation(this.ctx.storage, payload);
+    if (drift !== null) {
+      if (payload.action !== "query_target" && payload.action !== "read_sweep") {
+        await this.armAlarm();
+      }
+      return drift;
+    }
     if (payload.action === "query") {
       if (payload.key === "") {
         const records = [...(await this.ctx.storage.list({ prefix: REASSESSMENT_PREFIX })).values()];
-        return Response.json({ applied: false, record: null, records });
+        return Response.json({ applied: false, record: null, records, ...await driftSnapshot(this.ctx.storage) });
       }
       const record = await this.ctx.storage.get(REASSESSMENT_PREFIX + payload.key);
       return Response.json({ applied: false, record: record ?? null });
@@ -149,6 +161,7 @@ export class WebhookReplayQueue extends DurableObject {
       }
       const record = { ...payload.record, version: payload.expected_version + 1 };
       await transaction.put(key, record);
+      await countQueueTransition(transaction, current, record);
       return { applied: true, record };
     });
     await this.armAlarm();
@@ -156,13 +169,7 @@ export class WebhookReplayQueue extends DurableObject {
   }
 
   async callback(action, record) {
-    const body = JSON.stringify({ action, record });
-    const signature = await reassessmentSignature(this.env.GITHUB_WEBHOOK_SECRET, body);
-    const settings = createReviewSettingsHeader();
-    const settingsSignature = await signReviewSettings(this.env.GITHUB_WEBHOOK_SECRET, settings, body);
-    return this.env.PR_AGENT.getByName("github-app").fetch(new Request("https://reassessment/internal/v1/reassessment", {
-      method: "POST", headers: { "Content-Type": "application/json", [REASSESSMENT_SIGNATURE]: signature, [REVIEW_SETTINGS_HEADER]: settings, [REVIEW_SETTINGS_SIGNATURE_HEADER]: settingsSignature }, body,
-    }));
+    return reassessmentCallback(this.env, { action, record });
   }
 
   async reassessOne(record) {

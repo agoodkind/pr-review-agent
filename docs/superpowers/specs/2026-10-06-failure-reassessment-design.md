@@ -46,7 +46,17 @@ Retry operational failures and incomplete coverage caused by unsuccessful model 
 
 Queue completion requires a completed assessment, not approval or a successful check conclusion. An open finding with a returned `open` decision has been reassessed. An uncertain model decision also establishes reassessment but does not resolve the thread. Preserve existing review decisions during unsuccessful retry attempts.
 
-The eligibility checks cancel queued work after closure, merge, or draft conversion. A later ready-for-review or reopened event starts another ordinary review.
+The eligibility checks cancel queued work after confirmed closure, merge, or draft conversion. A ready-for-review or reopened event starts queue evaluation in a new generation. Evaluation uses saved coverage and the current target.
+
+## Reconcile stored and observed state
+
+Persist registered targets and private assessment outcomes independently of expiring queue records. A private outcome includes its nonce, delivery, generation, and observation time. GitHub checks include the matching outcome marker.
+
+Compare validated GitHub PR metadata, checks, and coverage with the private outcome before ending reassessment. Missing fields, malformed responses, failed requests, and contradictory observations defer evaluation. An empty or failed lookup cannot establish completion or closure.
+
+Confirm observed state changes according to the configured observation count and interval. Store observation provenance with each target. Repair a missing queue record when confirmed evidence requires unfinished work. Replace a mismatched target through a conditional update. Preserve checkpoints and reject results from an earlier generation.
+
+Scan registered targets and paginated GitHub App inventory through a persisted cursor. Register discovered targets before advancing that cursor. A scheduled Worker tick starts reconciliation without requiring another webhook. The coordinator controls scan cadence and bounded work through runtime settings.
 
 ## Runtime configuration
 
@@ -62,6 +72,10 @@ Configure `REASSESSMENT` in [runtime.json](../../../runtime.json). Omission disa
 | `ttl` | Limits unfinished reassessment work when positive. |
 | `terminal_retention` | Retains terminal queue records for diagnostics. |
 | `retry_declined` | Enables periodic admission checks for oversized or structurally declined reviews. |
+| `reconcile_interval` | Controls independent target and installation inventory scans. |
+| `page_size`, `batch_size` | Bound inventory pages and target evaluations. |
+| `state_confirmations`, `confirmation_interval` | Require repeated validated observations before repairing stored state. |
+| `read_budget` | Bounds matching completion disagreements before a new assessment reconstructs private evidence. |
 
 Validate positive retry delays, nonnegative attempt and age limits, and a maximum delay at least as long as the initial delay. A new failed head starts a new generation. Repeated failures on that generation retain the original limits. Configuration changes apply when the Go coordinator next evaluates a record.
 
@@ -109,5 +123,9 @@ Use the real local Cloudflare runtime and persistent storage for queue integrati
 | A permanent admission refusal occurs. | The queue records a terminal decision without retrying identical refused work. |
 | The attempt limit or expiration occurs. | The queue records exhaustion and the operator snapshot reports stopped automatic reassessment. |
 | A newer ordinary review completes during retry delay. | The matching queued assessment terminates without another model call. |
+| A closed or draft PR becomes ready for review. | A new generation reevaluates saved coverage and rejects delayed results from the prior generation. |
+| A queue record is missing while durable evidence requires more review. | Reconciliation recreates pending work without inventing completed coverage. |
+| GitHub returns an error, malformed data, or contradictory state. | Evaluation retains durable work and schedules another observation. |
+| The replay queue is empty and no webhook arrives. | The scheduled tick advances the persisted inventory cursor. |
 
 The implementation must pass `make check` and the Cloudflare deployment's existing test command. Live acceptance requires the configured test pull request, a recoverable provider failure, an unchanged-head automatic retry, and verified closure and draft cancellation. Preserve queue, attempt, check, and thread identifiers with the acceptance results.

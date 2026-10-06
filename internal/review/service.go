@@ -327,6 +327,9 @@ func (service *Service) runLocked(
 	if pullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+	if job.AutomaticReassessment && (!pullRequest.EligibilityKnown || !pullRequest.MetadataKnown) {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, errors.New("current pull request response is incomplete"))
+	}
 	if job.AutomaticReassessment && (pullRequest.State != "open" || pullRequest.Merged || pullRequest.Draft) {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}

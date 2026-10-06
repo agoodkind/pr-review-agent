@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -26,7 +27,7 @@ func statsQueue(ctx context.Context, runtimeData []byte, tokenFile string) opsst
 		return snapshot
 	}
 	endpoint, err := url.Parse(runtime.URL)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil {
+	if err != nil || !statsQueueURL(endpoint) {
 		snapshot.UnavailableReason = "The runtime queue origin requires an HTTPS URL."
 		return snapshot
 	}
@@ -71,17 +72,22 @@ func statsQueue(ctx context.Context, runtimeData []byte, tokenFile string) opsst
 		snapshot.UnavailableReason = "The queue response could not be read."
 		return snapshot
 	}
-	var payload struct {
-		Records json.RawMessage `json:"records"`
+	return opsstats.ReadQueueSnapshot(data, snapshot.CapturedAt, response.StatusCode)
+}
+
+func statsQueueURL(endpoint *url.URL) bool {
+	if endpoint == nil || endpoint.Host == "" || endpoint.User != nil {
+		return false
 	}
-	if json.Unmarshal(data, &payload) != nil || len(payload.Records) == 0 {
-		snapshot.UnavailableReason = "The queue response does not contain a records array."
-		return snapshot
+	if endpoint.Scheme == "https" {
+		return true
 	}
-	if json.Unmarshal(payload.Records, &snapshot.Records) != nil {
-		snapshot.UnavailableReason = "The queue records could not be decoded."
-		return snapshot
+	if endpoint.Scheme != "http" {
+		return false
 	}
-	snapshot.Known = true
-	return snapshot
+	if endpoint.Hostname() == "localhost" {
+		return true
+	}
+	address := net.ParseIP(endpoint.Hostname())
+	return address != nil && address.IsLoopback()
 }

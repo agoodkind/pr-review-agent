@@ -24,6 +24,7 @@ const (
 
 // AssessmentOutcome stores recovery evidence without provider-supplied error text.
 type AssessmentOutcome struct {
+	Nonce            string                `json:"nonce,omitempty"`
 	Disposition      AssessmentDisposition `json:"disposition"`
 	Head             HeadSHA               `json:"head"`
 	MetadataRevision string                `json:"metadata_revision,omitempty"`
