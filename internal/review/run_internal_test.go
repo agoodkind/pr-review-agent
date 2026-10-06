@@ -254,6 +254,7 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 	)
 	service := &Service{
 		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
+		reviewPolicy:       policytest.Load(t),
 		model:              postPlanModel{},
 		chunkTimeout:       time.Second,
 		publicationTimeout: time.Second,

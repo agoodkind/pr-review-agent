@@ -47,6 +47,7 @@
     "RESOURCE_EXHAUSTED"
   ],
   "templates": {
+    "inline.footer": "<sub><i>Already addressed this review? Please respond and resolve!</i></sub>",
     "failure.class.other": "an unexpected error",
     "failure.class.deadline": "a request timeout",
     "failure.class.provider_unavailable": "a provider service error",

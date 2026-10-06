@@ -295,8 +295,8 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 		return "", domain.Finding{}, errors.New("finding marker not found")
 	}
 
-	withoutMarker := findingPattern.ReplaceAllString(comment.Body, "")
-	withoutMarker = strings.TrimSpace(withoutMarker)
+	markerRange := findingPattern.FindStringIndex(comment.Body)
+	withoutMarker := strings.TrimSpace(comment.Body[:markerRange[0]])
 	if !strings.HasPrefix(withoutMarker, "### ") {
 		return "", domain.Finding{}, errors.New("finding title missing")
 	}
