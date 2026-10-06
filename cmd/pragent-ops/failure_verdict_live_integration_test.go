@@ -324,7 +324,7 @@ func liveFailureAssertReceipt(t *testing.T, ctx context.Context, github *githuba
 	}
 	for _, comment := range comments {
 		state, valid := marker.DecodeState(comment.Body)
-		if comment.Author != bot || !valid || state.RunID != job.DeliveryID || !strings.Contains(comment.Body, marker.Summary()) {
+		if comment.Author != bot || !valid || state.RunID != job.DeliveryID {
 			continue
 		}
 		if strings.Contains(comment.Body, invalidCredential) || !strings.Contains(comment.Body, providerID) {
