@@ -1,20 +1,5 @@
 package review
 
-// This file reviews the delta chunk by chunk and checkpoints after each one.
-//
-// A review that holds its progress in process memory loses everything when the
-// container dies, and a review under one shared clock never finishes a large
-// diff: 31 logged timeouts were that one clock colliding with unbounded input.
-// Here every chunk gets its own model call under its own timeout, posts what it
-// found, and only then advances the durable checkpoint. A death at any moment
-// loses at most the chunks in flight, and a chunk whose call or post failed
-// stays pending and visible for the next push.
-//
-// Chunks run several at a time. Concurrency is not a clock, so it takes nothing
-// away from the rule that no clock spans two model calls; what it buys is wall
-// clock, because a sixty chunk delta reviewed strictly one at a time would run
-// for hours.
-
 import (
 	"context"
 	"errors"
@@ -31,6 +16,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // chunkIDLength is how much of a chunk's digest names it in the durable marker.
@@ -794,6 +780,12 @@ func (service *Service) postChunkFindings(
 	if len(posts) == 0 {
 		return nil
 	}
+	var footerData reviewrules.PromptData
+	footer, err := service.reviewPolicy.Render("inline.footer", footerData)
+	if err != nil {
+		logger.ErrorContext(ctx, "render inline comment footer", slog.String("err", err.Error()))
+		return fmt.Errorf("render inline comment footer: %w", err)
+	}
 
 	// Posting runs free of the caller's deadline. The findings are worth
 	// nothing to the reader until they reach the pull request, so a stage that
@@ -815,6 +807,7 @@ func (service *Service) postChunkFindings(
 	var refusedErr error
 	var transientErr error
 	for _, post := range posts {
+		post.comment.Body += "\n\n" + footer
 		err := service.github.CreateReviewComment(
 			ctx,
 			job.InstallationID,

@@ -95,9 +95,11 @@ type dedicatedAdmission struct {
 
 // emptyDedicatedAdmission is the answer for a delivery that left nothing behind.
 func emptyDedicatedAdmission() dedicatedAdmission {
+	var outcome domain.AssessmentOutcome
 	return dedicatedAdmission{
 		checkRun: githubapp.CheckRun{
-			ID: 0, Name: "", Head: "", Status: "", Conclusion: "", ExternalID: "",
+			Outcome: outcome,
+			ID:      0, Name: "", Head: "", Status: "", Conclusion: "", ExternalID: "",
 		},
 		found:   false,
 		visible: false,
@@ -130,7 +132,7 @@ func (service *Service) priorDedicatedAdmission(
 	head domain.HeadSHA,
 ) (dedicatedAdmission, error) {
 	logger := gklog.L(ctx)
-	if !job.Forced && !job.RefreshVerdict {
+	if !job.Forced && !job.RefreshVerdict && !job.AutomaticReassessment {
 		return emptyDedicatedAdmission(), nil
 	}
 	checkRun, found, err := service.github.FindCheckRunByExternalID(
@@ -274,7 +276,7 @@ func (service *Service) checkRunForHead(
 		logger.ErrorContext(ctx, "find check run", slog.String("err", err.Error()))
 		return githubapp.CheckRun{}, fmt.Errorf("find check run: %w", err)
 	}
-	if found && !job.Forced && !job.RefreshVerdict {
+	if found && !job.Forced && !job.RefreshVerdict && !job.AutomaticReassessment {
 		return checkRun, nil
 	}
 	created, err := service.github.CreateCheckRun(
@@ -320,6 +322,7 @@ func (service *Service) succeed(
 // cancelCheck concludes a check run the run abandoned, which is what a head
 // that moved mid review leaves behind.
 func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
+	recordAssessment(ctx, domain.AssessmentInterrupted, nil, nil, 0)
 	logger := gklog.L(ctx)
 	if err := service.completeCheckRun(
 		ctx,
@@ -350,6 +353,14 @@ func (service *Service) completeCheckRun(
 	logger := gklog.L(ctx)
 	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
 	defer cancel()
+	outcome, outcomeErr := persistAssessment(completionCtx, checkRunID)
+	if outcomeErr != nil {
+		return fmt.Errorf("persist assessment outcome: %w", outcomeErr)
+	}
+	text := renderRunLog(ctx)
+	if outcome.Disposition != "" {
+		text += "\n\n" + domain.EncodeAssessmentOutcome(outcome)
+	}
 	// The log is rendered before the completion call, so the published text is
 	// everything the run recorded up to the moment it finished.
 	err := service.github.CompleteCheckRun(
@@ -360,7 +371,7 @@ func (service *Service) completeCheckRun(
 		conclusion,
 		title,
 		summary,
-		renderRunLog(ctx),
+		text,
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "complete check run", slog.String("err", err.Error()))

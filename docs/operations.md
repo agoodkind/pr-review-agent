@@ -15,7 +15,19 @@ The hidden state marker records the last reviewed commit, pending and completed 
 
 The service declines a delta that exceeds its configured admission limits before sending model requests. The summary reports the measured size. The check concludes `action_required`, and the last reviewed commit does not advance. Subsequent pushes include the unreviewed range until a review completes or the pull request is split.
 
-Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work and existing review decisions. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
+Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
+
+Automatic reassessment queues failed reviews, unread chunks, and failed discussion refreshes. The queue persists one record per pull request across container restarts. Each retry reads the current head and metadata before checking that the pull request remains open, unmerged, and ready for review. The retry resumes completed chunk checkpoints without forcing another full review.
+
+Reopening a pull request or marking a draft ready for review restarts queue evaluation for the current head and metadata. The new generation rejects delayed results from the earlier lifecycle. A current completed assessment can end evaluation without another model request.
+
+Periodic reconciliation retains a separate registry of known pull requests. Installation inventory discovers open pull requests through bounded pages. The registry remains available after terminal queue records expire. Live checkpoints and assessment outcomes determine whether a missing queue entry requires repair.
+
+GitHub transport errors, partial responses, and contradictory values defer evaluation. Repeated observations must confirm closure, draft status, merge status, or completion before the queue changes its terminal state. Completion requires matching private and GitHub assessment receipts for the current head and metadata. The private receipt persists before the service completes its GitHub check.
+
+Missing private completion evidence requires a new assessment after the configured read budget. The assessment uses a new dedicated check and writes a new private receipt. Valid chunk checkpoints prevent another full analysis of covered files. A missing or unusable checkpoint requires source analysis again.
+
+The queue waits for measured app quota availability. Other operational failures use exponential backoff. A successful check does not end retry when the assessment remains incomplete. A completed assessment ends retry even when an unresolved finding requires changes. The summary reports the scheduled retry time and reassessment identifier.
 
 The service measures the complete rendered input against its configured prompt budget. It trims surplus file context and splits chunks when needed. A provider response that stops at its output limit also triggers splitting. A single hunk that cannot fit or finish requires a decision about whether its unread content is necessary for the verdict.
 
@@ -23,7 +35,11 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-A failed review changes no standing review verdict. The summary and check report the recognized failure class and run identifier. Raw provider messages remain in the private service log. Public log fields are limited to service-defined measurements, identifiers, and wording. Inspect the private records using [logs.md](logs.md).
+An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
+
+Caller cancellation, exhausted quota, and rate limits do not withdraw the verdict. A successful provider fallback does not count as a terminal failure.
+
+The summary and check report the recognized failure class and run identifier. Collapsed failure details report the failing provider, model, HTTP status, and recognized error code. The private service log stores raw provider messages. Public log fields use service-defined measurements, identifiers, and wording. Inspect the private records using [logs.md](logs.md).
 
 ## Configure the service
 
@@ -47,6 +63,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PROVIDERS[].disabled` | Keep the provider configured without sending it requests |
 | `PROVIDER_BUDGET_URL` | Worker endpoint that records reported usage after model requests |
 | `SERVICE_FAILURE_APPEARANCE` | Choose whether each service failure class blocks the check |
+| `SERVICE_FAILURE_VERDICT_POLICY` | `dismiss_latest_block` withdraws the latest bot rejection after an unexpected terminal failure; `preserve` retains that rejection |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
 | `REVIEW_RULE_IMPORTANCE` | Fixed importance values indexed by stable rule ID |
 | `REVIEW_RULES_FILE` | Required path to the external rule catalog |
@@ -60,6 +77,11 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `PORT` | Sets the container listener port and the Worker connection port |
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
+| `REASSESSMENT` | Enables persistent automatic retries and configures `queue_url`, `initial_delay`, `maximum_delay`, `maximum_attempts`, `ttl`, `terminal_retention`, and `retry_declined` |
+| `REASSESSMENT.reconcile_interval` | Sets the interval between registry and installation inventory evaluations |
+| `REASSESSMENT.page_size`, `REASSESSMENT.batch_size` | Bound inventory pages and work per alarm |
+| `REASSESSMENT.state_confirmations`, `REASSESSMENT.confirmation_interval` | Require repeated matching GitHub observations before terminal decisions |
+| `REASSESSMENT.read_budget` | Bounds consistent completion disagreement before a new assessment rebuilds private evidence |
 
 The usage estimate uses configured paid list rates. It does not subtract free-tier usage or [complimentary data-sharing tokens](https://help.openai.com/en/articles/10306912-sharing-feedback-evaluation-and-fine-tuning-data-and-api-inputs-and-outputs-with-openai). The report marks an unpriced model as unknown. The token limit applies to the provider's requests from this service.
 
@@ -85,7 +107,9 @@ The shipped configuration treats app quota exhaustion and provider allowance exh
 
 The selected appearance changes only the check conclusion. The check title and the summary comment still report the recognized failure class. The run publishes no review verdict.
 
-Unread chunks stay pending. The next push reviews those chunks and any new changes.
+Unread chunks stay pending. Automatic reassessment retries those chunks when enabled. A later push includes the pending chunks and new changes.
+
+The shipped reassessment configuration imposes no attempt or age limit. Set a positive `maximum_attempts` or `ttl` to impose a limit. Set `retry_declined` to retry admission after a size or review-limit change. A declined review does not count as completed coverage.
 
 Configure each provider's quota fields using the [quota reference](quotas.md). Select input and output when matching OpenAI's complimentary data-sharing allowance. Keep the quota endpoint and its Durable Object binding configured when any provider has a cap.
 
@@ -101,7 +125,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Change review rules
 
-1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. The service reads both files at startup. The binary contains no default rules or prompts.
+1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json

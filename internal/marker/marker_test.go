@@ -279,6 +279,7 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
+	encoded += "\n\n<sub><i>Display footer.</i></sub>"
 	decodedHead, decodedFinding, err := DecodeFindingBody(domain.ReviewComment{
 		Path:      finding.Path,
 		StartLine: finding.StartLine,

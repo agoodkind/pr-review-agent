@@ -107,32 +107,34 @@ type LookupEnv func(string) (string, bool)
 const runtimeConfigPath = "/runtime.json"
 
 var runtimeConfigKeys = map[string]struct{}{
-	"CLYDE_BASE_URL":             {},
-	"CONTAINER_SLEEP_AFTER":      {},
-	"FALLBACK_BASE_URL":          {},
-	"FALLBACK_MODEL":             {},
-	"FALLBACK_ON":                {},
-	"PROVIDERS":                  {},
-	"PROVIDER_PRIORITY":          {},
-	"PROVIDER_FAILURE_POLICY":    {},
-	"PROVIDER_BUDGET_URL":        {},
-	"SERVICE_FAILURE_APPEARANCE": {},
-	"GITHUB_APP_ID":              {},
-	"GITHUB_BOT_LOGIN":           {},
-	"LOG_FORWARD_URL":            {},
-	"PORT":                       {},
-	"REVIEW_CHUNK_TIMEOUT":       {},
-	"REVIEW_CHUNK_CONCURRENCY":   {},
-	"REVIEW_MAX_CHUNKS":          {},
-	"REVIEW_MAX_FILES":           {},
-	"REVIEW_MAX_PROMPT_BYTES":    {},
-	"REVIEW_MIN_IMPORTANCE":      {},
-	"REVIEW_RULE_IMPORTANCE":     {},
-	"REVIEW_RULES_FILE":          {},
-	"REVIEW_PROMPTS_FILE":        {},
-	"REVIEW_MODEL":               {},
-	"REVIEW_MODEL_PRICING":       {},
-	"REVIEW_WORKERS":             {},
+	"SERVICE_FAILURE_VERDICT_POLICY": {},
+	"REASSESSMENT":                   {},
+	"CLYDE_BASE_URL":                 {},
+	"CONTAINER_SLEEP_AFTER":          {},
+	"FALLBACK_BASE_URL":              {},
+	"FALLBACK_MODEL":                 {},
+	"FALLBACK_ON":                    {},
+	"PROVIDERS":                      {},
+	"PROVIDER_PRIORITY":              {},
+	"PROVIDER_FAILURE_POLICY":        {},
+	"PROVIDER_BUDGET_URL":            {},
+	"SERVICE_FAILURE_APPEARANCE":     {},
+	"GITHUB_APP_ID":                  {},
+	"GITHUB_BOT_LOGIN":               {},
+	"LOG_FORWARD_URL":                {},
+	"PORT":                           {},
+	"REVIEW_CHUNK_TIMEOUT":           {},
+	"REVIEW_CHUNK_CONCURRENCY":       {},
+	"REVIEW_MAX_CHUNKS":              {},
+	"REVIEW_MAX_FILES":               {},
+	"REVIEW_MAX_PROMPT_BYTES":        {},
+	"REVIEW_MIN_IMPORTANCE":          {},
+	"REVIEW_RULE_IMPORTANCE":         {},
+	"REVIEW_RULES_FILE":              {},
+	"REVIEW_PROMPTS_FILE":            {},
+	"REVIEW_MODEL":                   {},
+	"REVIEW_MODEL_PRICING":           {},
+	"REVIEW_WORKERS":                 {},
 }
 
 // ModelPricing holds estimated US dollar rates per million tokens.
@@ -144,6 +146,8 @@ type ModelPricing struct {
 
 // Config holds validated service configuration.
 type Config struct {
+	FailureVerdictPolicy  FailureVerdictPolicy
+	Reassessment          Reassessment
 	Port                  string
 	ReviewWorkers         int
 	ReviewModel           string
@@ -279,7 +283,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
-		if name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
+		if name == "REASSESSMENT" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
 			values[name] = string(raw)
 			continue
 		}
@@ -327,6 +331,14 @@ func Load(lookup LookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ServiceFailureAppearance = appearances
+	cfg.FailureVerdictPolicy, err = loadFailureVerdictPolicy(lookup)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Reassessment, err = loadReassessment(lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	failurePolicy, err := LoadProviderFailurePolicy(lookup)
 	if err != nil {
 		return Config{}, err

@@ -129,6 +129,7 @@ function readPositiveDuration(value) {
 }
 
 const publicSettings = [
+  "REASSESSMENT",
   "PROVIDERS",
   "PROVIDER_PRIORITY",
   "PROVIDER_BUDGET_URL",
@@ -159,6 +160,7 @@ export function createPrAgentEnvironment(bindings, configuration = runtime) {
       continue;
     }
     switch (name) {
+      case "REASSESSMENT":
       case "REVIEW_MODEL_PRICING":
       case "PROVIDERS":
       case "PROVIDER_PRIORITY":

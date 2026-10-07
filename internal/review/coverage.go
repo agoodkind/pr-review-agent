@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -537,6 +538,16 @@ func (service *Service) concludeStructurallyIncomplete(
 	summary.Usage = UsageFromContext(ctx)
 	failures := pass.unreadChunks()
 	statuses := providerStatuses(failures)
+	disposition := domain.AssessmentDeclined
+	var classes []string
+	if len(failures) > 0 {
+		disposition = domain.AssessmentIncomplete
+		for _, class := range chunkFailureClasses(failures) {
+			classes = append(classes, string(class))
+		}
+	}
+	recordAssessment(ctx, disposition, &summary, classes, quotaRecovery(statuses))
+	cause := joinedChunkFailures(ctx, failures)
 	addAttemptedModels(&summary, statuses)
 	conclusion := checkConclusionDeclined
 	if !pass.decidedOmissions() || pass.acceptsOmissions() {
@@ -555,17 +566,21 @@ func (service *Service) concludeStructurallyIncomplete(
 			return service.cancelCheck(ctx, job, checkRun.ID)
 		}
 	}
+	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
 	notice := structuralShortfallNotice(summary.Head, shortfall, len(state.Pending))
 	if reason := chunkFailureReason(failures); reason != "" {
 		notice = reason + "\n\n" + notice
 	}
 	if len(failures) > 0 {
-		notice += "\n\n" + publicFailureDetail(job)
+		notice += "\n\n" + service.terminalFailureDetail(ctx, job, cause)
 	}
 	publicationCtx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
+	if _, err := persistAssessment(publicationCtx, checkRun.ID); err != nil {
+		return err
+	}
 	if err := service.upsertSummaryComment(publicationCtx, job, summaryCommentContent{
-		Prose: RenderUnreadableBody(summary, notice, statuses...),
+		Prose: RenderUnreadableBody(summary, notice, statuses...) + reassessmentNotice(ctx),
 		State: state,
 	}); err != nil {
 		return service.failCheck(
@@ -581,7 +596,8 @@ func (service *Service) concludeStructurallyIncomplete(
 		unreadableCheckTitle(len(shortfall.Hunks)),
 		notice+"\n\n"+RenderDetails(summary, statuses...),
 	); err != nil {
-		return err
+		logger.WarnContext(ctx, "complete unread-content review check", slog.String("err", err.Error()))
+		return errors.Join(err, dismissErr)
 	}
 	logger.InfoContext(
 		ctx,
@@ -591,6 +607,10 @@ func (service *Service) concludeStructurallyIncomplete(
 		slog.Int("pending", len(state.Pending)),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
+	if dismissErr != nil {
+		logger.WarnContext(ctx, "unread-content review withdrawal failed", slog.String("err", dismissErr.Error()))
+		return &reportedFailureError{cause: dismissErr}
+	}
 	return nil
 }
 

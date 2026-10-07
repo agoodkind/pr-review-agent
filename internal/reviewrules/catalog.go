@@ -18,6 +18,8 @@ type (
 	ID string
 	// Importance selects publication scores for categories without a fixed score.
 	Importance map[ID]int
+	// FailureCode identifies an API error code allowed in public diagnostics.
+	FailureCode string
 )
 
 const (
@@ -58,6 +60,7 @@ type promptsFile struct {
 	Limits           FormattingLimits       `json:"limits"`
 	Templates        map[string]string      `json:"templates"`
 	ProviderDetails  []ProviderDetailColumn `json:"provider_details"`
+	FailureCodes     []FailureCode          `json:"failure_codes"`
 }
 
 // FormattingLimits bounds generated reports using the loaded configuration.
@@ -68,6 +71,11 @@ type FormattingLimits struct {
 
 // PromptData is the concrete interpolation contract for configured templates.
 type PromptData struct {
+	Provider          string
+	Model             string
+	FailureClass      string
+	FailureStatus     string
+	FailureCode       string
 	MinimumImportance int
 	Rules             string
 	WritingPolicy     string
@@ -97,6 +105,7 @@ type Policy struct {
 	untrustedMarkers untrustedMarkers
 	limits           FormattingLimits
 	providerDetails  []ProviderDetailColumn
+	failureCodes     []FailureCode
 }
 
 // LoadPolicy requires both configuration files and rejects malformed templates.
@@ -143,7 +152,7 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 		compiled[name] = parsed
 	}
-	for _, name := range []string{"catalog.review", "catalog.output", "catalog.rule", "review.system", "review.input", "report.system", "report.input", "reconcile.system", "reconcile.input", "consolidate.system", "consolidate.input", "consolidate.across.input", "disputes.input", "omissions.none", "omissions.input", "omissions.decision", "pull_request.input", "structured.output", "untrusted.policy", "probe.user", "schema.finding.surface", "schema.finding.commit_sha", "schema.finding.correction_action", "schema.finding.path", "schema.finding.start_line", "schema.finding.end_line"} {
+	for _, name := range []string{"inline.footer", "failure.class.other", "failure.class.deadline", "failure.class.provider_unavailable", "failure.class.panic", "failure.class.daily_budget", "failure.class.usage_exceeded", "failure.class.rate_limited", "failure.dismiss", "failure.provider", "failure.service", "failure.details", "failure.row", "catalog.review", "catalog.output", "catalog.rule", "review.system", "review.input", "report.system", "report.input", "reconcile.system", "reconcile.input", "consolidate.system", "consolidate.input", "consolidate.across.input", "disputes.input", "omissions.none", "omissions.input", "omissions.decision", "pull_request.input", "structured.output", "untrusted.policy", "probe.user", "schema.finding.surface", "schema.finding.commit_sha", "schema.finding.correction_action", "schema.finding.path", "schema.finding.start_line", "schema.finding.end_line"} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
 		}
@@ -152,6 +161,7 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		catalog: Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
 		untrustedMarkers: prompts.UntrustedMarkers, limits: prompts.Limits,
 		providerDetails: prompts.ProviderDetails,
+		failureCodes:    prompts.FailureCodes,
 	}, nil
 }
 
@@ -243,6 +253,11 @@ func (policy Policy) Limits() FormattingLimits { return policy.limits }
 // ProviderDetails returns the configured collapsed table columns.
 func (policy Policy) ProviderDetails() []ProviderDetailColumn {
 	return slices.Clone(policy.providerDetails)
+}
+
+// RecognizesFailureCode uses failure_codes from the prompt configuration.
+func (policy Policy) RecognizesFailureCode(code string) bool {
+	return slices.Contains(policy.failureCodes, FailureCode(code))
 }
 
 // WrapUntrusted delimits source material using the configured protocol markers.

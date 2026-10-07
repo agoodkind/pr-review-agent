@@ -16,6 +16,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/queue"
+	"goodkind.io/pr-review-agent/internal/reassessment"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
 
@@ -146,6 +147,7 @@ const (
 )
 
 type handler struct {
+	reassessment   *reassessment.Coordinator
 	webhookHMACKey []byte
 	botLogin       string
 	pullRequests   pullRequestReader
@@ -164,6 +166,7 @@ func newHandler(
 	logger *slog.Logger,
 ) *handler {
 	return &handler{
+		reassessment:   nil,
 		webhookHMACKey: cfg.GitHubWebhookSecret, // gitleaks:allow
 		botLogin:       cfg.GitHubBotLogin,
 		pullRequests:   pullRequests,
@@ -175,6 +178,10 @@ func newHandler(
 }
 
 func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.URL.Path == reassessment.CallbackPath {
+		handler.handleReassessment(writer, request)
+		return
+	}
 	handler.logger.DebugContext(
 		request.Context(),
 		"http request",
@@ -281,7 +288,14 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	// honor at any point in this function.
 	job := event.Job()
 	job.Settings = readReviewSettings(request, body, handler.webhookHMACKey, logger)
+	if handler.suppressScheduledDelivery(ctx, writer, &job, event.RestartsQueue()) {
+		return
+	}
+	handler.admitWebhookReview(ctx, writer, job, logger)
+}
 
+func (handler *handler) admitWebhookReview(ctx context.Context, writer http.ResponseWriter, job domain.ReviewJob, logger *slog.Logger) {
+	deliveryID := job.DeliveryID
 	job, admitted, err := handler.admitter.Admit(ctx, job)
 	if err != nil {
 		handler.cache.Release(deliveryID)

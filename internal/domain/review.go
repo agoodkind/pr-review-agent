@@ -31,12 +31,12 @@ import (
 // delivery whose signature verified, and nothing here is worth more than the harm
 // it could do if a stranger chose it.
 type ReviewSettings struct {
-	MinimumImportance int
-	MaxFiles          int
-	MaxChunks         int
-	ChunkTimeout      time.Duration
-	ChunkConcurrency  int
-	MaxPromptBytes    int
+	MinimumImportance int           `json:"MinimumImportance"`
+	MaxFiles          int           `json:"MaxFiles"`
+	MaxChunks         int           `json:"MaxChunks"`
+	ChunkTimeout      time.Duration `json:"ChunkTimeout"`
+	ChunkConcurrency  int           `json:"ChunkConcurrency"`
+	MaxPromptBytes    int           `json:"MaxPromptBytes"`
 }
 
 // HeadSHA is a validated pull request head commit identifier.
@@ -81,16 +81,16 @@ func ForcesReview(labelName string) bool {
 
 // Repository identifies a GitHub repository owner and name pair.
 type Repository struct {
-	Owner string
-	Name  string
+	Owner string `json:"Owner"`
+	Name  string `json:"Name"`
 }
 
 // PullRequestRef identifies one pull request head under a GitHub installation.
 type PullRequestRef struct {
-	Repository     Repository
-	Number         int
-	InstallationID int64
-	Head           HeadSHA
+	Repository     Repository `json:"Repository"`
+	Number         int        `json:"Number"`
+	InstallationID int64      `json:"InstallationID"`
+	Head           HeadSHA    `json:"Head"`
 }
 
 // Key returns the stable queue key for this pull request.
@@ -334,17 +334,20 @@ func findingKey(finding Finding) string {
 
 // ReviewJob is one webhook delivery queued for review work.
 type ReviewJob struct {
-	DeliveryID         string
-	CheckRunID         int64
-	CheckRunStatus     string
-	CheckRunConclusion string
+	AutomaticReassessment  bool   `json:"AutomaticReassessment"`
+	ReassessmentID         string `json:"ReassessmentID"`
+	ReassessmentGeneration string `json:"ReassessmentGeneration"`
+	DeliveryID             string `json:"DeliveryID"`
+	CheckRunID             int64  `json:"CheckRunID"`
+	CheckRunStatus         string `json:"CheckRunStatus"`
+	CheckRunConclusion     string `json:"CheckRunConclusion"`
 	// ThreadRootCommentID asks an already reviewed head to reconsider the
 	// inline finding that received this reply.
-	ThreadRootCommentID int64
+	ThreadRootCommentID int64 `json:"ThreadRootCommentID"`
 	// RefreshVerdict marks a delivery caused by review discussion or thread
 	// state. Admission creates a dedicated check that stays in progress until
 	// this delivery finishes its verdict refresh.
-	RefreshVerdict bool
+	RefreshVerdict bool `json:"RefreshVerdict"`
 	// Forced marks a run a ForceReviewLabelPrefix label asked for. Such a run
 	// reviews the whole pull request from scratch: it ignores the commit the
 	// last completed run reviewed, the chunks earlier runs read, and every gate
@@ -356,11 +359,11 @@ type ReviewJob struct {
 	// later attempt of the same delivery, admitted because its check run never
 	// completed, resumes from what the earlier attempt recorded instead of
 	// paying for the whole pull request again.
-	Forced bool
+	Forced bool `json:"Forced"`
 	// Settings are the review tuning values this delivery carried. Every field
 	// it left zero falls back to the process configuration.
-	Settings ReviewSettings
-	PullRequestRef
+	Settings       ReviewSettings `json:"Settings"`
+	PullRequestRef `json:",inline"`
 }
 
 // ReviewComment is the root comment metadata for one review thread.

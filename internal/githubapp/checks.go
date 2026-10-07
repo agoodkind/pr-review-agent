@@ -34,12 +34,13 @@ func TruncateCheckRunText(text string) string {
 }
 
 type checkRunResponse struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	HeadSHA    string `json:"head_sha"`
-	Status     string `json:"status"`
-	Conclusion string `json:"conclusion"`
-	ExternalID string `json:"external_id"`
+	Output     checkRunOutput `json:"output"`
+	ID         int64          `json:"id"`
+	Name       string         `json:"name"`
+	HeadSHA    string         `json:"head_sha"`
+	Status     string         `json:"status"`
+	Conclusion string         `json:"conclusion"`
+	ExternalID string         `json:"external_id"`
 	// App names the GitHub App that owns the check run. A check run name is not
 	// reserved, so another app publishing one of the same name on the same head
 	// would otherwise be read as this service's own result.
@@ -83,7 +84,9 @@ type updateCheckRunBody struct {
 
 // emptyCheckRun is the zero check run returned beside a miss or a failure.
 func emptyCheckRun() CheckRun {
+	var outcome domain.AssessmentOutcome
 	return CheckRun{
+		Outcome:    outcome,
 		ID:         0,
 		Name:       "",
 		Head:       "",
@@ -156,6 +159,7 @@ func (client *Client) listCheckRuns(
 				return 0, err
 			}
 			runs = append(runs, CheckRun{
+				Outcome:    domain.DecodeAssessmentOutcome(item.Output.Text),
 				ID:         item.ID,
 				Name:       item.Name,
 				Head:       headSHA,
@@ -329,6 +333,7 @@ func decodeCheckRun(body []byte, ctx context.Context, client *Client) (CheckRun,
 	}
 	return CheckRun{
 		ID:         response.ID,
+		Outcome:    domain.DecodeAssessmentOutcome(response.Output.Text),
 		Name:       response.Name,
 		Head:       head,
 		Status:     response.Status,
