@@ -69,13 +69,7 @@
       "omit_max_output_tokens": true,
       "omit_text_format": true,
       "cf_access_client_id_binding": "CF_ACCESS_CLIENT_ID",
-      "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET",
-      "token_limit": 20000000,
-      "token_types": ["input", "output"],
-      "token_window": {
-        "mode": "rolling",
-        "duration": "24h"
-      }
+      "cf_access_client_secret_binding": "CF_ACCESS_CLIENT_SECRET"
     }
   ],
   "PROVIDER_PRIORITY": ["openai_goodkind_io", "openai_goodkindalex", "gemini", "openrouter", "clyde"],
