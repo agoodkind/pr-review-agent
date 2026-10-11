@@ -26,7 +26,27 @@ import (
 const reviewBodyRequestTimeout = 30 * time.Second
 const reviewBodyRollbackTimeout = 2 * time.Minute
 
+type reviewBodyIDs []int64
+
+func (ids *reviewBodyIDs) String() string {
+	values := make([]string, 0, len(*ids))
+	for _, id := range *ids {
+		values = append(values, strconv.FormatInt(id, 10))
+	}
+	return strings.Join(values, ",")
+}
+
+func (ids *reviewBodyIDs) Set(value string) error {
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return errors.New("review-id must be a positive integer")
+	}
+	*ids = append(*ids, id)
+	return nil
+}
+
 type reviewBodyOptions struct {
+	reviewIDs      reviewBodyIDs
 	runtime        string
 	appID          string
 	botLogin       string
@@ -54,6 +74,27 @@ type reviewBodySnapshot struct {
 	Threads        []githubapp.ReviewThread `json:"review_threads"`
 }
 
+type reviewBodyOperationError struct {
+	operation string
+	reviewID  int64
+	cause     error
+}
+
+func (failure *reviewBodyOperationError) Error() string {
+	return fmt.Sprintf("Review %d failed during %s.", failure.reviewID, failure.operation)
+}
+
+func (failure *reviewBodyOperationError) Unwrap() error {
+	return failure.cause
+}
+
+type reviewBodyDiagnostic struct {
+	HTTPStatus  int    `json:"http_status"`
+	Operation   string `json:"operation,omitempty"`
+	ReviewID    int64  `json:"review_id,omitempty"`
+	NativeError string `json:"native_error"`
+}
+
 func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	opts, err := reviewBodyFlags(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
@@ -79,6 +120,10 @@ func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	selected, clear := selectReviewBodies(snapshot.Reviews, cfg.GitHubBotLogin)
+	selected, clear, err = restrictReviewBodies(selected, clear, opts.reviewIDs)
+	if err != nil {
+		return err
+	}
 	if !opts.apply {
 		return printReviewBodyPlan(stdout, selected, clear, false)
 	}
@@ -89,6 +134,10 @@ func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	if err := applyReviewBodies(ctx, client, snapshot, selected); err != nil {
+		var apiError githubapp.APIError
+		if errors.As(err, &apiError) {
+			return reportReviewBodyError(ctx, opts.backupFile, err)
+		}
 		return err
 	}
 	return printReviewBodyPlan(stdout, selected, clear, true)
@@ -98,6 +147,7 @@ func reviewBodyFlags(args []string, output io.Writer) (reviewBodyOptions, error)
 	var opts reviewBodyOptions
 	set := flag.NewFlagSet("review-bodies", flag.ContinueOnError)
 	set.SetOutput(output)
+	set.Var(&opts.reviewIDs, "review-id", "Select an exact review ID. Repeat the flag to select additional IDs.")
 	set.StringVar(&opts.runtime, "runtime", "runtime.json", "Read the GitHub app ID and bot login from this public runtime file.")
 	set.StringVar(&opts.appID, "app-id", "", "Use this GitHub app ID instead of the runtime value.")
 	set.StringVar(&opts.botLogin, "bot-login", "", "Use this exact bot login instead of the runtime value.")
@@ -240,6 +290,31 @@ func reviewBodyHidden(body string) bool {
 	return true
 }
 
+func restrictReviewBodies(selected, clear []githubapp.Review, ids reviewBodyIDs) ([]githubapp.Review, []githubapp.Review, error) {
+	if len(ids) == 0 {
+		return selected, clear, nil
+	}
+	found := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		found[id] = false
+	}
+	exclude := func(review githubapp.Review) bool {
+		if _, requested := found[review.ID]; !requested {
+			return true
+		}
+		found[review.ID] = true
+		return false
+	}
+	selected = slices.DeleteFunc(selected, exclude)
+	clear = slices.DeleteFunc(clear, exclude)
+	for _, id := range ids {
+		if !found[id] {
+			return nil, nil, fmt.Errorf("review %d is not an eligible bot review with a hidden or empty body", id)
+		}
+	}
+	return selected, clear, nil
+}
+
 func writeReviewBodyBackup(path string, snapshot reviewBodySnapshot) (returnErr error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -280,14 +355,23 @@ func applyReviewBodies(ctx context.Context, client *githubapp.Client, snapshot r
 	}()
 	for _, original := range selected {
 		current, err := client.GetReview(ctx, snapshot.InstallationID, snapshot.Repository, snapshot.Number, original.ID)
-		if err != nil || current != original {
+		if err != nil {
+			return &reviewBodyOperationError{
+				operation: "read_review", reviewID: original.ID,
+				cause: fmt.Errorf("read review: %w", err),
+			}
+		}
+		if current != original {
 			return fmt.Errorf("review %d no longer matches its original snapshot", original.ID)
 		}
 		// A failed response may follow a successful remote write.
 		attempted = append(attempted, original)
 		updated, err := client.UpdateReview(ctx, snapshot.InstallationID, snapshot.Repository, snapshot.Number, original.ID, "")
 		if err != nil {
-			return fmt.Errorf("review %d body could not be cleared", original.ID)
+			return &reviewBodyOperationError{
+				operation: "clear_review_body", reviewID: original.ID,
+				cause: fmt.Errorf("clear review body: %w", err),
+			}
 		}
 		expected := original
 		expected.Body = ""
@@ -296,6 +380,50 @@ func applyReviewBodies(ctx context.Context, client *githubapp.Client, snapshot r
 		}
 	}
 	return verifyReviewBodySnapshot(ctx, client, snapshot, selected)
+}
+
+func reportReviewBodyError(ctx context.Context, backupPath string, failure error) error {
+	var diagnostic reviewBodyDiagnostic
+	var apiError githubapp.APIError
+	if errors.As(failure, &apiError) {
+		diagnostic.HTTPStatus = apiError.StatusCode
+		diagnostic.NativeError = apiError.Message
+	}
+	var operation *reviewBodyOperationError
+	if errors.As(failure, &operation) {
+		diagnostic.Operation = operation.operation
+		diagnostic.ReviewID = operation.reviewID
+		if diagnostic.NativeError == "" {
+			diagnostic.NativeError = operation.cause.Error()
+		}
+	}
+	path := backupPath + ".error.json"
+	publicStatus := fmt.Sprintf("GitHub returned HTTP %d.", diagnostic.HTTPStatus)
+	if diagnostic.HTTPStatus == 0 {
+		publicStatus = fmt.Sprintf("Review body operation %s failed.", diagnostic.Operation)
+	}
+	if err := writeReviewBodyDiagnostic(path, diagnostic); err != nil {
+		slog.WarnContext(ctx, "Private review body diagnostics could not be saved", "http_status", diagnostic.HTTPStatus, "path", path)
+		return fmt.Errorf("%s Private diagnostics could not be saved at %s.", publicStatus, path)
+	}
+	return fmt.Errorf("%s Private diagnostics are at %s.", publicStatus, path)
+}
+
+func writeReviewBodyDiagnostic(path string, diagnostic reviewBodyDiagnostic) (returnErr error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		returnErr = errors.Join(returnErr, file.Close())
+	}()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if err := json.NewEncoder(file).Encode(diagnostic); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 func rollbackReviewBodies(ctx context.Context, client *githubapp.Client, snapshot reviewBodySnapshot, attempted []githubapp.Review) error {
