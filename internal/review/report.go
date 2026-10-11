@@ -92,7 +92,8 @@ func (service *Service) updateVerdictBody(
 	standing githubapp.Review,
 	body string,
 ) error {
-	if standing.Body == body {
+	// GitHub rejects body edits after a review body becomes empty.
+	if standing.Body == "" || standing.Body == body {
 		return nil
 	}
 	logger := gklog.L(ctx)

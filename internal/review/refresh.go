@@ -133,10 +133,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	if err != nil {
 		return false, err
 	}
-	// Only a dismissed block is withheld from. Dismissing a block and dismissing
-	// an approval are opposite requests, and the review's own state no longer
-	// tells them apart, so the body it kept does.
-	blockWithdrawn := inputs.withdrawn && dismissedVerdictBlocked(inputs.verdict.Body)
+	blockWithdrawn := inputs.blockWithdrawn
 	omissions := inputs.assessment.omissions
 	omissionsAccepted := inputs.assessment.omissionsAccepted
 	decisionReason := inputs.assessment.decisionReason
@@ -251,15 +248,14 @@ func (service *Service) headReadWhole(
 // verdictRefreshInputs is everything a refresh decides from.
 type verdictRefreshInputs struct {
 	assessment assessmentSnapshot
-	// GitHub preserves the native review body after dismissal. The refresh reads
-	// that body to distinguish a dismissed rejection from a dismissed approval.
+	// Legacy native bodies provide assessments when the completed summary is absent.
 	verdict githubapp.Review
 	// standingState is what GitHub shows for this service now, across all heads.
 	standingState string
 	threads       []githubapp.ReviewThread
 	found         bool
-	// withdrawn is whether a person dismissed the verdict this head carried.
-	withdrawn bool
+	// Native dismissal evidence distinguishes human withdrawals from failure recovery.
+	blockWithdrawn bool
 }
 
 // loadVerdictRefreshInputs reads the standing verdict and the current threads a
@@ -274,7 +270,7 @@ func (service *Service) loadVerdictRefreshInputs(
 	logger := gklog.L(ctx)
 	var emptyAssessment assessmentSnapshot
 	missing := verdictRefreshInputs{
-		assessment: emptyAssessment, verdict: emptyReview(), standingState: "", threads: nil, found: false, withdrawn: false,
+		assessment: emptyAssessment, verdict: emptyReview(), standingState: "", threads: nil, found: false, blockWithdrawn: false,
 	}
 	if reviews == nil {
 		listed, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
@@ -285,7 +281,8 @@ func (service *Service) loadVerdictRefreshInputs(
 		reviews = listed
 	}
 	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
-	if verdict.withdrawn && dismissedVerdictBlocked(verdict.review.Body) {
+	blockWithdrawn := verdict.withdrawn && dismissedVerdictBlocked(verdict.review.Body)
+	if verdict.withdrawn && (blockWithdrawn || verdict.review.Body == "") {
 		dismissal, found, err := service.github.FindReviewDismissal(ctx, job.InstallationID, job.Repository, job.Number, verdict.review.ID)
 		if err != nil {
 			logger.WarnContext(ctx, "read failure dismissal provenance", slog.String("err", err.Error()))
@@ -294,7 +291,12 @@ func (service *Service) loadVerdictRefreshInputs(
 		if !found {
 			return missing, errors.New("review dismissal event is not available")
 		}
-		verdict.withdrawn = !automaticFailureDismissal(dismissal, service.botLogin, verdict.review.ID)
+		blocked, err := dismissedReviewBlocked(dismissal, verdict.review.Body)
+		if err != nil {
+			logger.WarnContext(ctx, "read original dismissed decision", slog.String("err", err.Error()))
+			return missing, err
+		}
+		blockWithdrawn = blocked && !automaticFailureDismissal(dismissal, service.botLogin, verdict.review.ID)
 	}
 	assessment, found, err := service.completedSummaryAssessment(ctx, job)
 	if err != nil {
@@ -315,12 +317,12 @@ func (service *Service) loadVerdictRefreshInputs(
 		threads = listed
 	}
 	return verdictRefreshInputs{
-		assessment:    assessment,
-		verdict:       verdict.review,
-		standingState: latestBotVerdictState(reviews, service.botLogin),
-		threads:       threads,
-		found:         true,
-		withdrawn:     verdict.withdrawn,
+		assessment:     assessment,
+		verdict:        verdict.review,
+		standingState:  latestBotVerdictState(reviews, service.botLogin),
+		threads:        threads,
+		found:          true,
+		blockWithdrawn: blockWithdrawn,
 	}, nil
 }
 

@@ -36,6 +36,14 @@ Persist a machine-readable outcome with the GitHub check. The replay admission p
 
 The app runner observes outcomes after review completion. The internal callback uses the existing admission and dispatcher components. An automatic source retry receives a dedicated check without setting the full-review force flag. Completed chunks and the last reviewed baseline retain their existing meaning. An automatic verdict retry reevaluates current threads and metadata without reanalyzing completed file chunks.
 
+## Metadata edit scheduling
+
+The queue stores edits limited to the title or description in the existing record for the pull request. Each distinct delivery records the latest metadata and postpones assessment until the edit interval has elapsed. Redelivering the same event retains the due time. A changed metadata fingerprint during planning restarts the wait before model work.
+
+New metadata generations supersede earlier queued edits and complete their checks with `skipped` without model requests. A full-review trigger replaces pending metadata work with immediate source review and rejects delayed results from the superseded generation. Base-branch changes, other edited fields, and edits without field details also require immediate full review.
+
+A metadata review reuses completed file coverage and checks current metadata. Missing or unfinished file coverage requires ordinary source review.
+
 ## Eligibility and completion
 
 Read the pull request immediately before admission and again under its existing execution lock before model requests. Start work only when the state is open, merged is false, and draft is false. A failed GitHub read defers work without assuming eligibility.
@@ -117,6 +125,9 @@ Use the real local Cloudflare runtime and persistent storage for queue integrati
 | A reply reconciliation fails. | A scheduled retry reevaluates that discussion and refreshes the standing verdict. |
 | The pull request closes, merges, or becomes draft. | The queue records cancellation before sending a model request. |
 | A new push replaces a queued head. | One record targets the latest head and an older outcome cannot remove it. |
+| Several title or description edits arrive on one head. | The queue assesses the latest metadata after the edit interval and reuses completed file coverage. Earlier checks conclude `skipped` without model requests. |
+| The same metadata delivery is replayed. | The existing due time and delivery check remain unchanged. |
+| A full-review trigger arrives while metadata work is waiting. | Source review starts immediately and delayed metadata results cannot replace its generation. |
 | A duplicate alarm arrives during analysis. | One attempt identifier produces one running check and one assessment. |
 | The process stops before enqueue or after check completion. | Restart resumes the recorded attempt or applies the recorded outcome without creating another assessment. |
 | A retry completes with an unresolved finding. | The queue records completion and the requested-changes verdict remains. |

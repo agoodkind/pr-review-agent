@@ -11,11 +11,12 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
-// ReviewDismissal records the actor and message from the matching timeline event.
+// ReviewDismissal recovers the original decision after GitHub changes the review state.
 type ReviewDismissal struct {
-	ReviewID int64
-	Actor    string
-	Message  string
+	OriginalDecision domain.ReviewDecision
+	ReviewID         int64
+	Actor            string
+	Message          string
 }
 
 type reviewDismissalEvent struct {
@@ -24,14 +25,15 @@ type reviewDismissalEvent struct {
 		Login string `json:"login"`
 	} `json:"actor"`
 	Review *struct {
-		ID      json.Number `json:"review_id"`
-		Message *string     `json:"dismissal_message"`
+		ID      json.Number          `json:"review_id"`
+		Message *string              `json:"dismissal_message"`
+		State   dismissedReviewState `json:"state"`
 	} `json:"dismissed_review"`
 }
 
 // FindReviewDismissal reads every timeline page before returning withdrawal evidence.
 func (client *Client) FindReviewDismissal(ctx context.Context, installationID int64, repo domain.Repository, number int, reviewID int64) (ReviewDismissal, bool, error) {
-	result := ReviewDismissal{ReviewID: 0, Actor: "", Message: ""}
+	result := ReviewDismissal{OriginalDecision: "", ReviewID: 0, Actor: "", Message: ""}
 	found := false
 	path := client.repoPath(repo, fmt.Sprintf("/issues/%d/timeline", number))
 	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
@@ -60,7 +62,12 @@ func (client *Client) FindReviewDismissal(ctx context.Context, installationID in
 				return 0, errors.New("decode dismissed review ID")
 			}
 			if id == reviewID {
-				result = ReviewDismissal{ReviewID: id, Actor: event.Actor.Login, Message: *event.Review.Message}
+				decision, err := originalDismissedDecision(event.Review.State)
+				if err != nil {
+					client.logger.WarnContext(ctx, "decode original dismissed decision", slog.String("err", err.Error()))
+					return 0, err
+				}
+				result = ReviewDismissal{OriginalDecision: decision, ReviewID: id, Actor: event.Actor.Login, Message: *event.Review.Message}
 				found = true
 			}
 		}
@@ -70,4 +77,28 @@ func (client *Client) FindReviewDismissal(ctx context.Context, installationID in
 		return result, false, err
 	}
 	return result, found, nil
+}
+
+type dismissedReviewState string
+
+const (
+	dismissedStateApproved  dismissedReviewState = "approved"
+	dismissedStateRequested dismissedReviewState = "changes_requested"
+	dismissedStateCommented dismissedReviewState = "commented"
+	dismissedStateUnknown   dismissedReviewState = ""
+)
+
+func originalDismissedDecision(state dismissedReviewState) (domain.ReviewDecision, error) {
+	switch state {
+	case dismissedStateApproved:
+		return domain.ReviewDecisionApprove, nil
+	case dismissedStateRequested:
+		return domain.ReviewDecisionRequestChanges, nil
+	case dismissedStateCommented:
+		return domain.ReviewDecisionComment, nil
+	case dismissedStateUnknown:
+		return "", nil
+	default:
+		return "", errors.New("the dismissed review has an invalid original state")
+	}
 }

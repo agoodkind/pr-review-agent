@@ -5,13 +5,15 @@ The service reviews changed repository content, pull request titles and descript
 
 ## Review lifecycle
 
-The service accepts `opened`, `reopened`, `ready_for_review`, `synchronize`, and `edited` pull request events. Draft pull requests require a `ready_for_review` event. An edit starts a fresh review even when the head is unchanged. Each admitted review receives a `PR-Agent Review` check.
+The service accepts `opened`, `reopened`, `ready_for_review`, `synchronize`, and `edited` pull request events. Draft pull requests require a `ready_for_review` event. Each admitted review receives a `PR-Agent Review` check.
 
 Mention `@goodkind-io-pr-agent` in a new top-level pull request comment to request a full review. A review label also requests a full review. Replies to the service's inline findings and changes to thread resolution refresh the verdict. The GitHub App requires `issue_comment`, `pull_request_review_comment`, `pull_request_review_thread`, and `pull_request` subscriptions.
 
 Ordinary push reviews examine the changes since the last reviewed commit. The first review examines the whole pull request. The service updates one summary comment with the purpose, changes, verdict, and actionable metadata findings. File findings appear inline. Title, description, and commit-message findings identify the source lines in the summary. The reviewer includes an exact replacement or deletion when a safe correction is available. A verified metadata defect still requests changes when an exact correction is unavailable. Collapsed details report models, duration, usage, estimated cost, coverage, and thread identifiers.
 
 The hidden state marker records the last reviewed commit, pending and completed chunks, run identifier, and status. Every summary update includes the marker. Resumed reviews reuse completed file chunks. Completed metadata chunks require a matching head and metadata revision. When the cached metadata record does not match, the service reviews the current metadata chunks again before approval.
+
+An edit limited to the title or description reuses completed file coverage and reviews current metadata. When edit coalescing is enabled, distinct deliveries postpone the queued review until the configured interval has elapsed since the latest edit. Superseded checks conclude `skipped` without model requests. A base-branch change, an edit to another field, or an edit without field details starts an immediate full review. Explicit full-review triggers also supersede pending metadata edits. Missing file coverage requires ordinary source review.
 
 The service declines a delta that exceeds its configured admission limits before sending model requests. The summary reports the measured size. The check concludes `action_required`, and the last reviewed commit does not advance. Subsequent pushes include the unreviewed range until a review completes or the pull request is split.
 
@@ -81,6 +83,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
 | `LOG_FORWARD_URL` | Service log destination |
 | `REASSESSMENT` | Enables persistent automatic retries and configures `queue_url`, `initial_delay`, `maximum_delay`, `maximum_attempts`, `ttl`, `terminal_retention`, and `retry_declined` |
+| `REASSESSMENT.metadata_settle_interval` | Set a positive duration with reassessment enabled to wait for title and description edits to stop. Omit the field or set `0s` to process those edits immediately. |
 | `REASSESSMENT.reconcile_interval` | Sets the interval between registry and installation inventory evaluations |
 | `REASSESSMENT.page_size`, `REASSESSMENT.batch_size` | Bound inventory pages and work per alarm |
 | `REASSESSMENT.state_confirmations`, `REASSESSMENT.confirmation_interval` | Require repeated matching GitHub observations before terminal decisions |
@@ -141,6 +144,35 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make check`. Verify findings and corrections with the live procedure in [acceptance.md](acceptance.md), then merge the change to deploy it.
 
 4. Confirm that the Release workflow completed successfully. The committed Cloudflare configuration contains an invalid image placeholder. For a manual deployment, set `PR_REVIEW_AGENT_IMAGE` to the verified image digest and run `npm run deploy` from `deploy/cloudflare`.
+
+## Clear hidden review bodies
+
+Clearing a native review body prevents later body updates through GitHub's `PUT` endpoint because GitHub rejects reviews with missing bodies. The command stores the original text in a local private backup and retains native review decisions.
+
+The command selects the configured bot's approvals, requests for changes, and dismissed reviews when each body contains a valid review marker and no visible text. Cleanup requires one completed bot summary covering the current head. Already-empty bodies require no update.
+
+1. Select the repository, pull request number, installation ID, and matching GitHub App private-key file. Run the command from the repository root to inspect the eligible IDs and native states.
+
+   ```bash
+   go run ./cmd/pragent-ops review-bodies \
+       --repository OWNER/REPO --pull-request NUMBER \
+       --installation-id INSTALLATION_ID \
+       --app-private-key-file /path/to/github-app.pem
+   ```
+
+   Replace the uppercase target placeholders with explicit values. Use `--app-id` and `--bot-login` to override the configured identity. The command requires no provider credentials or webhook secret.
+2. Apply cleanup after confirming the selected review IDs. Choose a backup path that does not exist.
+
+   ```bash
+   go run ./cmd/pragent-ops review-bodies \
+       --repository OWNER/REPO --pull-request NUMBER \
+       --installation-id INSTALLATION_ID \
+       --app-private-key-file /path/to/github-app.pem \
+       --apply --backup-file /path/to/new-private-backup.json
+   ```
+
+   The command saves the original review bodies and verification snapshots in the new backup with mode `0600` before changing GitHub bodies.
+3. Require a successful result with unchanged review IDs and states, summary comments, and inline comments. The command verifies those values after cleanup. A mismatch causes restoration attempts for bodies the command changed. The command reports restoration failures and does not overwrite an unexpected nonempty body. Retain the private backup after cleanup.
 
 ## Resume reviews
 

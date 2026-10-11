@@ -55,7 +55,7 @@ The command publishes no GitHub review. A request failure or missing usage is an
 
 1. Save the existing test pull request's title, description, head, labels, and thread state before changing the fixture.
 2. Introduce a known prose violation separately in the title, description, and a commit message. Require a current finding at the actual field lines in the existing summary. Require `request_changes` and the actual commit SHA for commit-message findings. Metadata findings must not use fabricated file anchors. Require an exact replacement or deletion when a safe correction is available. Feedback without an exact correction must request changes without printing an empty replacement.
-3. Correct the title or description without pushing a commit. Require an `edited` event to produce a new completed check on the unchanged head. Confirm that the corrected field no longer blocks approval.
+3. Correct the title or description without pushing a commit. When edit coalescing is enabled, make several edits before the configured interval expires. Require the latest metadata to receive a completed check on the unchanged head and earlier checks to conclude `skipped` without model requests. Confirm that completed file coverage is reused and the corrected field no longer blocks approval. Change the base branch separately and require an immediate full review.
 4. Resolve file threads while retaining a metadata defect. Require `request_changes` for the metadata defect. Confirm that required commit attribution remains unchanged.
 5. Interrupt a review after a metadata chunk is checkpointed. Push another commit while retaining the earlier bad commit message. Require a current finding for that commit after the resumed review completes.
 6. Restore the fixture's original metadata, labels, and thread state after the check, including after a failed assertion. Keep the check identifiers and source revisions as evidence.
@@ -206,6 +206,21 @@ The live regression seeds an older approval and a completed current-head assessm
    ```
 
 4. Require approval reuse under the default policy, delivery overrides in both directions, one empty-body approval under the per-commit policy, and no duplicate approval on repetition. Require the original summary ID and checkpoint data to remain intact.
+
+## Verify hidden review body cleanup
+
+The live regression verifies dry-run and apply idempotence on a fixture with already-empty native bot decision bodies. Use an open, non-draft test pull request with one completed current-head bot summary, a current bot rejection, and an older dismissed bot rejection with a lower review ID. The configured [recovery-test pull request](../deploy/cloudflare/recovery-test.json) is also supported when it satisfies those conditions.
+
+1. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for the selected fixture.
+2. Run the regression from the repository root.
+
+   ```bash
+   PR_AGENT_LIVE_REVIEW_BODIES_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveReviewBodiesPreservesEmptyReviewDecisions -count=1
+   ```
+
+3. Require the dry run and repeated apply to preserve review IDs, decisions, metadata, summary, and inline comments. Require the all-empty selection to create no new backup file.
+4. Verify that the dismissed review's original requested-changes decision remains available from GitHub's timeline after body cleanup.
 
 ## 8. A lost delivery is replayed, not dropped
 
