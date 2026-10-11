@@ -20,10 +20,9 @@ import (
 // makes a correction take effect on the next delivery instead of on the next
 // restart.
 //
-// A zero field is a delivery that said nothing about that value, and the process
-// configuration stands. That is what lets a worker and a container at different
-// versions work together: an older worker sends none of this, and every review
-// runs on the values it booted with, exactly as before.
+// A zero numeric field or nil Boolean field uses the process configuration.
+// An explicit Boolean overrides the process configuration, including false.
+// The service uses its process configuration when older workers omit these fields.
 //
 // Only values that govern one review travel. The model and the worker count size
 // the process rather than the review, and no secret travels at all. These arrive
@@ -31,6 +30,7 @@ import (
 // delivery whose signature verified, and nothing here is worth more than the harm
 // it could do if a stranger chose it.
 type ReviewSettings struct {
+	ApproveEachCommit *bool         `json:"ApproveEachCommit,omitempty"`
 	MinimumImportance int           `json:"MinimumImportance"`
 	MaxFiles          int           `json:"MaxFiles"`
 	MaxChunks         int           `json:"MaxChunks"`
@@ -360,8 +360,7 @@ type ReviewJob struct {
 	// completed, resumes from what the earlier attempt recorded instead of
 	// paying for the whole pull request again.
 	Forced bool `json:"Forced"`
-	// Settings are the review tuning values this delivery carried. Every field
-	// it left zero falls back to the process configuration.
+	// Zero numeric fields and nil Boolean fields use the process configuration.
 	Settings       ReviewSettings `json:"Settings"`
 	PullRequestRef `json:",inline"`
 }

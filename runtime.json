@@ -84,6 +84,7 @@
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
   "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",
   "PORT": "3000",
+  "REVIEW_APPROVE_EACH_COMMIT": false,
   "REVIEW_CHUNK_TIMEOUT": "5m",
   "REVIEW_CHUNK_CONCURRENCY": "4",
   "REVIEW_MAX_PROMPT_BYTES": "80000",

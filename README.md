@@ -2,7 +2,7 @@
 
 A Go executable for end-to-end pull request reviews.
 
-The service posts one check and one complete review for each pull request head. It silently resolves fixed findings on later heads.
+The service reviews each pull request head, publishes findings inline, and updates one summary comment. It silently resolves fixed findings on later heads.
 
 ## Install
 

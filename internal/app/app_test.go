@@ -964,7 +964,9 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if review["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", review["event"])
 	}
-	assertVerdictBody(t, review["body"], testDefectiveHead, false)
+	if body, exists := review["body"]; exists {
+		t.Fatalf("The approval request includes body %v; the body field must be omitted.", body)
+	}
 	comments, ok := review["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", review["comments"])
@@ -1019,7 +1021,10 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 		t.Fatalf("event = %v, want APPROVE", review["event"])
 	}
 	comment := fixture.githubState.summaryCommentBody()
-	verdict := reviewBody(t, review)
+	verdict := ""
+	if body, exists := review["body"]; exists {
+		t.Fatalf("The approval request includes body %v; the body field must be omitted.", body)
+	}
 
 	headings := strings.Count(comment, "## Review") + strings.Count(verdict, "## Review")
 	if headings != 1 {
@@ -1037,7 +1042,6 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	if !strings.Contains(comment, "## Review") {
 		t.Fatalf("summary comment = %q, want it to be the surviving Review block", comment)
 	}
-	assertVerdictBody(t, review["body"], testDefectiveHead, false)
 }
 
 // A block names what to fix in the one top-level comment, while the verdict
@@ -1735,7 +1739,9 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	if approval["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("second event = %v, want APPROVE", approval["event"])
 	}
-	assertVerdictBody(t, approval["body"], testCorrectedHead, false)
+	if body, exists := approval["body"]; exists {
+		t.Fatalf("The approval request includes body %v; the body field must be omitted.", body)
+	}
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {
 		t.Fatalf("resolve count = %d, want 1", fixture.githubState.resolveCallCount())

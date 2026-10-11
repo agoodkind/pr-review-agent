@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -102,9 +101,10 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	if current.Head != job.Head {
 		return true, nil
 	}
-	metadata, recorded, err := decodeMetadataRecord(inputs.verdict.Body)
-	if err != nil {
-		return false, err
+	metadata := inputs.assessment.metadata
+	recorded := inputs.assessment.metadataRecorded
+	if inputs.assessment.metadataError != nil {
+		return false, inputs.assessment.metadataError
 	}
 	if !recorded {
 		metadata, recorded, err = service.readMetadataRecord(ctx, job)
@@ -129,7 +129,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// true would approve a head whose incompleteness is recorded only in the
 	// comment this call could not read, which is the one way this path opens a
 	// gate over code nobody covered.
-	headFullyReviewed, err := service.headReadWhole(ctx, job, inputs.verdict.Body)
+	headFullyReviewed, err := service.headReadWhole(ctx, job, inputs.assessment.legacyWholeHead)
 	if err != nil {
 		return false, err
 	}
@@ -137,12 +137,9 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	// an approval are opposite requests, and the review's own state no longer
 	// tells them apart, so the body it kept does.
 	blockWithdrawn := inputs.withdrawn && dismissedVerdictBlocked(inputs.verdict.Body)
-	omissions := decodeOmissionMarker(inputs.verdict.Body)
-	omissionsAccepted := false
-	if accepted, found := decodeOmissionDecisionMarker(inputs.verdict.Body); found {
-		omissionsAccepted = accepted
-	}
-	decisionReason := decodeDecisionReasonMarker(inputs.verdict.Body)
+	omissions := inputs.assessment.omissions
+	omissionsAccepted := inputs.assessment.omissionsAccepted
+	decisionReason := inputs.assessment.decisionReason
 	omissions, omissionsAccepted, decisionReason = updateMetadataOmissions(omissions, omissionsAccepted, decisionReason, metadata)
 	if len(omissions) > 0 && !omissionsAccepted {
 		if decisionReason == "" {
@@ -150,7 +147,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		}
 	}
 	approvalAllowed := headFullyReviewed && (len(omissions) == 0 || omissionsAccepted) &&
-		!strings.Contains(inputs.verdict.Body, approvalWithheldMarker)
+		!inputs.assessment.approvalWithheld
 	decision := reviewerDecision(inputs.threads, service.botLogin, approvalAllowed)
 	if len(metadata.Findings) > 0 {
 		decision = domain.ReviewDecisionRequestChanges
@@ -160,6 +157,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		decisionReason:    decisionReason,
 		approvalWithheld:  !approvalAllowed,
 		standingState:     inputs.standingState,
+		currentApproval:   inputs.verdict.State == reviewStateApproved,
 		threads:           inputs.threads,
 		headFullyReviewed: headFullyReviewed,
 		blockWithdrawn:    blockWithdrawn,
@@ -231,7 +229,7 @@ func (service *Service) refreshReviewedCheck(
 func (service *Service) headReadWhole(
 	ctx context.Context,
 	job domain.ReviewJob,
-	verdictBody string,
+	legacyWholeHead bool,
 ) (bool, error) {
 	logger := gklog.L(ctx)
 	state, hasState, err := service.readState(ctx, job)
@@ -247,14 +245,14 @@ func (service *Service) headReadWhole(
 	if hasState && state.LastReviewed == job.Head {
 		return true, nil
 	}
-	return !strings.Contains(verdictBody, unreviewedHeadReason), nil
+	return legacyWholeHead, nil
 }
 
 // verdictRefreshInputs is everything a refresh decides from.
 type verdictRefreshInputs struct {
-	// verdict is the review that named this head, which is where how much was
-	// reviewed is recovered from. A dismissed review serves that just as well,
-	// because dismissing one does not edit its body.
+	assessment assessmentSnapshot
+	// GitHub preserves the native review body after dismissal. The refresh reads
+	// that body to distinguish a dismissed rejection from a dismissed approval.
 	verdict githubapp.Review
 	// standingState is what GitHub shows for this service now, across all heads.
 	standingState string
@@ -274,8 +272,9 @@ func (service *Service) loadVerdictRefreshInputs(
 	threads []githubapp.ReviewThread,
 ) (verdictRefreshInputs, error) {
 	logger := gklog.L(ctx)
+	var emptyAssessment assessmentSnapshot
 	missing := verdictRefreshInputs{
-		verdict: emptyReview(), standingState: "", threads: nil, found: false, withdrawn: false,
+		assessment: emptyAssessment, verdict: emptyReview(), standingState: "", threads: nil, found: false, withdrawn: false,
 	}
 	if reviews == nil {
 		listed, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
@@ -297,14 +296,14 @@ func (service *Service) loadVerdictRefreshInputs(
 		}
 		verdict.withdrawn = !automaticFailureDismissal(dismissal, service.botLogin, verdict.review.ID)
 	}
-	withheld, found, err := service.withheldSummaryVerdict(ctx, job)
+	assessment, found, err := service.completedSummaryAssessment(ctx, job)
 	if err != nil {
 		return missing, err
 	}
-	if found {
-		verdict = headVerdict{review: withheld, withdrawn: verdict.withdrawn, found: true}
+	if !found {
+		assessment = parseAssessmentSnapshot(verdict.review.Body)
 	}
-	if !verdict.found {
+	if !verdict.found && !found {
 		return missing, nil
 	}
 	if threads == nil {
@@ -316,6 +315,7 @@ func (service *Service) loadVerdictRefreshInputs(
 		threads = listed
 	}
 	return verdictRefreshInputs{
+		assessment:    assessment,
 		verdict:       verdict.review,
 		standingState: latestBotVerdictState(reviews, service.botLogin),
 		threads:       threads,
@@ -324,28 +324,9 @@ func (service *Service) loadVerdictRefreshInputs(
 	}, nil
 }
 
-// A failed verdict write can leave the summary as the only durable record
-// that the completed read did not establish approval.
-func (service *Service) withheldSummaryVerdict(
-	ctx context.Context,
-	job domain.ReviewJob,
-) (githubapp.Review, bool, error) {
-	logger := gklog.L(ctx)
-	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
-	if err != nil {
-		logger.ErrorContext(ctx, "read withheld summary verdict", slog.String("err", err.Error()))
-		return emptyReview(), false, fmt.Errorf("read withheld summary verdict: %w", err)
-	}
-	comment, found := findSummaryComment(comments, service.botLogin)
-	head, marked := marker.FindReview(comment.Body)
-	if !found || !marked || head != job.Head || !strings.Contains(comment.Body, approvalWithheldMarker) {
-		return emptyReview(), false, nil
-	}
-	return githubapp.Review{ID: 0, CommitID: head, Author: service.botLogin, Body: comment.Body, State: "COMMENTED"}, true, nil
-}
-
 // refreshedVerdict is what one refresh computed from current thread state.
 type refreshedVerdict struct {
+	currentApproval   bool
 	approvalWithheld  bool
 	decision          domain.ReviewDecision
 	decisionReason    string
@@ -404,6 +385,9 @@ type refreshedVerdict struct {
 func (refreshed refreshedVerdict) mayPublish() bool {
 	if refreshed.blockWithdrawn && refreshed.decision != domain.ReviewDecisionApprove {
 		return false
+	}
+	if refreshed.decision == domain.ReviewDecisionApprove && refreshed.settings.approveEachCommit && !refreshed.currentApproval {
+		return true
 	}
 	return reviewStateFor(refreshed.decision) != refreshed.standingState
 }

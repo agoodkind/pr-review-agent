@@ -231,11 +231,8 @@ func renderFallbackFindings(findings []domain.Finding) string {
 	return strings.Join(sections, "\n\n")
 }
 
-// RenderVerdictBody renders the review object that carries the verdict.
-//
-// GitHub displays the decision itself. The hidden markers preserve review state
-// without creating a third visible comment beside the top-level report and the
-// inline findings.
+// RenderVerdictBody serializes assessment checkpoints for the editable summary
+// and for native reviews that require a body. Native approvals omit this data.
 func RenderVerdictBody(summary Summary) string {
 	parts := make([]string, 0, 5)
 	parts = append(parts, marker.Review(summary.Head, summary.Decision))

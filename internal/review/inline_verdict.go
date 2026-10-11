@@ -101,7 +101,7 @@ func (service *Service) submitInlineBackedVerdict(
 	}
 	review, err := service.github.SubmitReview(ctx, job.InstallationID, job.Repository, job.Number, githubapp.SubmitReviewRequest{
 		CommitID: summary.Head,
-		Body:     RenderVerdictBody(summary),
+		Body:     nativeVerdictBody(summary),
 		Event:    summary.Decision,
 		Comments: nil,
 	})

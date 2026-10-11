@@ -73,8 +73,9 @@ type Reconciler interface {
 	Reconcile(context.Context, domain.ReviewJob) ([]githubapp.ReviewThread, error)
 }
 
-// Service publishes one complete GitHub review per pull request head.
+// Service reviews pull requests and publishes findings and decisions.
 type Service struct {
+	approveEachCommit  bool
 	failureVerdicts    config.FailureVerdictPolicy
 	github             GitHub
 	collector          Collector
@@ -138,6 +139,7 @@ func NewService(
 		chunkTimeout = config.DefaultReviewChunkTimeout
 	}
 	return &Service{
+		approveEachCommit:      false,
 		failureVerdicts:        config.DismissLatestFailureVerdict,
 		github:                 github,
 		collector:              collector,
@@ -491,78 +493,6 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	progress.reached("model analysis")
 }
 
-// carriedSettingFields names the tuning values this delivery supplied and the
-// run actually took, so the start line says which of the values beside it came
-// with the work and which the process booted with. Anything absent from this
-// list fell back.
-//
-// Naming what was taken rather than what was sent is deliberate. A value the
-// resolution refuses, because it is not above zero, falls back like a value that
-// never arrived, and a log that named it as carried would describe a run nobody
-// is having. Making a change visible when it takes effect is the whole reason
-// these travel with the delivery at all.
-// It asks the resolution rather than repeating its rules, because a second copy
-// of them drifts: the importance ceiling was added in one place and this list
-// went on naming a refused value as carried.
-
-// reviewSettings are the tuning values one run is bound by, after the values the
-// delivery carried are laid over the ones this process was configured with.
-type reviewSettings struct {
-	minimumImportance  int
-	maxFiles           int
-	maxChunks          int
-	chunkTimeout       time.Duration
-	chunkConcurrency   int
-	maximumPromptBytes int
-}
-
-// settingsFor resolves what this run is bound by.
-//
-// A delivery carries a value only when the worker attached one, so every field
-// it left zero falls back to what this process booted with. That fallback is
-// what lets a worker and a container at different versions work together, and it
-// is also what a delivery whose header could not be read gets.
-//
-// A non-positive value is not honored, for the same reason the constructor
-// refuses one: a zero budget refuses every real delta while admitting an empty
-// one, which is the opposite of what a budget is for, and a zero timeout would
-// end every model call before it began. These arrive from a header rather than
-// from configuration, so the same floor has to hold on both.
-//
-// An importance floor also has a ceiling, because findings are rated one
-// through ten. A floor above ten publishes nothing while the run still reports
-// a successful verdict, which reads to a person as a pull request with no
-// defects rather than as a threshold nothing could clear.
-func (service *Service) settingsFor(job domain.ReviewJob) reviewSettings {
-	settings := reviewSettings{
-		minimumImportance:  service.minimumImportance,
-		maxFiles:           service.reviewMaxFiles,
-		maxChunks:          service.reviewMaxChunks,
-		chunkTimeout:       service.chunkTimeout,
-		chunkConcurrency:   service.chunkConcurrency,
-		maximumPromptBytes: service.maximumPromptBytes,
-	}
-	if job.Settings.MinimumImportance > 0 && job.Settings.MinimumImportance <= domain.MaximumFindingImportance {
-		settings.minimumImportance = job.Settings.MinimumImportance
-	}
-	if job.Settings.MaxFiles > 0 {
-		settings.maxFiles = job.Settings.MaxFiles
-	}
-	if job.Settings.MaxChunks > 0 {
-		settings.maxChunks = job.Settings.MaxChunks
-	}
-	if job.Settings.ChunkTimeout > 0 {
-		settings.chunkTimeout = job.Settings.ChunkTimeout
-	}
-	if job.Settings.ChunkConcurrency > 0 {
-		settings.chunkConcurrency = job.Settings.ChunkConcurrency
-	}
-	if job.Settings.MaxPromptBytes > 0 {
-		settings.maximumPromptBytes = job.Settings.MaxPromptBytes
-	}
-	return settings
-}
-
 // stateClearedByThisDelivery reports whether this forced delivery already
 // cleared the durable state to review from scratch, which an earlier attempt of
 // it records before it starts reviewing.
@@ -906,9 +836,9 @@ func (service *Service) publishVerdict(
 			ctx, job, checkRun.ID, summary, checkFailureReviews, err,
 		)
 	}
-	standing := latestBotVerdictAtHead(reviews, service.botLogin, summary.Head)
+	standing := service.standingVerdict(job, reviews, summary)
 	decisionState := reviewStateFor(summary.Decision)
-	verdictBody := RenderVerdictBody(summary)
+	verdictBody := nativeVerdictBody(summary)
 	unchanged := standing.found && !standing.withdrawn &&
 		standing.review.State == decisionState &&
 		latestBotVerdictState(reviews, service.botLogin) == decisionState

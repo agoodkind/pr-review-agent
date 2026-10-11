@@ -22,7 +22,7 @@ type reviewResponse struct {
 
 type submitReviewBody struct {
 	CommitID string          `json:"commit_id"`
-	Body     string          `json:"body"`
+	Body     string          `json:"body,omitempty"`
 	Event    string          `json:"event"`
 	Comments []InlineComment `json:"comments"`
 }

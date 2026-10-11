@@ -57,6 +57,7 @@ func (event PullRequestEvent) Job() domain.ReviewJob {
 		// are read only once the signature has verified, so nothing decoded here
 		// can set them.
 		Settings: domain.ReviewSettings{
+			ApproveEachCommit: nil,
 			MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
 			ChunkConcurrency: 0, MaxPromptBytes: 0,
 		},

@@ -50,6 +50,9 @@ export async function signReviewSettings(signingKey, settings, body) {
 // what lets a worker and a container at different versions work together.
 export function createReviewSettingsHeader(bindings = runtime) {
   const settings = {};
+  if (typeof bindings.REVIEW_APPROVE_EACH_COMMIT === "boolean") {
+    settings.approve_each_commit = bindings.REVIEW_APPROVE_EACH_COMMIT;
+  }
   const minimumImportance = readPositiveInteger(bindings.REVIEW_MIN_IMPORTANCE);
   if (minimumImportance !== null) {
     settings.minimum_importance = minimumImportance;
@@ -138,6 +141,7 @@ const publicSettings = [
   "GITHUB_BOT_LOGIN",
   "LOG_FORWARD_URL",
   "PORT",
+  "REVIEW_APPROVE_EACH_COMMIT",
   "REVIEW_CHUNK_TIMEOUT",
   "REVIEW_CHUNK_CONCURRENCY",
   "REVIEW_MAX_PROMPT_BYTES",
@@ -160,6 +164,9 @@ export function createPrAgentEnvironment(bindings, configuration = runtime) {
       continue;
     }
     switch (name) {
+      case "REVIEW_APPROVE_EACH_COMMIT":
+        environment[name] = String(configuration[name]);
+        continue;
       case "REASSESSMENT":
       case "REVIEW_MODEL_PRICING":
       case "PROVIDERS":

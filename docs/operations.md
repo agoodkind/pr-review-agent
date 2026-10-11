@@ -35,6 +35,8 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
+The service submits approvals without review bodies. The editable summary stores assessment details and checkpoints. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Requested changes, human dismissals, and immediate inline publication retain their existing behavior.
+
 An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
 
 Caller cancellation, exhausted quota, and rate limits do not withdraw the verdict. A successful provider fallback does not count as a terminal failure.
@@ -65,6 +67,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `SERVICE_FAILURE_APPEARANCE` | Choose whether each service failure class blocks the check |
 | `SERVICE_FAILURE_VERDICT_POLICY` | `dismiss_latest_block` withdraws the latest bot rejection after an unexpected terminal failure; `preserve` retains that rejection |
 | `REVIEW_MIN_IMPORTANCE` | Minimum published importance from `1` through `10` |
+| `REVIEW_APPROVE_EACH_COMMIT` | Set `true` to submit an approval for each newly reviewed clean head; set `false` to reuse the latest standing approval |
 | `REVIEW_RULE_IMPORTANCE` | Fixed importance values indexed by stable rule ID |
 | `REVIEW_RULES_FILE` | Required path to the external rule catalog |
 | `REVIEW_PROMPTS_FILE` | Required path to the external stage prompt templates |
