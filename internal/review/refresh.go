@@ -251,7 +251,8 @@ func (service *Service) headReadWhole(
 // verdictRefreshInputs is everything a refresh decides from.
 type verdictRefreshInputs struct {
 	assessment assessmentSnapshot
-	// The native body determines whether a dismissed verdict blocked approval.
+	// GitHub preserves the native review body after dismissal. The refresh reads
+	// that body to distinguish a dismissed rejection from a dismissed approval.
 	verdict githubapp.Review
 	// standingState is what GitHub shows for this service now, across all heads.
 	standingState string
