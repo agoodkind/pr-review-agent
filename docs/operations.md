@@ -151,6 +151,8 @@ Clearing a native review body prevents later body updates through GitHub's `PUT`
 
 The command selects the configured bot's approvals, requests for changes, and dismissed reviews when each body contains a valid review marker and no visible text. Cleanup requires one completed bot summary covering the current head. Already-empty bodies require no update.
 
+GitHub rejects an empty body on some change-request reviews. Dismissing such a review changes its recorded decision and requires a separate operator decision; body cleanup never dismisses reviews automatically.
+
 1. Select the repository, pull request number, installation ID, and matching GitHub App private-key file. Run the command from the repository root to inspect the eligible IDs and native states.
 
    ```bash
@@ -161,6 +163,8 @@ The command selects the configured bot's approvals, requests for changes, and di
    ```
 
    Replace the uppercase target placeholders with explicit values. Use `--app-id` and `--bot-login` to override the configured identity. The command requires no provider credentials or webhook secret.
+
+   Repeat `--review-id` with each exact identifier to restrict cleanup. Every requested identifier must identify an eligible or already-empty review.
 2. Apply cleanup after confirming the selected review IDs. Choose a backup path that does not exist.
 
    ```bash
@@ -173,6 +177,8 @@ The command selects the configured bot's approvals, requests for changes, and di
 
    The command saves the original review bodies and verification snapshots in the new backup with mode `0600` before changing GitHub bodies.
 3. Require a successful result with unchanged review IDs and states, summary comments, and inline comments. The command verifies those values after cleanup. A mismatch causes restoration attempts for bodies the command changed. The command reports restoration failures and does not overwrite an unexpected nonempty body. Retain the private backup after cleanup.
+
+   A rejected GitHub update records the review identifier, operation, HTTP status, and native error in a private file ending in `.error.json` beside the backup. Public output contains only the status and diagnostic path.
 
 ## Resume reviews
 
