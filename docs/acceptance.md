@@ -87,11 +87,8 @@ Expect:
   at the head and `status=done`
 - the detail table carries duration, every reported token category, estimated
   cost, and the current thread identifiers and counts
-- one verdict review that states its decision in prose. An empty verdict
-  blocked a live pull request once: the review's whole body was one HTML
-  marker, so it named nothing to fix and no edit could satisfy it
-- the verdict review carries no detail table. The table lives on the comment;
-  a review repeating it rendered as two near identical Review boxes
+- A native approval has no review body. Requested changes require actionable findings.
+- The editable summary stores review details and checkpoint data.
 - one run identifier on the check text, the comment marker, and every log line
 
 ## 2. The same delivery and the same head never review twice
@@ -194,6 +191,21 @@ The live test dismisses the selected bot rejection and publishes a failed check.
    PR_AGENT_LIVE_FAILURE_VERDICT_TEST=1 go test -tags=integration ./cmd/pragent-ops \
        -run TestLiveUnexpectedFailurePreservesLaterOwnApproval -count=1
    ```
+
+## Verify approval publication
+
+The live regression seeds an older approval and a completed current-head assessment on a dedicated test pull request. It creates check runs and approvals, restores the original summary, and dismisses only approvals created by the test.
+
+1. Select an open, non-draft test pull request with an existing bot summary and no unresolved bot threads. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for that fixture.
+2. Set `PR_AGENT_LIVE_APPROVAL_OLDER_HEAD` to an earlier commit in the pull request and `PR_AGENT_LIVE_FAILURE_PROVIDER_ID` to a configured provider without Cloudflare Access requirements. The test uses an invalid provider credential because a completed assessment refresh must send no model request.
+3. Run the regression.
+
+   ```bash
+   PR_AGENT_LIVE_APPROVAL_PUBLICATION_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveApprovalPublicationUsesEmptyBodiesAndDeliveryPolicy -count=1
+   ```
+
+4. Require approval reuse under the default policy, delivery overrides in both directions, one empty-body approval under the per-commit policy, and no duplicate approval on repetition. Require the original summary ID and checkpoint data to remain intact.
 
 ## 8. A lost delivery is replayed, not dropped
 

@@ -187,6 +187,7 @@ func liveFailureService(cfg config.Config, logger *slog.Logger) (*review.Service
 	reconciler := reconcile.NewService(github, model, cfg.GitHubBotLogin, logger, cfg.PromptBytes(), cfg.ReviewPolicy)
 	service := review.NewService(github, diff.NewCollector(github), model, reconciler, queue.NewKeyedLocker(), cfg.GitHubBotLogin, cfg.MinimumImportance, cfg.ReviewMaxFiles, cfg.ReviewMaxChunks, cfg.ReviewChunkTimeout, cfg.ServiceFailureAppearance, clock.System, logger, cfg.ChunkConcurrency(), cfg.PromptBytes(), cfg.ReviewPolicy)
 	service.SetFailureVerdictPolicy(config.DismissLatestFailureVerdict)
+	service.SetApproveEachCommit(cfg.ApproveEachCommit)
 	return service, github
 }
 

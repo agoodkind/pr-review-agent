@@ -2699,22 +2699,8 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
 	}
-	body, ok := fixture.state.lastSubmitReview["body"].(string)
-	if !ok {
-		t.Fatalf("body = %v, want string", fixture.state.lastSubmitReview["body"])
-	}
-	// An approving verdict body is the review marker and nothing else. The
-	// approval event carries the meaning and the one top level comment carries
-	// the prose and the table, so any prose here renders a second Review box
-	// saying what the comment above it already said.
-	if strings.Split(body, "\n")[0] != marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionApprove) {
-		t.Fatalf("approving verdict body = %q, want the review marker alone", body)
-	}
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && (!strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->")) {
-			t.Fatalf("approving verdict includes visible text: %q", line)
-		}
+	if body, exists := fixture.state.lastSubmitReview["body"]; exists {
+		t.Fatalf("The approval request includes body %v; the body field must be omitted.", body)
 	}
 	commentBody, ok := fixture.state.issueComments[0]["body"].(string)
 	if !ok || !strings.Contains(commentBody, "| Model | `"+testReviewModel+"` |") {
@@ -2722,6 +2708,10 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 			fixture.state.issueComments[0]["body"])
 	}
 	assertCheckAndCommentShareDetails(t, fixture, commentBody)
+	state, decoded := marker.DecodeState(commentBody)
+	if !decoded || state.LastReviewed != domain.HeadSHA(testHeadSHA) || state.Status != marker.StateDone {
+		t.Fatalf("The summary checkpoint is %v with decoded %t; the reviewed head must be complete.", state, decoded)
+	}
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])

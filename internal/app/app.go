@@ -74,6 +74,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 		cfg.ReviewPolicy,
 	)
 	reviewService.SetFailureVerdictPolicy(cfg.FailureVerdictPolicy)
+	reviewService.SetApproveEachCommit(cfg.ApproveEachCommit)
 
 	cache := queue.NewDeliveryCache(
 		config.DeliveryCacheCapacity,

@@ -3,14 +3,18 @@ package review
 import "goodkind.io/pr-review-agent/internal/domain"
 
 func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
-	carried := make([]string, 0, 6)
+	carried := make([]string, 0, 7)
 	unsettled := job
 	unsettled.Settings = domain.ReviewSettings{
+		ApproveEachCommit: nil,
 		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
 		ChunkConcurrency: 0, MaxPromptBytes: 0,
 	}
 	empty := service.settingsFor(unsettled)
 	resolved := service.settingsFor(job)
+	if resolved.approveEachCommit != empty.approveEachCommit {
+		carried = append(carried, "approve_each_commit")
+	}
 	if resolved.minimumImportance != empty.minimumImportance {
 		carried = append(carried, "minimum_importance")
 	}

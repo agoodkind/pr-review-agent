@@ -60,6 +60,7 @@ func reviewSettingsSigningInput(settings string, body []byte) []byte {
 // optional, and one the worker left out stays zero, which the service reads as
 // the process configuration standing.
 type reviewSettingsPayload struct {
+	ApproveEachCommit *bool  `json:"approve_each_commit,omitempty"`
 	MinimumImportance int    `json:"minimum_importance"`
 	MaxFiles          int    `json:"max_files"`
 	MaxChunks         int    `json:"max_chunks"`
@@ -89,6 +90,7 @@ func readReviewSettings(
 	logger *slog.Logger,
 ) domain.ReviewSettings {
 	empty := domain.ReviewSettings{
+		ApproveEachCommit: nil,
 		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
 		ChunkConcurrency: 0, MaxPromptBytes: 0,
 	}
@@ -120,6 +122,7 @@ func readReviewSettings(
 		}
 	}
 	return domain.ReviewSettings{
+		ApproveEachCommit: payload.ApproveEachCommit,
 		MinimumImportance: payload.MinimumImportance,
 		MaxFiles:          payload.MaxFiles,
 		MaxChunks:         payload.MaxChunks,

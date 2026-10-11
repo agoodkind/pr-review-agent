@@ -123,6 +123,7 @@ var runtimeConfigKeys = map[string]struct{}{
 	"GITHUB_BOT_LOGIN":               {},
 	"LOG_FORWARD_URL":                {},
 	"PORT":                           {},
+	"REVIEW_APPROVE_EACH_COMMIT":     {},
 	"REVIEW_CHUNK_TIMEOUT":           {},
 	"REVIEW_CHUNK_CONCURRENCY":       {},
 	"REVIEW_MAX_CHUNKS":              {},
@@ -146,6 +147,7 @@ type ModelPricing struct {
 
 // Config holds validated service configuration.
 type Config struct {
+	ApproveEachCommit     bool
 	FailureVerdictPolicy  FailureVerdictPolicy
 	Reassessment          Reassessment
 	Port                  string
@@ -283,6 +285,14 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
+		if name == "REVIEW_APPROVE_EACH_COMMIT" {
+			var value bool
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return Config{}, fmt.Errorf("runtime configuration key %q must be a boolean", name)
+			}
+			values[name] = strconv.FormatBool(value)
+			continue
+		}
 		if name == "REASSESSMENT" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
 			values[name] = string(raw)
 			continue
@@ -310,6 +320,13 @@ func Load(lookup LookupEnv) (Config, error) {
 	}
 	if err := LoadReviewLimits(lookup, &cfg); err != nil {
 		return Config{}, err
+	}
+	if value, configured := lookup("REVIEW_APPROVE_EACH_COMMIT"); configured {
+		approveEachCommit, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, errors.New("REVIEW_APPROVE_EACH_COMMIT must be a boolean")
+		}
+		cfg.ApproveEachCommit = approveEachCommit
 	}
 	policy, err := LoadReviewPolicy(lookup)
 	if err != nil {
