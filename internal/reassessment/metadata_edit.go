@@ -16,15 +16,7 @@ import (
 
 // ScheduleMetadataEdit updates a durable due time only for a distinct delivery.
 func (coordinator *Coordinator) ScheduleMetadataEdit(ctx context.Context, job domain.ReviewJob) (*Record, bool, error) {
-	if !coordinator.Settings.Enabled || !job.MetadataOnly || coordinator.Settings.MetadataSettleInterval == "" {
-		return nil, false, nil
-	}
-	interval, err := time.ParseDuration(coordinator.Settings.MetadataSettleInterval)
-	if err != nil {
-		coordinator.Logger.ErrorContext(ctx, "parse metadata settle interval", "err", err)
-		return nil, false, fmt.Errorf("parse metadata settle interval: %w", err)
-	}
-	if interval == 0 {
+	if !coordinator.Settings.Enabled || !job.MetadataOnly || coordinator.Settings.MetadataSettleDelay == 0 {
 		return nil, false, nil
 	}
 	current, err := coordinator.GitHub.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
@@ -57,7 +49,7 @@ func (coordinator *Coordinator) ScheduleMetadataEdit(ctx context.Context, job do
 	record.MetadataFingerprint = diff.MetadataRevision(diff.PullRequestMetadata(current, nil))
 	record.Phase = "waiting"
 	record.Reason = "metadata_edit_settling"
-	record.NotBeforeMS = now.Add(interval).UnixMilli()
+	record.NotBeforeMS = now.Add(coordinator.Settings.MetadataSettleDelay).UnixMilli()
 	version := int64(0)
 	if prior != nil {
 		version = prior.Version
@@ -173,12 +165,11 @@ func (coordinator *Coordinator) planMetadataEdit(ctx context.Context, record Rec
 	record.MetadataRevision = diff.PullRequestRevision(current)
 	record.MetadataFingerprint = fingerprint
 	if changed {
-		interval, _ := time.ParseDuration(coordinator.Settings.MetadataSettleInterval)
 		record.Generation = rand.Text()
 		record.Job.ReassessmentGeneration = record.Generation
 		record.Phase = "waiting"
 		record.Reason = "metadata_edit_settling"
-		record.NotBeforeMS = now.Add(interval).UnixMilli()
+		record.NotBeforeMS = now.Add(coordinator.Settings.MetadataSettleDelay).UnixMilli()
 		return record
 	}
 	if record.Phase == "waiting" && record.NotBeforeMS > now.UnixMilli() {

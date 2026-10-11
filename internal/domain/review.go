@@ -10,25 +10,10 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-// ReviewSettings are the review tuning values one delivery carried with it.
-//
-// The container reads its configuration once, at start, so a value corrected
-// after it booted did not reach a running instance: a chunk timeout changed to
-// six seconds and restored five minutes later still governed a real pull request
-// thirteen minutes after the restore, because nothing had replaced the process.
-// Carrying these with the work rather than with the process lifetime is what
-// makes a correction take effect on the next delivery instead of on the next
-// restart.
-//
-// A zero numeric field or nil Boolean field uses the process configuration.
-// An explicit Boolean overrides the process configuration, including false.
-// The service uses its process configuration when older workers omit these fields.
-//
-// Only values that govern one review travel. The model and the worker count size
-// the process rather than the review, and no secret travels at all. These arrive
-// beside a signed body rather than inside it, so they are honored only on a
-// delivery whose signature verified, and nothing here is worth more than the harm
-// it could do if a stranger chose it.
+// ReviewSettings overrides process defaults with authenticated delivery settings.
+// The service verifies the delivery signatures before applying these settings.
+// Zero numeric fields and nil Boolean fields use process configuration.
+// An explicit Boolean overrides process configuration, including false.
 type ReviewSettings struct {
 	ApproveEachCommit *bool         `json:"ApproveEachCommit,omitempty"`
 	MinimumImportance int           `json:"MinimumImportance"`

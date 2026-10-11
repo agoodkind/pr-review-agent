@@ -9,21 +9,22 @@ import (
 
 // Reassessment permits indefinite retries when both attempt and age limits are zero.
 type Reassessment struct {
-	MetadataSettleInterval string `json:"metadata_settle_interval"`
-	ReadBudget             int    `json:"read_budget"`
-	ReconcileInterval      string `json:"reconcile_interval"`
-	PageSize               int    `json:"page_size"`
-	BatchSize              int    `json:"batch_size"`
-	StateConfirmations     int    `json:"state_confirmations"`
-	ConfirmationInterval   string `json:"confirmation_interval"`
-	Enabled                bool   `json:"enabled"`
-	QueueURL               string `json:"queue_url"`
-	InitialDelay           string `json:"initial_delay"`
-	MaximumDelay           string `json:"maximum_delay"`
-	MaximumAttempts        int    `json:"maximum_attempts"`
-	TTL                    string `json:"ttl"`
-	TerminalRetention      string `json:"terminal_retention"`
-	RetryDeclined          bool   `json:"retry_declined"`
+	MetadataSettleDelay    time.Duration `json:"-"`
+	MetadataSettleInterval string        `json:"metadata_settle_interval"`
+	ReadBudget             int           `json:"read_budget"`
+	ReconcileInterval      string        `json:"reconcile_interval"`
+	PageSize               int           `json:"page_size"`
+	BatchSize              int           `json:"batch_size"`
+	StateConfirmations     int           `json:"state_confirmations"`
+	ConfirmationInterval   string        `json:"confirmation_interval"`
+	Enabled                bool          `json:"enabled"`
+	QueueURL               string        `json:"queue_url"`
+	InitialDelay           string        `json:"initial_delay"`
+	MaximumDelay           string        `json:"maximum_delay"`
+	MaximumAttempts        int           `json:"maximum_attempts"`
+	TTL                    string        `json:"ttl"`
+	TerminalRetention      string        `json:"terminal_retention"`
+	RetryDeclined          bool          `json:"retry_declined"`
 }
 
 func loadReassessment(lookup LookupEnv) (Reassessment, error) {
@@ -43,6 +44,7 @@ func loadReassessment(lookup LookupEnv) (Reassessment, error) {
 		if err != nil || interval < 0 {
 			return settings, errors.New("REASSESSMENT.metadata_settle_interval must be a nonnegative duration")
 		}
+		settings.MetadataSettleDelay = interval
 	}
 	if _, err := parseRequiredHTTPSURL("REASSESSMENT.queue_url", settings.QueueURL); err != nil {
 		return settings, err
