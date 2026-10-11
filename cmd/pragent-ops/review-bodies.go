@@ -95,6 +95,19 @@ type reviewBodyDiagnostic struct {
 	NativeError string `json:"native_error"`
 }
 
+type reviewBodyDiagnosticError struct {
+	message string
+	cause   error
+}
+
+func (failure *reviewBodyDiagnosticError) Error() string {
+	return failure.message
+}
+
+func (failure *reviewBodyDiagnosticError) Unwrap() error {
+	return failure.cause
+}
+
 func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	opts, err := reviewBodyFlags(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
@@ -136,7 +149,7 @@ func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err := applyReviewBodies(ctx, client, snapshot, selected); err != nil {
 		var apiError githubapp.APIError
 		if errors.As(err, &apiError) {
-			return reportReviewBodyError(ctx, opts.backupFile, err)
+			return reportReviewBodyError(opts.backupFile, err)
 		}
 		return err
 	}
@@ -382,7 +395,7 @@ func applyReviewBodies(ctx context.Context, client *githubapp.Client, snapshot r
 	return verifyReviewBodySnapshot(ctx, client, snapshot, selected)
 }
 
-func reportReviewBodyError(ctx context.Context, backupPath string, failure error) error {
+func reportReviewBodyError(backupPath string, failure error) error {
 	var diagnostic reviewBodyDiagnostic
 	var apiError githubapp.APIError
 	if errors.As(failure, &apiError) {
@@ -403,10 +416,15 @@ func reportReviewBodyError(ctx context.Context, backupPath string, failure error
 		publicStatus = fmt.Sprintf("Review body operation %s failed.", diagnostic.Operation)
 	}
 	if err := writeReviewBodyDiagnostic(path, diagnostic); err != nil {
-		slog.WarnContext(ctx, "Private review body diagnostics could not be saved", "http_status", diagnostic.HTTPStatus, "path", path)
-		return fmt.Errorf("%s Private diagnostics could not be saved at %s.", publicStatus, path)
+		return &reviewBodyDiagnosticError{
+			message: fmt.Sprintf("%s Private diagnostics could not be saved at %s.", publicStatus, path),
+			cause: errors.Join(failure, fmt.Errorf("write private review diagnostics: %w", err)),
+		}
 	}
-	return fmt.Errorf("%s Private diagnostics are at %s.", publicStatus, path)
+	return &reviewBodyDiagnosticError{
+		message: fmt.Sprintf("%s Private diagnostics are at %s.", publicStatus, path),
+		cause: failure,
+	}
 }
 
 func writeReviewBodyDiagnostic(path string, diagnostic reviewBodyDiagnostic) (returnErr error) {
