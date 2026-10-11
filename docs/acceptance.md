@@ -60,6 +60,21 @@ The command publishes no GitHub review. A request failure or missing usage is an
 5. Interrupt a review after a metadata chunk is checkpointed. Push another commit while retaining the earlier bad commit message. Require a current finding for that commit after the resumed review completes.
 6. Restore the fixture's original metadata, labels, and thread state after the check, including after a failed assertion. Keep the check identifiers and source revisions as evidence.
 
+## Verify metadata edit scheduling
+
+The deployed regression temporarily changes and restores a test pull request's title. It requires completed file coverage, a matching metadata assessment, an existing bot rejection, and a completed review check.
+
+1. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for an eligible test fixture or the configured recovery pull request.
+2. Set `PR_AGENT_LIVE_OPERATOR_TOKEN_FILE` to inspect durable records and `PR_AGENT_LIVE_CLOUDFLARE_ACCOUNT_TOKEN_FILE` to verify model request telemetry. The runtime metadata settling interval must permit observing both queued edits.
+3. Run the regression after deploying the change.
+
+   ```bash
+   PR_AGENT_LIVE_METADATA_SETTLE_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveMetadataEditsCoalesceWithoutRepeatingCompletedReview -count=1
+   ```
+
+4. Require the original title, review decisions, inline findings, summary ID, and file checkpoints to remain unchanged. The earlier check must conclude `skipped`, and the latest admitted check must complete. Inspect the private evidence directory for durable generations and request telemetry.
+
 ## Watch what happens
 
 Every check below is easier with the log open in another terminal:

@@ -58,19 +58,8 @@ func (handler *handler) completeSupersededMetadataChecks(ctx context.Context, re
 
 func (handler *handler) completeMetadataChecks(ctx context.Context, record reassessment.Record, keepCurrent bool) error {
 	logger := gklog.L(ctx)
-	if !record.Job.MetadataOnly && record.SupersededMetadataHead == "" {
-		return nil
-	}
-	head := record.Head
-	if !record.Job.MetadataOnly {
-		head = record.SupersededMetadataHead
-	}
-	deliveries := append([]string(nil), record.SourceDeliveries...)
-	if !keepCurrent {
-		deliveries = append(deliveries, record.Job.DeliveryID)
-	}
-	for _, deliveryID := range deliveries {
-		if keepCurrent && (deliveryID == record.Job.DeliveryID || deliveryID == record.OriginDeliveryID) {
+	for deliveryID, head := range record.MetadataCheckHeads {
+		if keepCurrent && deliveryID == record.Job.DeliveryID {
 			continue
 		}
 		check, found, err := handler.reassessment.GitHub.FindCheckRunByExternalID(ctx, record.Job.InstallationID, record.Job.Repository, head, config.ReviewCheckName, deliveryID)

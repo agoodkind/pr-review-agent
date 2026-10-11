@@ -18,28 +18,28 @@ import (
 
 // Record retains one generation and its stable attempt identity across restarts.
 type Record struct {
-	RebuildEvidence        bool                     `json:"rebuild_evidence"`
-	Dispatch               bool                     `json:"dispatch"`
-	SourceDeliveries       []string                 `json:"source_deliveries"`
-	ID                     string                   `json:"id"`
-	Key                    string                   `json:"key"`
-	Version                int64                    `json:"version"`
-	Generation             string                   `json:"generation"`
-	OriginDeliveryID       string                   `json:"origin_delivery_id"`
-	Job                    domain.ReviewJob         `json:"job"`
-	Head                   domain.HeadSHA           `json:"head"`
-	MetadataRevision       string                   `json:"metadata_revision"`
-	MetadataFingerprint    string                   `json:"metadata_fingerprint,omitempty"`
-	SupersededMetadataHead domain.HeadSHA           `json:"superseded_metadata_head,omitempty"`
-	Outcome                domain.AssessmentOutcome `json:"outcome"`
-	Phase                  string                   `json:"phase"`
-	Reason                 string                   `json:"reason"`
-	CreatedAtMS            int64                    `json:"created_at_ms"`
-	ExpiresAtMS            int64                    `json:"expires_at_ms"`
-	RetainUntilMS          int64                    `json:"retain_until_ms"`
-	NotBeforeMS            int64                    `json:"not_before_ms"`
-	Attempts               int                      `json:"attempts"`
-	AttemptID              string                   `json:"attempt_id"`
+	RebuildEvidence     bool                      `json:"rebuild_evidence"`
+	Dispatch            bool                      `json:"dispatch"`
+	SourceDeliveries    []string                  `json:"source_deliveries"`
+	ID                  string                    `json:"id"`
+	Key                 string                    `json:"key"`
+	Version             int64                     `json:"version"`
+	Generation          string                    `json:"generation"`
+	OriginDeliveryID    string                    `json:"origin_delivery_id"`
+	Job                 domain.ReviewJob          `json:"job"`
+	Head                domain.HeadSHA            `json:"head"`
+	MetadataRevision    string                    `json:"metadata_revision"`
+	MetadataFingerprint string                    `json:"metadata_fingerprint,omitempty"`
+	MetadataCheckHeads  map[string]domain.HeadSHA `json:"metadata_check_heads,omitempty"`
+	Outcome             domain.AssessmentOutcome  `json:"outcome"`
+	Phase               string                    `json:"phase"`
+	Reason              string                    `json:"reason"`
+	CreatedAtMS         int64                     `json:"created_at_ms"`
+	ExpiresAtMS         int64                     `json:"expires_at_ms"`
+	RetainUntilMS       int64                     `json:"retain_until_ms"`
+	NotBeforeMS         int64                     `json:"not_before_ms"`
+	Attempts            int                       `json:"attempts"`
+	AttemptID           string                    `json:"attempt_id"`
 }
 
 // GitHub rereads eligibility and check outcomes before retry admission.
@@ -342,6 +342,10 @@ func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Rec
 			record.AttemptID = record.Job.DeliveryID
 			record.Attempts++
 		}
+		if record.MetadataCheckHeads == nil {
+			record.MetadataCheckHeads = make(map[string]domain.HeadSHA)
+		}
+		record.MetadataCheckHeads[record.Job.DeliveryID] = record.Head
 		record.Job.AutomaticReassessment = true
 		record.Job.ReassessmentID = record.ID
 		record.Job.ReassessmentGeneration = record.Generation

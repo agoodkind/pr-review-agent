@@ -2,8 +2,10 @@ package reassessment
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -59,14 +61,15 @@ func (coordinator *Coordinator) ScheduleMetadataEdit(ctx context.Context, job do
 	version := int64(0)
 	if prior != nil {
 		version = prior.Version
-		if prior.Job.MetadataOnly && prior.Head == job.Head && prior.Phase != "terminal" {
-			record.SourceDeliveries = append([]string(nil), prior.SourceDeliveries...)
-			if !slices.Contains(record.SourceDeliveries, prior.Job.DeliveryID) {
-				record.SourceDeliveries = append(record.SourceDeliveries, prior.Job.DeliveryID)
-			}
+		if prior.Phase != "terminal" {
+			retainMetadataChecks(&record, prior)
 		}
 	}
 	record.SourceDeliveries = append(record.SourceDeliveries, job.DeliveryID)
+	if record.MetadataCheckHeads == nil {
+		record.MetadataCheckHeads = make(map[string]domain.HeadSHA)
+	}
+	record.MetadataCheckHeads[job.DeliveryID] = job.Head
 	response, err = coordinator.Store.Send(ctx, Mutation{Action: "transition", Key: key, ExpectedVersion: version, Record: &record})
 	if err != nil {
 		return nil, false, err
@@ -112,14 +115,10 @@ func (coordinator *Coordinator) SupersedeMetadataEdit(ctx context.Context, job d
 	record.MetadataRevision = diff.PullRequestRevision(current)
 	record.Phase = "running"
 	record.Reason = "metadata_edit_superseded"
-	record.SupersededMetadataHead = prior.Head
 	record.AttemptID = job.DeliveryID
 	record.Attempts = 1
 	record.NotBeforeMS = now.UnixMilli()
-	record.SourceDeliveries = append([]string(nil), prior.SourceDeliveries...)
-	if !slices.Contains(record.SourceDeliveries, prior.Job.DeliveryID) {
-		record.SourceDeliveries = append(record.SourceDeliveries, prior.Job.DeliveryID)
-	}
+	retainMetadataChecks(&record, prior)
 	record.SourceDeliveries = append(record.SourceDeliveries, job.DeliveryID)
 	response, err = coordinator.Store.Send(ctx, Mutation{Action: "transition", Key: key, ExpectedVersion: prior.Version, Record: &record})
 	if err != nil {
@@ -175,6 +174,8 @@ func (coordinator *Coordinator) planMetadataEdit(ctx context.Context, record Rec
 	record.MetadataFingerprint = fingerprint
 	if changed {
 		interval, _ := time.ParseDuration(coordinator.Settings.MetadataSettleInterval)
+		record.Generation = rand.Text()
+		record.Job.ReassessmentGeneration = record.Generation
 		record.Phase = "waiting"
 		record.Reason = "metadata_edit_settling"
 		record.NotBeforeMS = now.Add(interval).UnixMilli()
@@ -194,4 +195,18 @@ func (coordinator *Coordinator) planMetadataEdit(ctx context.Context, record Rec
 	snapshot.AttemptCheck = check
 	snapshot.AttemptFound = found
 	return coordinator.Decide(record, snapshot, now)
+}
+
+func retainMetadataChecks(record *Record, prior *Record) {
+	record.SourceDeliveries = append([]string(nil), prior.SourceDeliveries...)
+	record.MetadataCheckHeads = maps.Clone(prior.MetadataCheckHeads)
+	if prior.Job.MetadataOnly {
+		if record.MetadataCheckHeads == nil {
+			record.MetadataCheckHeads = make(map[string]domain.HeadSHA)
+		}
+		record.MetadataCheckHeads[prior.Job.DeliveryID] = prior.Head
+		if !slices.Contains(record.SourceDeliveries, prior.Job.DeliveryID) {
+			record.SourceDeliveries = append(record.SourceDeliveries, prior.Job.DeliveryID)
+		}
+	}
 }

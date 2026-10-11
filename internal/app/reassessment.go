@@ -152,7 +152,7 @@ func (handler *handler) suppressScheduledDelivery(ctx context.Context, writer ht
 	if !scheduled {
 		return false
 	}
-	handler.cache.Settle(job.DeliveryID)
+	handler.cache.Release(job.DeliveryID)
 	writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 	writer.WriteHeader(http.StatusAccepted)
 	return true

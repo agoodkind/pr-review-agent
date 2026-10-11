@@ -40,7 +40,7 @@ The app runner observes outcomes after review completion. The internal callback 
 
 The queue stores edits limited to the title or description in the existing record for the pull request. Each distinct delivery records the latest metadata and postpones assessment until the edit interval has elapsed. Redelivering the same event retains the due time. A changed metadata fingerprint during planning restarts the wait before model work.
 
-New metadata generations supersede earlier queued edits and complete their checks with `skipped` without model requests. A full-review trigger replaces pending metadata work with immediate source review and rejects delayed results from the superseded generation. Base-branch changes, other edited fields, and edits without field details also require immediate full review.
+New metadata generations supersede earlier queued edits and complete their checks with `skipped` without model requests. A metadata change discovered during planning also replaces the generation before deferring assessment. A full-review trigger replaces pending metadata work with immediate source review and rejects delayed results from the superseded generation. Base-branch changes, other edited fields, and edits without field details also require immediate full review.
 
 A metadata review reuses completed file coverage and checks current metadata. Missing or unfinished file coverage requires ordinary source review.
 

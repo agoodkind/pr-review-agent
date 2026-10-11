@@ -325,7 +325,7 @@ func (handler *handler) admitWebhookReview(ctx context.Context, writer http.Resp
 		return
 	}
 	if scheduled {
-		handler.cache.Settle(deliveryID)
+		handler.cache.Release(deliveryID)
 		writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		writer.WriteHeader(http.StatusAccepted)
 		return
