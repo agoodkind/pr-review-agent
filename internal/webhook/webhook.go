@@ -26,6 +26,7 @@ type PullRequestEvent struct {
 	Draft               bool
 	ThreadRootCommentID int64
 	RefreshVerdict      bool
+	MetadataOnly        bool
 	// Forced marks a delivery that asked for a fresh full review.
 	Forced bool
 	// Label is the full name of the label that forced this delivery, and it is
@@ -52,6 +53,7 @@ func (event PullRequestEvent) Job() domain.ReviewJob {
 		CheckRunConclusion:  "",
 		ThreadRootCommentID: event.ThreadRootCommentID,
 		RefreshVerdict:      event.RefreshVerdict,
+		MetadataOnly:        event.MetadataOnly,
 		Forced:              event.Forced,
 		// The tuning values ride on the request rather than in the payload, and
 		// are read only once the signature has verified, so nothing decoded here
@@ -167,6 +169,7 @@ func emptyEvent() PullRequestEvent {
 		Draft:               false,
 		ThreadRootCommentID: 0,
 		RefreshVerdict:      false,
+		MetadataOnly:        false,
 		Forced:              false,
 		Label:               "",
 	}
@@ -225,6 +228,7 @@ func ParseMentionedIssueComment(deliveryID string, body []byte, botLogin string)
 		Draft:               false,
 		ThreadRootCommentID: 0,
 		RefreshVerdict:      false,
+		MetadataOnly:        false,
 		Forced:              true,
 		Label:               "",
 	}, true, nil
@@ -301,7 +305,8 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 	// A label is only a trigger when it is one of this service's own. Any other
 	// label on any pull request would otherwise start a review, which is the
 	// opposite of what a person adding a label expects.
-	forced := action == actionEdited
+	metadataOnly := action == actionEdited && metadataChangesOnly(payload.Changes)
+	forced := action == actionEdited && !metadataOnly
 	if action == actionLabeled {
 		if !domain.ForcesReview(payload.Label.Name) {
 			return emptyEvent(), false, nil
@@ -314,7 +319,24 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 	if action != actionReadyForReview && payload.PullRequest.Draft {
 		return emptyEvent(), false, nil
 	}
-	return eventFromPayload(deliveryID, payload, forced)
+	event, supported, err := eventFromPayload(deliveryID, payload, forced)
+	if supported && err == nil && metadataOnly {
+		event.MetadataOnly = true
+		event.RefreshVerdict = true
+	}
+	return event, supported, err
+}
+
+func metadataChangesOnly(changes map[string]json.RawMessage) bool {
+	if len(changes) == 0 {
+		return false
+	}
+	for field := range changes {
+		if field != "title" && field != "body" {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseReviewThread parses a resolved or unresolved review thread delivery.
@@ -398,13 +420,15 @@ func eventFromPayload(
 		Draft:               payload.PullRequest.Draft,
 		ThreadRootCommentID: 0,
 		RefreshVerdict:      false,
+		MetadataOnly:        false,
 		Forced:              forced,
 		Label:               label,
 	}, true, nil
 }
 
 type pullRequestPayload struct {
-	Action       string `json:"action"`
+	Changes      map[string]json.RawMessage `json:"changes"`
+	Action       string                     `json:"action"`
 	Installation struct {
 		ID int64 `json:"id"`
 	} `json:"installation"`

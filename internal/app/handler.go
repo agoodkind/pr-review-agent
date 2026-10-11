@@ -316,11 +316,26 @@ func (handler *handler) admitWebhookReview(ctx context.Context, writer http.Resp
 		return
 	}
 
+	scheduled, scheduleErr := handler.scheduleMetadataEdit(ctx, &job)
+	if scheduleErr != nil {
+		handler.cache.Release(deliveryID)
+		handler.wakeUnqueuedReview(ctx, job)
+		logger.ErrorContext(ctx, "persist metadata edit", slog.String("err", scheduleErr.Error()))
+		http.Error(writer, "metadata edit scheduling failed", http.StatusServiceUnavailable)
+		return
+	}
+	if scheduled {
+		handler.cache.Settle(deliveryID)
+		writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
+		writer.WriteHeader(http.StatusAccepted)
+		return
+	}
 	if !handler.dispatcher.Enqueue(job) {
 		handler.cache.Release(deliveryID)
 		if err := handler.admitter.Reject(ctx, job, errReviewQueueFull); err != nil {
 			logger.ErrorContext(ctx, "complete rejected review check", slog.String("err", err.Error()))
 		}
+		handler.wakeUnqueuedReview(ctx, job)
 		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", errReviewQueueFull.Error()))
 		http.Error(writer, "queue full", http.StatusServiceUnavailable)
 		return

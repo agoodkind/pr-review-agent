@@ -47,12 +47,7 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		return
 	}
 	if payload.Action == callbackPlan {
-		planned := handler.reassessment.Plan(request.Context(), payload.Record)
-		writer.Header().Set("Content-Type", "application/json")
-		if encodeErr := json.NewEncoder(writer).Encode(planned); encodeErr != nil {
-			handler.logger.WarnContext(request.Context(), "encode reassessment plan", "err", encodeErr.Error())
-			return
-		}
+		handler.planReassessment(writer, request, payload.Record)
 		return
 	}
 	if payload.Action != callbackExecute || payload.Record.Phase != "running" {
@@ -96,6 +91,22 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 	}
 	handler.logger.InfoContext(request.Context(), "reassessment started", "reassessment_id", payload.Record.ID, "generation", payload.Record.Generation, "origin_delivery_id", payload.Record.OriginDeliveryID, "attempt_id", job.DeliveryID, "check_run_id", job.CheckRunID, "repository", job.Repository.Owner+"/"+job.Repository.Name, "pull_request", job.Number, "head", string(job.Head), "attempts", payload.Record.Attempts)
 	writer.WriteHeader(http.StatusAccepted)
+}
+
+func (handler *handler) planReassessment(writer http.ResponseWriter, request *http.Request, record reassessment.Record) {
+	if err := handler.completeSupersededMetadataChecks(request.Context(), record); err != nil {
+		http.Error(writer, "superseded metadata checks unavailable", http.StatusBadGateway)
+		return
+	}
+	planned := handler.reassessment.Plan(request.Context(), record)
+	if err := handler.completeTerminatedMetadataCheck(request.Context(), planned); err != nil {
+		http.Error(writer, "metadata check completion failed", http.StatusBadGateway)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(planned); err != nil {
+		handler.logger.WarnContext(request.Context(), "encode reassessment plan", "err", err.Error())
+	}
 }
 
 func (handler *handler) handleDriftReassessment(writer http.ResponseWriter, request *http.Request, payload reassessmentRequest) {

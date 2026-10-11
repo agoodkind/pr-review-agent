@@ -2,6 +2,7 @@
   "CONTAINER_SLEEP_AFTER": "11m",
   "REASSESSMENT": {
     "enabled": true,
+    "metadata_settle_interval": "1m",
     "reconcile_interval": "15m",
     "page_size": 100,
     "batch_size": 10,

@@ -348,6 +348,7 @@ type ReviewJob struct {
 	// state. Admission creates a dedicated check that stays in progress until
 	// this delivery finishes its verdict refresh.
 	RefreshVerdict bool `json:"RefreshVerdict"`
+	MetadataOnly   bool `json:"MetadataOnly"`
 	// Forced marks a run a ForceReviewLabelPrefix label asked for. Such a run
 	// reviews the whole pull request from scratch: it ignores the commit the
 	// last completed run reviewed, the chunks earlier runs read, and every gate
