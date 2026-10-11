@@ -18,26 +18,28 @@ import (
 
 // Record retains one generation and its stable attempt identity across restarts.
 type Record struct {
-	RebuildEvidence  bool                     `json:"rebuild_evidence"`
-	Dispatch         bool                     `json:"dispatch"`
-	SourceDeliveries []string                 `json:"source_deliveries"`
-	ID               string                   `json:"id"`
-	Key              string                   `json:"key"`
-	Version          int64                    `json:"version"`
-	Generation       string                   `json:"generation"`
-	OriginDeliveryID string                   `json:"origin_delivery_id"`
-	Job              domain.ReviewJob         `json:"job"`
-	Head             domain.HeadSHA           `json:"head"`
-	MetadataRevision string                   `json:"metadata_revision"`
-	Outcome          domain.AssessmentOutcome `json:"outcome"`
-	Phase            string                   `json:"phase"`
-	Reason           string                   `json:"reason"`
-	CreatedAtMS      int64                    `json:"created_at_ms"`
-	ExpiresAtMS      int64                    `json:"expires_at_ms"`
-	RetainUntilMS    int64                    `json:"retain_until_ms"`
-	NotBeforeMS      int64                    `json:"not_before_ms"`
-	Attempts         int                      `json:"attempts"`
-	AttemptID        string                   `json:"attempt_id"`
+	RebuildEvidence     bool                      `json:"rebuild_evidence"`
+	Dispatch            bool                      `json:"dispatch"`
+	SourceDeliveries    []string                  `json:"source_deliveries"`
+	ID                  string                    `json:"id"`
+	Key                 string                    `json:"key"`
+	Version             int64                     `json:"version"`
+	Generation          string                    `json:"generation"`
+	OriginDeliveryID    string                    `json:"origin_delivery_id"`
+	Job                 domain.ReviewJob          `json:"job"`
+	Head                domain.HeadSHA            `json:"head"`
+	MetadataRevision    string                    `json:"metadata_revision"`
+	MetadataFingerprint string                    `json:"metadata_fingerprint,omitempty"`
+	MetadataCheckHeads  map[string]domain.HeadSHA `json:"metadata_check_heads,omitempty"`
+	Outcome             domain.AssessmentOutcome  `json:"outcome"`
+	Phase               string                    `json:"phase"`
+	Reason              string                    `json:"reason"`
+	CreatedAtMS         int64                     `json:"created_at_ms"`
+	ExpiresAtMS         int64                     `json:"expires_at_ms"`
+	RetainUntilMS       int64                     `json:"retain_until_ms"`
+	NotBeforeMS         int64                     `json:"not_before_ms"`
+	Attempts            int                       `json:"attempts"`
+	AttemptID           string                    `json:"attempt_id"`
 }
 
 // GitHub rereads eligibility and check outcomes before retry admission.
@@ -192,6 +194,9 @@ func (coordinator *Coordinator) Plan(ctx context.Context, record Record) Record 
 	if !coordinator.Settings.Enabled {
 		return coordinator.terminal(record, "disabled", now)
 	}
+	if record.Job.MetadataOnly && record.Phase == "waiting" && record.NotBeforeMS > now.UnixMilli() {
+		return record
+	}
 	target, err := coordinator.Store.ReadTarget(ctx, record.Key)
 	if err != nil {
 		return coordinator.deferAfterFailure(ctx, record, now, "target", err)
@@ -206,6 +211,9 @@ func (coordinator *Coordinator) Plan(ctx context.Context, record Record) Record 
 		}
 	}
 	live := coordinator.ReadLive(ctx, record.Job)
+	if record.Job.MetadataOnly {
+		return coordinator.planMetadataEdit(ctx, record, live, now)
+	}
 	repair := coordinator.Repair(*target, &record, live, now)
 	applied, err := coordinator.Store.WriteTarget(ctx, repair.Target, repair.ExpectedTargetVersion, record.Version, record.Generation)
 	if err != nil {
@@ -323,6 +331,29 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 }
 
 func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Record {
+	if record.Job.MetadataOnly {
+		if record.Phase != "running" && record.Phase != "confirming" {
+			if record.AttemptID != "" {
+				record.Job.DeliveryID = "reassessment-" + rand.Text()
+				record.Job.CheckRunID = 0
+				record.Job.CheckRunStatus = ""
+				record.Job.CheckRunConclusion = ""
+			}
+			record.AttemptID = record.Job.DeliveryID
+			record.Attempts++
+		}
+		if record.MetadataCheckHeads == nil {
+			record.MetadataCheckHeads = make(map[string]domain.HeadSHA)
+		}
+		record.MetadataCheckHeads[record.Job.DeliveryID] = record.Head
+		record.Job.AutomaticReassessment = true
+		record.Job.ReassessmentID = record.ID
+		record.Job.ReassessmentGeneration = record.Generation
+		record.Phase = "running"
+		record.Dispatch = true
+		record.NotBeforeMS = coordinator.delayed(now, 0).UnixMilli()
+		return record
+	}
 	if record.Phase != "running" && record.Phase != "confirming" {
 		record.AttemptID = "reassessment-" + rand.Text()
 		record.Attempts++
@@ -332,7 +363,7 @@ func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Rec
 	record.Job.CheckRunID = 0
 	record.Job.CheckRunStatus = ""
 	record.Job.CheckRunConclusion = ""
-	record.Job.Forced = false
+	record.Job.Forced = record.Phase == "running" && record.Job.Forced
 	var settings domain.ReviewSettings
 	record.Job.Settings = settings
 	record.Job.AutomaticReassessment = true
@@ -361,7 +392,12 @@ func (coordinator *Coordinator) newGeneration(key string, job domain.ReviewJob, 
 func (coordinator *Coordinator) deferAfterFailure(ctx context.Context, record Record, now time.Time, stage string, cause error) Record {
 	coordinator.Logger.WarnContext(ctx, "reassessment prerequisite unavailable", slog.String("stage", stage), slog.String("err", cause.Error()))
 	record.Reason = stage + "_unavailable"
-	record.NotBeforeMS = coordinator.delayed(now, record.Attempts).UnixMilli()
+	retryAt := coordinator.delayed(now, record.Attempts).UnixMilli()
+	if record.Job.MetadataOnly {
+		record.NotBeforeMS = max(record.NotBeforeMS, retryAt)
+	} else {
+		record.NotBeforeMS = retryAt
+	}
 	return record
 }
 

@@ -47,12 +47,7 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		return
 	}
 	if payload.Action == callbackPlan {
-		planned := handler.reassessment.Plan(request.Context(), payload.Record)
-		writer.Header().Set("Content-Type", "application/json")
-		if encodeErr := json.NewEncoder(writer).Encode(planned); encodeErr != nil {
-			handler.logger.WarnContext(request.Context(), "encode reassessment plan", "err", encodeErr.Error())
-			return
-		}
+		handler.planReassessment(writer, request, payload.Record)
 		return
 	}
 	if payload.Action != callbackExecute || payload.Record.Phase != "running" {
@@ -98,6 +93,22 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 	writer.WriteHeader(http.StatusAccepted)
 }
 
+func (handler *handler) planReassessment(writer http.ResponseWriter, request *http.Request, record reassessment.Record) {
+	if err := handler.completeSupersededMetadataChecks(request.Context(), record); err != nil {
+		http.Error(writer, "superseded metadata checks unavailable", http.StatusBadGateway)
+		return
+	}
+	planned := handler.reassessment.Plan(request.Context(), record)
+	if err := handler.completeTerminatedMetadataCheck(request.Context(), planned); err != nil {
+		http.Error(writer, "metadata check completion failed", http.StatusBadGateway)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(planned); err != nil {
+		handler.logger.WarnContext(request.Context(), "encode reassessment plan", "err", err.Error())
+	}
+}
+
 func (handler *handler) handleDriftReassessment(writer http.ResponseWriter, request *http.Request, payload reassessmentRequest) {
 	writer.Header().Set("Content-Type", "application/json")
 	if payload.Action == callbackInventory && payload.Sweep != nil {
@@ -141,7 +152,7 @@ func (handler *handler) suppressScheduledDelivery(ctx context.Context, writer ht
 	if !scheduled {
 		return false
 	}
-	handler.cache.Settle(job.DeliveryID)
+	handler.cache.Release(job.DeliveryID)
 	writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 	writer.WriteHeader(http.StatusAccepted)
 	return true

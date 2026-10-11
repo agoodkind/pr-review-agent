@@ -105,6 +105,10 @@ func (coordinator *Coordinator) Repair(target Target, record *Record, snapshot L
 	if pr.State != "open" || pr.Merged || pr.Draft {
 		return coordinator.repairIneligible(plan, record, pr, now)
 	}
+	if record != nil && record.Job.MetadataOnly && record.Phase != "terminal" {
+		plan.RepairKind = "consistent_pending"
+		return plan
+	}
 	if completed, handled := coordinator.repairCompletion(plan, record, snapshot, now); handled {
 		return completed
 	}

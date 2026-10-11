@@ -55,10 +55,25 @@ The command publishes no GitHub review. A request failure or missing usage is an
 
 1. Save the existing test pull request's title, description, head, labels, and thread state before changing the fixture.
 2. Introduce a known prose violation separately in the title, description, and a commit message. Require a current finding at the actual field lines in the existing summary. Require `request_changes` and the actual commit SHA for commit-message findings. Metadata findings must not use fabricated file anchors. Require an exact replacement or deletion when a safe correction is available. Feedback without an exact correction must request changes without printing an empty replacement.
-3. Correct the title or description without pushing a commit. Require an `edited` event to produce a new completed check on the unchanged head. Confirm that the corrected field no longer blocks approval.
+3. Correct the title or description without pushing a commit. Require an `edited` event to produce a completed check on the unchanged head. Confirm that the corrected field no longer blocks approval.
 4. Resolve file threads while retaining a metadata defect. Require `request_changes` for the metadata defect. Confirm that required commit attribution remains unchanged.
 5. Interrupt a review after a metadata chunk is checkpointed. Push another commit while retaining the earlier bad commit message. Require a current finding for that commit after the resumed review completes.
 6. Restore the fixture's original metadata, labels, and thread state after the check, including after a failed assertion. Keep the check identifiers and source revisions as evidence.
+
+## Verify metadata edit scheduling
+
+The deployed regression temporarily changes and restores a test pull request's title. It requires completed file coverage, a matching metadata assessment, an existing bot rejection, and a completed review check.
+
+1. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for an eligible test fixture or the configured recovery pull request.
+2. Set `PR_AGENT_LIVE_OPERATOR_TOKEN_FILE` to inspect durable records and `PR_AGENT_LIVE_CLOUDFLARE_ACCOUNT_TOKEN_FILE` to verify model request telemetry. The runtime metadata settling interval must permit observing both queued edits.
+3. Run the regression after deploying the change.
+
+   ```bash
+   PR_AGENT_LIVE_METADATA_SETTLE_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveMetadataEditsCoalesceWithoutRepeatingCompletedReview -count=1
+   ```
+
+4. Require the original title, review decisions, inline findings, summary ID, and file checkpoints to remain unchanged. The earlier check must conclude `skipped`, and the latest admitted check must complete. Inspect the private evidence directory for durable generations and request telemetry.
 
 ## Watch what happens
 
@@ -206,6 +221,21 @@ The live regression seeds an older approval and a completed current-head assessm
    ```
 
 4. Require approval reuse under the default policy, delivery overrides in both directions, one empty-body approval under the per-commit policy, and no duplicate approval on repetition. Require the original summary ID and checkpoint data to remain intact.
+
+## Verify hidden review body cleanup
+
+The live regression verifies dry-run and apply idempotence on a fixture with already-empty native bot decision bodies. Use an open, non-draft test pull request with one completed current-head bot summary, a current bot rejection, and an older dismissed bot rejection with a lower review ID. The configured [recovery-test pull request](../deploy/cloudflare/recovery-test.json) is also supported when it satisfies those conditions.
+
+1. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for the selected fixture.
+2. Run the regression from the repository root.
+
+   ```bash
+   PR_AGENT_LIVE_REVIEW_BODIES_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveReviewBodiesPreservesEmptyReviewDecisions -count=1
+   ```
+
+3. Require the dry run and repeated apply to preserve review IDs, decisions, metadata, summary, and inline comments. Require the all-empty selection to create no new backup file.
+4. Verify that the dismissed review's original requested-changes decision remains available from GitHub's timeline after body cleanup.
 
 ## 8. A lost delivery is replayed, not dropped
 

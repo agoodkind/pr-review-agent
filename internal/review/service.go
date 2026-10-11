@@ -339,6 +339,9 @@ func (service *Service) runLocked(
 	}
 	progress.reached("the pull request")
 
+	if job.MetadataOnly {
+		return service.reviewMetadataEdit(ctx, job, checkRun, pullRequest, startedAt, progress, settings)
+	}
 	if job.AutomaticReassessment && job.RefreshVerdict {
 		return service.refreshReviewedCheck(ctx, job, nil, settings)
 	}

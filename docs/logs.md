@@ -19,6 +19,8 @@ Use `--input /path/to/capture/events.ndjson` to reuse a saved Cloudflare capture
 
 GitHub state reflects the capture time. Cloudflare telemetry can omit earlier events within the requested interval. The report distinguishes missing evidence from a measured zero. A provider failure during fallback does not establish that the review failed. Historical rejecting reviews do not establish a standing rejection after a newer approval.
 
+An edited webhook or superseded metadata check does not establish a model request. Count provider work from request events and completed assessments from their receipts when comparing repeated metadata deliveries with review checks.
+
 ## Collect historical logs
 
 1. Provide a file containing a Cloudflare token with Workers Observability Read permission. An account token that can create scoped tokens is also supported.
