@@ -196,7 +196,7 @@ The live test dismisses the selected bot rejection and publishes a failed check.
 
 The live regression seeds an older approval and a completed current-head assessment on a dedicated test pull request. It creates check runs and approvals, restores the original summary, and dismisses only approvals created by the test.
 
-1. Select an open, non-draft test pull request with an existing bot summary and no unresolved bot threads. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for that fixture.
+1. Select an open, non-draft test pull request with an existing bot summary, no active bot approval or rejection, and no unresolved bot threads. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for that fixture.
 2. Set `PR_AGENT_LIVE_APPROVAL_OLDER_HEAD` to an earlier commit in the pull request and `PR_AGENT_LIVE_FAILURE_PROVIDER_ID` to a configured provider without Cloudflare Access requirements. The test uses an invalid provider credential because a completed assessment refresh must send no model request.
 3. Run the regression.
 

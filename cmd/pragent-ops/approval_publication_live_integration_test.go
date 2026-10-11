@@ -71,6 +71,10 @@ func TestLiveApprovalPublicationUsesEmptyBodiesAndDeliveryPolicy(t *testing.T) {
 		t.Fatal("The test pull request must have no unresolved bot review threads.")
 	}
 	before := liveApprovalReviews(t, ctx, github, reference)
+	standing := githubapp.LatestDecisionReview(before, cfg.GitHubBotLogin)
+	if standing.State == "APPROVED" || standing.State == "CHANGES_REQUESTED" {
+		t.Fatal("The test pull request must have no active bot approval or requested-changes decision.")
+	}
 	if slices.ContainsFunc(before, func(item githubapp.Review) bool {
 		return item.Author == cfg.GitHubBotLogin && item.CommitID == reference.Head && item.State != "DISMISSED"
 	}) {
