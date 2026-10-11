@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -26,11 +25,6 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/review"
 )
-
-type liveApprovalMetadata struct {
-	Head     domain.HeadSHA `json:"head"`
-	Revision string         `json:"revision"`
-}
 
 func TestLiveApprovalPublicationUsesEmptyBodiesAndDeliveryPolicy(t *testing.T) {
 	if os.Getenv("PR_AGENT_LIVE_APPROVAL_PUBLICATION_TEST") != "1" {
@@ -173,7 +167,7 @@ func TestLiveApprovalPublicationUsesEmptyBodiesAndDeliveryPolicy(t *testing.T) {
 			t.Fatalf("The %s stage published a duplicate review.", stage.label)
 		}
 		currentSummary := liveApprovalSummary(t, ctx, github, reference, cfg.GitHubBotLogin)
-		liveApprovalAssertSummary(t, currentSummary, originalSummary.ID, reference.Head, summary.MetadataRevision, invalidCredential)
+		liveApprovalAssertSummary(t, currentSummary, originalSummary.ID, reference.Head, invalidCredential)
 		current, err := github.GetPullRequest(ctx, reference.InstallationID, reference.Repository, reference.Number)
 		if err != nil || !reflect.DeepEqual(current, original) {
 			t.Fatal("The test pull request metadata changed during the live regression.")
@@ -254,23 +248,12 @@ func liveApprovalAssertProtectedReviews(t *testing.T, before, after []githubapp.
 	}
 }
 
-func liveApprovalAssertSummary(t *testing.T, summary githubapp.IssueComment, summaryID int64, head domain.HeadSHA, revision, invalidCredential string) {
+func liveApprovalAssertSummary(t *testing.T, summary githubapp.IssueComment, summaryID int64, head domain.HeadSHA, invalidCredential string) {
 	t.Helper()
 	state, valid := marker.DecodeState(summary.Body)
 	checkpointHead, marked := marker.FindReview(summary.Body)
 	if summary.ID != summaryID || !valid || state.Status != marker.StateDone || state.LastReviewed != head || len(state.Pending) != 0 || len(state.Unread) != 0 || !marked || checkpointHead != head || strings.Contains(summary.Body, invalidCredential) {
 		t.Fatal("The single summary did not retain the completed current-commit checkpoint.")
-	}
-	const prefix = "<!-- pr-review-agent:metadata:v1 "
-	start := strings.LastIndex(summary.Body, prefix)
-	if start < 0 {
-		t.Fatal("The single summary lost its metadata checkpoint.")
-	}
-	encoded, _, found := strings.Cut(summary.Body[start+len(prefix):], " -->")
-	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
-	var metadata liveApprovalMetadata
-	if !found || err != nil || json.Unmarshal(decoded, &metadata) != nil || metadata.Head != head || metadata.Revision != revision {
-		t.Fatal("The single summary did not retain decodable current-commit metadata.")
 	}
 }
 

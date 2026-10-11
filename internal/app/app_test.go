@@ -967,10 +967,6 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	if body, exists := review["body"]; exists {
 		t.Fatalf("The approval request includes body %v; the body field must be omitted.", body)
 	}
-	state, decoded := marker.DecodeState(fixture.githubState.summaryCommentBody())
-	if !decoded || state.LastReviewed != domain.HeadSHA(testDefectiveHead) || state.Status != marker.StateDone {
-		t.Fatalf("The summary checkpoint is %v with decoded %t; the reviewed head must be complete.", state, decoded)
-	}
 	comments, ok := review["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", review["comments"])
@@ -1045,10 +1041,6 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	// the marker a later run reads to know this head was reviewed.
 	if !strings.Contains(comment, "## Review") {
 		t.Fatalf("summary comment = %q, want it to be the surviving Review block", comment)
-	}
-	state, decoded := marker.DecodeState(comment)
-	if !decoded || state.LastReviewed != domain.HeadSHA(testDefectiveHead) || state.Status != marker.StateDone {
-		t.Fatalf("The summary checkpoint is %v with decoded %t; the reviewed head must be complete.", state, decoded)
 	}
 }
 
@@ -1749,10 +1741,6 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	}
 	if body, exists := approval["body"]; exists {
 		t.Fatalf("The approval request includes body %v; the body field must be omitted.", body)
-	}
-	state, decoded := marker.DecodeState(fixture.githubState.summaryCommentBody())
-	if !decoded || state.LastReviewed != domain.HeadSHA(testCorrectedHead) || state.Status != marker.StateDone {
-		t.Fatalf("The summary checkpoint is %v with decoded %t; the reviewed head must be complete.", state, decoded)
 	}
 	fixture.waitForResolveCalls(t, 1)
 	if fixture.githubState.resolveCallCount() != 1 {

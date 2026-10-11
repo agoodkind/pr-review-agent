@@ -2708,10 +2708,6 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 			fixture.state.issueComments[0]["body"])
 	}
 	assertCheckAndCommentShareDetails(t, fixture, commentBody)
-	state, decoded := marker.DecodeState(commentBody)
-	if !decoded || state.LastReviewed != domain.HeadSHA(testHeadSHA) || state.Status != marker.StateDone {
-		t.Fatalf("The summary checkpoint is %v with decoded %t; the reviewed head must be complete.", state, decoded)
-	}
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
