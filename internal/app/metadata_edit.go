@@ -100,7 +100,7 @@ func (handler *handler) completeTerminatedMetadataCheck(ctx context.Context, rec
 	if !record.Job.MetadataOnly || record.Phase != "terminal" || record.Reason == "completed" || record.Reason == "declined" {
 		return nil
 	}
-	return handler.completeMetadataCheck(ctx, record.Job)
+	return handler.completeMetadataChecks(ctx, record, false)
 }
 
 func (handler *handler) wakeUnqueuedReview(ctx context.Context, job domain.ReviewJob) {
