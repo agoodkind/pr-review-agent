@@ -35,7 +35,7 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-An approval submits no review body. The editable summary stores assessment details and checkpoints. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Requested changes, human dismissals, and immediate inline publication retain their existing behavior.
+The service submits approvals without review bodies. The editable summary stores assessment details and checkpoints. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Requested changes, human dismissals, and immediate inline publication retain their existing behavior.
 
 An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
 
