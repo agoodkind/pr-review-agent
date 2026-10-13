@@ -4,27 +4,29 @@ import (
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // reviewProgress records what one review has learned so far. A review that
 // stops early reports this, so the reader sees which model answered, how much
 // it read, and where it stopped, rather than a bare error with no context.
 type reviewProgress struct {
-	head              domain.HeadSHA
-	startedAt         time.Time
-	minimumImportance int
-	stage             string
-	models            []string
-	filesReviewed     int
-	chunks            int
-	observed          []domain.Finding
-	eligible          []domain.Finding
-	published         []domain.Finding
-	metadata          []domain.Finding
-	metadataRevision  string
-	priorReviews      []reviewTrace
-	threads           []threadTrace
-	usage             *UsageRecorder
+	head                    domain.HeadSHA
+	startedAt               time.Time
+	minimumImportance       int
+	stage                   string
+	models                  []string
+	filesReviewed           int
+	chunks                  int
+	observed                []domain.Finding
+	eligible                []domain.Finding
+	published               []domain.Finding
+	metadata                []domain.Finding
+	metadataRevision        string
+	metadataFindingsDisplay reviewrules.FindingDisplay
+	priorReviews            []reviewTrace
+	threads                 []threadTrace
+	usage                   *UsageRecorder
 	// forced records that a label asked for this run, so every summary rendered
 	// from this progress reports the same trigger the successful one does.
 	forced bool
@@ -35,24 +37,26 @@ func newReviewProgress(
 	startedAt time.Time,
 	minimumImportance int,
 	forced bool,
+	metadataFindingsDisplay reviewrules.FindingDisplay,
 ) *reviewProgress {
 	return &reviewProgress{
-		head:              head,
-		startedAt:         startedAt,
-		minimumImportance: minimumImportance,
-		stage:             "",
-		models:            nil,
-		filesReviewed:     0,
-		chunks:            0,
-		observed:          nil,
-		eligible:          nil,
-		published:         nil,
-		metadata:          nil,
-		metadataRevision:  "",
-		priorReviews:      nil,
-		threads:           nil,
-		usage:             nil,
-		forced:            forced,
+		head:                    head,
+		startedAt:               startedAt,
+		minimumImportance:       minimumImportance,
+		stage:                   "",
+		models:                  nil,
+		filesReviewed:           0,
+		chunks:                  0,
+		observed:                nil,
+		eligible:                nil,
+		published:               nil,
+		metadata:                nil,
+		metadataRevision:        "",
+		metadataFindingsDisplay: metadataFindingsDisplay,
+		priorReviews:            nil,
+		threads:                 nil,
+		usage:                   nil,
+		forced:                  forced,
 	}
 }
 
@@ -104,15 +108,16 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		// Findings post while the review runs, so a failed run can still leave
 		// comments on the page. Reporting none here would contradict what the
 		// reader sees on the same pull request.
-		Published:        progress.published,
-		Fallback:         nil,
-		Metadata:         progress.metadata,
-		MetadataRevision: progress.metadataRevision,
-		Omissions:        nil,
-		PriorReviews:     progress.priorReviews,
-		Threads:          progress.threads,
-		Reached:          progress.stage,
-		Failed:           true,
-		Forced:           progress.forced,
+		Published:               progress.published,
+		Fallback:                nil,
+		Metadata:                progress.metadata,
+		MetadataRevision:        progress.metadataRevision,
+		MetadataFindingsDisplay: progress.metadataFindingsDisplay,
+		Omissions:               nil,
+		PriorReviews:            progress.priorReviews,
+		Threads:                 progress.threads,
+		Reached:                 progress.stage,
+		Failed:                  true,
+		Forced:                  progress.forced,
 	}
 }

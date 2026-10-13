@@ -1,4 +1,5 @@
 {
+  "metadata_findings_display": "collapsed",
   "untrusted_markers": {
     "begin": "<<<UNTRUSTED_INPUT>>>",
     "end": "<<<END_UNTRUSTED_INPUT>>>",

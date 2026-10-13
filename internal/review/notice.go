@@ -315,6 +315,7 @@ func (service *Service) writeFailureSummary(
 	defer cancel()
 
 	logger := gklog.L(ctx)
+	progress.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
 	prose := RenderFailureBody(progress, title, detail)
 	prose += reassessmentNotice(ctx)
 	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, _ string) summaryCommentContent {

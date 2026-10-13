@@ -10,6 +10,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // shortHeadLength is how much of a head SHA the review details show.
@@ -28,23 +29,24 @@ type Summary struct {
 	// Blocking states what a requesting-changes verdict is waiting on, one
 	// entry per cause. A block that names nothing reads as a silent repeat, so
 	// a blocking verdict always carries at least one entry here.
-	Blocking          []string
-	Models            []string
-	Usage             UsageSummary
-	Duration          time.Duration
-	FilesReviewed     int
-	Chunks            int
-	CoverageComplete  bool
-	MinimumImportance int
-	Observed          []domain.Finding
-	Eligible          []domain.Finding
-	Published         []domain.Finding
-	Fallback          []domain.Finding
-	Metadata          []domain.Finding
-	MetadataRevision  string
-	Omissions         []unreadHunk
-	PriorReviews      []reviewTrace
-	Threads           []threadTrace
+	Blocking                []string
+	Models                  []string
+	Usage                   UsageSummary
+	Duration                time.Duration
+	FilesReviewed           int
+	Chunks                  int
+	CoverageComplete        bool
+	MinimumImportance       int
+	Observed                []domain.Finding
+	Eligible                []domain.Finding
+	Published               []domain.Finding
+	Fallback                []domain.Finding
+	Metadata                []domain.Finding
+	MetadataRevision        string
+	MetadataFindingsDisplay reviewrules.FindingDisplay
+	Omissions               []unreadHunk
+	PriorReviews            []reviewTrace
+	Threads                 []threadTrace
 	// Reached names the last stage the review completed. A failed review fills
 	// only the fields it got far enough to learn, so the reader can tell how far
 	// it got rather than seeing zeros with no explanation.
@@ -65,7 +67,10 @@ func (summary Summary) Verdict() string {
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
 		return "This review found no severe defects."
 	}
-	if len(summary.Metadata) > 0 {
+	if len(unpublishedSummaryFindings(summary, summary.Metadata)) > 0 {
+		if summary.MetadataFindingsDisplay == reviewrules.FindingsHidden {
+			return "Correct the pull-request prose findings."
+		}
 		return "Correct the prose findings below."
 	}
 	return "Resolve the open inline findings."
@@ -179,10 +184,10 @@ const (
 
 func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
 	parts := []string{verdictSectionStart, "### Verdict", verdictLead(summary)}
-	if metadata := renderMetadataFindings(summary.Metadata); metadata != "" {
+	if metadata := renderSummaryMetadata(summary); metadata != "" {
 		parts = append(parts, metadata)
 	}
-	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
+	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
 		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
 	}
 	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
@@ -249,6 +254,9 @@ func RenderVerdictBody(summary Summary) string {
 	if summary.MetadataRevision != "" {
 		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
 	}
+	if fallback := encodeFallbackRecord(summary); fallback != "" {
+		parts = append(parts, fallback)
+	}
 	return strings.Join(parts, "\n")
 }
 
@@ -294,6 +302,10 @@ func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
 
 func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bool) string {
 	prose := stripDurableStateMarker(existingBody)
+	fallbackRecord, recordedFallback := readFallbackRecord(prose, summary.Head)
+	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && recordedFallback {
+		summary.Fallback = fallbackRecord.Findings
+	}
 	start := strings.Index(prose, verdictSectionStart)
 	if start < 0 {
 		return renderVerdictRefreshProse(summary, blockWithdrawn)
@@ -304,7 +316,7 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 	}
 	end := start + endOffset + len(verdictSectionEnd)
 	verdict := renderVerdictSection(summary, blockWithdrawn)
-	if summary.ApprovalWithheld && len(summary.Fallback) == 0 {
+	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && !recordedFallback {
 		if fallbackStart := strings.Index(prose[start:end], fallbackSectionStart); fallbackStart >= 0 {
 			fallback := prose[start+fallbackStart : end]
 			if fallbackEnd := strings.Index(fallback, fallbackSectionEnd); fallbackEnd >= 0 {
@@ -442,14 +454,14 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
 		parts = append(parts, trimmedDetail)
 	}
-	if summary.ApprovalWithheld && summary.Decision != "" {
+	hasVerdict := summary.ApprovalWithheld && summary.Decision != ""
+	if hasVerdict {
 		summary.Decision = domain.ReviewDecisionComment
 		parts = append(parts, renderVerdictSection(summary, false), RenderVerdictBody(summary))
-	}
-	if metadata := renderMetadataFindings(summary.Metadata); metadata != "" {
+	} else if metadata := renderSummaryMetadata(summary); metadata != "" {
 		parts = append(parts, metadata)
 	}
-	if summary.MetadataRevision != "" {
+	if !hasVerdict && summary.MetadataRevision != "" {
 		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
 	}
 	parts = append(parts, RenderDetails(summary), marker.Summary())
@@ -597,7 +609,7 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 			parts = append(parts, trimmed)
 		}
 	}
-	if metadata := renderMetadataFindings(summary.Metadata); metadata != "" {
+	if metadata := renderSummaryMetadata(summary); metadata != "" {
 		parts = append(parts, metadata)
 	}
 	if summary.MetadataRevision != "" {

@@ -644,7 +644,7 @@ func (service *Service) newProgress(
 	settings reviewSettings,
 	startedAt time.Time,
 ) *reviewProgress {
-	return newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced)
+	return newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced, service.reviewPolicy.MetadataFindingsDisplay())
 }
 
 // checkAlreadySucceeded reports whether this head already carries a completed
@@ -753,27 +753,28 @@ func (service *Service) publish(
 			Summary:     "",
 			Walkthrough: nil,
 		},
-		Blocking:          blocking,
-		Models:            analysis.Models,
-		Usage:             UsageFromContext(ctx),
-		Duration:          service.now().Sub(startedAt),
-		FilesReviewed:     analysis.FilesReviewed,
-		Chunks:            analysis.Chunks,
-		CoverageComplete:  analysis.CoverageComplete,
-		MinimumImportance: settings.minimumImportance,
-		Observed:          analysis.Observed,
-		Eligible:          analysis.Anchored,
-		Published:         published,
-		Fallback:          fallback,
-		Metadata:          metadata,
-		MetadataRevision:  diff.PullRequestRevision(pass.work.PullRequest),
-		PriorReviews:      traceReviews(reviews, service.botLogin),
-		Threads:           traceThreads(threads, service.botLogin),
-		Reached:           "",
-		Failed:            false,
-		Forced:            job.Forced,
-		Omissions:         nil,
-		OmissionsAccepted: omissionsAccepted,
+		Blocking:                blocking,
+		Models:                  analysis.Models,
+		Usage:                   UsageFromContext(ctx),
+		Duration:                service.now().Sub(startedAt),
+		FilesReviewed:           analysis.FilesReviewed,
+		Chunks:                  analysis.Chunks,
+		CoverageComplete:        analysis.CoverageComplete,
+		MinimumImportance:       settings.minimumImportance,
+		Observed:                analysis.Observed,
+		Eligible:                analysis.Anchored,
+		Published:               published,
+		Fallback:                fallback,
+		Metadata:                metadata,
+		MetadataRevision:        diff.PullRequestRevision(pass.work.PullRequest),
+		MetadataFindingsDisplay: service.reviewPolicy.MetadataFindingsDisplay(),
+		PriorReviews:            traceReviews(reviews, service.botLogin),
+		Threads:                 traceThreads(threads, service.botLogin),
+		Reached:                 "",
+		Failed:                  false,
+		Forced:                  job.Forced,
+		Omissions:               nil,
+		OmissionsAccepted:       omissionsAccepted,
 	}
 	if omissionsDecided {
 		summary.Omissions = shortfall.Hunks

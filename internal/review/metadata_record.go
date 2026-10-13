@@ -105,7 +105,7 @@ func renderMetadataFindings(findings []domain.Finding) string {
 	}
 	ordered := append([]domain.Finding(nil), findings...)
 	sortFindings(ordered)
-	sections := []string{"#### Prose findings"}
+	sections := make([]string, 0, len(ordered))
 	for _, finding := range ordered {
 		source := diff.MetadataSource{Surface: finding.EffectiveSurface(), CommitSHA: finding.CommitSHA, Text: "", StartLine: 0, EndLine: 0}
 		label := source.Label()

@@ -56,11 +56,12 @@ type untrustedMarkers struct {
 }
 
 type promptsFile struct {
-	UntrustedMarkers untrustedMarkers       `json:"untrusted_markers"`
-	Limits           FormattingLimits       `json:"limits"`
-	Templates        map[string]string      `json:"templates"`
-	ProviderDetails  []ProviderDetailColumn `json:"provider_details"`
-	FailureCodes     []FailureCode          `json:"failure_codes"`
+	MetadataFindingsDisplay FindingDisplay         `json:"metadata_findings_display"`
+	UntrustedMarkers        untrustedMarkers       `json:"untrusted_markers"`
+	Limits                  FormattingLimits       `json:"limits"`
+	Templates               map[string]string      `json:"templates"`
+	ProviderDetails         []ProviderDetailColumn `json:"provider_details"`
+	FailureCodes            []FailureCode          `json:"failure_codes"`
 }
 
 // FormattingLimits bounds generated reports using the loaded configuration.
@@ -100,12 +101,13 @@ type Catalog struct {
 
 // Policy stores one loaded catalog and its configured prompt templates.
 type Policy struct {
-	catalog          Catalog
-	templates        map[string]*template.Template
-	untrustedMarkers untrustedMarkers
-	limits           FormattingLimits
-	providerDetails  []ProviderDetailColumn
-	failureCodes     []FailureCode
+	metadataFindingsDisplay FindingDisplay
+	catalog                 Catalog
+	templates               map[string]*template.Template
+	untrustedMarkers        untrustedMarkers
+	limits                  FormattingLimits
+	providerDetails         []ProviderDetailColumn
+	failureCodes            []FailureCode
 }
 
 // LoadPolicy requires both configuration files and rejects malformed templates.
@@ -119,6 +121,9 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	}
 	prompts, err := decodeFile[promptsFile](promptsPath)
 	if err != nil {
+		return Policy{}, err
+	}
+	if err := validateFindingDisplay(prompts.MetadataFindingsDisplay); err != nil {
 		return Policy{}, err
 	}
 	if prompts.UntrustedMarkers.Begin == "" || prompts.UntrustedMarkers.End == "" || prompts.UntrustedMarkers.EscapedBegin == "" || prompts.UntrustedMarkers.EscapedEnd == "" {
@@ -158,7 +163,8 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 	}
 	return Policy{
-		catalog: Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
+		metadataFindingsDisplay: prompts.MetadataFindingsDisplay,
+		catalog:                 Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
 		untrustedMarkers: prompts.UntrustedMarkers, limits: prompts.Limits,
 		providerDetails: prompts.ProviderDetails,
 		failureCodes:    prompts.FailureCodes,
