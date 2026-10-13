@@ -644,7 +644,7 @@ func (service *Service) newProgress(
 	settings reviewSettings,
 	startedAt time.Time,
 ) *reviewProgress {
-	return newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced)
+	return newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced, service.reviewPolicy.MetadataFindingsDisplay())
 }
 
 // checkAlreadySucceeded reports whether this head already carries a completed
