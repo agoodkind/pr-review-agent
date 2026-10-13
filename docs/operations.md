@@ -93,6 +93,18 @@ The usage estimate uses configured paid list rates. It does not subtract free-ti
 
 Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials in Cloudflare secret bindings. Set each provider's binding names in the runtime configuration. The Go service rejects secret values in that file.
 
+## Configure finding details
+
+Set `metadata_findings_display` in the [prompt configuration](../config/review-prompts.json) to select how the summary displays title, description, and commit-message findings.
+
+| Value | Display |
+| --- | --- |
+| `expanded` | The summary displays the complete Prose findings section. |
+| `collapsed` | The summary puts the section inside a disclosure labeled Prose findings. |
+| `hidden` | The summary omits the section. Review decisions and stored findings remain active. |
+
+The renderer excludes findings with IDs that already appear in published inline comments. Findings that GitHub refused to publish inline remain in the summary. The service stores those unpublished findings separately so later thread refreshes can compare their IDs. Older summaries without that record retain their unpublished findings until a full review writes the record.
+
 ## Configure provider order
 
 List every configured provider ID once in `PROVIDER_PRIORITY`, including providers marked `disabled`. Put the preferred provider first. The service rejects incomplete providers and invalid priority lists at startup.
@@ -131,7 +143,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Change review rules
 
-1. Edit the [rule catalog](../config/review-rules.json) or [prompt templates](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
+1. Edit the [rule catalog](../config/review-rules.json) or prompt configuration. Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json
