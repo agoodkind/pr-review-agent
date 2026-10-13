@@ -95,7 +95,7 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 ## Configure finding details
 
-Set `metadata_findings_display` in the [prompt configuration](../config/review-prompts.json) to select how the summary displays title, description, and commit-message findings.
+Use the [rule-change procedure](#change-review-rules) to edit `metadata_findings_display` and select how the summary displays title, description, and commit-message findings.
 
 | Value | Display |
 | --- | --- |
@@ -143,7 +143,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Change review rules
 
-1. Edit the [rule catalog](../config/review-rules.json) or prompt configuration. Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
+1. Edit the [rule catalog](../config/review-rules.json) or [prompt configuration](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json
@@ -153,7 +153,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
    ```
 
    The catalog's category settings define fixed importance and which rules apply to generated review text. The shipped prose category requires importance `10`. A rule without fixed category importance or an override uses the model's score. `REVIEW_MIN_IMPORTANCE` controls publication after these scores are applied.
-3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make check`. Verify findings and corrections with the live procedure in [acceptance.md](acceptance.md), then merge the change to deploy it.
+3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make build`. Verify findings and corrections with the live procedure in [acceptance.md](acceptance.md), then merge the change to deploy it.
 
 4. Confirm that the Release workflow completed successfully. The committed Cloudflare configuration contains an invalid image placeholder. For a manual deployment, set `PR_REVIEW_AGENT_IMAGE` to the verified image digest and run `npm run deploy` from `deploy/cloudflare`.
 
