@@ -147,8 +147,7 @@ export class ProviderBudget extends DurableObject {
         const detailsKey = `usage_report_details:${reportId}`;
         const detailsFingerprint = JSON.stringify([cachedInput, cacheWrites, serviceTier]);
         const sdkKey = `usage_report_sdk:${reportId}`;
-        const sdkFingerprint = JSON.stringify(sdkUsage == null ? null :
-          [sdkUsage.api, sdkUsage.model ?? "", sdkUsage.response_id ?? "", sdkUsage.usage_json]);
+        const sdkFingerprint = JSON.stringify(sdkUsage ?? null);
         if (reportId !== undefined) {
           const previous = await transaction.get(reportKey);
           if (previous !== undefined) {
@@ -181,7 +180,7 @@ export class ProviderBudget extends DurableObject {
         this.ctx.storage.sql.exec(usageDetails, inserted.sequence,
           cachedInput ?? null, cacheWrites ?? null, serviceTier ?? null);
         if (sdkUsage !== undefined && sdkUsage !== null) {
-          this.ctx.storage.sql.exec(usageSDK, inserted.sequence, JSON.stringify(sdkUsage));
+          this.ctx.storage.sql.exec(usageSDK, inserted.sequence, sdkFingerprint);
         }
         if (reportId !== undefined) {
           await transaction.put(reportKey, fingerprint);

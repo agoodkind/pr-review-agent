@@ -279,7 +279,7 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
       const configuration = JSON.parse(await readFile(new URL("../../../runtime.json", import.meta.url), "utf8"));
       const pageBytes = Number(configuration.PROVIDER_USAGE_PAGE_BYTES);
       const reportBytes = Number(configuration.PROVIDER_USAGE_MAX_BYTES);
-      const native = { api: "responses", model: "selected_model", response_id: "response_identity",
+      const native = { api: "responses", model: "selected_model", response_id: "response_identity", future_envelope: { revision: 1 },
         usage_json: `{ "future_count": 123456789012345678901234567890, "future": { "explicit_null": null, "items": [true, "${"界".repeat(3000)}"] } }` };
       const details = { report_id: "native-envelope", sdk_usage: native };
       assert.deepEqual(await reportUsage(port, "native", admittedAt, details), { reported: true, sdk_usage_stored: true });
@@ -290,6 +290,7 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
       for (const changed of [
         { ...native, api: "chat_completions" }, { ...native, model: "another_model" },
         { ...native, response_id: "another_response" }, { ...native, usage_json: "{}" },
+        { ...native, future_envelope: { revision: 2 } },
       ]) {
         await budgetRequest(port, { action: "report_usage", provider_id: "native", model: modelId,
           admitted_at_ms: admittedAt, input_tokens: 11, output_tokens: 7, total_tokens: 20,
