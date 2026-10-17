@@ -64,7 +64,11 @@ The live test commits temporary prose changes to a dedicated pull request and wa
        -run '^TestLiveClippedContrasts' -count=1 -v -timeout 75m
    ```
 
-4. Require separate importance 10 findings for repeated file and description passages, continued rejection after one correction, approval after both corrections, and a new rejection after reintroduction at another file location. Confirm that cleanup restores the original file and description.
+4. Require separate importance 10 findings for repeated file and description passages.
+5. Require continued rejection after one correction.
+6. Require approval after both corrections.
+7. Require a new rejection after the test reintroduces the violation at another file location.
+8. Confirm that cleanup restores the original file and description.
 
 ## Verify metadata findings and resumed reviews
 
