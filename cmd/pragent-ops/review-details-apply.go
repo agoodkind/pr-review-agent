@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"log/slog"
 	"os"
 	"reflect"
 
@@ -16,33 +14,27 @@ import (
 func writeReviewDetailsBackup(path string, snapshot reviewDetailsSnapshot) (returnErr error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		slog.Error("Review details backup creation failed", "err", err)
-		return fmt.Errorf("create private review-details backup: %w", err)
+		return err
 	}
 	defer func() {
 		returnErr = errors.Join(returnErr, file.Close())
 	}()
 	if err := file.Chmod(0o600); err != nil {
-		slog.Error("Review details backup permission update failed", "err", err)
-		return fmt.Errorf("set review-details backup permissions: %w", err)
+		return err
 	}
 	if err := json.NewEncoder(file).Encode(snapshot); err != nil {
-		slog.Error("Review details backup encoding failed", "err", err)
-		return fmt.Errorf("encode original review details: %w", err)
+		return err
 	}
 	if err := file.Sync(); err != nil {
-		slog.Error("Review details backup synchronization failed", "err", err)
-		return fmt.Errorf("synchronize review-details backup: %w", err)
+		return err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		slog.Error("Review details backup verification read failed", "err", err)
-		return fmt.Errorf("read review-details backup for verification: %w", err)
+		return err
 	}
 	var restored reviewDetailsSnapshot
 	if err := json.Unmarshal(data, &restored); err != nil {
-		slog.Error("Review details backup decoding failed", "err", err)
-		return fmt.Errorf("decode review-details backup: %w", err)
+		return err
 	}
 	if !reflect.DeepEqual(restored, snapshot) {
 		return errors.New("the review-details backup does not match the original snapshot")

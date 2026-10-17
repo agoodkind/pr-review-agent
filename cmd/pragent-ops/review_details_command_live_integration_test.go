@@ -84,5 +84,5 @@ func TestLiveReviewDetailsCommandRepairsAndRepeats(t *testing.T) {
 			t.Fatal("The repeated command did not report an unchanged summary.")
 		}
 	}
-	t.Log("The real command preserved its dry run, restored measured details, cleared the failure notice, saved a private backup, and repeated without another update.")
+	t.Log("The command restored measured details, cleared the failure notice, and saved a private backup. The dry run and repetition did not change the comment.")
 }

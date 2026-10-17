@@ -50,7 +50,7 @@ func stripMaintenanceFailure(body string) string {
 	return strings.TrimSpace(body[:start] + body[start+end+len(maintenanceFailureEnd):])
 }
 
-// ClearUpdateFailure removes the managed failure and reassessment notices.
+// ClearUpdateFailure leaves the verdict and checkpoint unchanged.
 func ClearUpdateFailure(body string) string {
 	return stripReassessmentNotice(stripMaintenanceFailure(body))
 }
@@ -91,13 +91,13 @@ func preservedReportPrefix(body string) string {
 	return "## Review"
 }
 
-// MetadataMatches verifies the recorded metadata head and revision.
+// MetadataMatches checks the revision because title and description edits can keep the commit unchanged.
 func MetadataMatches(body string, head domain.HeadSHA, revision string) bool {
 	record, found, err := decodeMetadataRecord(body)
 	return err == nil && found && record.Head == head && record.Revision == revision
 }
 
-// RestoreReviewDetails returns the existing summary with restored details and current thread counts.
+// RestoreReviewDetails preserves the destination verdict and checkpoint when copying source details.
 func RestoreReviewDetails(existingBody, sourceDetails string, threads []githubapp.ReviewThread, botLogin string) (string, error) {
 	start, end, err := reviewDetailsRange(existingBody, "existing summary")
 	if err != nil {

@@ -55,7 +55,8 @@ func reviewDetails(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 	snapshot.Source, err = client.GetCheckRunDetails(ctx, opts.identity.installationID, repo, opts.sourceCheckID)
 	if err != nil {
-		return err
+		slog.Error("Source review check read failed", "check_run_id", opts.sourceCheckID, "err", err)
+		return fmt.Errorf("read source review check %d: %w", opts.sourceCheckID, err)
 	}
 	if err := prepareReviewDetails(&snapshot, opts, cfg); err != nil {
 		return err
@@ -63,10 +64,12 @@ func reviewDetails(ctx context.Context, args []string, stdout, stderr io.Writer)
 	changed := snapshot.Comment.Body != snapshot.Repaired
 	if opts.identity.apply && changed {
 		if err := writeReviewDetailsBackup(opts.identity.backupFile, snapshot); err != nil {
-			return err
+			slog.Error("Review details backup failed", "backup_file", opts.identity.backupFile, "err", err)
+			return fmt.Errorf("save review details backup: %w", err)
 		}
 		if err := applyReviewDetails(ctx, client, snapshot, cfg.GitHubBotLogin); err != nil {
-			return err
+			slog.Error("Review details repair failed", "comment_id", opts.commentID, "err", err)
+			return fmt.Errorf("repair summary comment %d: %w", opts.commentID, err)
 		}
 	}
 	_, err = fmt.Fprintf(stdout, "Summary comment %d requires repair: %t. Check run %d matches head %s. The command applied changes: %t.\n", snapshot.Comment.ID, changed, snapshot.Source.Run.ID, snapshot.Original.PullRequest.Head, opts.identity.apply && changed)
