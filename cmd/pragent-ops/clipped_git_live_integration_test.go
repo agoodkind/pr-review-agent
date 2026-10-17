@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func (fixture *clippedLiveFixture) commit(t *testing.T, ctx context.Context, content, subject string) string {
@@ -53,4 +54,24 @@ func clippedLiveGit(t *testing.T, ctx context.Context, directory string, argumen
 		t.Fatalf("Git failed during fixture %s: %.512s", arguments[0], output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+func (fixture *clippedLiveFixture) awaitHead(t *testing.T, parent context.Context, previous string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	for ctx.Err() == nil {
+		current := fixture.pullRequest(t, ctx).Head.SHA
+		if current == fixture.head {
+			return
+		}
+		if current != previous {
+			t.Fatal("An unrelated commit changed the pull request head after the fixture push.")
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+		}
+	}
+	t.Fatal("GitHub did not report the signed fixture commit within thirty seconds.")
 }

@@ -122,9 +122,7 @@ func (fixture *clippedLiveFixture) write(t *testing.T, ctx context.Context, cont
 	if !commit.Commit.Verification.Verified {
 		t.Fatal("GitHub did not verify the fixture commit signature.")
 	}
-	if fixture.pullRequest(t, ctx).Head.SHA != fixture.head {
-		t.Fatal("The pull request head changed after the fixture commit.")
-	}
+	fixture.awaitHead(t, ctx, previous)
 	t.Logf("The fixture commit %s uses branch %s.", fixture.head, current.Head.Ref)
 }
 
