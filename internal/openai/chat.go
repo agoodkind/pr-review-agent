@@ -20,7 +20,7 @@ func completeChat(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage),
+	report func(responses.ResponseUsage, string),
 ) (string, string, error) {
 	params := openaigo.ChatCompletionNewParams{
 		Model:           target.model,
@@ -48,24 +48,28 @@ func completeChat(
 
 	var content strings.Builder
 	model := ""
+	serviceTier := ""
 	usage := openaigo.CompletionUsage{}
 	hasUsage := false
 	finished := false
 	finishReason := ""
 	defer func() {
 		converted := responseUsageFromChat(usage)
-		result := modelUsage(model, converted, hasUsage, target)
+		result := modelUsage(model, converted, hasUsage, target, serviceTier)
 		result.AudioInputTokens = usage.PromptTokensDetails.AudioTokens
 		result.AudioOutputTokens = usage.CompletionTokensDetails.AudioTokens
 		result.AcceptedPredictionTokens = usage.CompletionTokensDetails.AcceptedPredictionTokens
 		result.RejectedPredictionTokens = usage.CompletionTokensDetails.RejectedPredictionTokens
 		review.RecordModelUsage(ctx, result)
 		if hasUsage {
-			report(converted)
+			report(converted, serviceTier)
 		}
 	}()
 	for stream.Next() {
 		chunk := stream.Current()
+		if chunk.ServiceTier != "" {
+			serviceTier = string(chunk.ServiceTier)
+		}
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
@@ -106,7 +110,8 @@ func responseUsageFromChat(usage openaigo.CompletionUsage) responses.ResponseUsa
 		OutputTokens: usage.CompletionTokens,
 		TotalTokens:  usage.TotalTokens,
 		InputTokensDetails: responses.ResponseUsageInputTokensDetails{
-			CachedTokens: usage.PromptTokensDetails.CachedTokens,
+			CachedTokens:     usage.PromptTokensDetails.CachedTokens,
+			CacheWriteTokens: usage.PromptTokensDetails.CacheWriteTokens,
 		},
 		OutputTokensDetails: responses.ResponseUsageOutputTokensDetails{
 			ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens,

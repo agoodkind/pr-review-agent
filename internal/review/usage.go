@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"slices"
 	"sync"
 
 	"goodkind.io/pr-review-agent/internal/config"
@@ -19,6 +20,8 @@ type ModelUsage struct {
 	ReportedRequests            int
 	InputTokens                 int64
 	CachedInputTokens           int64
+	CacheWriteTokens            int64
+	ServiceTier                 string
 	AudioInputTokens            int64
 	OutputTokens                int64
 	ReasoningTokens             int64
@@ -28,6 +31,7 @@ type ModelUsage struct {
 	TotalTokens                 int64
 	EstimatedInputCostUSD       float64
 	EstimatedCachedInputCostUSD float64
+	EstimatedCacheWriteCostUSD  float64
 	EstimatedOutputCostUSD      float64
 	EstimatedCostUSD            float64
 }
@@ -39,6 +43,8 @@ type UsageSummary struct {
 	PricedRequests              int
 	InputTokens                 int64
 	CachedInputTokens           int64
+	CacheWriteTokens            int64
+	ServiceTiers                []string
 	AudioInputTokens            int64
 	OutputTokens                int64
 	ReasoningTokens             int64
@@ -48,6 +54,7 @@ type UsageSummary struct {
 	TotalTokens                 int64
 	EstimatedInputCostUSD       float64
 	EstimatedCachedInputCostUSD float64
+	EstimatedCacheWriteCostUSD  float64
 	EstimatedOutputCostUSD      float64
 	EstimatedCostUSD            float64
 	Models                      []ModelUsage
@@ -77,6 +84,7 @@ type usageModelKey struct {
 	requestedModel string
 	model          string
 	priced         bool
+	serviceTier    string
 }
 
 // RecordProviderAttempt records admission refusals as well as actual API calls.
@@ -163,6 +171,7 @@ func (recorder *UsageRecorder) record(usage ModelUsage) {
 		requestedModel: usage.RequestedModel,
 		model:          usage.Model,
 		priced:         usage.Priced,
+		serviceTier:    usage.ServiceTier,
 	}
 	model, found := recorder.models[key]
 	if !found {
@@ -170,6 +179,7 @@ func (recorder *UsageRecorder) record(usage ModelUsage) {
 		model.RequestedModel = usage.RequestedModel
 		model.Model = usage.Model
 		model.Priced = usage.Priced
+		model.ServiceTier = usage.ServiceTier
 		recorder.ordered = append(recorder.ordered, key)
 	}
 	addUsage(&model, usage)
@@ -186,6 +196,7 @@ func (recorder *UsageRecorder) Summary() UsageSummary {
 	defer recorder.mu.Unlock()
 
 	summary := recorder.totals
+	summary.ServiceTiers = append([]string(nil), recorder.totals.ServiceTiers...)
 	summary.ProviderAttempts = append([]ProviderAttempt(nil), recorder.totals.ProviderAttempts...)
 	summary.ProviderColumns = append([]reviewrules.ProviderDetailColumn(nil), recorder.totals.ProviderColumns...)
 	summary.Models = make([]ModelUsage, 0, len(recorder.ordered))
@@ -203,6 +214,10 @@ func addModelUsage(summary *UsageSummary, usage ModelUsage) {
 	summary.ReportedRequests += usage.ReportedRequests
 	summary.InputTokens += usage.InputTokens
 	summary.CachedInputTokens += usage.CachedInputTokens
+	summary.CacheWriteTokens += usage.CacheWriteTokens
+	if usage.ServiceTier != "" && !slices.Contains(summary.ServiceTiers, usage.ServiceTier) {
+		summary.ServiceTiers = append(summary.ServiceTiers, usage.ServiceTier)
+	}
 	summary.AudioInputTokens += usage.AudioInputTokens
 	summary.OutputTokens += usage.OutputTokens
 	summary.ReasoningTokens += usage.ReasoningTokens
@@ -212,6 +227,7 @@ func addModelUsage(summary *UsageSummary, usage ModelUsage) {
 	summary.TotalTokens += usage.TotalTokens
 	summary.EstimatedInputCostUSD += usage.EstimatedInputCostUSD
 	summary.EstimatedCachedInputCostUSD += usage.EstimatedCachedInputCostUSD
+	summary.EstimatedCacheWriteCostUSD += usage.EstimatedCacheWriteCostUSD
 	summary.EstimatedOutputCostUSD += usage.EstimatedOutputCostUSD
 	summary.EstimatedCostUSD += usage.EstimatedCostUSD
 }
@@ -221,6 +237,7 @@ func addUsage(total *ModelUsage, usage ModelUsage) {
 	total.ReportedRequests += usage.ReportedRequests
 	total.InputTokens += usage.InputTokens
 	total.CachedInputTokens += usage.CachedInputTokens
+	total.CacheWriteTokens += usage.CacheWriteTokens
 	total.AudioInputTokens += usage.AudioInputTokens
 	total.OutputTokens += usage.OutputTokens
 	total.ReasoningTokens += usage.ReasoningTokens
@@ -230,6 +247,7 @@ func addUsage(total *ModelUsage, usage ModelUsage) {
 	total.TotalTokens += usage.TotalTokens
 	total.EstimatedInputCostUSD += usage.EstimatedInputCostUSD
 	total.EstimatedCachedInputCostUSD += usage.EstimatedCachedInputCostUSD
+	total.EstimatedCacheWriteCostUSD += usage.EstimatedCacheWriteCostUSD
 	total.EstimatedOutputCostUSD += usage.EstimatedOutputCostUSD
 	total.EstimatedCostUSD += usage.EstimatedCostUSD
 }

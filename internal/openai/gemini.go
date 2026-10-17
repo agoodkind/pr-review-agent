@@ -21,7 +21,7 @@ func completeGemini(
 	prompt string,
 	policy string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage),
+	report func(responses.ResponseUsage, string),
 ) (string, string, error) {
 	attempts := int32(1)
 	sdk, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -51,9 +51,9 @@ func completeGemini(
 	hasUsage := false
 	finishReason := genai.FinishReasonUnspecified
 	defer func() {
-		review.RecordModelUsage(ctx, modelUsage(model, usage, hasUsage, target))
+		review.RecordModelUsage(ctx, modelUsage(model, usage, hasUsage, target, ""))
 		if hasUsage {
-			report(usage)
+			report(usage, "")
 		}
 	}()
 	contents := []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)}

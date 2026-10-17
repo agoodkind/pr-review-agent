@@ -219,6 +219,17 @@ func retryableReportError(err error) bool {
 }
 
 func validUsage(usage Usage) bool {
+	for _, count := range []*int64{usage.CachedInputTokens, usage.CacheWriteTokens} {
+		if count != nil && (*count < 0 || *count > usage.InputTokens) {
+			return false
+		}
+	}
+	if usage.CachedInputTokens != nil && usage.CacheWriteTokens != nil && *usage.CachedInputTokens > usage.InputTokens-*usage.CacheWriteTokens {
+		return false
+	}
+	if len(usage.ServiceTier) > 200 {
+		return false
+	}
 	return usage.InputTokens >= 0 && usage.InputTokens <= MaximumInteger &&
 		usage.OutputTokens >= 0 && usage.OutputTokens <= MaximumInteger &&
 		usage.TotalTokens >= 0 && usage.TotalTokens <= MaximumInteger

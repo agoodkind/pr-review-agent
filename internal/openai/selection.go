@@ -55,8 +55,8 @@ func (client *Client) attemptCompletion(
 	if err != nil {
 		return "", "", budget, err
 	}
-	report := func(usage responses.ResponseUsage) {
-		client.reportBudget(attemptCtx, target, budget, usage)
+	report := func(usage responses.ResponseUsage, serviceTier string) {
+		client.reportBudget(attemptCtx, target, budget, usage, serviceTier)
 	}
 	switch target.api {
 	case config.GeminiAPI:

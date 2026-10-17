@@ -173,9 +173,12 @@ func previousOccurrence(schedule cron.Schedule, now time.Time) (time.Time, error
 
 // Usage stores the provider total independently of selected input/output categories.
 type Usage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
+	InputTokens       int64  `json:"input_tokens"`
+	OutputTokens      int64  `json:"output_tokens"`
+	TotalTokens       int64  `json:"total_tokens"`
+	CachedInputTokens *int64 `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens  *int64 `json:"cache_write_tokens,omitempty"`
+	ServiceTier       string `json:"service_tier,omitempty"`
 }
 
 // Tokens uses the provider total when the configured category list is empty.

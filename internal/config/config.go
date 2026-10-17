@@ -142,9 +142,10 @@ var runtimeConfigKeys = map[string]struct{}{
 
 // ModelPricing holds estimated US dollar rates per million tokens.
 type ModelPricing struct {
-	InputPerMillionTokens       float64 `json:"input_per_million_tokens"`
-	CachedInputPerMillionTokens float64 `json:"cached_input_per_million_tokens"`
-	OutputPerMillionTokens      float64 `json:"output_per_million_tokens"`
+	InputPerMillionTokens       float64  `json:"input_per_million_tokens"`
+	CachedInputPerMillionTokens float64  `json:"cached_input_per_million_tokens"`
+	CacheWritePerMillionTokens  *float64 `json:"cache_write_per_million_tokens,omitempty"`
+	OutputPerMillionTokens      float64  `json:"output_per_million_tokens"`
 }
 
 // Config holds validated service configuration.
@@ -440,6 +441,7 @@ func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
 		}
 		if rates.InputPerMillionTokens < 0 ||
 			rates.CachedInputPerMillionTokens < 0 ||
+			(rates.CacheWritePerMillionTokens != nil && *rates.CacheWritePerMillionTokens < 0) ||
 			rates.OutputPerMillionTokens < 0 {
 			return nil, errors.New("REVIEW_MODEL_PRICING token rates must not be negative")
 		}
