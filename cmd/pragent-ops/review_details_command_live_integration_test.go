@@ -38,7 +38,6 @@ func TestLiveReviewDetailsCommandRepairsAndRepeats(t *testing.T) {
 	}
 	original := fixture.original.Body
 	metadata := liveDetailsSection(t, original, "<!-- pr-review-agent:metadata:v1 ", " -->")
-	report, _, _ := strings.Cut(original, "<!-- pr-review-agent:verdict-section:start -->")
 	fixture.write(t, ctx, strings.Replace(original, metadata, "", 1))
 	outcome, failure := fixture.run(t, ctx)
 	if failure == nil || outcome.Disposition != domain.AssessmentFailed {
@@ -59,6 +58,14 @@ func TestLiveReviewDetailsCommandRepairsAndRepeats(t *testing.T) {
 		t.Fatalf("The fixture could not reproduce the erased details: %v", err)
 	}
 	fixture.write(t, ctx, damaged)
+	damagedDetails := liveDetailsSection(t, damaged, "<details>\n<summary>Review details</summary>", "</details>")
+	sourceDetails := liveDetailsSection(t, source.Summary, "<details>\n<summary>Review details</summary>", "</details>")
+	failureNotice := liveDetailsSection(t, damaged, "<!-- pr-review-agent:maintenance-failure:start -->", "<!-- pr-review-agent:maintenance-failure:end -->")
+	expectedBody := strings.Replace(damaged, damagedDetails, sourceDetails, 1)
+	expectedBody = strings.TrimSpace(strings.Replace(expectedBody, failureNotice, "", 1))
+	completedState := state
+	completedState.Status = marker.StateDone
+	expectedBody = strings.Replace(expectedBody, marker.EncodeState(state), marker.EncodeState(completedState), 1)
 	backup := filepath.Join(filepath.Dir(fixture.logPath), "command-before.json")
 	arguments := []string{"review-details", "--runtime", fixture.opts.runtime, "--repository", fixture.opts.repository, "--pull-request", strconv.Itoa(fixture.opts.pullRequest), "--installation-id", strconv.FormatInt(fixture.opts.installationID, 10), "--app-private-key-file", fixture.opts.privateKeyFile, "--summary-comment-id", strconv.FormatInt(fixture.original.ID, 10), "--source-check-run-id", strconv.FormatInt(identifier, 10), "--backup-file", backup}
 	for index, apply := range []bool{false, true, true} {
@@ -78,7 +85,9 @@ func TestLiveReviewDetailsCommandRepairsAndRepeats(t *testing.T) {
 			}
 			continue
 		}
-		liveDetailsAssertRecovered(t, current, liveDetailsSection(t, source.Summary, "<details>\n<summary>Review details</summary>", "</details>"), strings.TrimSpace(report), fixture.before.PullRequest.Head)
+		if current != expectedBody {
+			t.Fatal("The repair changed content outside the selected details, failure notice, and checkpoint status.")
+		}
 		info, statErr := os.Stat(backup)
 		if statErr != nil {
 			t.Fatalf("The private backup could not be inspected: %v", statErr)
