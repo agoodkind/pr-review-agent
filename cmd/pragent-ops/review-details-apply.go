@@ -19,9 +19,6 @@ func writeReviewDetailsBackup(path string, snapshot reviewDetailsSnapshot) (retu
 	defer func() {
 		returnErr = errors.Join(returnErr, file.Close())
 	}()
-	if err := file.Chmod(0o600); err != nil {
-		return err
-	}
 	if err := json.NewEncoder(file).Encode(snapshot); err != nil {
 		return err
 	}
@@ -72,6 +69,15 @@ func verifyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot
 	if err != nil {
 		return err
 	}
+	source, err := client.GetCheckRunDetails(ctx, original.InstallationID, original.Repository, snapshot.Source.Run.ID)
+	if err != nil {
+		return err
+	}
+	return compareReviewDetails(snapshot, expectedBody, current, source)
+}
+
+func compareReviewDetails(snapshot reviewDetailsSnapshot, expectedBody string, current reviewBodySnapshot, source githubapp.CheckRunDetails) error {
+	original := snapshot.Original
 	if current.PullRequest != original.PullRequest {
 		return errors.New("pull request metadata changed during review-details repair")
 	}
@@ -91,10 +97,6 @@ func verifyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot
 		if current.Comments[index] != expected {
 			return errors.New("a summary comment no longer matches the expected snapshot")
 		}
-	}
-	source, err := client.GetCheckRunDetails(ctx, original.InstallationID, original.Repository, snapshot.Source.Run.ID)
-	if err != nil {
-		return err
 	}
 	if !reflect.DeepEqual(source, snapshot.Source) {
 		return errors.New("the source check changed during review-details repair")

@@ -16,14 +16,30 @@ type CheckRunDetails struct {
 	Summary string
 }
 
-type checkRunDetailsResponse checkRunResponse
+type checkRunDetailsResponse CheckRunDetails
 
-func (response *checkRunDetailsResponse) UnmarshalJSON(data []byte) error {
+func (details *checkRunDetailsResponse) UnmarshalJSON(data []byte) error {
 	var decoded checkRunResponse
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return fmt.Errorf("decode check run details: %w", err)
 	}
-	*response = checkRunDetailsResponse(decoded)
+	head, err := parseHeadSHA(decoded.HeadSHA)
+	if err != nil {
+		return err
+	}
+	*details = checkRunDetailsResponse{
+		Run: CheckRun{
+			ID:         decoded.ID,
+			Outcome:    domain.DecodeAssessmentOutcome(decoded.Output.Text),
+			Name:       decoded.Name,
+			Head:       head,
+			Status:     decoded.Status,
+			Conclusion: decoded.Conclusion,
+			ExternalID: decoded.ExternalID,
+		},
+		AppID:   decoded.App.ID,
+		Summary: decoded.Output.Summary,
+	}
 	return nil
 }
 
@@ -39,11 +55,5 @@ func (client *Client) GetCheckRunDetails(ctx context.Context, installationID int
 	if err := response.UnmarshalJSON(body); err != nil {
 		return details, err
 	}
-	details.Run, err = decodeCheckRun(body, ctx, client)
-	if err != nil {
-		return details, err
-	}
-	details.AppID = response.App.ID
-	details.Summary = response.Output.Summary
-	return details, nil
+	return CheckRunDetails(response), nil
 }
