@@ -453,7 +453,7 @@ func (service *Service) reviewOwedWork(
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
-	pass := newChunkPass(work, settings, &selection, disputes, openThreadLocations(threads, service.botLogin), disputePrompt)
+	pass := newChunkPass(work, settings, &selection, disputes, disputePrompt)
 	for _, finding := range retainedMetadata {
 		pass.metadata = append(pass.metadata, finding)
 		pass.metadataSeen[metadataFindingKey(finding)] = struct{}{}

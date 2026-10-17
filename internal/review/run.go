@@ -63,13 +63,6 @@ type chunkPass struct {
 	// the lock.
 	disputes      disputeContext
 	disputePrompt string
-	// carried names what the pull request was already waiting on when this pass
-	// started, taken from the service's own open threads. A resumed pass posts
-	// only the findings it reads itself, so without this the progress comment
-	// would drop everything an earlier pass had already put on the page. It is
-	// built once and never written again, so the chunks read it without the
-	// lock.
-	carried []string
 
 	publicationMu   sync.Mutex
 	mu              sync.Mutex
@@ -121,7 +114,6 @@ func newChunkPass(
 	settings reviewSettings,
 	selection *publicationState,
 	disputes disputeContext,
-	carried []string,
 	disputePrompt string,
 ) *chunkPass {
 	return &chunkPass{
@@ -130,7 +122,6 @@ func newChunkPass(
 		selection:       selection,
 		disputes:        disputes,
 		disputePrompt:   disputePrompt,
-		carried:         carried,
 		publicationMu:   sync.Mutex{},
 		mu:              sync.Mutex{},
 		collector:       newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
@@ -650,14 +641,6 @@ func (service *Service) checkpoint(
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
-	// The findings are read inside the tracker lock, so the order checkpoints
-	// take that lock is also the order their snapshots were taken. Reading first
-	// let a chunk that acquired the lock late overwrite the comment with a list
-	// that predated a newer finding. Nothing holds the pass lock while waiting
-	// on this one, so taking it here cannot deadlock.
-	published := pass.publishedFindings()
-	waiting := mergeLocations(pass.carried, findingLocations(published))
-
 	tracker.unfinished = removeChunkID(tracker.unfinished, id)
 	tracker.completed = append(tracker.completed, id)
 	tracker.unread = removeChunkID(tracker.unread, id)
@@ -667,7 +650,7 @@ func (service *Service) checkpoint(
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderProgressBody(head, len(tracker.unfinished), waiting) + "\n\n" +
+		Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
 			renderMetadataFindings(pass.metadataFindings()) + "\n" +
 			encodeMetadataRecord(metadataReviewRecord{
 				Head: head, Revision: diff.PullRequestRevision(pass.work.PullRequest), Findings: pass.metadataFindings(),
