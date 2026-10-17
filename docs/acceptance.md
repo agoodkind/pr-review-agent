@@ -251,7 +251,7 @@ The live regression seeds an older approval and a completed current-head assessm
        -run TestLiveReviewDetailsSurviveRefreshFailureAndRecovery -count=1 -v
    ```
 
-3. Require the original measured details after the provider refusal, recovery, and repair of a legacy failure body. Require recovery to clear the failed status. Confirm that cleanup restores the original summary and that native reviews, inline threads, and pull request metadata remain unchanged.
+3. Require the original measured details after the provider refusal, the successful refresh, and recovery from a legacy failure body. Require recovery to clear the failed status. Confirm that cleanup restores the original summary and preserves native reviews, inline threads, and pull request metadata.
 
 ## Verify hidden review body cleanup
 
