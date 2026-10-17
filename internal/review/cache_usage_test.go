@@ -27,3 +27,36 @@ func TestUsageDetailsPreserveCacheWritesAndActualServiceTiers(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageDetailsDoNotPriceUnpricedCacheWritesAsZero(t *testing.T) {
+	for _, scenario := range []struct {
+		name            string
+		unpricedWrites  int64
+		pricedWrites    int64
+		pricedWriteCost float64
+		expected        string
+	}{
+		{name: "only unpriced writes", unpricedWrites: 200_000, expected: "unknown"},
+		{name: "partial write estimate", unpricedWrites: 200_000, pricedWrites: 200_000, pricedWriteCost: 0.05, expected: "unknown"},
+		{name: "unpriced request without writes", pricedWrites: 200_000, pricedWriteCost: 0.05, expected: "$0.05000000"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx, recorder := review.WithUsageRecorder(t.Context())
+			review.RecordModelUsage(ctx, review.ModelUsage{
+				RequestedModel: "priced", Model: "priced", Requests: 1, ReportedRequests: 1,
+				Priced: true, CacheWriteTokens: scenario.pricedWrites,
+				InputTokens: scenario.pricedWrites, TotalTokens: scenario.pricedWrites,
+				EstimatedCacheWriteCostUSD: scenario.pricedWriteCost, EstimatedCostUSD: scenario.pricedWriteCost,
+			})
+			review.RecordModelUsage(ctx, review.ModelUsage{
+				RequestedModel: "unpriced", Model: "unpriced", Requests: 1, ReportedRequests: 1,
+				CacheWriteTokens: scenario.unpricedWrites,
+				InputTokens:      scenario.unpricedWrites, TotalTokens: scenario.unpricedWrites,
+			})
+			body := review.RenderDetails(review.Summary{Usage: recorder.Summary()})
+			if !strings.Contains(body, "| Estimated cache write cost | "+scenario.expected+" |") {
+				t.Fatalf("review diagnostics misstated cache write cost: %s", body)
+			}
+		})
+	}
+}

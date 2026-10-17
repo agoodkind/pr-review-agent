@@ -44,7 +44,7 @@ func renderUsageDetails(usage UsageSummary) string {
 	} else {
 		fmt.Fprintf(&builder, "| Estimated input cost | $%.8f |\n", usage.EstimatedInputCostUSD)
 		fmt.Fprintf(&builder, "| Estimated cached input cost | $%.8f |\n", usage.EstimatedCachedInputCostUSD)
-		fmt.Fprintf(&builder, "| Estimated cache write cost | $%.8f |\n", usage.EstimatedCacheWriteCostUSD)
+		fmt.Fprintf(&builder, "| Estimated cache write cost | %s |\n", cacheWriteCostCell(usage))
 		fmt.Fprintf(&builder, "| Estimated output cost | $%.8f |\n", usage.EstimatedOutputCostUSD)
 		fmt.Fprintf(&builder, "| Estimated total cost | $%.8f |\n", usage.EstimatedCostUSD)
 	}
@@ -67,6 +67,15 @@ func renderUsageDetails(usage UsageSummary) string {
 		}
 	}
 	return builder.String()
+}
+
+func cacheWriteCostCell(usage UsageSummary) string {
+	for _, model := range usage.Models {
+		if !model.Priced && model.CacheWriteTokens > 0 {
+			return "unknown"
+		}
+	}
+	return fmt.Sprintf("$%.8f", usage.EstimatedCacheWriteCostUSD)
 }
 
 func usageModelCell(model string) string {
