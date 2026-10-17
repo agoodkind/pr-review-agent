@@ -120,6 +120,8 @@ var runtimeConfigKeys = map[string]struct{}{
 	"PROVIDER_FAILURE_POLICY":        {},
 	"PROVIDER_BUDGET_URL":            {},
 	"PROVIDER_BUDGET_REPORT":         {},
+	"PROVIDER_USAGE_MAX_BYTES":       {},
+	"PROVIDER_USAGE_PAGE_BYTES":      {},
 	"SERVICE_FAILURE_APPEARANCE":     {},
 	"GITHUB_APP_ID":                  {},
 	"GITHUB_BOT_LOGIN":               {},

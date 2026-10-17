@@ -270,9 +270,66 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
       assert.equal(legacy.events[0].cache_write_tokens, null);
       assert.equal(legacy.events[0].cached_input_tokens, null);
       assert.equal(legacy.events[0].service_tier, null);
+      assert.equal(legacy.events[0].sdk_usage, null);
       await stopRuntime(runtime);
       runtime = await startRuntime(port, persistPath);
       assert.deepEqual(await queryUsage(port, "billing", 0, Date.now()), stored);
+    });
+    await context.test("native SDK usage remains exact across byte-bounded history pages", async function () {
+      const configuration = JSON.parse(await readFile(new URL("../../../runtime.json", import.meta.url), "utf8"));
+      const pageBytes = Number(configuration.PROVIDER_USAGE_PAGE_BYTES);
+      const reportBytes = Number(configuration.PROVIDER_USAGE_MAX_BYTES);
+      const native = { api: "responses", model: "selected_model", response_id: "response_identity",
+        usage_json: `{ "future_count": 123456789012345678901234567890, "future": { "explicit_null": null, "items": [true, "${"界".repeat(3000)}"] } }` };
+      const details = { report_id: "native-envelope", sdk_usage: native };
+      assert.deepEqual(await reportUsage(port, "native", admittedAt, details), { reported: true, sdk_usage_stored: true });
+      assert.deepEqual(await reportUsage(port, "native", admittedAt, details), { reported: true, sdk_usage_stored: true });
+      const one = await queryUsage(port, "native", 0, Date.now());
+      assert.equal(one.events.length, 1);
+      assert.deepEqual(one.events[0].sdk_usage, native);
+      for (const changed of [
+        { ...native, api: "chat_completions" }, { ...native, model: "another_model" },
+        { ...native, response_id: "another_response" }, { ...native, usage_json: "{}" },
+      ]) {
+        await budgetRequest(port, { action: "report_usage", provider_id: "native", model: modelId,
+          admitted_at_ms: admittedAt, input_tokens: 11, output_tokens: 7, total_tokens: 20,
+          ...details, sdk_usage: changed }, 409);
+      }
+      for (let index = 1; index < 20; index += 1) {
+        await reportUsage(port, "native", admittedAt + index, { sdk_usage: native });
+      }
+      const first = await queryUsage(port, "native", 0, Date.now());
+      assert.ok(first.next_sequence > 0);
+      assert.ok(first.events.length < 20);
+      assert.ok(Buffer.byteLength(JSON.stringify(first)) <= pageBytes);
+      await reportUsage(port, "native", admittedAt, { sdk_usage: native });
+      const events = [...first.events];
+      let next = first.next_sequence;
+      while (next !== 0) {
+        const page = await queryUsage(port, "native", 0, Date.now(), {
+          after_sequence: next, snapshot_sequence: first.snapshot_sequence,
+        });
+        assert.equal(page.snapshot_sequence, first.snapshot_sequence);
+        assert.ok(Buffer.byteLength(JSON.stringify(page)) <= pageBytes);
+        events.push(...page.events);
+        next = page.next_sequence;
+      }
+      assert.equal(events.length, 20);
+      assert.equal(new Set(events.map(function (event) { return event.sequence; })).size, 20);
+      for (const event of events) {
+        assert.deepEqual(event.sdk_usage, native);
+        assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [11, 7, 20]);
+      }
+      assert.deepEqual(await reportUsage(port, "nullable_sdk", admittedAt, { report_id: "legacy-envelope" }), { reported: true, sdk_usage_stored: false });
+      assert.deepEqual(await reportUsage(port, "nullable_sdk", admittedAt, { report_id: "legacy-envelope", sdk_usage: null }), { reported: true, sdk_usage_stored: false });
+      assert.equal((await queryUsage(port, "nullable_sdk", 0, Date.now())).events.length, 1);
+      await budgetRequest(port, { action: "report_usage", provider_id: "too_large", model: modelId,
+        admitted_at_ms: admittedAt, input_tokens: 1, output_tokens: 1, total_tokens: 2,
+        sdk_usage: { api: "responses", usage_json: JSON.stringify({ future: "x".repeat(reportBytes) }) } }, 413);
+      const persisted = await queryUsage(port, "native", 0, Date.now(), { page_size: 1 });
+      await stopRuntime(runtime);
+      runtime = await startRuntime(port, persistPath);
+      assert.deepEqual(await queryUsage(port, "native", 0, Date.now(), { page_size: 1 }), persisted);
     });
     await context.test("pagination excludes inserts after the initial snapshot", async function () {
       for (let index = 0; index < 7; index += 1) {
@@ -331,6 +388,12 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
         { report_id: "" }, { report_id: null }, { report_id: "bad/identity" },
         { cached_input_tokens: -1 }, { cache_write_tokens: 2 },
         { cached_input_tokens: 1, cache_write_tokens: 1 }, { service_tier: 42 },
+        { sdk_usage: [] }, { sdk_usage: {} },
+        { sdk_usage: { api: " ", usage_json: "{}" } },
+        { sdk_usage: { api: "responses", usage_json: "[]" } },
+        { sdk_usage: { api: "responses", usage_json: "null" } },
+        { sdk_usage: { api: "responses", usage_json: "{" } },
+        { sdk_usage: { api: "responses", usage_json: "{}", model: 1 } },
       ]) {
         await budgetRequest(port, { ...validReport, ...invalidFields }, 400);
       }
