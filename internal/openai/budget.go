@@ -195,6 +195,7 @@ func (client *Client) reportBudget(ctx context.Context, target provider, snapsho
 		Usage: quota.Usage{
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens,
 			CachedInputTokens: &usage.InputTokensDetails.CachedTokens, CacheWriteTokens: &usage.InputTokensDetails.CacheWriteTokens, ServiceTier: serviceTier,
+			SDKUsage: nil,
 		}, LegacyDay: "", LegacyTokens: nil,
 	}
 	if target.dailyTokenLimit > 0 {
