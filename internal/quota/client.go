@@ -60,7 +60,8 @@ type DailySnapshot struct {
 }
 
 type reportResponse struct {
-	Reported bool `json:"reported"`
+	Reported       bool `json:"reported"`
+	SDKUsageStored bool `json:"sdk_usage_stored"`
 }
 
 // ReportRequest updates legacy counters with the original admission day.
@@ -180,6 +181,9 @@ func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 	if request.ReportID == "" {
 		request.ReportID = rand.Text()
 	}
+	if !validSDKUsage(request.SDKUsage) {
+		return errors.New("SDK usage requires a nonempty API and a native JSON object")
+	}
 	if !validUsage(request.Usage) || request.AdmittedAtMS < 0 || request.AdmittedAtMS > MaximumInteger {
 		return errors.New("usage report is outside the storage integer range")
 	}
@@ -191,6 +195,9 @@ func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 		if err == nil {
 			if !response.Reported {
 				return errors.New("accounting service did not acknowledge usage")
+			}
+			if request.SDKUsage != nil && !response.SDKUsageStored {
+				return errors.New("accounting service did not acknowledge native SDK usage storage")
 			}
 			return nil
 		}
@@ -219,6 +226,9 @@ func retryableReportError(err error) bool {
 }
 
 func validUsage(usage Usage) bool {
+	if !validSDKUsage(usage.SDKUsage) {
+		return false
+	}
 	for _, count := range []*int64{usage.CachedInputTokens, usage.CacheWriteTokens} {
 		if count != nil && (*count < 0 || *count > usage.InputTokens) {
 			return false
@@ -233,6 +243,14 @@ func validUsage(usage Usage) bool {
 	return usage.InputTokens >= 0 && usage.InputTokens <= MaximumInteger &&
 		usage.OutputTokens >= 0 && usage.OutputTokens <= MaximumInteger &&
 		usage.TotalTokens >= 0 && usage.TotalTokens <= MaximumInteger
+}
+
+func validSDKUsage(usage *SDKUsage) bool {
+	if usage == nil {
+		return true
+	}
+	raw := strings.TrimSpace(usage.UsageJSON)
+	return strings.TrimSpace(usage.API) != "" && strings.HasPrefix(raw, "{") && json.Valid([]byte(raw))
 }
 
 func post[Request QueryRequest | ReportRequest | dailyRequest, Response QueryResponse | reportResponse | DailySnapshot](ctx context.Context, client *Client, payload Request, result *Response) error {

@@ -184,7 +184,7 @@ func startBudgetWorker(t *testing.T) string {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256([]byte("test-operator-token"))
-	command := exec.Command(filepath.Join(directory, "node_modules", ".bin", "wrangler"), "dev", "--config", "test/budget.wrangler.jsonc", "--local", "--port", strconv.Itoa(port), "--persist-to", t.TempDir(), "--var", "OPERATOR_TOKEN_SHA256:"+hex.EncodeToString(digest[:]))
+	command := exec.Command(filepath.Join(directory, "node_modules", ".bin", "wrangler"), "dev", "--config", "test/budget.wrangler.jsonc", "--local", "--port", strconv.Itoa(port), "--inspector-port", "0", "--persist-to", t.TempDir(), "--var", "OPERATOR_TOKEN_SHA256:"+hex.EncodeToString(digest[:]))
 	command.Dir = directory
 	command.Stdout, command.Stderr = logFile, logFile
 	if err := command.Start(); err != nil {

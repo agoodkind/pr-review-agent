@@ -19,3 +19,7 @@ CREATE TABLE IF NOT EXISTS usage_event_details (
   cache_write_tokens INTEGER,
   service_tier TEXT
 );
+CREATE TABLE IF NOT EXISTS usage_event_sdk (
+  sequence INTEGER PRIMARY KEY,
+  sdk_usage TEXT NOT NULL
+);
