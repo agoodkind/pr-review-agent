@@ -3,7 +3,6 @@ package review
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -94,16 +93,14 @@ func MetadataMatches(body string, head domain.HeadSHA, revision string) bool {
 	return err == nil && found && record.Head == head && record.Revision == revision
 }
 
-// RestoreReviewDetails replaces only the existing details section and updates its live thread counts.
-func RestoreReviewDetails(existingBody, sourceDetails string, threads []githubapp.ReviewThread, botLogin string) (string, error) {
+// WriteReviewDetails returns the existing summary with restored details and current thread counts.
+func WriteReviewDetails(existingBody, sourceDetails string, threads []githubapp.ReviewThread, botLogin string) (string, error) {
 	start, end, err := reviewDetailsRange(existingBody)
 	if err != nil {
-		slog.Error("Read existing review details failed", "err", err)
 		return "", fmt.Errorf("read existing review details: %w", err)
 	}
 	sourceStart, sourceEnd, err := reviewDetailsRange(sourceDetails)
 	if err != nil {
-		slog.Error("Read source review details failed", "err", err)
 		return "", fmt.Errorf("read source review details: %w", err)
 	}
 	var summary Summary

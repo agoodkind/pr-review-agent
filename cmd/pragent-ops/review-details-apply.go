@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 
@@ -11,29 +12,33 @@ import (
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
-func writeReviewDetailsBackup(path string, snapshot reviewDetailsSnapshot) (returnErr error) {
+// WriteReviewDetailsBackup saves and verifies the private original records.
+func WriteReviewDetailsBackup(path string, snapshot reviewDetailsSnapshot) (returnErr error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return errors.New("the new private review-details backup could not be created")
+		return fmt.Errorf("create private review-details backup: %w", err)
 	}
 	defer func() {
 		returnErr = errors.Join(returnErr, file.Close())
 	}()
 	if err := file.Chmod(0o600); err != nil {
-		return errors.New("the review-details backup permissions could not be set")
+		return fmt.Errorf("set review-details backup permissions: %w", err)
 	}
 	if err := json.NewEncoder(file).Encode(snapshot); err != nil {
-		return errors.New("the original review details could not be backed up")
+		return fmt.Errorf("encode original review details: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		return errors.New("the review-details backup could not be synchronized")
+		return fmt.Errorf("synchronize review-details backup: %w", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return errors.New("the review-details backup could not be read for verification")
+		return fmt.Errorf("read review-details backup for verification: %w", err)
 	}
 	var restored reviewDetailsSnapshot
-	if json.Unmarshal(data, &restored) != nil || !reflect.DeepEqual(restored, snapshot) {
+	if err := json.Unmarshal(data, &restored); err != nil {
+		return fmt.Errorf("decode review-details backup: %w", err)
+	}
+	if !reflect.DeepEqual(restored, snapshot) {
 		return errors.New("the review-details backup does not match the original snapshot")
 	}
 	return nil
@@ -43,19 +48,17 @@ func applyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot 
 	if err := verifyReviewDetails(ctx, client, snapshot, snapshot.Comment.Body); err != nil {
 		return err
 	}
-	updated, updateErr := client.UpdateIssueComment(ctx, snapshot.Original.InstallationID, snapshot.Original.Repository, snapshot.Comment.ID, snapshot.Repaired)
-	if updateErr != nil {
-		// GitHub may accept an update before the response fails.
-		if err := verifyReviewDetails(ctx, client, snapshot, snapshot.Repaired); err != nil {
-			return errors.New("the summary update or its verification failed; retain the private backup")
-		}
-	} else if updated.ID != snapshot.Comment.ID || updated.Author != snapshot.Comment.Author || updated.Body != snapshot.Repaired {
+	updated, err := client.UpdateIssueComment(ctx, snapshot.Original.InstallationID, snapshot.Original.Repository, snapshot.Comment.ID, snapshot.Repaired)
+	if err != nil {
+		return err
+	}
+	if updated.ID != snapshot.Comment.ID || updated.Author != snapshot.Comment.Author || updated.Body != snapshot.Repaired {
 		return errors.New("the summary update did not return the expected comment")
 	}
 	if err := verifyReviewDetails(ctx, client, snapshot, snapshot.Repaired); err != nil {
 		return err
 	}
-	repeated, err := review.RestoreReviewDetails(snapshot.Repaired, snapshot.Source.Summary, snapshot.Original.Threads, botLogin)
+	repeated, err := review.WriteReviewDetails(snapshot.Repaired, snapshot.Source.Summary, snapshot.Original.Threads, botLogin)
 	if err != nil || repeated != snapshot.Repaired {
 		return errors.New("the restored review details did not pass the idempotence check")
 	}
@@ -88,9 +91,9 @@ func verifyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot
 			return errors.New("a summary comment no longer matches the expected snapshot")
 		}
 	}
-	source, err := client.GetCheckRunDetails(ctx, original.InstallationID, original.Repository, snapshot.Source.Run.ID)
+	source, err := client.ReadCheckRunDetails(ctx, original.InstallationID, original.Repository, snapshot.Source.Run.ID)
 	if err != nil {
-		return errors.New("the source check could not be read for verification")
+		return err
 	}
 	if !reflect.DeepEqual(source, snapshot.Source) {
 		return errors.New("the source check changed during review-details repair")

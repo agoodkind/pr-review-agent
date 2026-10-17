@@ -53,16 +53,16 @@ func reviewDetails(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
-	snapshot.Source, err = client.GetCheckRunDetails(ctx, opts.identity.installationID, repo, opts.sourceCheckID)
+	snapshot.Source, err = client.ReadCheckRunDetails(ctx, opts.identity.installationID, repo, opts.sourceCheckID)
 	if err != nil {
-		return errors.New("the selected source check run could not be read")
+		return err
 	}
 	if err := prepareReviewDetails(&snapshot, opts, cfg); err != nil {
 		return err
 	}
 	changed := snapshot.Comment.Body != snapshot.Repaired
 	if opts.identity.apply && changed {
-		if err := writeReviewDetailsBackup(opts.identity.backupFile, snapshot); err != nil {
+		if err := WriteReviewDetailsBackup(opts.identity.backupFile, snapshot); err != nil {
 			return err
 		}
 		if err := applyReviewDetails(ctx, client, snapshot, cfg.GitHubBotLogin); err != nil {
@@ -132,9 +132,9 @@ func prepareReviewDetails(snapshot *reviewDetailsSnapshot, opts reviewDetailsOpt
 		return errors.New("the selected summary must record complete coverage of the current head")
 	}
 	var err error
-	snapshot.Repaired, err = review.RestoreReviewDetails(snapshot.Comment.Body, source.Summary, snapshot.Original.Threads, cfg.GitHubBotLogin)
+	snapshot.Repaired, err = review.WriteReviewDetails(snapshot.Comment.Body, source.Summary, snapshot.Original.Threads, cfg.GitHubBotLogin)
 	if err != nil {
-		return errors.New("the source or destination review details are incomplete or ambiguous")
+		return err
 	}
 	if state.Status == marker.StateFailed {
 		if !review.MetadataMatches(snapshot.Comment.Body, head, diff.PullRequestRevision(snapshot.Original.PullRequest)) {
