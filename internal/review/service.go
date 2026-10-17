@@ -842,17 +842,11 @@ func (service *Service) publishVerdict(
 	}
 	standing := service.standingVerdict(job, reviews, summary)
 	decisionState := reviewStateFor(summary.Decision)
-	verdictBody := nativeVerdictBody(summary)
 	unchanged := standing.found && !standing.withdrawn &&
 		standing.review.State == decisionState &&
 		latestBotVerdictState(reviews, service.botLogin) == decisionState
 	if unchanged {
-		if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
-			return service.failCheck(
-				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
-			)
-		}
-		if err := service.updateVerdictBody(ctx, job, standing.review, verdictBody); err != nil {
+		if err := service.updateStandingVerdict(ctx, job, standing.review, summary); err != nil {
 			return service.failCheck(
 				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
 			)
