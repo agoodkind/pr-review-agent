@@ -53,7 +53,7 @@ func (service *Service) nativeVerdictBody(ctx context.Context, job domain.Review
 	return NativeReviewSummaryLink(service.reviewPolicy, job.Repository, job.Number, comment.ID, RenderVerdictBody(summary))
 }
 
-// NativeReviewSummaryLink retains checkpoint data after a visible summary permalink.
+// NativeReviewSummaryLink appends checkpoint data after the visible summary permalink.
 func NativeReviewSummaryLink(policy reviewrules.Policy, repo domain.Repository, number int, commentID int64, checkpoint string) (string, error) {
 	if number <= 0 || commentID <= 0 || repo.Owner == "" || repo.Name == "" {
 		return "", errors.New("native review summary link requires repository, pull request, and comment identifiers")
