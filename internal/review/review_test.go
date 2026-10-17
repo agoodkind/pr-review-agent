@@ -6496,10 +6496,7 @@ func TestTheReviewSaysItStartedBeforeItReadsAnything(t *testing.T) {
 	}
 }
 
-// The comment names what the review is already waiting on while it is still
-// reading, so a reader can start on the first finding rather than waiting for
-// the whole run. The two facts arrive in either order and appear together.
-func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
+func TestProgressOmitsPublishedInlineFindings(t *testing.T) {
 	model := newChunkScriptedModel("file1.go")
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         twoChunkCollector{},
@@ -6522,30 +6519,15 @@ func TestTheCommentNamesAFindingWhileChunksAreStillOwed(t *testing.T) {
 	if progress == "" {
 		t.Fatalf("no progress body was written: %v", fixture.state.issueCommentBodies)
 	}
-	if !strings.Contains(progress, "Resolve these inline findings:") {
-		t.Fatalf("the progress comment names nothing to act on yet: %q", progress)
+	if strings.Contains(progress, "Resolve these inline findings:") || strings.Contains(progress, "`file0.go`:2") {
+		t.Fatalf("progress repeats an inline finding: %q", progress)
 	}
-	// The path is a code span, because it is whatever the pull request named a
-	// file and this comment carries the service's own identity.
-	if !strings.Contains(progress, "`file0.go`:2") {
-		t.Fatalf("the progress comment does not name the finding already posted: %q", progress)
+	if len(fixture.state.streamedComments) != 1 {
+		t.Fatalf("inline comments = %d, want 1", len(fixture.state.streamedComments))
 	}
-}
-
-// A resumed pass posts only the findings it reads itself, so the comment names
-// what the pull request was already waiting on as well. Without that, finishing
-// the last chunk of a long review would drop every finding an earlier pass had
-// put on the page.
-func TestTheCommentKeepsNamingWhatAnEarlierPassAlreadyPosted(t *testing.T) {
-	body := review.RenderProgressBody(
-		domain.HeadSHA(testHeadSHA),
-		1,
-		[]string{"`old.go`:9", "`new.go`:2"},
-	)
-	for _, want := range []string{"`old.go`:9", "`new.go`:2"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("the progress comment dropped %s: %q", want, body)
-		}
+	state, ok := marker.DecodeState(progress)
+	if !ok || len(state.Completed) != 1 || len(state.Pending) != 1 {
+		t.Fatalf("progress checkpoint = %+v, valid = %t", state, ok)
 	}
 }
 

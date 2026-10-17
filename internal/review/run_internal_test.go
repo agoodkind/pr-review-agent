@@ -249,7 +249,6 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		settings,
 		&selection,
 		collectDisputes(nil, summaryCommentTestBotLogin, postHead),
-		nil,
 		"",
 	)
 	service := &Service{
@@ -378,7 +377,6 @@ func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
 		reviewSettings{minimumImportance: 1, maxFiles: 10, maxChunks: 10, chunkTimeout: carried},
 		&publicationState{},
 		disputeContext{},
-		nil,
 		"",
 	)
 	candidates := []domain.Finding{

@@ -478,76 +478,14 @@ func RenderSkipBody(reason string) string {
 	}, "\n\n")
 }
 
-// RenderProgressBody renders the visible comment between chunks, while the
-// review is still running.
-//
-// It names what the review is already waiting on beside how much is left to
-// read. A finding is posted as its chunk answers, so on a long delta the reader
-// can start fixing the first one while the rest is still being read, instead of
-// waiting for the whole run to say anything. The two facts arrive in either
-// order and are shown together whenever both exist.
-//
-// It shares no renderer with the finished summary on purpose. The summary
-// carries the review marker, which means this head was reviewed, and a comment
-// describing an unfinished review must never say that.
-func RenderProgressBody(head domain.HeadSHA, remaining int, waitingOn []string) string {
+// RenderProgressBody reports the current head and remaining chunks.
+func RenderProgressBody(head domain.HeadSHA, remaining int) string {
 	progress := fmt.Sprintf("Reviewing `%s`. %s still to read.", shortHead(head), chunkCount(remaining))
 	if remaining == 0 {
 		progress = "Reviewing `" + shortHead(head) + "`. Every chunk has been read."
 	}
 	parts := []string{"## Review", progress}
-	if waiting := renderBlocking(waitingOn); waiting != "" {
-		parts = append(parts, waiting)
-	}
 	return strings.Join(parts, "\n\n")
-}
-
-// findingLocations names each published finding by the place a reader goes to
-// act on it.
-func findingLocations(published []domain.Finding) []string {
-	locations := make([]string, 0, len(published))
-	for _, finding := range published {
-		normalizedPath, err := marker.NormalizePath(finding.Path)
-		if err != nil {
-			continue
-		}
-		locations = append(locations, fmt.Sprintf("%s:%d", codeSpan(normalizedPath), finding.EndLine))
-	}
-	return locations
-}
-
-// openThreadLocations names each finding of this service's own that the pull
-// request is still waiting on, in the same shape a freshly published one takes.
-func openThreadLocations(threads []githubapp.ReviewThread, botLogin string) []string {
-	locations := make([]string, 0, len(threads))
-	for _, thread := range threads {
-		if thread.RootComment.Author != botLogin || thread.Resolved {
-			continue
-		}
-		normalizedPath, err := marker.NormalizePath(thread.RootComment.Path)
-		if err != nil {
-			continue
-		}
-		locations = append(locations, fmt.Sprintf("%s:%d", codeSpan(normalizedPath), thread.RootComment.EndLine))
-	}
-	return locations
-}
-
-// mergeLocations joins two lists of places without naming one twice, keeping
-// the order they were given in.
-func mergeLocations(first []string, second []string) []string {
-	merged := make([]string, 0, len(first)+len(second))
-	seen := make(map[string]struct{}, len(first)+len(second))
-	for _, list := range [][]string{first, second} {
-		for _, location := range list {
-			if _, found := seen[location]; found {
-				continue
-			}
-			seen[location] = struct{}{}
-			merged = append(merged, location)
-		}
-	}
-	return merged
 }
 
 // codeSpan renders repository-controlled text as an inline code span that the
