@@ -571,7 +571,7 @@ func verifyReviewBodySnapshot(ctx context.Context, client *githubapp.Client, ori
 func printReviewBodyPlan(output io.Writer, selected, clear []githubapp.Review, applied, linked bool) error {
 	for _, item := range selected {
 		if linked {
-			if _, err := fmt.Fprintf(output, "Review %d retains state %s with a summary permalink; applied=%t.\n", item.ID, item.State, applied); err != nil {
+			if _, err := fmt.Fprintf(output, "Review %d has state %s with a summary permalink; applied=%t.\n", item.ID, item.State, applied); err != nil {
 				return err
 			}
 			continue
@@ -588,7 +588,7 @@ func printReviewBodyPlan(output io.Writer, selected, clear []githubapp.Review, a
 	}
 	for _, item := range clear {
 		if linked && item.Body != "" {
-			if _, err := fmt.Fprintf(output, "Review %d already includes the summary permalink and retains state %s.\n", item.ID, item.State); err != nil {
+			if _, err := fmt.Fprintf(output, "Review %d already includes the summary permalink and has state %s.\n", item.ID, item.State); err != nil {
 				return err
 			}
 			continue
