@@ -51,7 +51,7 @@ func completeChat(
 	model := ""
 	serviceTier := ""
 	usage := openaigo.CompletionUsage{}
-	var sdkUsage *quota.SDKUsage
+	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	hasUsage := false
 	finished := false
 	finishReason := ""
@@ -64,11 +64,15 @@ func completeChat(
 		result.RejectedPredictionTokens = usage.CompletionTokensDetails.RejectedPredictionTokens
 		review.RecordModelUsage(ctx, result)
 		if hasUsage {
-			report(converted, serviceTier, sdkUsage)
+			sdkUsage.Model = model
+			report(converted, serviceTier, &sdkUsage)
 		}
 	}()
 	for stream.Next() {
 		chunk := stream.Current()
+		if chunk.ID != "" {
+			sdkUsage.ResponseID = chunk.ID
+		}
 		if chunk.ServiceTier != "" {
 			serviceTier = string(chunk.ServiceTier)
 		}
@@ -78,10 +82,7 @@ func completeChat(
 		if chunk.JSON.Usage.Valid() {
 			usage = chunk.Usage
 			hasUsage = true
-			sdkUsage = &quota.SDKUsage{
-				API: string(target.api), Model: model, ResponseID: chunk.ID,
-				UsageJSON: chunk.Usage.RawJSON(),
-			}
+			sdkUsage.UsageJSON = chunk.Usage.RawJSON()
 		}
 		for _, choice := range chunk.Choices {
 			content.WriteString(choice.Delta.Content)

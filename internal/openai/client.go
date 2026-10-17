@@ -478,19 +478,23 @@ func completeWith(
 		serviceTier   string
 		usage         responses.ResponseUsage
 		hasUsage      bool
-		sdkUsage      *quota.SDKUsage
 	)
+	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	completed := false
 	incompleteReason := ""
 	var streamFailure error
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target, serviceTier))
 		if hasUsage {
-			report(usage, serviceTier, sdkUsage)
+			sdkUsage.Model = responseModel
+			report(usage, serviceTier, &sdkUsage)
 		}
 	}()
 	for stream.Next() {
 		event := stream.Current()
+		if event.Response.ID != "" {
+			sdkUsage.ResponseID = event.Response.ID
+		}
 		switch responseEventType(event.Type) {
 		case responseOutputTextDelta:
 			content.WriteString(event.Delta)
@@ -502,10 +506,7 @@ func completeWith(
 			if event.Response.JSON.Usage.Valid() {
 				usage = event.Response.Usage
 				hasUsage = true
-				sdkUsage = &quota.SDKUsage{
-					API: string(target.api), Model: responseModel, ResponseID: event.Response.ID,
-					UsageJSON: event.Response.Usage.RawJSON(),
-				}
+				sdkUsage.UsageJSON = event.Response.Usage.RawJSON()
 			}
 			switch responseTerminalEventType(event.Type) {
 			case terminalCompleted:

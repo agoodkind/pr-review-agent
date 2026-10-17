@@ -49,13 +49,14 @@ func completeGemini(
 	var content strings.Builder
 	model := ""
 	usage := responses.ResponseUsage{}
-	var sdkUsage *quota.SDKUsage
+	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	hasUsage := false
 	finishReason := genai.FinishReasonUnspecified
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(model, usage, hasUsage, target, ""))
 		if hasUsage {
-			report(usage, "", sdkUsage)
+			sdkUsage.Model = model
+			report(usage, "", &sdkUsage)
 		}
 	}()
 	contents := []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)}
@@ -66,6 +67,9 @@ func completeGemini(
 		if chunk.ModelVersion != "" {
 			model = chunk.ModelVersion
 		}
+		if chunk.ResponseID != "" {
+			sdkUsage.ResponseID = chunk.ResponseID
+		}
 		if chunk.UsageMetadata != nil {
 			usageJSON, err := json.Marshal(chunk.UsageMetadata)
 			if err != nil {
@@ -73,10 +77,7 @@ func completeGemini(
 			}
 			usage = responseUsageFromGemini(chunk.UsageMetadata)
 			hasUsage = true
-			sdkUsage = &quota.SDKUsage{
-				API: string(target.api), Model: model, ResponseID: chunk.ResponseID,
-				UsageJSON: string(usageJSON),
-			}
+			sdkUsage.UsageJSON = string(usageJSON)
 		}
 		for _, candidate := range chunk.Candidates {
 			if candidate.FinishReason != "" {
