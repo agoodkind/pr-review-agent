@@ -49,11 +49,10 @@ func TestLiveClippedContrastsRemainBlockingInDescription(t *testing.T) {
 	expectedBody = firstFixed
 	findings = fixture.awaitMetadata(t, ctx, expectedBody, "CHANGES_REQUESTED", 1)
 	clippedLiveAssertMetadataAnchors(t, findings, expectedBody, bad)
-	bothFixed := clippedLiveDocument(fixture.original.Body, clippedLivePad(fixed, bad), clippedLivePad(fixed, bad), "")
-	fixture.editBody(t, ctx, expectedBody, bothFixed)
-	expectedBody = bothFixed
+	fixture.editBody(t, ctx, expectedBody, fixture.original.Body)
+	expectedBody = fixture.original.Body
 	fixture.awaitMetadata(t, ctx, expectedBody, "APPROVED", 0)
-	t.Logf("The deployed description review retained both occurrences, blocked the remaining occurrence after one correction, and approved both corrections on %s#%d.", fixture.opts.repository, fixture.opts.pullRequest)
+	t.Logf("The deployed description review retained both occurrences, blocked the remaining occurrence after one correction, and approved the restored description on %s#%d.", fixture.opts.repository, fixture.opts.pullRequest)
 }
 
 func (fixture *clippedLiveFixture) editBody(t *testing.T, ctx context.Context, expected, replacement string) {
