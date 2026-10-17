@@ -182,7 +182,7 @@ type Usage struct {
 	SDKUsage          *SDKUsage `json:"sdk_usage,omitempty"`
 }
 
-// SDKUsage preserves native usage JSON without converting its numbers or dropping unknown fields.
+// SDKUsage stores a native SDK usage snapshot and its response identity.
 type SDKUsage struct {
 	API        string `json:"api"`
 	Model      string `json:"model,omitempty"`
