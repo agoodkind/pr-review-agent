@@ -22,7 +22,10 @@ func (fixture *liveDetailsFixture) write(t *testing.T, ctx context.Context, body
 		return
 	}
 	updated, err := fixture.client.UpdateIssueComment(ctx, fixture.opts.installationID, fixture.before.Repository, fixture.original.ID, body)
-	if err != nil || updated.ID != fixture.original.ID || updated.Author != fixture.original.Author || updated.Body != body {
+	if err != nil {
+		t.Fatalf("The fixture summary update failed: %v", err)
+	}
+	if updated.ID != fixture.original.ID || updated.Author != fixture.original.Author || updated.Body != body {
 		t.Fatal("The fixture summary update did not retain its expected identity and body.")
 	}
 	fixture.expected = body
