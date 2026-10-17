@@ -2,6 +2,7 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -461,13 +462,7 @@ func completeWith(
 	if err != nil {
 		return "", "", err
 	}
-	var options []option.RequestOption
-	if target.autoRouterCostTier != "" {
-		options = append(options, option.WithJSONSet("plugins", []map[string]string{{
-			"id": "auto-router", "cost_tier": string(target.autoRouterCostTier),
-		}}), option.WithJSONSet("provider.require_parameters", true))
-	}
-	stream := target.sdk.Responses.NewStreaming(ctx, params, options...)
+	stream := target.sdk.Responses.NewStreaming(ctx, params, responseOptions(target)...)
 	defer func() {
 		_ = stream.Close()
 	}()
@@ -492,9 +487,7 @@ func completeWith(
 	}()
 	for stream.Next() {
 		event := stream.Current()
-		if event.Response.ID != "" {
-			sdkUsage.ResponseID = event.Response.ID
-		}
+		sdkUsage.ResponseID = cmp.Or(event.Response.ID, sdkUsage.ResponseID)
 		switch responseEventType(event.Type) {
 		case responseOutputTextDelta:
 			content.WriteString(event.Delta)
@@ -548,6 +541,18 @@ func completeWith(
 		completionModel = responseModel
 	}
 	return result, completionModel, nil
+}
+
+func responseOptions(target provider) []option.RequestOption {
+	if target.autoRouterCostTier == "" {
+		return nil
+	}
+	return []option.RequestOption{
+		option.WithJSONSet("plugins", []map[string]string{{
+			"id": "auto-router", "cost_tier": string(target.autoRouterCostTier),
+		}}),
+		option.WithJSONSet("provider.require_parameters", true),
+	}
 }
 
 func newResponseParams(

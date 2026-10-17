@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -67,9 +68,7 @@ func completeGemini(
 		if chunk.ModelVersion != "" {
 			model = chunk.ModelVersion
 		}
-		if chunk.ResponseID != "" {
-			sdkUsage.ResponseID = chunk.ResponseID
-		}
+		sdkUsage.ResponseID = cmp.Or(chunk.ResponseID, sdkUsage.ResponseID)
 		if chunk.UsageMetadata != nil {
 			usageJSON, err := json.Marshal(chunk.UsageMetadata)
 			if err != nil {

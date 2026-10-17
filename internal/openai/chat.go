@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -70,9 +71,7 @@ func completeChat(
 	}()
 	for stream.Next() {
 		chunk := stream.Current()
-		if chunk.ID != "" {
-			sdkUsage.ResponseID = chunk.ID
-		}
+		sdkUsage.ResponseID = cmp.Or(chunk.ID, sdkUsage.ResponseID)
 		if chunk.ServiceTier != "" {
 			serviceTier = string(chunk.ServiceTier)
 		}
