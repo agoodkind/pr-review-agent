@@ -5,6 +5,7 @@ import usageHistory from "./budget-history.sql";
 import usageReport from "./budget-report.sql";
 import usageSnapshot from "./budget-snapshot.sql";
 import usageQuery from "./budget-query.sql";
+import usageDetails from "./budget-details.sql";
 
 const MAXIMUM_PAGE_SIZE = 500;
 
@@ -77,6 +78,15 @@ export class ProviderBudget extends DurableObject {
     const hasLegacyDay = Object.hasOwn(payload, "legacy_day");
     const hasLegacyTokens = Object.hasOwn(payload, "legacy_tokens");
     const reportId = payload.report_id;
+    const cachedInput = payload.cached_input_tokens;
+    const cacheWrites = payload.cache_write_tokens;
+    const serviceTier = payload.service_tier;
+    if ((cachedInput !== undefined && (!isNonnegativeInteger(cachedInput) || cachedInput > inputTokens)) ||
+        (cacheWrites !== undefined && (!isNonnegativeInteger(cacheWrites) || cacheWrites > inputTokens)) ||
+        (cachedInput !== undefined && cacheWrites !== undefined && cachedInput > inputTokens - cacheWrites) ||
+        (serviceTier !== undefined && (typeof serviceTier !== "string" || serviceTier.length > 200))) {
+      return new Response("invalid usage details", { status: 400 });
+    }
     if (reportId !== undefined && (typeof reportId !== "string" ||
         !/^[A-Za-z0-9_-]{1,128}$/.test(reportId))) {
       return new Response("invalid report identity", { status: 400 });
@@ -93,11 +103,17 @@ export class ProviderBudget extends DurableObject {
         const reportKey = `usage_report:${reportId}`;
         const fingerprint = JSON.stringify([providerId, model, admittedAt,
           inputTokens, outputTokens, totalTokens, legacyDay, legacyTokens]);
+        const detailsKey = `usage_report_details:${reportId}`;
+        const detailsFingerprint = JSON.stringify([cachedInput, cacheWrites, serviceTier]);
         if (reportId !== undefined) {
           const previous = await transaction.get(reportKey);
           if (previous !== undefined) {
             if (previous !== fingerprint) {
               throw new UsageConflictError("report identity already contains different usage");
+            }
+            const previousDetails = await transaction.get(detailsKey);
+            if (previousDetails !== undefined && previousDetails !== detailsFingerprint) {
+              throw new UsageConflictError("report identity already contains different usage details");
             }
             return;
           }
@@ -112,10 +128,13 @@ export class ProviderBudget extends DurableObject {
           }
           await transaction.put(key, used + legacyTokens);
         }
-        this.ctx.storage.sql.exec(usageReport, providerId, model, admittedAt,
-          inputTokens, outputTokens, totalTokens);
+        const inserted = this.ctx.storage.sql.exec(usageReport, providerId, model, admittedAt,
+          inputTokens, outputTokens, totalTokens).one();
+        this.ctx.storage.sql.exec(usageDetails, inserted.sequence,
+          cachedInput ?? null, cacheWrites ?? null, serviceTier ?? null);
         if (reportId !== undefined) {
           await transaction.put(reportKey, fingerprint);
+          await transaction.put(detailsKey, detailsFingerprint);
         }
       });
     } catch (error) {
