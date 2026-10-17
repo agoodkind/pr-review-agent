@@ -55,9 +55,9 @@ The command publishes no GitHub review. A request failure or missing usage is an
 
 The live test commits temporary prose changes to a dedicated pull request and waits for the deployed reviewer. Cleanup restores the original file and verifies its metadata. The test refuses to overwrite an unexpected branch update.
 
-1. Select the open [prose fixture](https://github.com/agoodkind/goodkind.io/pull/353). Authenticate `gh` with write access to its branch.
+1. Select the open [prose fixture](https://github.com/agoodkind/goodkind.io/pull/353). Authenticate `gh` with read access to the pull request and write access to its metadata. Prepare a clean worktree on the fixture branch with Git push access and commit signing.
 2. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for the fixture. Set `PR_AGENT_LIVE_CLIPPED_PATH` to [docs/pr-agent-prose-fixture.md](https://github.com/agoodkind/goodkind.io/blob/codex/pragent-prose-fixture/docs/pr-agent-prose-fixture.md).
-3. Run the test from the repository root after deploying the rule and duplicate-handling changes.
+3. Set `PR_AGENT_LIVE_CLIPPED_WORKTREE` to the fixture worktree's absolute path. Run the test from the repository root after deploying the rule and duplicate-handling changes.
 
    ```bash
    PR_AGENT_LIVE_CLIPPED_CONTRASTS_TEST=1 go test -tags=integration ./cmd/pragent-ops \

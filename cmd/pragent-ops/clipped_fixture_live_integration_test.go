@@ -100,31 +100,15 @@ func (fixture *clippedLiveFixture) write(t *testing.T, ctx context.Context, cont
 	if current.Head.SHA != fixture.head || current.Head.Ref != fixture.original.Head.Ref || current.Title != fixture.original.Title || current.Body != fixture.original.Body {
 		t.Fatal("The fixture changed concurrently. The test will not overwrite another change.")
 	}
-	original := fixture.file(t, ctx)
-	payload := struct {
-		Message string `json:"message"`
-		Content string `json:"content"`
-		SHA     string `json:"sha"`
-		Branch  string `json:"branch"`
-	}{subject + "\n\nCo-authored-by: Codex <noreply@openai.com>", base64.StdEncoding.EncodeToString([]byte(content)), original.SHA, current.Head.Ref}
-	var result struct {
-		Commit struct {
-			SHA     string `json:"sha"`
-			Parents []struct {
-				SHA string `json:"sha"`
-			} `json:"parents"`
-		} `json:"commit"`
-	}
-	clippedLiveAPI(t, ctx, http.MethodPut, "repos/"+fixture.opts.repository+"/contents/"+fixture.filePath, payload, &result)
-	if result.Commit.SHA == "" {
-		t.Fatal("GitHub did not return the fixture commit identifier.")
-	}
 	previous := fixture.head
-	fixture.head = result.Commit.SHA
-	if len(result.Commit.Parents) != 1 || result.Commit.Parents[0].SHA != previous {
-		t.Fatal("The fixture commit did not use the expected parent.")
+	fixture.head = fixture.commit(t, ctx, content, subject)
+	if fixture.head == previous {
+		return
 	}
 	var commit struct {
+		Parents []struct {
+			SHA string `json:"sha"`
+		} `json:"parents"`
 		Commit struct {
 			Verification struct {
 				Verified bool `json:"verified"`
@@ -132,12 +116,13 @@ func (fixture *clippedLiveFixture) write(t *testing.T, ctx context.Context, cont
 		} `json:"commit"`
 	}
 	clippedLiveAPI(t, ctx, http.MethodGet, "repos/"+fixture.opts.repository+"/commits/"+fixture.head, nil, &commit)
+	if len(commit.Parents) != 1 || commit.Parents[0].SHA != previous {
+		t.Fatal("The fixture commit did not use the expected parent.")
+	}
 	if !commit.Commit.Verification.Verified {
 		t.Fatal("GitHub did not verify the fixture commit signature.")
 	}
-	if fixture.pullRequest(t, ctx).Head.SHA != fixture.head {
-		t.Fatal("The pull request head changed after the fixture commit.")
-	}
+	fixture.awaitHead(t, ctx, previous)
 	t.Logf("The fixture commit %s uses branch %s.", fixture.head, current.Head.Ref)
 }
 
