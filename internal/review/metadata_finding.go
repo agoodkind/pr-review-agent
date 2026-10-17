@@ -7,6 +7,7 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 func (pass *chunkPass) metadataFindings() []domain.Finding {
@@ -16,6 +17,9 @@ func (pass *chunkPass) metadataFindings() []domain.Finding {
 }
 
 func metadataFindingKey(finding domain.Finding) string {
+	if finding.Deduplication == reviewrules.DeduplicateLocation {
+		return fmt.Sprintf("%s:%s:%s:%d:%d", finding.EffectiveSurface(), finding.CommitSHA, finding.RuleID, finding.StartLine, finding.EndLine)
+	}
 	return fmt.Sprintf("%s:%s:%s:%s", finding.EffectiveSurface(), finding.CommitSHA, finding.RuleID, strings.TrimSpace(finding.Evidence))
 }
 

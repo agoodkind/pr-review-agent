@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const (
@@ -36,15 +38,18 @@ var (
 	// outlive this change on every open pull request, so a pattern requiring one
 	// would stop recognizing the service's own findings.
 	findingPattern = regexp.MustCompile(
-		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) importance=([1-9]|10) id=([0-9a-f]{64})(?: claim=([0-9a-f]{64}))?(?: claimtext=([0-9a-f]{64}))? -->`,
+		`<!-- pr-review-agent:finding:v1 head=([0-9a-f]{40}|[0-9a-f]{64}) importance=([1-9]|10) id=([0-9a-f]{64})(?: claim=([0-9a-f]{64}))?(?: claimtext=([0-9a-f]{64}))?(?: scope=(location) start=([1-9][0-9]*) end=([1-9][0-9]*))? -->`,
 	)
 )
 
 // FindingMarker is the parsed finding marker embedded in a review comment body.
 type FindingMarker struct {
-	Head       domain.HeadSHA
-	Importance int
-	ID         string
+	OriginalStartLine int
+	OriginalEndLine   int
+	Deduplication     reviewrules.Deduplication
+	Head              domain.HeadSHA
+	Importance        int
+	ID                string
 	// ClaimKey identifies what the finding is about rather than how it was
 	// worded. It is empty on a marker written before the key existed, and an
 	// empty key matches nothing.
@@ -149,18 +154,33 @@ func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
 	if claimText, claimTextErr := ClaimTextKey(finding.Claim); claimTextErr == nil {
 		body += " claimtext=" + claimText
 	}
+	if finding.Deduplication == reviewrules.DeduplicateLocation {
+		body += fmt.Sprintf(" scope=location start=%d end=%d", finding.StartLine, finding.EndLine)
+	}
 	return body + markerSuffix, nil
 }
 
 // FindFinding extracts a finding marker from a comment body.
 func FindFinding(body string) (FindingMarker, bool) {
+	var empty FindingMarker
 	matches := findingPattern.FindStringSubmatch(body)
-	if len(matches) != 6 {
-		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: "", ClaimTextKey: ""}, false
+	if len(matches) != 9 {
+		return empty, false
 	}
 	head, err := domain.ParseHeadSHA(matches[1])
 	if err != nil {
-		return FindingMarker{Head: "", Importance: 0, ID: "", ClaimKey: "", ClaimTextKey: ""}, false
+		return empty, false
+	}
+	startLine, endLine := 0, 0
+	if matches[7] != "" {
+		startLine, err = strconv.Atoi(matches[7])
+		if err != nil {
+			return empty, false
+		}
+		endLine, err = strconv.Atoi(matches[8])
+		if err != nil || endLine < startLine {
+			return empty, false
+		}
 	}
 	var importance int
 	if matches[2] == "10" {
@@ -171,11 +191,14 @@ func FindFinding(body string) (FindingMarker, bool) {
 	// matches[4] and matches[5] are empty for a marker written before their key
 	// existed, which is every marker already on an open pull request.
 	return FindingMarker{
-		Head:         head,
-		Importance:   importance,
-		ID:           matches[3],
-		ClaimKey:     matches[4],
-		ClaimTextKey: matches[5],
+		OriginalStartLine: startLine,
+		OriginalEndLine:   endLine,
+		Deduplication:     reviewrules.Deduplication(matches[6]),
+		Head:              head,
+		Importance:        importance,
+		ID:                matches[3],
+		ClaimKey:          matches[4],
+		ClaimTextKey:      matches[5],
 	}, true
 }
 
@@ -318,6 +341,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 
 	finding := domain.Finding{
+		Deduplication:    marker.Deduplication,
 		Surface:          domain.FindingFile,
 		CommitSHA:        "",
 		CorrectionAction: domain.CorrectionNone,
@@ -343,7 +367,11 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 		return "", domain.Finding{}, errors.New("invalid finding")
 	}
 
-	recomputedID, err := FindingID(finding)
+	identity := finding
+	if marker.OriginalStartLine > 0 {
+		identity.StartLine, identity.EndLine = marker.OriginalStartLine, marker.OriginalEndLine
+	}
+	recomputedID, err := FindingID(identity)
 	if err != nil {
 		return "", domain.Finding{}, err
 	}
@@ -384,6 +412,9 @@ func FindingID(finding domain.Finding) (string, error) {
 	buffer.WriteString(normalizedPath)
 	writeLengthHex(&buffer, len(title))
 	buffer.WriteString(title)
+	if finding.Deduplication == reviewrules.DeduplicateLocation {
+		fmt.Fprintf(&buffer, ":%d:%d", finding.StartLine, finding.EndLine)
+	}
 
 	sum := sha256.Sum256(buffer.Bytes())
 	return hex.EncodeToString(sum[:]), nil

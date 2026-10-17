@@ -35,6 +35,7 @@ import (
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // The layer a suppression log line names, so a reader can tell which layer
@@ -70,6 +71,7 @@ const claimKeyLogLength = 12
 // A value here can carry any of them, all of them, or none, and one that
 // carries none matches nothing.
 type duplicateKeys struct {
+	locationOnly bool
 	claimKey     string
 	claimTextKey string
 	path         string
@@ -87,6 +89,7 @@ func keysFrom(
 	endLine int,
 ) duplicateKeys {
 	keys := duplicateKeys{
+		locationOnly: false,
 		claimKey:     claimKey,
 		claimTextKey: claimTextKey,
 		path:         "",
@@ -120,7 +123,9 @@ func candidateKeys(finding domain.Finding) duplicateKeys {
 	if value, err := marker.ClaimTextKey(finding.Claim); err == nil {
 		claimTextKey = value
 	}
-	return keysFrom(claimKey, claimTextKey, finding.Path, finding.StartLine, finding.EndLine)
+	keys := keysFrom(claimKey, claimTextKey, finding.Path, finding.StartLine, finding.EndLine)
+	keys.locationOnly = finding.Deduplication == reviewrules.DeduplicateLocation
+	return keys
 }
 
 // threadKeys reads the comparison keys off one thread an earlier run opened.
@@ -130,13 +135,15 @@ func candidateKeys(finding domain.Finding) duplicateKeys {
 // sentence, only their hashes, so a finding decoded back out of one could derive
 // no key at all.
 func threadKeys(published marker.FindingMarker, comment domain.ReviewComment) duplicateKeys {
-	return keysFrom(
+	keys := keysFrom(
 		published.ClaimKey,
 		published.ClaimTextKey,
 		comment.Path,
 		comment.StartLine,
 		comment.EndLine,
 	)
+	keys.locationOnly = published.Deduplication == reviewrules.DeduplicateLocation
+	return keys
 }
 
 // duplicateMatch names why one finding repeats another and what it repeats.
@@ -161,6 +168,13 @@ func noMatch() duplicateMatch {
 // the candidate measured against the carried finding, which is the direction a
 // reader of the log line is thinking in.
 func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, bool) {
+	if carried.locationOnly || candidate.locationOnly {
+		if carried.rangeValid && candidate.rangeValid && carried.path == candidate.path &&
+			carried.startLine == candidate.startLine && carried.endLine == candidate.endLine {
+			return duplicateMatch{Sense: senseAnchorRange, Detail: describeOverlap(carried, candidate), Matched: ""}, true
+		}
+		return noMatch(), false
+	}
 	if carried.claimKey != "" && carried.claimKey == candidate.claimKey {
 		return duplicateMatch{
 			Sense:   senseClaimKey,

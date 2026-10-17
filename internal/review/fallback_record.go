@@ -8,21 +8,27 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const fallbackRecordPrefix = "<!-- pr-review-agent:fallback-record:v1 "
 
 type fallbackReviewRecord struct {
-	Head     domain.HeadSHA   `json:"head"`
-	Findings []domain.Finding `json:"findings"`
+	Deduplication map[reviewrules.ID]reviewrules.Deduplication `json:"deduplication,omitempty"`
+	Head          domain.HeadSHA                               `json:"head"`
+	Findings      []domain.Finding                             `json:"findings"`
 }
 
 func encodeFallbackRecord(summary Summary) string {
 	if len(summary.Fallback) == 0 {
 		return ""
 	}
-	record := fallbackReviewRecord{Head: summary.Head, Findings: append([]domain.Finding(nil), summary.Fallback...)}
+	record := fallbackReviewRecord{Head: summary.Head, Findings: append([]domain.Finding(nil), summary.Fallback...), Deduplication: make(map[reviewrules.ID]reviewrules.Deduplication)}
 	for index := range record.Findings {
+		finding := record.Findings[index]
+		if finding.Deduplication == reviewrules.DeduplicateLocation {
+			record.Deduplication[finding.RuleID] = finding.Deduplication
+		}
 		record.Findings[index].Evidence = ""
 		record.Findings[index].Claim = ""
 	}
@@ -57,7 +63,13 @@ func readFallbackRecord(body string, head domain.HeadSHA) (fallbackReviewRecord,
 	if _, err := domain.ParseHeadSHA(string(record.Head)); err != nil || record.Head != head {
 		return record, false
 	}
-	for _, finding := range record.Findings {
+	for index, finding := range record.Findings {
+		mode := record.Deduplication[finding.RuleID]
+		if mode != "" && mode != reviewrules.DeduplicateDefect && mode != reviewrules.DeduplicateLocation {
+			slog.Warn("Fallback review state contains an invalid deduplication policy")
+			return record, false
+		}
+		record.Findings[index].Deduplication = mode
 		if finding.EffectiveSurface() != domain.FindingFile || finding.Validate() != nil {
 			slog.Warn("Fallback review state contains an invalid finding")
 			return record, false

@@ -609,6 +609,7 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			CommitSHA:        "",
 			CorrectionAction: finding.CorrectionAction,
 			RuleID:           finding.RuleID,
+			Deduplication:    finding.Deduplication,
 			Path:             normalizedPath,
 			StartLine:        finding.StartLine,
 			EndLine:          finding.EndLine,

@@ -35,10 +35,11 @@ type categorySettings struct {
 }
 
 type rule struct {
-	ID           ID     `json:"id"`
-	Category     string `json:"category"`
-	Title        string `json:"title"`
-	Instructions string `json:"instructions"`
+	ID            ID            `json:"id"`
+	Deduplication Deduplication `json:"deduplication,omitempty"`
+	Category      string        `json:"category"`
+	Title         string        `json:"title"`
+	Instructions  string        `json:"instructions"`
 }
 
 type catalogFile struct {
@@ -216,6 +217,9 @@ func validateCatalog(catalog catalogFile) error {
 	}
 	seen := make(map[ID]struct{}, len(catalog.Rules))
 	for _, entry := range catalog.Rules {
+		if entry.Deduplication != "" && entry.Deduplication != DeduplicateDefect && entry.Deduplication != DeduplicateLocation {
+			return fmt.Errorf("review rule %q deduplication must be defect or location", entry.ID)
+		}
 		if entry.ID == "" || entry.Title == "" || entry.Instructions == "" {
 			return fmt.Errorf("review rule requires an ID, title, and instructions")
 		}

@@ -357,6 +357,12 @@ func keysFor(finding domain.Finding) findingKeys {
 // suppressed reports whether an earlier review or an earlier chunk already
 // carried this finding, and names the layer and the evidence that decided it.
 func (state *publicationState) suppressed(keys findingKeys) (string, duplicateMatch, bool) {
+	if keys.duplicate.locationOnly {
+		if match, seen := state.carried.match(keys.duplicate); seen {
+			return layerAcrossChunks, match, true
+		}
+		return "", noMatch(), false
+	}
 	if keys.id != "" {
 		if _, seen := state.historyIDs[keys.id]; seen {
 			return layerPriorReviews, duplicateMatch{

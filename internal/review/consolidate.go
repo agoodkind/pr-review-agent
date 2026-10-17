@@ -327,6 +327,10 @@ func applyConsolidation(
 
 	kept := make([]domain.Finding, 0, len(candidates))
 	for index, candidate := range candidates {
+		if candidate.Deduplication == reviewrules.DeduplicateLocation {
+			kept = append(kept, candidate)
+			continue
+		}
 		match, isDropped := dropped[index+1]
 		if !isDropped {
 			kept = append(kept, candidate)

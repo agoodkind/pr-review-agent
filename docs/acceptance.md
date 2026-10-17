@@ -51,6 +51,21 @@ deployed image digest before testing.
 
 The command publishes no GitHub review. A request failure or missing usage is an incomplete evaluation. The command returns a failure when a completed case misses an expected violation, reports an unexpected finding, or proposes a prohibited correction action.
 
+## Verify repeated prose findings
+
+The live test commits temporary prose changes to a dedicated pull request and waits for the deployed reviewer. Cleanup restores the original file and verifies its metadata. The test refuses to overwrite an unexpected branch update.
+
+1. Select the open [prose fixture](https://github.com/agoodkind/goodkind.io/pull/353). Authenticate `gh` with write access to its branch.
+2. Set `PR_AGENT_LIVE_REPOSITORY`, `PR_AGENT_LIVE_PULL_REQUEST`, `PR_AGENT_LIVE_INSTALLATION_ID`, and `PR_AGENT_LIVE_GITHUB_APP_KEY_FILE` for the fixture. Set `PR_AGENT_LIVE_CLIPPED_PATH` to [docs/pr-agent-prose-fixture.md](https://github.com/agoodkind/goodkind.io/blob/codex/pragent-prose-fixture/docs/pr-agent-prose-fixture.md).
+3. Run the test from the repository root after deploying the rule and duplicate-handling changes.
+
+   ```bash
+   PR_AGENT_LIVE_CLIPPED_CONTRASTS_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run '^TestLiveClippedContrasts' -count=1 -v -timeout 75m
+   ```
+
+4. Require separate importance 10 findings for repeated file and description passages, continued rejection after one correction, approval after both corrections, and a new rejection after reintroduction at another file location. Confirm that cleanup restores the original file and description.
+
 ## Verify metadata findings and resumed reviews
 
 1. Save the existing test pull request's title, description, head, labels, and thread state before changing the fixture.
