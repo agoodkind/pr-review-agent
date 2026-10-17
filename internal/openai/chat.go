@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
+	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
@@ -20,7 +22,7 @@ func completeChat(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage, string),
+	report usageReporter,
 ) (string, string, error) {
 	params := openaigo.ChatCompletionNewParams{
 		Model:           target.model,
@@ -50,6 +52,7 @@ func completeChat(
 	model := ""
 	serviceTier := ""
 	usage := openaigo.CompletionUsage{}
+	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	hasUsage := false
 	finished := false
 	finishReason := ""
@@ -62,11 +65,13 @@ func completeChat(
 		result.RejectedPredictionTokens = usage.CompletionTokensDetails.RejectedPredictionTokens
 		review.RecordModelUsage(ctx, result)
 		if hasUsage {
-			report(converted, serviceTier)
+			sdkUsage.Model = model
+			report(converted, serviceTier, &sdkUsage)
 		}
 	}()
 	for stream.Next() {
 		chunk := stream.Current()
+		sdkUsage.ResponseID = cmp.Or(chunk.ID, sdkUsage.ResponseID)
 		if chunk.ServiceTier != "" {
 			serviceTier = string(chunk.ServiceTier)
 		}
@@ -76,6 +81,7 @@ func completeChat(
 		if chunk.JSON.Usage.Valid() {
 			usage = chunk.Usage
 			hasUsage = true
+			sdkUsage.UsageJSON = chunk.Usage.RawJSON()
 		}
 		for _, choice := range chunk.Choices {
 			content.WriteString(choice.Delta.Content)

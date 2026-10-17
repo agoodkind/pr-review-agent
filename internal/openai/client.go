@@ -2,6 +2,7 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -455,19 +456,13 @@ func completeWith(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage, string),
+	report usageReporter,
 ) (string, string, error) {
 	params, err := newResponseParams(target, prompt, policy, schemaName, schema)
 	if err != nil {
 		return "", "", err
 	}
-	var options []option.RequestOption
-	if target.autoRouterCostTier != "" {
-		options = append(options, option.WithJSONSet("plugins", []map[string]string{{
-			"id": "auto-router", "cost_tier": string(target.autoRouterCostTier),
-		}}), option.WithJSONSet("provider.require_parameters", true))
-	}
-	stream := target.sdk.Responses.NewStreaming(ctx, params, options...)
+	stream := target.sdk.Responses.NewStreaming(ctx, params, responseOptions(target)...)
 	defer func() {
 		_ = stream.Close()
 	}()
@@ -479,17 +474,20 @@ func completeWith(
 		usage         responses.ResponseUsage
 		hasUsage      bool
 	)
+	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	completed := false
 	incompleteReason := ""
 	var streamFailure error
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target, serviceTier))
 		if hasUsage {
-			report(usage, serviceTier)
+			sdkUsage.Model = responseModel
+			report(usage, serviceTier, &sdkUsage)
 		}
 	}()
 	for stream.Next() {
 		event := stream.Current()
+		sdkUsage.ResponseID = cmp.Or(event.Response.ID, sdkUsage.ResponseID)
 		switch responseEventType(event.Type) {
 		case responseOutputTextDelta:
 			content.WriteString(event.Delta)
@@ -501,6 +499,7 @@ func completeWith(
 			if event.Response.JSON.Usage.Valid() {
 				usage = event.Response.Usage
 				hasUsage = true
+				sdkUsage.UsageJSON = event.Response.Usage.RawJSON()
 			}
 			switch responseTerminalEventType(event.Type) {
 			case terminalCompleted:
@@ -542,6 +541,18 @@ func completeWith(
 		completionModel = responseModel
 	}
 	return result, completionModel, nil
+}
+
+func responseOptions(target provider) []option.RequestOption {
+	if target.autoRouterCostTier == "" {
+		return nil
+	}
+	return []option.RequestOption{
+		option.WithJSONSet("plugins", []map[string]string{{
+			"id": "auto-router", "cost_tier": string(target.autoRouterCostTier),
+		}}),
+		option.WithJSONSet("provider.require_parameters", true),
+	}
 }
 
 func newResponseParams(

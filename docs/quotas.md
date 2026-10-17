@@ -40,6 +40,10 @@ Usage is attributed to the request's admission time. A late response retains tha
 
 The Cloudflare quota store records admission timestamps and reported input, output, and total counts. Window and token-category changes can query this measured history. Query pages use one sequence snapshot to exclude reports inserted after the query started.
 
+The store writes each complete SDK usage object as JSON text with its API, reported model, and response identifier. OpenAI adapters call SDK `RawJSON`, which returns unknown fields and explicit nulls while leaving omitted fields absent. Gemini adapters serialize the final cumulative SDK usage metadata; the Gemini SDK cannot expose unknown wire fields or distinguish an omitted scalar from zero. Each report counts the final cumulative snapshot once. The Worker writes and reads the supplied JSON text without changing its numbers.
+
+`PROVIDER_USAGE_MAX_BYTES` bounds each complete report request, and `PROVIDER_USAGE_PAGE_BYTES` bounds each encoded history page. The page budget must exceed the report budget and fit the Go client's response limit. The client reads successive pages with the original sequence snapshot; native usage details do not change the canonical quota counters.
+
 Existing daily counters remain authoritative for legacy daily quotas. The daily totals do not contain timestamps or token-category splits and are not converted into invented events. Timestamped collection begins when the quota store receives its first query or report for a provider. Diagnostics identify the measured history boundary when it does not cover the requested span.
 
 The app's quota is independent of provider API or subscription limits. An app denial, provider quota refusal, or provider rate limit can select the next configured fallback without repeating the refused request. The `daily_budget` failure-appearance key applies to app quota denials for every window mode. The `rate_limited` key applies to provider throttling.

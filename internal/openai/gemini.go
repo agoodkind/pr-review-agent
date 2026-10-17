@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
@@ -21,7 +23,7 @@ func completeGemini(
 	prompt string,
 	policy string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage, string),
+	report usageReporter,
 ) (string, string, error) {
 	attempts := int32(1)
 	sdk, err := genai.NewClient(ctx, &genai.ClientConfig{
@@ -48,12 +50,14 @@ func completeGemini(
 	var content strings.Builder
 	model := ""
 	usage := responses.ResponseUsage{}
+	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	hasUsage := false
 	finishReason := genai.FinishReasonUnspecified
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(model, usage, hasUsage, target, ""))
 		if hasUsage {
-			report(usage, "")
+			sdkUsage.Model = model
+			report(usage, "", &sdkUsage)
 		}
 	}()
 	contents := []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)}
@@ -64,9 +68,15 @@ func completeGemini(
 		if chunk.ModelVersion != "" {
 			model = chunk.ModelVersion
 		}
+		sdkUsage.ResponseID = cmp.Or(chunk.ResponseID, sdkUsage.ResponseID)
 		if chunk.UsageMetadata != nil {
+			usageJSON, err := json.Marshal(chunk.UsageMetadata)
+			if err != nil {
+				return "", "", fmt.Errorf("encode Gemini SDK usage: %w", err)
+			}
 			usage = responseUsageFromGemini(chunk.UsageMetadata)
 			hasUsage = true
+			sdkUsage.UsageJSON = string(usageJSON)
 		}
 		for _, candidate := range chunk.Candidates {
 			if candidate.FinishReason != "" {

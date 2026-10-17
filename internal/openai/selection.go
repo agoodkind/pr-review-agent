@@ -10,6 +10,7 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/modelrequest"
+	"goodkind.io/pr-review-agent/internal/quota"
 )
 
 // ManagesProviderTimeouts prevents a shared stage deadline from cancelling fallback attempts.
@@ -55,8 +56,8 @@ func (client *Client) attemptCompletion(
 	if err != nil {
 		return "", "", budget, err
 	}
-	report := func(usage responses.ResponseUsage, serviceTier string) {
-		client.reportBudget(attemptCtx, target, budget, usage, serviceTier)
+	report := func(usage responses.ResponseUsage, serviceTier string, sdkUsage *quota.SDKUsage) {
+		client.reportBudget(attemptCtx, target, budget, usage, serviceTier, sdkUsage)
 	}
 	switch target.api {
 	case config.GeminiAPI:
