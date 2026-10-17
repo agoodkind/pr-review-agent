@@ -194,6 +194,24 @@ GitHub rejects an empty body on some change-request reviews. Dismissing such a r
 
    A rejected GitHub update records the review identifier, operation, HTTP status, and native error in a private file ending in `.error.json` beside the backup. Public output contains only the status and diagnostic path.
 
+## Restore review details
+
+The `review-details` command restores the Review details section from an exact successful review check on the current head. It preserves the summary's verdict and metadata findings, refreshes the inline thread counts, and verifies native reviews and pull request metadata without changing them.
+
+1. Select the summary comment and the successful source check. Run the command without `--apply` to validate both records and inspect whether the summary requires repair.
+
+   ```bash
+   go run ./cmd/pragent-ops review-details \
+       --repository OWNER/REPO --pull-request NUMBER \
+       --installation-id INSTALLATION_ID \
+       --summary-comment-id COMMENT_ID --source-check-run-id CHECK_RUN_ID \
+       --app-private-key-file /path/to/github-app.pem
+   ```
+
+2. Repeat the command with `--apply --backup-file /path/to/new-private-backup.json` to save the original records before updating the comment. Retain the private backup after the command verifies the restored comment. A repeated repair does not update an unchanged comment.
+
+The command can complete a failed checkpoint only when the checkpoint records complete coverage of the current head, the stored metadata assessment matches the current pull request revision, and the latest bot review approves that head. It does not submit reviews or send model requests.
+
 ## Resume reviews
 
 The GitHub App installation controls webhook delivery. A suspended installation cannot start new reviews. Set `GITHUB_APP_KEY_FILE` to the matching private key path, `GITHUB_APP_ID` to the deployed App ID, and `GITHUB_APP_INSTALLATION_ID` to the account's installation ID. After a successful release, run:

@@ -487,6 +487,9 @@ func (service *Service) applyRefreshedVerdict(
 				State: state,
 			}
 		}
+		if state.Status == marker.StateFailed && completedHeadState(state, job.Head) {
+			state.Status = marker.StateDone
+		}
 		return summaryCommentContent{
 			Prose: refreshVerdictProse(stripReassessmentNotice(existingBody), summary, refreshed.blockWithdrawn),
 			State: state,
