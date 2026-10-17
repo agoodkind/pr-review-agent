@@ -253,6 +253,15 @@ The live regression seeds an older approval and a completed current-head assessm
 
 3. Require the original measured details after the provider refusal, the successful refresh, and recovery from a legacy failure body. Require recovery to clear the failed status. Confirm that cleanup restores the original summary and preserves native reviews, inline threads, and pull request metadata.
 
+4. Set `PR_AGENT_LIVE_SOURCE_CHECK_RUN_ID` to a successful review check on the fixture's current head with measured details. Run the command regression.
+
+   ```bash
+   PR_AGENT_LIVE_REVIEW_DETAILS_COMMAND_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveReviewDetailsCommandRepairsAndRepeats -count=1 -v
+   ```
+
+   Require the dry run to preserve the comment. Require repair to restore the source statistics, remove the failure notice, complete the checkpoint, and save a private backup. Require repetition to leave the comment unchanged and cleanup to restore its original body.
+
 ## Verify hidden review body cleanup
 
 The live regression verifies dry-run and apply idempotence on a fixture with already-empty native bot decision bodies. Use an open, non-draft test pull request with one completed current-head bot summary, a current bot rejection, and an older dismissed bot rejection with a lower review ID. The configured [recovery-test pull request](../deploy/cloudflare/recovery-test.json) is also supported when it satisfies those conditions.

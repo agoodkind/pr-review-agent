@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 
@@ -12,30 +13,35 @@ import (
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
-// WriteReviewDetailsBackup saves and verifies the private original records.
-func WriteReviewDetailsBackup(path string, snapshot reviewDetailsSnapshot) (returnErr error) {
+func writeReviewDetailsBackup(path string, snapshot reviewDetailsSnapshot) (returnErr error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		slog.Error("Review details backup creation failed", "err", err)
 		return fmt.Errorf("create private review-details backup: %w", err)
 	}
 	defer func() {
 		returnErr = errors.Join(returnErr, file.Close())
 	}()
 	if err := file.Chmod(0o600); err != nil {
+		slog.Error("Review details backup permission update failed", "err", err)
 		return fmt.Errorf("set review-details backup permissions: %w", err)
 	}
 	if err := json.NewEncoder(file).Encode(snapshot); err != nil {
+		slog.Error("Review details backup encoding failed", "err", err)
 		return fmt.Errorf("encode original review details: %w", err)
 	}
 	if err := file.Sync(); err != nil {
+		slog.Error("Review details backup synchronization failed", "err", err)
 		return fmt.Errorf("synchronize review-details backup: %w", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		slog.Error("Review details backup verification read failed", "err", err)
 		return fmt.Errorf("read review-details backup for verification: %w", err)
 	}
 	var restored reviewDetailsSnapshot
 	if err := json.Unmarshal(data, &restored); err != nil {
+		slog.Error("Review details backup decoding failed", "err", err)
 		return fmt.Errorf("decode review-details backup: %w", err)
 	}
 	if !reflect.DeepEqual(restored, snapshot) {
@@ -58,8 +64,11 @@ func applyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot 
 	if err := verifyReviewDetails(ctx, client, snapshot, snapshot.Repaired); err != nil {
 		return err
 	}
-	repeated, err := review.WriteReviewDetails(snapshot.Repaired, snapshot.Source.Summary, snapshot.Original.Threads, botLogin)
-	if err != nil || repeated != snapshot.Repaired {
+	repeated, err := review.RestoreReviewDetails(snapshot.Repaired, snapshot.Source.Summary, snapshot.Original.Threads, botLogin)
+	if err != nil {
+		return err
+	}
+	if repeated != snapshot.Repaired {
 		return errors.New("the restored review details did not pass the idempotence check")
 	}
 	return nil
@@ -91,7 +100,7 @@ func verifyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot
 			return errors.New("a summary comment no longer matches the expected snapshot")
 		}
 	}
-	source, err := client.ReadCheckRunDetails(ctx, original.InstallationID, original.Repository, snapshot.Source.Run.ID)
+	source, err := client.GetCheckRunDetails(ctx, original.InstallationID, original.Repository, snapshot.Source.Run.ID)
 	if err != nil {
 		return err
 	}

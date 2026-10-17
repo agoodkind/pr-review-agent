@@ -1,7 +1,6 @@
 package review
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -51,8 +50,13 @@ func stripMaintenanceFailure(body string) string {
 	return strings.TrimSpace(body[:start] + body[start+end+len(maintenanceFailureEnd):])
 }
 
+// ClearUpdateFailure removes the managed failure and reassessment notices.
+func ClearUpdateFailure(body string) string {
+	return stripReassessmentNotice(stripMaintenanceFailure(body))
+}
+
 func preservedReviewDetails(body string, summary Summary) string {
-	start, end, err := reviewDetailsRange(body)
+	start, end, err := reviewDetailsRange(body, "completed review summary")
 	if err == nil {
 		return refreshThreadDetails(body[start:end], summary)
 	}
@@ -69,7 +73,7 @@ func preservedReportPrefix(body string) string {
 		end = strings.Index(body, "### Verdict")
 	}
 	if end < 0 {
-		start, _, err := reviewDetailsRange(body)
+		start, _, err := reviewDetailsRange(body, "completed review summary")
 		if err == nil {
 			end = start
 		}
@@ -93,15 +97,15 @@ func MetadataMatches(body string, head domain.HeadSHA, revision string) bool {
 	return err == nil && found && record.Head == head && record.Revision == revision
 }
 
-// WriteReviewDetails returns the existing summary with restored details and current thread counts.
-func WriteReviewDetails(existingBody, sourceDetails string, threads []githubapp.ReviewThread, botLogin string) (string, error) {
-	start, end, err := reviewDetailsRange(existingBody)
+// RestoreReviewDetails returns the existing summary with restored details and current thread counts.
+func RestoreReviewDetails(existingBody, sourceDetails string, threads []githubapp.ReviewThread, botLogin string) (string, error) {
+	start, end, err := reviewDetailsRange(existingBody, "existing summary")
 	if err != nil {
-		return "", fmt.Errorf("read existing review details: %w", err)
+		return "", err
 	}
-	sourceStart, sourceEnd, err := reviewDetailsRange(sourceDetails)
+	sourceStart, sourceEnd, err := reviewDetailsRange(sourceDetails, "source check summary")
 	if err != nil {
-		return "", fmt.Errorf("read source review details: %w", err)
+		return "", err
 	}
 	var summary Summary
 	summary.Threads = traceThreads(threads, botLogin)
@@ -112,9 +116,9 @@ func WriteReviewDetails(existingBody, sourceDetails string, threads []githubapp.
 	return existingBody[:start] + details + existingBody[end:], nil
 }
 
-func reviewDetailsRange(body string) (int, int, error) {
+func reviewDetailsRange(body, source string) (int, int, error) {
 	if strings.Count(body, "<summary>Review details</summary>") != 1 || strings.Count(body, reviewDetailsStart) != 1 {
-		return 0, 0, errors.New("exactly one review details section is required")
+		return 0, 0, fmt.Errorf("%s requires exactly one review details section", source)
 	}
 	start := strings.Index(body, reviewDetailsStart)
 	cursor := start + len("<details>")
@@ -122,13 +126,13 @@ func reviewDetailsRange(body string) (int, int, error) {
 	for depth > 0 {
 		closing := strings.Index(body[cursor:], "</details>")
 		if closing < 0 {
-			return 0, 0, errors.New("the review details section is incomplete")
+			return 0, 0, fmt.Errorf("%s contains an incomplete review details section", source)
 		}
 		opening := strings.Index(body[cursor:], "<details")
 		if opening >= 0 && opening < closing {
 			openingEnd := strings.IndexByte(body[cursor+opening:], '>')
 			if openingEnd < 0 || opening+openingEnd >= closing {
-				return 0, 0, errors.New("the nested details section is incomplete")
+				return 0, 0, fmt.Errorf("%s contains an incomplete nested details section", source)
 			}
 			cursor += opening + openingEnd + 1
 			depth++

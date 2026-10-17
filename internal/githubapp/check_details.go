@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -16,16 +17,17 @@ type CheckRunDetails struct {
 	Summary string
 }
 
-// ReadCheckRunDetails reads one exact check run without selecting a newer run.
-func (client *Client) ReadCheckRunDetails(ctx context.Context, installationID int64, repo domain.Repository, checkRunID int64) (CheckRunDetails, error) {
+// GetCheckRunDetails reads one exact check run without selecting a newer run.
+func (client *Client) GetCheckRunDetails(ctx context.Context, installationID int64, repo domain.Repository, checkRunID int64) (CheckRunDetails, error) {
 	var details CheckRunDetails
 	path := client.repoPath(repo, fmt.Sprintf("/check-runs/%d", checkRunID))
 	body, err := client.doREST(ctx, installationID, http.MethodGet, path, nil, nil)
 	if err != nil {
-		return details, fmt.Errorf("read check run details: %w", err)
+		return details, err
 	}
 	var response checkRunResponse
 	if err := json.Unmarshal(body, &response); err != nil {
+		client.logger.ErrorContext(ctx, "Check run response decoding failed", slog.String("err", err.Error()))
 		return details, fmt.Errorf("decode check run details: %w", err)
 	}
 	details.Run, err = decodeCheckRun(body, ctx, client)

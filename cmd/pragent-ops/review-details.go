@@ -53,7 +53,7 @@ func reviewDetails(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
-	snapshot.Source, err = client.ReadCheckRunDetails(ctx, opts.identity.installationID, repo, opts.sourceCheckID)
+	snapshot.Source, err = client.GetCheckRunDetails(ctx, opts.identity.installationID, repo, opts.sourceCheckID)
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func reviewDetails(ctx context.Context, args []string, stdout, stderr io.Writer)
 	}
 	changed := snapshot.Comment.Body != snapshot.Repaired
 	if opts.identity.apply && changed {
-		if err := WriteReviewDetailsBackup(opts.identity.backupFile, snapshot); err != nil {
+		if err := writeReviewDetailsBackup(opts.identity.backupFile, snapshot); err != nil {
 			return err
 		}
 		if err := applyReviewDetails(ctx, client, snapshot, cfg.GitHubBotLogin); err != nil {
@@ -132,7 +132,7 @@ func prepareReviewDetails(snapshot *reviewDetailsSnapshot, opts reviewDetailsOpt
 		return errors.New("the selected summary must record complete coverage of the current head")
 	}
 	var err error
-	snapshot.Repaired, err = review.WriteReviewDetails(snapshot.Comment.Body, source.Summary, snapshot.Original.Threads, cfg.GitHubBotLogin)
+	snapshot.Repaired, err = review.RestoreReviewDetails(snapshot.Comment.Body, source.Summary, snapshot.Original.Threads, cfg.GitHubBotLogin)
 	if err != nil {
 		return err
 	}
@@ -144,6 +144,7 @@ func prepareReviewDetails(snapshot *reviewDetailsSnapshot, opts reviewDetailsOpt
 		if latest.State != "APPROVED" || latest.CommitID != head {
 			return errors.New("a failed checkpoint requires the latest bot decision to approve the current head")
 		}
+		snapshot.Repaired = review.ClearUpdateFailure(snapshot.Repaired)
 		snapshot.Repaired, err = completeReviewDetailsCheckpoint(snapshot.Repaired)
 		return err
 	}

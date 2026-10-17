@@ -1,0 +1,88 @@
+//go:build integration
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/review"
+)
+
+func TestLiveReviewDetailsCommandRepairsAndRepeats(t *testing.T) {
+	if os.Getenv("PR_AGENT_LIVE_REVIEW_DETAILS_COMMAND_TEST") != "1" {
+		t.Skip("The live review-details command regression is not enabled.")
+	}
+	fixture := liveDetailsSetup(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
+	identifier, err := strconv.ParseInt(os.Getenv("PR_AGENT_LIVE_SOURCE_CHECK_RUN_ID"), 10, 64)
+	if err != nil || identifier <= 0 {
+		t.Fatal("The command regression requires an explicit successful source check identifier.")
+	}
+	source, err := fixture.client.GetCheckRunDetails(ctx, fixture.opts.installationID, fixture.before.Repository, identifier)
+	if err != nil || source.Run.Head != fixture.before.PullRequest.Head || source.Run.Conclusion != "success" {
+		t.Fatal("The selected source must be a successful check on the fixture's current head.")
+	}
+	original := fixture.original.Body
+	metadata := liveDetailsSection(t, original, "<!-- pr-review-agent:metadata:v1 ", " -->")
+	report, _, _ := strings.Cut(original, "<!-- pr-review-agent:verdict-section:start -->")
+	fixture.write(t, ctx, strings.Replace(original, metadata, "", 1))
+	outcome, failure := fixture.run(t, ctx)
+	if failure == nil || outcome.Disposition != domain.AssessmentFailed {
+		t.Fatal("The real provider refusal did not create the failed summary needed for repair.")
+	}
+	if err := fixture.logFile.Sync(); err != nil {
+		t.Fatal("The real provider failure log could not be synchronized.")
+	}
+	liveFailureAssertProvider(t, fixture.logPath, fixture.cfg.Providers[0].ID, fixture.cfg.Providers[0].Model)
+	body := fixture.capture(t, ctx)
+	state, valid := marker.DecodeState(body)
+	if !valid || state.Status != marker.StateFailed {
+		t.Fatal("The provider refusal did not create a failed checkpoint.")
+	}
+	body = strings.Replace(body, marker.EncodeState(state), metadata+"\n"+marker.EncodeState(state), 1)
+	damaged, err := review.RestoreReviewDetails(body, review.RenderDetails(review.Summary{Head: fixture.before.PullRequest.Head}), fixture.before.Threads, fixture.cfg.GitHubBotLogin)
+	if err != nil {
+		t.Fatal("The fixture could not reproduce the erased details.")
+	}
+	fixture.write(t, ctx, damaged)
+	backup := filepath.Join(filepath.Dir(fixture.logPath), "command-before.json")
+	arguments := []string{"review-details", "--runtime", fixture.opts.runtime, "--repository", fixture.opts.repository, "--pull-request", strconv.Itoa(fixture.opts.pullRequest), "--installation-id", strconv.FormatInt(fixture.opts.installationID, 10), "--app-private-key-file", fixture.opts.privateKeyFile, "--summary-comment-id", strconv.FormatInt(fixture.original.ID, 10), "--source-check-run-id", strconv.FormatInt(identifier, 10), "--backup-file", backup}
+	for index, apply := range []bool{false, true, true} {
+		selected := append([]string(nil), arguments...)
+		if apply {
+			selected = append(selected, "--apply")
+		}
+		var output bytes.Buffer
+		commandErr := run(ctx, selected, &output, io.Discard)
+		current := fixture.capture(t, ctx)
+		if commandErr != nil {
+			t.Fatalf("The real review-details command failed: %v", commandErr)
+		}
+		if !apply {
+			if current != damaged {
+				t.Fatal("The dry run changed the summary.")
+			}
+			continue
+		}
+		liveDetailsAssertRecovered(t, current, liveDetailsSection(t, source.Summary, "<details>\n<summary>Review details</summary>", "</details>"), strings.TrimSpace(report), fixture.before.PullRequest.Head)
+		info, statErr := os.Stat(backup)
+		if statErr != nil || info.Mode().Perm() != 0o600 {
+			t.Fatal("The repair did not retain its private original backup.")
+		}
+		if index == 2 && !strings.Contains(output.String(), "requires repair: false") {
+			t.Fatal("The repeated command did not report an unchanged summary.")
+		}
+	}
+	t.Log("The real command preserved its dry run, restored measured details, cleared the failure notice, saved a private backup, and repeated without another update.")
+}
