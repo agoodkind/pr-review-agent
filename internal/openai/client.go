@@ -80,6 +80,7 @@ type Client struct {
 	reviewPolicy            reviewrules.Policy
 	budgetURL               string
 	budgetSigningKey        []byte
+	budgetReportPolicy      quota.ReportPolicy
 	httpClient              *http.Client
 	now                     clock.Clock
 }
@@ -151,6 +152,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		reviewPolicy:            cfg.ReviewPolicy,
 		budgetURL:               "",
 		budgetSigningKey:        cfg.GitHubWebhookSecret,
+		budgetReportPolicy:      cfg.BudgetReportPolicy(),
 		httpClient:              httpClient,
 		now:                     clock.System,
 	}

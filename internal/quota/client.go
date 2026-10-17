@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/telemetry"
@@ -21,8 +20,6 @@ import (
 const (
 	maximumResponseBytes = 256 * 1024
 	maximumPageSize      = 500
-	reportAttempts       = 3
-	reportAttemptTimeout = 5 * time.Second
 )
 
 // QueryRequest uses endpoint flags to distinguish rolling and fixed boundaries.
@@ -84,6 +81,7 @@ type Client struct {
 	signingKey    []byte
 	operatorToken string
 	httpClient    *http.Client
+	reportPolicy  ReportPolicy
 }
 
 // NewClient requires one endpoint for legacy daily checks and timestamped usage.
@@ -91,7 +89,17 @@ func NewClient(url string, signingKey []byte, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{url: url, signingKey: signingKey, operatorToken: "", httpClient: httpClient}
+	return &Client{url: url, signingKey: signingKey, operatorToken: "", httpClient: httpClient, reportPolicy: DefaultReportPolicy()}
+}
+
+// NewReportingClient rejects invalid delivery settings before sending usage.
+func NewReportingClient(endpoint string, signingKey []byte, httpClient *http.Client, policy ReportPolicy) (*Client, error) {
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	client := NewClient(endpoint, signingKey, httpClient)
+	client.reportPolicy = policy
+	return client, nil
 }
 
 // NewOperatorClient disables redirects because another origin must not receive the operator credential.
@@ -166,6 +174,8 @@ func (client *Client) Query(ctx context.Context, providerID, model string, bound
 
 // Report retains one identity across transient failures because the response may fail after storage commits.
 func (client *Client) Report(ctx context.Context, request ReportRequest) error {
+	ctx, cancelReport := context.WithTimeout(ctx, client.reportPolicy.Timeout)
+	defer cancelReport()
 	request.Action = "report_usage"
 	if request.ReportID == "" {
 		request.ReportID = rand.Text()
@@ -173,9 +183,9 @@ func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 	if !validUsage(request.Usage) || request.AdmittedAtMS < 0 || request.AdmittedAtMS > MaximumInteger {
 		return errors.New("usage report is outside the storage integer range")
 	}
-	for attempt := range reportAttempts {
+	for attempt := range client.reportPolicy.Attempts {
 		var response reportResponse
-		attemptContext, cancel := context.WithTimeout(ctx, reportAttemptTimeout)
+		attemptContext, cancel := context.WithTimeout(ctx, client.reportPolicy.AttemptTimeout)
 		err := post(attemptContext, client, request, &response)
 		cancel()
 		if err == nil {
@@ -184,7 +194,7 @@ func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 			}
 			return nil
 		}
-		if ctx.Err() != nil || attempt == reportAttempts-1 || !retryableReportError(err) {
+		if ctx.Err() != nil || attempt == client.reportPolicy.Attempts-1 || !retryableReportError(err) {
 			return err
 		}
 	}

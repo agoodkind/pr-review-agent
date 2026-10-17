@@ -136,6 +136,7 @@ const publicSettings = [
   "PROVIDERS",
   "PROVIDER_PRIORITY",
   "PROVIDER_BUDGET_URL",
+  "PROVIDER_BUDGET_REPORT",
   "SERVICE_FAILURE_APPEARANCE",
   "GITHUB_APP_ID",
   "GITHUB_BOT_LOGIN",
@@ -168,6 +169,7 @@ export function createPrAgentEnvironment(bindings, configuration = runtime) {
         environment[name] = String(configuration[name]);
         continue;
       case "REASSESSMENT":
+      case "PROVIDER_BUDGET_REPORT":
       case "REVIEW_MODEL_PRICING":
       case "PROVIDERS":
       case "PROVIDER_PRIORITY":

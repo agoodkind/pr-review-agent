@@ -198,10 +198,11 @@ func (client *Client) reportBudget(ctx context.Context, target provider, snapsho
 		tokens := budgetTokens(usage, target.dailyTokenTypes)
 		report.LegacyDay, report.LegacyTokens = snapshot.day, &tokens
 	}
-	requestContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*budgetRequestTimeout)
-	defer cancel()
-	storage := quota.NewClient(client.budgetURL, client.budgetSigningKey, client.httpClient)
-	if err := storage.Report(requestContext, report); err != nil {
+	storage, err := quota.NewReportingClient(client.budgetURL, client.budgetSigningKey, client.httpClient, client.budgetReportPolicy)
+	if err == nil {
+		err = storage.Report(context.WithoutCancel(ctx), report)
+	}
+	if err != nil {
 		gklog.L(ctx).WarnContext(ctx, "send model budget report failed", slog.String("err", err.Error()),
 			slog.String("report_id", report.ReportID), slog.String("provider_id", target.id), slog.String("configured_model", target.model),
 			slog.Int64("admitted_at_ms", report.AdmittedAtMS), slog.Int64("input_tokens", usage.InputTokens),
