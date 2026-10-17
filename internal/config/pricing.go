@@ -8,7 +8,7 @@ type TokenCost struct {
 	OutputUSD      float64
 }
 
-// Estimate requires cache write pricing and excludes explicit nonstandard service tiers.
+// Estimate rejects positive cache writes without a configured rate and excludes explicit nonstandard service tiers.
 func (pricing ModelPricing) Estimate(input, cached, writes, output int64, serviceTier string) (TokenCost, bool) {
 	var cost TokenCost
 	if serviceTier != "" && serviceTier != "default" {

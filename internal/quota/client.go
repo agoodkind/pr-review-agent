@@ -172,7 +172,7 @@ func (client *Client) Query(ctx context.Context, providerID, model string, bound
 	}
 }
 
-// Report retains one identity across transient failures because the response may fail after storage commits.
+// Report assigns one ID to the request and reuses it across transient failures because a response may fail after storage commits.
 func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 	ctx, cancelReport := context.WithTimeout(ctx, client.reportPolicy.Timeout)
 	defer cancelReport()
