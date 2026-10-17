@@ -241,6 +241,27 @@ The live regression seeds an older approval and a completed current-head assessm
 
 4. Require approval reuse under the default policy, delivery overrides in both directions, one empty-body approval under the per-commit policy, and no duplicate approval on repetition. Require the original summary ID and checkpoint data to remain intact.
 
+## Verify review details after a refresh failure
+
+1. Select an approved, open test pull request with a completed current-head review and measured model usage. Configure its repository, pull request, installation, and App key inputs from the [unexpected-failure test](#7-verify-dismissal-after-an-unexpected-failure).
+2. Set `PR_AGENT_LIVE_FAILURE_PROVIDER_ID` to a configured provider without Cloudflare Access requirements. Run the regression with an invalid test credential.
+
+   ```bash
+   PR_AGENT_LIVE_REVIEW_DETAILS_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveReviewDetailsSurviveRefreshFailureAndRecovery -count=1 -v
+   ```
+
+3. Require the original measured details after the provider refusal, the successful refresh, and recovery from a legacy failure body. Require recovery to clear the failed status. Confirm that cleanup restores the original summary and preserves native reviews, inline threads, and pull request metadata.
+
+4. Set `PR_AGENT_LIVE_SOURCE_CHECK_RUN_ID` to a successful review check on the fixture's current head with measured details. Run the command regression.
+
+   ```bash
+   PR_AGENT_LIVE_REVIEW_DETAILS_COMMAND_TEST=1 go test -tags=integration ./cmd/pragent-ops \
+       -run TestLiveReviewDetailsCommandRepairsAndRepeats -count=1 -v
+   ```
+
+   Require the dry run to preserve the comment. Require repair to restore the source statistics, remove the failure notice, complete the checkpoint, and save a private backup. Require repetition to leave the comment unchanged and cleanup to restore its original body.
+
 ## Verify hidden review body cleanup
 
 The live regression verifies dry-run and apply idempotence on a fixture with already-empty native bot decision bodies. Use an open, non-draft test pull request with one completed current-head bot summary, a current bot rejection, and an older dismissed bot rejection with a lower review ID. The configured [recovery-test pull request](../deploy/cloudflare/recovery-test.json) is also supported when it satisfies those conditions.

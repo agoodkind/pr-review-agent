@@ -287,32 +287,32 @@ const withdrawnBlockNote = "The blocking review on this commit was dismissed by 
 // blockWithdrawn says a person dismissed the verdict at this head, which the
 // prose has to carry because the refresh then submits no blocking review and
 // the comment is the only place a reader learns why.
-func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool) string {
-	parts := []string{"## Review", renderVerdictSection(summary, blockWithdrawn)}
+func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool, details, reportPrefix string) string {
+	parts := []string{reportPrefix, renderVerdictSection(summary, blockWithdrawn)}
 	if len(summary.Omissions) > 0 {
 		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
 	}
 	parts = append(
 		parts,
-		RenderDetails(summary),
+		details,
 		marker.Summary()+"\n"+RenderVerdictBody(summary),
 	)
 	return strings.Join(parts, "\n\n")
 }
 
 func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bool) string {
-	prose := stripDurableStateMarker(existingBody)
+	prose := stripMaintenanceFailure(stripDurableStateMarker(existingBody))
 	fallbackRecord, recordedFallback := readFallbackRecord(prose, summary.Head)
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && recordedFallback {
 		summary.Fallback = fallbackRecord.Findings
 	}
 	start := strings.Index(prose, verdictSectionStart)
 	if start < 0 {
-		return renderVerdictRefreshProse(summary, blockWithdrawn)
+		return renderVerdictRefreshProse(summary, blockWithdrawn, preservedReviewDetails(prose, summary), preservedReportPrefix(prose))
 	}
 	endOffset := strings.Index(prose[start:], verdictSectionEnd)
 	if endOffset < 0 {
-		return renderVerdictRefreshProse(summary, blockWithdrawn)
+		return renderVerdictRefreshProse(summary, blockWithdrawn, preservedReviewDetails(prose, summary), preservedReportPrefix(prose))
 	}
 	end := start + endOffset + len(verdictSectionEnd)
 	verdict := renderVerdictSection(summary, blockWithdrawn)

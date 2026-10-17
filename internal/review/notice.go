@@ -318,9 +318,13 @@ func (service *Service) writeFailureSummary(
 	progress.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
 	prose := RenderFailureBody(progress, title, detail)
 	prose += reassessmentNotice(ctx)
-	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, _ string) summaryCommentContent {
+	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, existingBody string) summaryCommentContent {
+		failureProse := prose
+		if preserveCompletedSummary(existing, existingBody, progress) {
+			failureProse = renderMaintenanceFailure(existingBody, title, detail) + reassessmentNotice(ctx)
+		}
 		return summaryCommentContent{
-			Prose: prose,
+			Prose: failureProse,
 			State: marker.State{
 				LastReviewed: existing.LastReviewed,
 				RunID:        job.DeliveryID,
