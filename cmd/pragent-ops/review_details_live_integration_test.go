@@ -53,7 +53,7 @@ func TestLiveReviewDetailsSurviveRefreshFailureAndRecovery(t *testing.T) {
 		t.Fatal("The real provider refusal did not fail the refresh.")
 	}
 	if err := fixture.logFile.Sync(); err != nil {
-		t.Fatal("The private provider log could not be synchronized.")
+		t.Fatalf("The private provider log could not be synchronized: %v", err)
 	}
 	liveFailureAssertProvider(t, fixture.logPath, fixture.cfg.Providers[0].ID, fixture.cfg.Providers[0].Model)
 	body := fixture.capture(t, ctx)
@@ -69,7 +69,10 @@ func TestLiveReviewDetailsSurviveRefreshFailureAndRecovery(t *testing.T) {
 	}
 	fixture.write(t, ctx, strings.Replace(body, marker.EncodeState(state), metadata+"\n"+marker.EncodeState(state), 1))
 	completed, recoveryErr := fixture.run(t, ctx)
-	if recoveryErr != nil || completed.Disposition != domain.AssessmentCompleted {
+	if recoveryErr != nil {
+		t.Fatalf("The refresh failed during recovery: %v", recoveryErr)
+	}
+	if completed.Disposition != domain.AssessmentCompleted {
 		t.Fatal("The refresh could not recover from the completed assessment without a model request.")
 	}
 	body = fixture.capture(t, ctx)
@@ -83,7 +86,10 @@ func TestLiveReviewDetailsSurviveRefreshFailureAndRecovery(t *testing.T) {
 	legacy = strings.Replace(legacy, marker.EncodeState(state), marker.EncodeState(legacyState), 1)
 	fixture.write(t, ctx, legacy)
 	completed, recoveryErr = fixture.run(t, ctx)
-	if recoveryErr != nil || completed.Disposition != domain.AssessmentCompleted {
+	if recoveryErr != nil {
+		t.Fatalf("The legacy recovery failed: %v", recoveryErr)
+	}
+	if completed.Disposition != domain.AssessmentCompleted {
 		t.Fatal("The legacy failure body could not recover its completed assessment.")
 	}
 	liveDetailsAssertRecovered(t, fixture.capture(t, ctx), details, report, fixture.before.PullRequest.Head)
@@ -96,17 +102,17 @@ func liveDetailsSetup(t *testing.T) *liveDetailsFixture {
 	cfg, _ := liveFailureConfig(t)
 	directory, err := os.MkdirTemp("", "pragent-details-live-")
 	if err != nil {
-		t.Fatal("The private evidence directory could not be created.")
+		t.Fatalf("The private evidence directory could not be created: %v", err)
 	}
 	logPath := filepath.Join(directory, "service.ndjson")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		t.Fatal("The private service log could not be created.")
+		t.Fatalf("The private service log could not be created: %v", err)
 	}
 	service, client := liveFailureService(cfg, slog.New(slog.NewJSONHandler(logFile, nil)))
 	repo, err := reviewBodyRepository(opts.repository)
 	if err != nil {
-		t.Fatal("The fixture repository is invalid.")
+		t.Fatalf("The fixture repository is invalid: %v", err)
 	}
 	before := liveReviewBodyCapture(t, t.Context(), client, opts, repo)
 	if before.PullRequest.State != "open" || before.PullRequest.Draft || !liveReviewBodyFixture(t, opts, before.PullRequest.Title) || validateReviewBodySummary(before, cfg.GitHubBotLogin) != nil {
@@ -125,7 +131,7 @@ func liveDetailsSetup(t *testing.T) *liveDetailsFixture {
 		t.Fatal("The fixture must contain measured model and token details.")
 	}
 	if err := writeReviewBodyBackup(filepath.Join(directory, "before.json"), before); err != nil {
-		t.Fatal("The original GitHub fixture could not be backed up.")
+		t.Fatalf("The original GitHub fixture could not be backed up: %v", err)
 	}
 	fixture := &liveDetailsFixture{opts: opts, cfg: cfg, client: client, service: service, before: before, original: original, expected: original.Body, logFile: logFile, logPath: logPath}
 	t.Cleanup(func() {
@@ -133,7 +139,7 @@ func liveDetailsSetup(t *testing.T) *liveDetailsFixture {
 		defer cancel()
 		fixture.write(t, ctx, original.Body)
 		if err := logFile.Close(); err != nil {
-			t.Error("The private log could not be closed.")
+			t.Errorf("The private log could not be closed: %v", err)
 		}
 	})
 	t.Logf("The private evidence directory is %s.", directory)
@@ -144,7 +150,10 @@ func (fixture *liveDetailsFixture) run(t *testing.T, ctx context.Context) (domai
 	t.Helper()
 	job := domain.ReviewJob{PullRequestRef: domain.PullRequestRef{Repository: fixture.before.Repository, Number: fixture.opts.pullRequest, InstallationID: fixture.opts.installationID, Head: fixture.before.PullRequest.Head}, DeliveryID: "live-review-details-" + rand.Text(), RefreshVerdict: true}
 	admitted, accepted, err := fixture.service.Admit(ctx, job)
-	if err != nil || !accepted {
+	if err != nil {
+		t.Fatalf("The refresh admission failed: %v", err)
+	}
+	if !accepted {
 		t.Fatal("The real GitHub App did not admit the refresh regression.")
 	}
 	outcome, runErr := fixture.service.RunWithOutcome(ctx, admitted)
