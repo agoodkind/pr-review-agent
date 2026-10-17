@@ -12,6 +12,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const metadataRecordPrefix = "<!-- pr-review-agent:metadata:v1 "
@@ -27,13 +28,23 @@ type metadataReviewRecord struct {
 	DecisionReason    string           `json:"decision_reason,omitempty"`
 }
 
+type metadataReviewRecordJSON struct {
+	metadataReviewRecord
+	Deduplication map[reviewrules.ID]reviewrules.Deduplication `json:"deduplication,omitempty"`
+}
+
 func encodeMetadataRecord(record metadataReviewRecord) string {
+	modes := make(map[reviewrules.ID]reviewrules.Deduplication)
 	record.Findings = append([]domain.Finding(nil), record.Findings...)
 	for index := range record.Findings {
+		finding := record.Findings[index]
+		if finding.Deduplication == reviewrules.DeduplicateLocation {
+			modes[finding.RuleID] = finding.Deduplication
+		}
 		record.Findings[index].Evidence = ""
 		record.Findings[index].Claim = ""
 	}
-	encoded, err := json.Marshal(record)
+	encoded, err := json.Marshal(metadataReviewRecordJSON{metadataReviewRecord: record, Deduplication: modes})
 	if err != nil {
 		slog.Error("Metadata review state encoding failed", "err", err)
 		return ""
@@ -55,13 +66,20 @@ func decodeMetadataRecord(body string) (metadataReviewRecord, bool, error) {
 	if err != nil {
 		return record, false, errors.New("the metadata review state cannot be decoded")
 	}
-	if err := json.Unmarshal(decoded, &record); err != nil {
+	var stored metadataReviewRecordJSON
+	if err := json.Unmarshal(decoded, &stored); err != nil {
 		return record, false, errors.New("the metadata review state is invalid")
 	}
+	record = stored.metadataReviewRecord
 	if _, err := domain.ParseHeadSHA(string(record.Head)); err != nil || record.Revision == "" {
 		return record, false, errors.New("the metadata review revision is invalid")
 	}
-	for _, finding := range record.Findings {
+	for index, finding := range record.Findings {
+		mode := stored.Deduplication[finding.RuleID]
+		if mode != "" && mode != reviewrules.DeduplicateDefect && mode != reviewrules.DeduplicateLocation {
+			return record, false, errors.New("the stored metadata deduplication policy is invalid")
+		}
+		record.Findings[index].Deduplication = mode
 		if finding.EffectiveSurface() == domain.FindingFile || finding.Validate() != nil {
 			return record, false, errors.New("the stored metadata finding is invalid")
 		}

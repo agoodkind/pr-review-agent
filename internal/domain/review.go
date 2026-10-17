@@ -161,15 +161,16 @@ type FindingTarget struct {
 
 // Finding includes the source coordinates and the proposed correction.
 type Finding struct {
-	Surface          FindingSurface   `json:"surface"`
-	CommitSHA        HeadSHA          `json:"commit_sha"`
-	CorrectionAction CorrectionAction `json:"correction_action"`
-	RuleID           reviewrules.ID   `json:"rule_id"`
-	Path             string           `json:"path"`
-	StartLine        int              `json:"start_line"`
-	EndLine          int              `json:"end_line"`
-	Title            string           `json:"title"`
-	Body             string           `json:"body"`
+	Surface          FindingSurface            `json:"surface"`
+	CommitSHA        HeadSHA                   `json:"commit_sha"`
+	CorrectionAction CorrectionAction          `json:"correction_action"`
+	RuleID           reviewrules.ID            `json:"rule_id"`
+	Deduplication    reviewrules.Deduplication `json:"-"`
+	Path             string                    `json:"path"`
+	StartLine        int                       `json:"start_line"`
+	EndLine          int                       `json:"end_line"`
+	Title            string                    `json:"title"`
+	Body             string                    `json:"body"`
 	// Evidence is the exact source line the finding relies on, copied verbatim
 	// from the code the model was shown. Publication drops a finding whose
 	// evidence does not appear in that source, so a claim about code the model

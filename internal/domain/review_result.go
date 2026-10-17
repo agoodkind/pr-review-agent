@@ -22,6 +22,11 @@ func UnmarshalReviewResult(data []byte, catalog reviewrules.Catalog, importance 
 			return ReviewResult{}, fmt.Errorf("apply review rule importance: %w", err)
 		}
 		result.Findings[index].Importance = score
+		deduplication, err := catalog.FindingDeduplication(finding.RuleID)
+		if err != nil {
+			return ReviewResult{}, fmt.Errorf("apply review rule deduplication: %w", err)
+		}
+		result.Findings[index].Deduplication = deduplication
 	}
 	if err := result.Validate(); err != nil {
 		return ReviewResult{}, err

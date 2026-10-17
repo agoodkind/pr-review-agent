@@ -144,6 +144,8 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 ## Change review rules
 
 1. Edit the [rule catalog](../config/review-rules.json) or [prompt configuration](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
+
+   Set a rule's `deduplication` to `location` when each source occurrence requires a separate correction. Use `defect` when one correction can resolve findings at several locations.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json
