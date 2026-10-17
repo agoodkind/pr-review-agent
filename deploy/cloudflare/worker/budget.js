@@ -1,9 +1,26 @@
 import { readBoundedText } from "./servicelogs.js";
 import { authenticateOperator } from "./operator.js";
+import runtime from "../../../runtime.json" with { type: "json" };
 
 export const BUDGET_PATH = "/internal/v1/provider_budget";
 export const BUDGET_SIGNATURE_HEADER = "X-Pr-Agent-Budget-Signature";
-const MAXIMUM_RESERVATION_BYTES = 1024;
+const MAXIMUM_QUERY_RESPONSE_BYTES = 256 * 1024;
+
+function requiredPositiveInteger(name) {
+  const value = runtime[name];
+  if ((typeof value !== "string" && typeof value !== "number") ||
+      !Number.isSafeInteger(Number(value)) || Number(value) <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return Number(value);
+}
+
+export const MAXIMUM_USAGE_REPORT_BYTES = requiredPositiveInteger("PROVIDER_USAGE_MAX_BYTES");
+export const MAXIMUM_USAGE_PAGE_BYTES = requiredPositiveInteger("PROVIDER_USAGE_PAGE_BYTES");
+if (MAXIMUM_USAGE_PAGE_BYTES <= MAXIMUM_USAGE_REPORT_BYTES ||
+    MAXIMUM_USAGE_PAGE_BYTES > MAXIMUM_QUERY_RESPONSE_BYTES) {
+  throw new Error("PROVIDER_USAGE_PAGE_BYTES must exceed PROVIDER_USAGE_MAX_BYTES and fit the Go response byte limit");
+}
 const DAILY_READ_FIELDS = new Set(["provider_id", "model", "limit"]);
 const USAGE_READ_FIELDS = new Set([
   "action", "provider_id", "model", "start_ms", "end_ms", "include_start", "include_end",
@@ -22,9 +39,9 @@ export async function handleProviderBudget(request, env, verifySignature) {
   if (request.method !== "POST") {
     return new Response("not found", { status: 404 });
   }
-  const body = await readBoundedText(request, MAXIMUM_RESERVATION_BYTES);
+  const body = await readBoundedText(request, MAXIMUM_USAGE_REPORT_BYTES);
   if (body === null) {
-    return new Response("reservation too large", { status: 413 });
+    return new Response("usage request exceeds PROVIDER_USAGE_MAX_BYTES", { status: 413 });
   }
   const signed = await verifySignature(env.GITHUB_WEBHOOK_SECRET, body,
     request.headers.get(BUDGET_SIGNATURE_HEADER) ?? "");

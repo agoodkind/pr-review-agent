@@ -6,6 +6,8 @@ import usageReport from "./budget-report.sql";
 import usageSnapshot from "./budget-snapshot.sql";
 import usageQuery from "./budget-query.sql";
 import usageDetails from "./budget-details.sql";
+import usageSDK from "./budget-sdk.sql";
+import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
 
 const MAXIMUM_PAGE_SIZE = 500;
 
@@ -14,6 +16,25 @@ class UsageConflictError extends Error {}
 
 function isNonnegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
+}
+
+function validSDKUsage(usage) {
+  if (usage === undefined || usage === null) {
+    return true;
+  }
+  if (typeof usage !== "object" || Array.isArray(usage) ||
+      typeof usage.api !== "string" || usage.api.trim() === "" ||
+      typeof usage.usage_json !== "string" ||
+      (usage.model !== undefined && typeof usage.model !== "string") ||
+      (usage.response_id !== undefined && typeof usage.response_id !== "string")) {
+    return false;
+  }
+  try {
+    const native = JSON.parse(usage.usage_json);
+    return native !== null && typeof native === "object" && !Array.isArray(native);
+  } catch {
+    return false;
+  }
 }
 
 function budgetKey(prefix, day, providerId, model) {
@@ -65,10 +86,26 @@ export class ProviderBudget extends DurableObject {
     const rows = this.ctx.storage.sql.exec(usageQuery, providerId, model, after, snapshot,
       start, Number(includeStart), start, end, Number(includeEnd), end, pageSize + 1)
       .toArray();
-    const hasNext = rows.length > pageSize;
-    const events = rows.slice(0, pageSize);
-    return Response.json({ events, snapshot_sequence: snapshot,
-      next_sequence: hasNext ? events.at(-1).sequence : 0, history_start_ms: historyStart });
+    const page = { events: [], snapshot_sequence: snapshot,
+      next_sequence: 0, history_start_ms: historyStart };
+    const encoder = new TextEncoder();
+    let eventBytes = 0;
+    for (const row of rows.slice(0, pageSize)) {
+      const event = { ...row, sdk_usage: row.sdk_usage === null ? null : JSON.parse(row.sdk_usage) };
+      const next = rows.length > page.events.length + 1 ? row.sequence : 0;
+      const size = encoder.encode(JSON.stringify(event)).byteLength;
+      const metadataSize = encoder.encode(JSON.stringify({ ...page, events: [], next_sequence: next })).byteLength;
+      if (metadataSize + eventBytes + size + page.events.length > MAXIMUM_USAGE_PAGE_BYTES) {
+        if (page.events.length === 0) {
+          return new Response("stored usage event exceeds PROVIDER_USAGE_PAGE_BYTES", { status: 413 });
+        }
+        break;
+      }
+      eventBytes += size;
+      page.events.push(event);
+    }
+    page.next_sequence = rows.length > page.events.length ? page.events.at(-1).sequence : 0;
+    return Response.json(page);
   }
 
   async reportUsage(payload) {
@@ -81,6 +118,10 @@ export class ProviderBudget extends DurableObject {
     const cachedInput = payload.cached_input_tokens;
     const cacheWrites = payload.cache_write_tokens;
     const serviceTier = payload.service_tier;
+    const sdkUsage = payload.sdk_usage;
+    if (!validSDKUsage(sdkUsage)) {
+      return new Response("invalid SDK usage", { status: 400 });
+    }
     if ((cachedInput !== undefined && (!isNonnegativeInteger(cachedInput) || cachedInput > inputTokens)) ||
         (cacheWrites !== undefined && (!isNonnegativeInteger(cacheWrites) || cacheWrites > inputTokens)) ||
         (cachedInput !== undefined && cacheWrites !== undefined && cachedInput > inputTokens - cacheWrites) ||
@@ -105,6 +146,8 @@ export class ProviderBudget extends DurableObject {
           inputTokens, outputTokens, totalTokens, legacyDay, legacyTokens]);
         const detailsKey = `usage_report_details:${reportId}`;
         const detailsFingerprint = JSON.stringify([cachedInput, cacheWrites, serviceTier]);
+        const sdkKey = `usage_report_sdk:${reportId}`;
+        const sdkFingerprint = JSON.stringify(sdkUsage ?? null);
         if (reportId !== undefined) {
           const previous = await transaction.get(reportKey);
           if (previous !== undefined) {
@@ -114,6 +157,10 @@ export class ProviderBudget extends DurableObject {
             const previousDetails = await transaction.get(detailsKey);
             if (previousDetails !== undefined && previousDetails !== detailsFingerprint) {
               throw new UsageConflictError("report identity already contains different usage details");
+            }
+            const previousSDK = (await transaction.get(sdkKey)) ?? "null";
+            if (previousSDK !== sdkFingerprint) {
+              throw new UsageConflictError("report identity already contains different SDK usage");
             }
             return;
           }
@@ -132,9 +179,13 @@ export class ProviderBudget extends DurableObject {
           inputTokens, outputTokens, totalTokens).one();
         this.ctx.storage.sql.exec(usageDetails, inserted.sequence,
           cachedInput ?? null, cacheWrites ?? null, serviceTier ?? null);
+        if (sdkUsage !== undefined && sdkUsage !== null) {
+          this.ctx.storage.sql.exec(usageSDK, inserted.sequence, sdkFingerprint);
+        }
         if (reportId !== undefined) {
           await transaction.put(reportKey, fingerprint);
           await transaction.put(detailsKey, detailsFingerprint);
+          await transaction.put(sdkKey, sdkFingerprint);
         }
       });
     } catch (error) {
@@ -148,7 +199,7 @@ export class ProviderBudget extends DurableObject {
         report_id: reportId, provider_id: providerId, model, error: String(error) }));
       throw error;
     }
-    return Response.json({ reported: true });
+    return Response.json({ reported: true, sdk_usage_stored: sdkUsage !== undefined && sdkUsage !== null });
   }
 
   async fetch(request) {

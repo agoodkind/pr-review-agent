@@ -173,12 +173,21 @@ func previousOccurrence(schedule cron.Schedule, now time.Time) (time.Time, error
 
 // Usage stores the provider total independently of selected input/output categories.
 type Usage struct {
-	InputTokens       int64  `json:"input_tokens"`
-	OutputTokens      int64  `json:"output_tokens"`
-	TotalTokens       int64  `json:"total_tokens"`
-	CachedInputTokens *int64 `json:"cached_input_tokens,omitempty"`
-	CacheWriteTokens  *int64 `json:"cache_write_tokens,omitempty"`
-	ServiceTier       string `json:"service_tier,omitempty"`
+	InputTokens       int64     `json:"input_tokens"`
+	OutputTokens      int64     `json:"output_tokens"`
+	TotalTokens       int64     `json:"total_tokens"`
+	CachedInputTokens *int64    `json:"cached_input_tokens,omitempty"`
+	CacheWriteTokens  *int64    `json:"cache_write_tokens,omitempty"`
+	ServiceTier       string    `json:"service_tier,omitempty"`
+	SDKUsage          *SDKUsage `json:"sdk_usage,omitempty"`
+}
+
+// SDKUsage stores a native SDK usage snapshot and its response identity.
+type SDKUsage struct {
+	API        string `json:"api"`
+	Model      string `json:"model,omitempty"`
+	ResponseID string `json:"response_id,omitempty"`
+	UsageJSON  string `json:"usage_json"`
 }
 
 // Tokens uses the provider total when the configured category list is empty.

@@ -60,7 +60,8 @@ type DailySnapshot struct {
 }
 
 type reportResponse struct {
-	Reported bool `json:"reported"`
+	Reported       bool `json:"reported"`
+	SDKUsageStored bool `json:"sdk_usage_stored"`
 }
 
 // ReportRequest updates legacy counters with the original admission day.
@@ -191,6 +192,9 @@ func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 		if err == nil {
 			if !response.Reported {
 				return errors.New("accounting service did not acknowledge usage")
+			}
+			if request.SDKUsage != nil && !response.SDKUsageStored {
+				return errors.New("accounting service did not acknowledge native SDK usage storage")
 			}
 			return nil
 		}
