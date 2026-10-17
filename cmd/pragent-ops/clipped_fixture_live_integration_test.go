@@ -162,10 +162,18 @@ func clippedLiveAssertAnchors(t *testing.T, threads []githubapp.ReviewThread, do
 		index += offset
 		start := strings.Count(document[:index], "\n") + 1
 		end := start + strings.Count(passage, "\n")
-		for _, thread := range threads {
+		matches := 0
+		for threadIndex, thread := range threads {
 			if thread.RootComment.StartLine <= end && thread.RootComment.EndLine >= start {
-				seen[start] = true
+				if seen[threadIndex] {
+					t.Fatal("One inline finding overlaps more than one separate passage.")
+				}
+				seen[threadIndex] = true
+				matches++
 			}
+		}
+		if matches != 1 {
+			t.Fatal("Each passage requires exactly one matching inline finding.")
 		}
 		offset = index + len(passage)
 	}
