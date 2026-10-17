@@ -13,3 +13,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
 );
 CREATE INDEX IF NOT EXISTS usage_event_range
   ON usage_events (provider_id, model, admitted_at_ms, sequence);
+CREATE TABLE IF NOT EXISTS usage_event_details (
+  sequence INTEGER PRIMARY KEY,
+  cached_input_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  service_tier TEXT
+);

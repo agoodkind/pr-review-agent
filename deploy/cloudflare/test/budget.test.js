@@ -254,6 +254,26 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
         include_start: false,
       })).events.length, 0);
     });
+    await context.test("usage details persist without inventing historical counters", async function () {
+      const report = { report_id: "billing-details", cached_input_tokens: 4,
+        cache_write_tokens: 3, service_tier: "default" };
+      await reportUsage(port, "billing", admittedAt, report);
+      await reportUsage(port, "billing", admittedAt, report);
+      const stored = await queryUsage(port, "billing", 0, Date.now());
+      assert.equal(stored.events.length, 1);
+      assert.deepEqual([stored.events[0].cached_input_tokens, stored.events[0].cache_write_tokens,
+        stored.events[0].service_tier], [4, 3, "default"]);
+      await budgetRequest(port, { action: "report_usage", provider_id: "billing", model: modelId,
+        admitted_at_ms: admittedAt, input_tokens: 11, output_tokens: 7, total_tokens: 20,
+        ...report, cache_write_tokens: 2 }, 409);
+      const legacy = await queryUsage(port, providerId, 0, Date.now());
+      assert.equal(legacy.events[0].cache_write_tokens, null);
+      assert.equal(legacy.events[0].cached_input_tokens, null);
+      assert.equal(legacy.events[0].service_tier, null);
+      await stopRuntime(runtime);
+      runtime = await startRuntime(port, persistPath);
+      assert.deepEqual(await queryUsage(port, "billing", 0, Date.now()), stored);
+    });
     await context.test("pagination excludes inserts after the initial snapshot", async function () {
       for (let index = 0; index < 7; index += 1) {
         await reportUsage(port, "pages", admittedAt + index);
@@ -308,6 +328,9 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
         { model: "" }, { model: null }, { provider_id: "Invalid" }, { legacy_day: "2026-10-04" },
         { legacy_tokens: 1 }, { legacy_day: "bad", legacy_tokens: 1 },
         { legacy_day: "2026-10-04", legacy_tokens: -1 },
+        { report_id: "" }, { report_id: null }, { report_id: "bad/identity" },
+        { cached_input_tokens: -1 }, { cache_write_tokens: 2 },
+        { cached_input_tokens: 1, cache_write_tokens: 1 }, { service_tier: 42 },
       ]) {
         await budgetRequest(port, { ...validReport, ...invalidFields }, 400);
       }
@@ -339,9 +362,19 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
       assert.equal((await check(port, "overflow")).used, Number.MAX_SAFE_INTEGER);
       assert.deepEqual((await queryUsage(port, "overflow", 0, Date.now())).events, []);
     });
+    const replayedReport = {
+      report_id: "concurrent-replay", legacy_day: new Date().toISOString().slice(0, 10),
+      legacy_tokens: 18,
+    };
+    await Promise.all(Array.from({ length: 5 }, function () {
+      return reportUsage(port, "replayed", admittedAt, replayedReport);
+    }));
     const persisted = await queryUsage(port, providerId, 0, Date.now());
     await stopRuntime(runtime);
     runtime = await startRuntime(port, persistPath);
+    await reportUsage(port, "replayed", admittedAt, replayedReport);
+    assert.equal((await queryUsage(port, "replayed", 0, Date.now())).events.length, 1);
+    assert.equal((await check(port, "replayed")).used, 18);
     assert.deepEqual(await queryUsage(port, providerId, 0, Date.now()), persisted);
     assert.equal((await check(port, providerId)).used, 511);
   } finally {
