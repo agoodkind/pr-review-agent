@@ -571,10 +571,18 @@ func formatThreadSection(
 	builder.WriteString(thread.Finding.Body)
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
+	mode := thread.Finding.Deduplication
+	if mode == "" {
+		mode = reviewrules.DeduplicateDefect
+	}
+	builder.WriteString("\nDeduplication mode: ")
+	builder.WriteString(string(mode))
 	if contextText.originalAnchorKnown {
 		builder.WriteString("\n\nOriginal finding source at the earlier commit (historical evidence):\n")
 		builder.WriteString(contextText.originalAnchor)
-		fmt.Fprintf(&builder, "\nOriginal finding source still appears verbatim in the complete current file: %t\n", contextText.originalAnchorPresent)
+		if mode != reviewrules.DeduplicateLocation {
+			fmt.Fprintf(&builder, "\nOriginal finding source still appears verbatim in the complete current file: %t\n", contextText.originalAnchorPresent)
+		}
 	} else {
 		builder.WriteString("\nOriginal finding source could not be reconstructed.\n")
 	}

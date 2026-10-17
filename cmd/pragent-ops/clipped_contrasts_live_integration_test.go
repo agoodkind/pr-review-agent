@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -77,8 +78,11 @@ func TestLiveClippedContrastsRemainBlockingAtEachLocation(t *testing.T) {
 	t.Logf("The deployed service identified both occurrences, resolved each corrected thread, approved the corrected document, and blocked a new occurrence on %s#%d.", fixture.opts.repository, fixture.opts.pullRequest)
 }
 
-func (fixture *clippedLiveFixture) await(t *testing.T, ctx context.Context, decision string, resolved map[string]bool, openCount int) reviewBodySnapshot {
+func (fixture *clippedLiveFixture) await(t *testing.T, parent context.Context, decision string, resolved map[string]bool, openCount int) reviewBodySnapshot {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 6*time.Minute)
+	defer cancel()
+	last := "The deployed review has not completed the current commit."
 	for ctx.Err() == nil {
 		if fixture.pullRequest(t, ctx).Head.SHA != fixture.head {
 			t.Fatal("The fixture head changed while waiting for the deployed review.")
@@ -104,6 +108,11 @@ func (fixture *clippedLiveFixture) await(t *testing.T, ctx context.Context, deci
 					matched = matched && want == thread.Resolved
 				}
 			}
+			next := fmt.Sprintf("The latest decision is %s with %d unresolved findings. The expected thread resolutions match: %t.", actual, open, matched && len(seen) == len(resolved))
+			if next != last {
+				t.Log(next)
+				last = next
+			}
 			if actual == decision && open == openCount && matched && len(seen) == len(resolved) {
 				return snapshot
 			}
@@ -113,7 +122,7 @@ func (fixture *clippedLiveFixture) await(t *testing.T, ctx context.Context, deci
 		case <-time.After(5 * time.Second):
 		}
 	}
-	t.Fatalf("The deployed review did not complete with decision %s and %d unresolved findings at %s.", decision, openCount, fixture.head)
+	t.Fatalf("The deployed review did not complete with decision %s and %d unresolved findings at %s within six minutes. %s", decision, openCount, fixture.head, last)
 	return reviewBodySnapshot{}
 }
 
