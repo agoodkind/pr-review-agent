@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -183,23 +184,33 @@ func budgetFailure(target provider, snapshot budgetSnapshot, cause error) error 
 	return &budgetAdmissionError{providerID: target.id, model: target.model, snapshot: snapshot, cause: cause}
 }
 
-func (client *Client) reportBudget(ctx context.Context, target provider, snapshot budgetSnapshot, usage responses.ResponseUsage) {
+func (client *Client) reportBudget(ctx context.Context, target provider, snapshot budgetSnapshot, usage responses.ResponseUsage, serviceTier string) {
 	if client.budgetURL == "" || len(client.budgetSigningKey) == 0 {
 		return
 	}
 	report := quota.ReportRequest{
-		Action: "report_usage", ProviderID: target.id, Model: target.model,
+		ReportID: rand.Text(),
+		Action:   "report_usage", ProviderID: target.id, Model: target.model,
 		AdmittedAtMS: snapshot.admittedAtMS,
-		Usage:        quota.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens}, LegacyDay: "", LegacyTokens: nil,
+		Usage: quota.Usage{
+			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens,
+			CachedInputTokens: &usage.InputTokensDetails.CachedTokens, CacheWriteTokens: &usage.InputTokensDetails.CacheWriteTokens, ServiceTier: serviceTier,
+		}, LegacyDay: "", LegacyTokens: nil,
 	}
 	if target.dailyTokenLimit > 0 {
 		tokens := budgetTokens(usage, target.dailyTokenTypes)
 		report.LegacyDay, report.LegacyTokens = snapshot.day, &tokens
 	}
-	requestContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), budgetRequestTimeout)
-	defer cancel()
-	storage := quota.NewClient(client.budgetURL, client.budgetSigningKey, client.httpClient)
-	if err := storage.Report(requestContext, report); err != nil {
-		gklog.L(ctx).WarnContext(ctx, "send model budget report failed", slog.String("err", err.Error()))
+	storage, err := quota.NewReportingClient(client.budgetURL, client.budgetSigningKey, client.httpClient, client.budgetReportPolicy)
+	if err == nil {
+		err = storage.Report(context.WithoutCancel(ctx), report)
+	}
+	if err != nil {
+		gklog.L(ctx).WarnContext(ctx, "send model budget report failed", slog.String("err", err.Error()),
+			slog.String("report_id", report.ReportID), slog.String("provider_id", target.id), slog.String("configured_model", target.model),
+			slog.Int64("admitted_at_ms", report.AdmittedAtMS), slog.Int64("input_tokens", usage.InputTokens),
+			slog.Int64("cached_input_tokens", usage.InputTokensDetails.CachedTokens),
+			slog.Int64("cache_write_tokens", usage.InputTokensDetails.CacheWriteTokens), slog.String("service_tier", serviceTier),
+			slog.Int64("output_tokens", usage.OutputTokens), slog.Int64("total_tokens", usage.TotalTokens))
 	}
 }

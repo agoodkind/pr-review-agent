@@ -80,6 +80,7 @@ type Client struct {
 	reviewPolicy            reviewrules.Policy
 	budgetURL               string
 	budgetSigningKey        []byte
+	budgetReportPolicy      quota.ReportPolicy
 	httpClient              *http.Client
 	now                     clock.Clock
 }
@@ -151,6 +152,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		reviewPolicy:            cfg.ReviewPolicy,
 		budgetURL:               "",
 		budgetSigningKey:        cfg.GitHubWebhookSecret,
+		budgetReportPolicy:      cfg.BudgetReportPolicy(),
 		httpClient:              httpClient,
 		now:                     clock.System,
 	}
@@ -453,7 +455,7 @@ func completeWith(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage),
+	report func(responses.ResponseUsage, string),
 ) (string, string, error) {
 	params, err := newResponseParams(target, prompt, policy, schemaName, schema)
 	if err != nil {
@@ -471,16 +473,19 @@ func completeWith(
 	}()
 
 	var content strings.Builder
-	responseModel := ""
-	usage := responses.ResponseUsage{}
-	hasUsage := false
+	var (
+		responseModel string
+		serviceTier   string
+		usage         responses.ResponseUsage
+		hasUsage      bool
+	)
 	completed := false
 	incompleteReason := ""
 	var streamFailure error
 	defer func() {
-		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target))
+		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target, serviceTier))
 		if hasUsage {
-			report(usage)
+			report(usage, serviceTier)
 		}
 	}()
 	for stream.Next() {
@@ -489,6 +494,7 @@ func completeWith(
 		case responseOutputTextDelta:
 			content.WriteString(event.Delta)
 		case responseCompleted, responseIncomplete, responseFailed:
+			serviceTier = string(event.Response.ServiceTier)
 			if event.Response.Model != "" {
 				responseModel = event.Response.Model
 			}
@@ -590,28 +596,23 @@ func budgetTokens(usage responses.ResponseUsage, tokenTypes []config.TokenType) 
 	return tokens
 }
 
-func modelUsage(model string, usage responses.ResponseUsage, usageReported bool, target provider) review.ModelUsage {
+func modelUsage(model string, usage responses.ResponseUsage, usageReported bool, target provider, serviceTier string) review.ModelUsage {
 	reportedRequests := 0
 	if usageReported {
 		reportedRequests = 1
 	}
-	estimatedInputCost := float64(0)
-	estimatedCachedInputCost := float64(0)
-	estimatedOutputCost := float64(0)
 	pricingModel := model
 	if pricingModel == "" {
 		pricingModel = target.model
 	}
 	pricing, pricingFound := config.FindModelPricing(target.pricingByModel, pricingModel)
-	priced := usageReported && pricingFound
-	if priced {
-		cachedTokens := usage.InputTokensDetails.CachedTokens
-		uncachedTokens := max(usage.InputTokens-cachedTokens, 0)
-		estimatedInputCost = float64(uncachedTokens) * pricing.InputPerMillionTokens / 1_000_000
-		estimatedCachedInputCost = float64(cachedTokens) * pricing.CachedInputPerMillionTokens / 1_000_000
-		estimatedOutputCost = float64(usage.OutputTokens) * pricing.OutputPerMillionTokens / 1_000_000
+	writeTokens := usage.InputTokensDetails.CacheWriteTokens
+	cost, ratesKnown := pricing.Estimate(usage.InputTokens, usage.InputTokensDetails.CachedTokens, writeTokens, usage.OutputTokens, serviceTier)
+	priced := usageReported && pricingFound && ratesKnown
+	if !priced {
+		var unknownCost config.TokenCost
+		cost = unknownCost
 	}
-	estimatedCost := estimatedInputCost + estimatedCachedInputCost + estimatedOutputCost
 	return review.ModelUsage{
 		ProviderID:                  target.id,
 		RequestedModel:              target.model,
@@ -621,6 +622,8 @@ func modelUsage(model string, usage responses.ResponseUsage, usageReported bool,
 		ReportedRequests:            reportedRequests,
 		InputTokens:                 usage.InputTokens,
 		CachedInputTokens:           usage.InputTokensDetails.CachedTokens,
+		CacheWriteTokens:            writeTokens,
+		ServiceTier:                 serviceTier,
 		AudioInputTokens:            0,
 		OutputTokens:                usage.OutputTokens,
 		ReasoningTokens:             usage.OutputTokensDetails.ReasoningTokens,
@@ -628,10 +631,11 @@ func modelUsage(model string, usage responses.ResponseUsage, usageReported bool,
 		AcceptedPredictionTokens:    0,
 		RejectedPredictionTokens:    0,
 		TotalTokens:                 usage.TotalTokens,
-		EstimatedInputCostUSD:       estimatedInputCost,
-		EstimatedCachedInputCostUSD: estimatedCachedInputCost,
-		EstimatedOutputCostUSD:      estimatedOutputCost,
-		EstimatedCostUSD:            estimatedCost,
+		EstimatedInputCostUSD:       cost.InputUSD,
+		EstimatedCachedInputCostUSD: cost.CachedInputUSD,
+		EstimatedCacheWriteCostUSD:  cost.CacheWriteUSD,
+		EstimatedOutputCostUSD:      cost.OutputUSD,
+		EstimatedCostUSD:            cost.TotalUSD(),
 	}
 }
 

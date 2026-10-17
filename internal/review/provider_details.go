@@ -14,6 +14,7 @@ type providerDetailRow struct {
 	usage    ModelUsage
 	models   []string
 	priced   int
+	tiers    []string
 }
 
 func renderProviderDetails(summary UsageSummary) string {
@@ -48,7 +49,7 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 		})
 		if index < 0 {
 			var usage ModelUsage
-			rows = append(rows, providerDetailRow{attempt: attempt, attempts: nil, usage: usage, models: nil, priced: 0})
+			rows = append(rows, providerDetailRow{attempt: attempt, attempts: nil, usage: usage, models: nil, priced: 0, tiers: nil})
 			index = len(rows) - 1
 		}
 		if attempt.Sequence > rows[index].attempt.Sequence {
@@ -65,6 +66,9 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 			addUsage(&row.usage, model)
 			if model.Priced {
 				row.priced += model.ReportedRequests
+			}
+			if model.ServiceTier != "" && !slices.Contains(row.tiers, model.ServiceTier) {
+				row.tiers = append(row.tiers, model.ServiceTier)
 			}
 			if model.Model != "" && !slices.Contains(row.models, model.Model) {
 				row.models = append(row.models, model.Model)
@@ -116,7 +120,12 @@ func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDe
 		if !attempt.OutputCapOmitted {
 			outputLimit = formatTokenCount(attempt.MaxOutputTokens)
 		}
-		return usageModelCell(string(attempt.API)) + " / " + usageModelCell(string(attempt.ReasoningEffort)) + " / " + outputLimit
+		var settings strings.Builder
+		settings.WriteString(usageModelCell(string(attempt.API)) + " / " + usageModelCell(string(attempt.ReasoningEffort)) + " / " + outputLimit)
+		for _, tier := range row.tiers {
+			settings.WriteString("<br>Reported tier " + usageModelCell(tier))
+		}
+		return settings.String()
 	case reviewrules.ProviderRequestsColumn:
 		var attempts, completed int
 		for _, outcome := range row.attempts {
@@ -130,8 +139,9 @@ func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDe
 		if row.usage.ReportedRequests == 0 {
 			return "not reported"
 		}
-		return fmt.Sprintf("Input %s<br>Cached %s<br>Output %s<br>Reasoning %s<br>Total %s<br>Usage reports %d / %d",
+		return fmt.Sprintf("Input %s<br>Cached %s<br>Cache writes %s<br>Output %s<br>Reasoning %s<br>Total %s<br>Usage reports %d / %d",
 			formatTokenCount(row.usage.InputTokens), formatTokenCount(row.usage.CachedInputTokens),
+			formatTokenCount(row.usage.CacheWriteTokens),
 			formatTokenCount(row.usage.OutputTokens), formatTokenCount(row.usage.ReasoningTokens),
 			formatTokenCount(row.usage.TotalTokens), row.usage.ReportedRequests, row.usage.Requests)
 	case reviewrules.ProviderCostColumn:

@@ -3,6 +3,7 @@ package quota
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,6 +65,7 @@ type reportResponse struct {
 
 // ReportRequest updates legacy counters with the original admission day.
 type ReportRequest struct {
+	ReportID     string `json:"report_id,omitempty"`
 	Action       string `json:"action"`
 	ProviderID   string `json:"provider_id"`
 	Model        string `json:"model"`
@@ -79,6 +81,7 @@ type Client struct {
 	signingKey    []byte
 	operatorToken string
 	httpClient    *http.Client
+	reportPolicy  ReportPolicy
 }
 
 // NewClient requires one endpoint for legacy daily checks and timestamped usage.
@@ -86,7 +89,17 @@ func NewClient(url string, signingKey []byte, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{url: url, signingKey: signingKey, operatorToken: "", httpClient: httpClient}
+	return &Client{url: url, signingKey: signingKey, operatorToken: "", httpClient: httpClient, reportPolicy: DefaultReportPolicy()}
+}
+
+// NewReportingClient rejects invalid delivery settings before sending usage.
+func NewReportingClient(endpoint string, signingKey []byte, httpClient *http.Client, policy ReportPolicy) (*Client, error) {
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	client := NewClient(endpoint, signingKey, httpClient)
+	client.reportPolicy = policy
+	return client, nil
 }
 
 // NewOperatorClient disables redirects because another origin must not receive the operator credential.
@@ -159,23 +172,64 @@ func (client *Client) Query(ctx context.Context, providerID, model string, bound
 	}
 }
 
-// Report sends no retry because storage does not deduplicate usage events.
+// Report assigns one ID to the request and reuses it across transient failures because a response may fail after storage commits.
 func (client *Client) Report(ctx context.Context, request ReportRequest) error {
+	ctx, cancelReport := context.WithTimeout(ctx, client.reportPolicy.Timeout)
+	defer cancelReport()
 	request.Action = "report_usage"
+	if request.ReportID == "" {
+		request.ReportID = rand.Text()
+	}
 	if !validUsage(request.Usage) || request.AdmittedAtMS < 0 || request.AdmittedAtMS > MaximumInteger {
 		return errors.New("usage report is outside the storage integer range")
 	}
-	var response reportResponse
-	if err := post(ctx, client, request, &response); err != nil {
-		return err
-	}
-	if !response.Reported {
-		return errors.New("accounting service did not acknowledge usage")
+	for attempt := range client.reportPolicy.Attempts {
+		var response reportResponse
+		attemptContext, cancel := context.WithTimeout(ctx, client.reportPolicy.AttemptTimeout)
+		err := post(attemptContext, client, request, &response)
+		cancel()
+		if err == nil {
+			if !response.Reported {
+				return errors.New("accounting service did not acknowledge usage")
+			}
+			return nil
+		}
+		if ctx.Err() != nil || attempt == client.reportPolicy.Attempts-1 || !retryableReportError(err) {
+			return err
+		}
 	}
 	return nil
 }
 
+type storageStatusError struct {
+	status int
+}
+
+func (err *storageStatusError) Error() string {
+	return fmt.Sprintf("accounting service returned HTTP %d", err.status)
+}
+
+func retryableReportError(err error) bool {
+	var status *storageStatusError
+	if errors.As(err, &status) {
+		return status.status == http.StatusRequestTimeout || status.status == http.StatusTooManyRequests || status.status >= http.StatusInternalServerError
+	}
+	var transport *url.Error
+	return errors.As(err, &transport) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 func validUsage(usage Usage) bool {
+	for _, count := range []*int64{usage.CachedInputTokens, usage.CacheWriteTokens} {
+		if count != nil && (*count < 0 || *count > usage.InputTokens) {
+			return false
+		}
+	}
+	if usage.CachedInputTokens != nil && usage.CacheWriteTokens != nil && *usage.CachedInputTokens > usage.InputTokens-*usage.CacheWriteTokens {
+		return false
+	}
+	if len(usage.ServiceTier) > 200 {
+		return false
+	}
 	return usage.InputTokens >= 0 && usage.InputTokens <= MaximumInteger &&
 		usage.OutputTokens >= 0 && usage.OutputTokens <= MaximumInteger &&
 		usage.TotalTokens >= 0 && usage.TotalTokens <= MaximumInteger
@@ -206,7 +260,7 @@ func post[Request QueryRequest | ReportRequest | dailyRequest, Response QueryRes
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("accounting service returned HTTP %d", response.StatusCode)
+		return &storageStatusError{status: response.StatusCode}
 	}
 	limited := io.LimitReader(response.Body, maximumResponseBytes+1)
 	data, err := io.ReadAll(limited)

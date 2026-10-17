@@ -37,7 +37,7 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-The service submits approvals without review bodies. The editable summary stores assessment details and checkpoints. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Requested changes, human dismissals, and immediate inline publication retain their existing behavior.
+The service submits approvals without review bodies. Other native review bodies append hidden recovery data after a direct link to the editable summary. The `native.summary_link` template in the prompt configuration controls the visible link and uses `SummaryURL` for its destination. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Human dismissals and immediate inline publication retain their existing behavior.
 
 An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
 
@@ -166,6 +166,8 @@ Clearing a native review body prevents later body updates through GitHub's `PUT`
 The command selects the configured bot's approvals, requests for changes, and dismissed reviews when each body contains a valid review marker and no visible text. Cleanup requires one completed bot summary covering the current head. Already-empty bodies require no update.
 
 GitHub rejects an empty body on some change-request reviews. Dismissing such a review changes its recorded decision and requires a separate operator decision; body cleanup never dismisses reviews automatically.
+
+Use `--link-summary` to prepend the configured summary permalink to each hidden-only review body. The command copies the existing hidden recovery data after the link. This mode preserves the native decision and supports change-request reviews that GitHub refuses to clear. Repeating it does not change an already-linked review.
 
 1. Select the repository, pull request number, installation ID, and matching GitHub App private-key file. Run the command from the repository root to inspect the eligible IDs and native states.
 

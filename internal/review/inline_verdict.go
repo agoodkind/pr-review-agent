@@ -99,9 +99,13 @@ func (service *Service) submitInlineBackedVerdict(
 	if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
 		return emptyReview(), err
 	}
+	body, err := service.nativeVerdictBody(ctx, job, summary)
+	if err != nil {
+		return emptyReview(), err
+	}
 	review, err := service.github.SubmitReview(ctx, job.InstallationID, job.Repository, job.Number, githubapp.SubmitReviewRequest{
 		CommitID: summary.Head,
-		Body:     nativeVerdictBody(summary),
+		Body:     body,
 		Event:    summary.Decision,
 		Comments: nil,
 	})

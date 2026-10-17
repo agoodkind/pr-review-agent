@@ -73,6 +73,7 @@ type FormattingLimits struct {
 
 // PromptData is the concrete interpolation contract for configured templates.
 type PromptData struct {
+	SummaryURL        string
 	Provider          string
 	Model             string
 	FailureClass      string
@@ -157,6 +158,9 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 			return Policy{}, err
 		}
 		compiled[name] = parsed
+	}
+	if _, exists := compiled["native.summary_link"]; !exists {
+		return Policy{}, fmt.Errorf("required prompt template %q is missing", "native.summary_link")
 	}
 	for _, name := range []string{"inline.footer", "failure.class.other", "failure.class.deadline", "failure.class.provider_unavailable", "failure.class.panic", "failure.class.daily_budget", "failure.class.usage_exceeded", "failure.class.rate_limited", "failure.dismiss", "failure.provider", "failure.service", "failure.details", "failure.row", "catalog.review", "catalog.output", "catalog.rule", "review.system", "review.input", "report.system", "report.input", "reconcile.system", "reconcile.input", "consolidate.system", "consolidate.input", "consolidate.across.input", "disputes.input", "omissions.none", "omissions.input", "omissions.decision", "pull_request.input", "structured.output", "untrusted.policy", "probe.user", "schema.finding.surface", "schema.finding.commit_sha", "schema.finding.correction_action", "schema.finding.path", "schema.finding.start_line", "schema.finding.end_line"} {
 		if _, exists := compiled[name]; !exists {

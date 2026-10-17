@@ -71,6 +71,11 @@
   },
   "SERVICE_FAILURE_VERDICT_POLICY": "dismiss_latest_block",
   "PROVIDER_BUDGET_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/provider_budget",
+  "PROVIDER_BUDGET_REPORT": {
+    "attempts": 3,
+    "attempt_timeout": "5s",
+    "timeout": "20s"
+  },
   "GITHUB_APP_ID": "4571682",
   "GITHUB_BOT_LOGIN": "goodkind-io-pr-agent[bot]",
   "LOG_FORWARD_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/service_logs",
@@ -113,6 +118,7 @@
     "gpt-5.6-luna": {
       "input_per_million_tokens": 0.20,
       "cached_input_per_million_tokens": 0.02,
+      "cache_write_per_million_tokens": 0.25,
       "output_per_million_tokens": 1.20
     },
     "openai/gpt-5.6-luna": {

@@ -1044,12 +1044,6 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	}
 }
 
-// A block names what to fix in the one top-level comment, while the verdict
-// review carries no visible prose.
-//
-// A block naming nothing to fix leaves no edit that could satisfy it, so the
-// reasons have to be visible in the existing report and inline findings. The
-// verdict review only carries the decision and hidden state.
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
@@ -1091,7 +1085,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	if strings.Contains(visible, testFindingPath) {
 		t.Fatalf("the visible verdict duplicates the inline finding location: %q", comment)
 	}
-	assertVerdictBody(t, review["body"], testDefectiveHead, true)
+	assertVerdictBody(t, fixture, review["body"], testDefectiveHead, true)
 }
 
 func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
@@ -1573,10 +1567,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	if fixture.githubState.listedFilePages() == 0 {
 		t.Fatal("full file list page fetches = 0, want the current pull request")
 	}
-	// Every verdict review states its decision. The old behavior submitted a
-	// marker-only body once a summary review existed, and that body blocked a
-	// live pull request while naming nothing to fix.
-	assertVerdictBody(t, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true)
+	assertVerdictBody(t, fixture, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -3396,9 +3387,15 @@ var summaryProse = []string{
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks that the verdict review adds no third visible comment.
-func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
+// assertVerdictBody checks the summary permalink and hidden recovery data.
+func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string, blocking bool) {
 	t.Helper()
+	if !blocking {
+		if value != nil && value != "" {
+			t.Fatalf("The approval includes native body %v.", value)
+		}
+		return
+	}
 	body, ok := value.(string)
 	if !ok {
 		t.Fatalf("body = %v, want string", value)
@@ -3406,17 +3403,25 @@ func assertVerdictBody(t *testing.T, value any, head string, blocking bool) {
 	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
 		t.Fatalf("body = %q, want the review marker for %s", body, head)
 	}
-	decision := domain.ReviewDecisionApprove
-	if blocking {
-		decision = domain.ReviewDecisionRequestChanges
+	fixture.githubState.mu.Lock()
+	commentCount := len(fixture.githubState.issueComments)
+	var commentID any
+	if commentCount == 1 {
+		commentID = fixture.githubState.issueComments[0]["id"]
 	}
-	if strings.TrimSpace(strings.Split(body, "\n")[0]) != marker.Review(domain.HeadSHA(head), decision) {
-		t.Fatalf("verdict body creates a third visible comment: %q", body)
+	fixture.githubState.mu.Unlock()
+	if commentCount != 1 || commentID == nil {
+		t.Fatalf("The native review requires one canonical summary, but the fixture contains %d comments.", commentCount)
 	}
-	for _, line := range strings.Split(body, "\n") {
+	expectedURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%v", testRepoOwner, testRepoName, testPRNumber, commentID)
+	link, checkpoint, found := strings.Cut(body, "\n\n")
+	if !found || !strings.Contains(link, "]("+expectedURL+")") {
+		t.Fatalf("The native review does not link directly to summary %s: %q", expectedURL, body)
+	}
+	for _, line := range strings.Split(checkpoint, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && (!strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->")) {
-			t.Fatalf("verdict body includes visible text: %q", line)
+			t.Fatalf("The native review repeats visible prose after its summary link: %q", line)
 		}
 	}
 	// The marker records the decision because a dismissal erases GitHub's own

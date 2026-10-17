@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
@@ -118,6 +119,7 @@ var runtimeConfigKeys = map[string]struct{}{
 	"PROVIDER_PRIORITY":              {},
 	"PROVIDER_FAILURE_POLICY":        {},
 	"PROVIDER_BUDGET_URL":            {},
+	"PROVIDER_BUDGET_REPORT":         {},
 	"SERVICE_FAILURE_APPEARANCE":     {},
 	"GITHUB_APP_ID":                  {},
 	"GITHUB_BOT_LOGIN":               {},
@@ -140,9 +142,10 @@ var runtimeConfigKeys = map[string]struct{}{
 
 // ModelPricing holds estimated US dollar rates per million tokens.
 type ModelPricing struct {
-	InputPerMillionTokens       float64 `json:"input_per_million_tokens"`
-	CachedInputPerMillionTokens float64 `json:"cached_input_per_million_tokens"`
-	OutputPerMillionTokens      float64 `json:"output_per_million_tokens"`
+	InputPerMillionTokens       float64  `json:"input_per_million_tokens"`
+	CachedInputPerMillionTokens float64  `json:"cached_input_per_million_tokens"`
+	CacheWritePerMillionTokens  *float64 `json:"cache_write_per_million_tokens,omitempty"`
+	OutputPerMillionTokens      float64  `json:"output_per_million_tokens"`
 }
 
 // Config holds validated service configuration.
@@ -157,6 +160,7 @@ type Config struct {
 	Providers             []ProviderConfig
 	ProviderFailurePolicy ProviderFailurePolicy
 	ProviderBudgetURL     *url.URL
+	ProviderBudgetReport  quota.ReportPolicy
 	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
 	// timer, is what keeps a review finishable, so these are the only limits
 	// on how much work one invocation accepts.
@@ -293,7 +297,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 			values[name] = strconv.FormatBool(value)
 			continue
 		}
-		if name == "REASSESSMENT" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
+		if name == "REASSESSMENT" || name == "PROVIDER_BUDGET_REPORT" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
 			values[name] = string(raw)
 			continue
 		}
@@ -352,8 +356,7 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.Reassessment, err = loadReassessment(lookup)
-	if err != nil {
+	if err := loadDeliveryPolicies(lookup, &cfg); err != nil {
 		return Config{}, err
 	}
 	failurePolicy, err := LoadProviderFailurePolicy(lookup)
@@ -438,6 +441,7 @@ func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
 		}
 		if rates.InputPerMillionTokens < 0 ||
 			rates.CachedInputPerMillionTokens < 0 ||
+			(rates.CacheWritePerMillionTokens != nil && *rates.CacheWritePerMillionTokens < 0) ||
 			rates.OutputPerMillionTokens < 0 {
 			return nil, errors.New("REVIEW_MODEL_PRICING token rates must not be negative")
 		}

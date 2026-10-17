@@ -20,6 +20,7 @@ func renderUsageDetails(usage UsageSummary) string {
 		{"Requests reporting usage", int64(usage.ReportedRequests)},
 		{"Input tokens", usage.InputTokens},
 		{"Cached input tokens", usage.CachedInputTokens},
+		{"Cache write tokens", usage.CacheWriteTokens},
 		{"Audio input tokens", usage.AudioInputTokens},
 		{"Output tokens", usage.OutputTokens},
 		{"Reasoning tokens", usage.ReasoningTokens},
@@ -31,11 +32,19 @@ func renderUsageDetails(usage UsageSummary) string {
 	for _, row := range rows {
 		fmt.Fprintf(&builder, "| %s | `%d` |\n", row.name, row.value)
 	}
+	if len(usage.ServiceTiers) > 0 {
+		cells := make([]string, 0, len(usage.ServiceTiers))
+		for _, tier := range usage.ServiceTiers {
+			cells = append(cells, usageModelCell(tier))
+		}
+		fmt.Fprintf(&builder, "| Reported service tiers | %s |\n", strings.Join(cells, ", "))
+	}
 	if usage.PricedRequests == 0 {
-		builder.WriteString("| Estimated input cost | unknown |\n| Estimated cached input cost | unknown |\n| Estimated output cost | unknown |\n| Estimated total cost | unknown |\n")
+		builder.WriteString("| Estimated input cost | unknown |\n| Estimated cached input cost | unknown |\n| Estimated cache write cost | unknown |\n| Estimated output cost | unknown |\n| Estimated total cost | unknown |\n")
 	} else {
 		fmt.Fprintf(&builder, "| Estimated input cost | $%.8f |\n", usage.EstimatedInputCostUSD)
 		fmt.Fprintf(&builder, "| Estimated cached input cost | $%.8f |\n", usage.EstimatedCachedInputCostUSD)
+		fmt.Fprintf(&builder, "| Estimated cache write cost | %s |\n", cacheWriteCostCell(usage))
 		fmt.Fprintf(&builder, "| Estimated output cost | $%.8f |\n", usage.EstimatedOutputCostUSD)
 		fmt.Fprintf(&builder, "| Estimated total cost | $%.8f |\n", usage.EstimatedCostUSD)
 	}
@@ -58,6 +67,15 @@ func renderUsageDetails(usage UsageSummary) string {
 		}
 	}
 	return builder.String()
+}
+
+func cacheWriteCostCell(usage UsageSummary) string {
+	for _, model := range usage.Models {
+		if !model.Priced && model.CacheWriteTokens > 0 {
+			return "unknown"
+		}
+	}
+	return fmt.Sprintf("$%.8f", usage.EstimatedCacheWriteCostUSD)
 }
 
 func usageModelCell(model string) string {
