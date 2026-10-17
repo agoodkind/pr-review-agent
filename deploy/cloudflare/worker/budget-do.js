@@ -9,6 +9,7 @@ import usageQuery from "./budget-query.sql";
 const MAXIMUM_PAGE_SIZE = 500;
 
 class UsageOverflowError extends Error {}
+class UsageConflictError extends Error {}
 
 function isNonnegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
@@ -75,6 +76,11 @@ export class ProviderBudget extends DurableObject {
       legacy_day: legacyDay, legacy_tokens: legacyTokens } = payload;
     const hasLegacyDay = Object.hasOwn(payload, "legacy_day");
     const hasLegacyTokens = Object.hasOwn(payload, "legacy_tokens");
+    const reportId = payload.report_id;
+    if (reportId !== undefined && (typeof reportId !== "string" ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(reportId))) {
+      return new Response("invalid report identity", { status: 400 });
+    }
     if (!isNonnegativeInteger(admittedAt) || !isNonnegativeInteger(inputTokens) ||
         !isNonnegativeInteger(outputTokens) || !isNonnegativeInteger(totalTokens) ||
         hasLegacyDay !== hasLegacyTokens || (hasLegacyDay &&
@@ -84,6 +90,18 @@ export class ProviderBudget extends DurableObject {
     }
     try {
       await this.ctx.storage.transaction(async (transaction) => {
+        const reportKey = `usage_report:${reportId}`;
+        const fingerprint = JSON.stringify([providerId, model, admittedAt,
+          inputTokens, outputTokens, totalTokens, legacyDay, legacyTokens]);
+        if (reportId !== undefined) {
+          const previous = await transaction.get(reportKey);
+          if (previous !== undefined) {
+            if (previous !== fingerprint) {
+              throw new UsageConflictError("report identity already contains different usage");
+            }
+            return;
+          }
+        }
         this.ctx.storage.sql.exec(usageHistory, providerId, Date.now()).toArray();
         if (hasLegacyDay) {
           await migrateLegacyUsage(transaction, legacyDay, providerId, model);
@@ -96,11 +114,19 @@ export class ProviderBudget extends DurableObject {
         }
         this.ctx.storage.sql.exec(usageReport, providerId, model, admittedAt,
           inputTokens, outputTokens, totalTokens);
+        if (reportId !== undefined) {
+          await transaction.put(reportKey, fingerprint);
+        }
       });
     } catch (error) {
       if (error instanceof UsageOverflowError) {
         return new Response(error.message, { status: 400 });
       }
+      if (error instanceof UsageConflictError) {
+        return new Response(error.message, { status: 409 });
+      }
+      console.error(JSON.stringify({ message: "model usage storage failed",
+        report_id: reportId, provider_id: providerId, model, error: String(error) }));
       throw error;
     }
     return Response.json({ reported: true });

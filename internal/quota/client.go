@@ -3,6 +3,7 @@ package quota
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/telemetry"
@@ -19,6 +21,8 @@ import (
 const (
 	maximumResponseBytes = 256 * 1024
 	maximumPageSize      = 500
+	reportAttempts       = 3
+	reportAttemptTimeout = 5 * time.Second
 )
 
 // QueryRequest uses endpoint flags to distinguish rolling and fixed boundaries.
@@ -64,6 +68,7 @@ type reportResponse struct {
 
 // ReportRequest updates legacy counters with the original admission day.
 type ReportRequest struct {
+	ReportID     string `json:"report_id,omitempty"`
 	Action       string `json:"action"`
 	ProviderID   string `json:"provider_id"`
 	Model        string `json:"model"`
@@ -159,20 +164,48 @@ func (client *Client) Query(ctx context.Context, providerID, model string, bound
 	}
 }
 
-// Report sends no retry because storage does not deduplicate usage events.
+// Report retains one identity across transient failures because the response may fail after storage commits.
 func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 	request.Action = "report_usage"
+	if request.ReportID == "" {
+		request.ReportID = rand.Text()
+	}
 	if !validUsage(request.Usage) || request.AdmittedAtMS < 0 || request.AdmittedAtMS > MaximumInteger {
 		return errors.New("usage report is outside the storage integer range")
 	}
-	var response reportResponse
-	if err := post(ctx, client, request, &response); err != nil {
-		return err
-	}
-	if !response.Reported {
-		return errors.New("accounting service did not acknowledge usage")
+	for attempt := range reportAttempts {
+		var response reportResponse
+		attemptContext, cancel := context.WithTimeout(ctx, reportAttemptTimeout)
+		err := post(attemptContext, client, request, &response)
+		cancel()
+		if err == nil {
+			if !response.Reported {
+				return errors.New("accounting service did not acknowledge usage")
+			}
+			return nil
+		}
+		if ctx.Err() != nil || attempt == reportAttempts-1 || !retryableReportError(err) {
+			return err
+		}
 	}
 	return nil
+}
+
+type storageStatusError struct {
+	status int
+}
+
+func (err *storageStatusError) Error() string {
+	return fmt.Sprintf("accounting service returned HTTP %d", err.status)
+}
+
+func retryableReportError(err error) bool {
+	var status *storageStatusError
+	if errors.As(err, &status) {
+		return status.status == http.StatusRequestTimeout || status.status == http.StatusTooManyRequests || status.status >= http.StatusInternalServerError
+	}
+	var transport *url.Error
+	return errors.As(err, &transport) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func validUsage(usage Usage) bool {
@@ -206,7 +239,7 @@ func post[Request QueryRequest | ReportRequest | dailyRequest, Response QueryRes
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("accounting service returned HTTP %d", response.StatusCode)
+		return &storageStatusError{status: response.StatusCode}
 	}
 	limited := io.LimitReader(response.Body, maximumResponseBytes+1)
 	data, err := io.ReadAll(limited)

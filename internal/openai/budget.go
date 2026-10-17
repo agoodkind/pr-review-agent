@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,7 +189,8 @@ func (client *Client) reportBudget(ctx context.Context, target provider, snapsho
 		return
 	}
 	report := quota.ReportRequest{
-		Action: "report_usage", ProviderID: target.id, Model: target.model,
+		ReportID: rand.Text(),
+		Action:   "report_usage", ProviderID: target.id, Model: target.model,
 		AdmittedAtMS: snapshot.admittedAtMS,
 		Usage:        quota.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens}, LegacyDay: "", LegacyTokens: nil,
 	}
@@ -196,10 +198,13 @@ func (client *Client) reportBudget(ctx context.Context, target provider, snapsho
 		tokens := budgetTokens(usage, target.dailyTokenTypes)
 		report.LegacyDay, report.LegacyTokens = snapshot.day, &tokens
 	}
-	requestContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), budgetRequestTimeout)
+	requestContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 4*budgetRequestTimeout)
 	defer cancel()
 	storage := quota.NewClient(client.budgetURL, client.budgetSigningKey, client.httpClient)
 	if err := storage.Report(requestContext, report); err != nil {
-		gklog.L(ctx).WarnContext(ctx, "send model budget report failed", slog.String("err", err.Error()))
+		gklog.L(ctx).WarnContext(ctx, "send model budget report failed", slog.String("err", err.Error()),
+			slog.String("report_id", report.ReportID), slog.String("provider_id", target.id), slog.String("configured_model", target.model),
+			slog.Int64("admitted_at_ms", report.AdmittedAtMS), slog.Int64("input_tokens", usage.InputTokens),
+			slog.Int64("output_tokens", usage.OutputTokens), slog.Int64("total_tokens", usage.TotalTokens))
 	}
 }
