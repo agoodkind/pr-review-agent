@@ -184,7 +184,7 @@ func budgetFailure(target provider, snapshot budgetSnapshot, cause error) error 
 	return &budgetAdmissionError{providerID: target.id, model: target.model, snapshot: snapshot, cause: cause}
 }
 
-func (client *Client) reportBudget(ctx context.Context, target provider, snapshot budgetSnapshot, usage responses.ResponseUsage, serviceTier string) {
+func (client *Client) reportBudget(ctx context.Context, target provider, snapshot budgetSnapshot, usage responses.ResponseUsage, serviceTier string, sdkUsage *quota.SDKUsage) {
 	if client.budgetURL == "" || len(client.budgetSigningKey) == 0 {
 		return
 	}
@@ -195,6 +195,7 @@ func (client *Client) reportBudget(ctx context.Context, target provider, snapsho
 		Usage: quota.Usage{
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, TotalTokens: usage.TotalTokens,
 			CachedInputTokens: &usage.InputTokensDetails.CachedTokens, CacheWriteTokens: &usage.InputTokensDetails.CacheWriteTokens, ServiceTier: serviceTier,
+			SDKUsage: sdkUsage,
 		}, LegacyDay: "", LegacyTokens: nil,
 	}
 	if target.dailyTokenLimit > 0 {
@@ -211,6 +212,7 @@ func (client *Client) reportBudget(ctx context.Context, target provider, snapsho
 			slog.Int64("admitted_at_ms", report.AdmittedAtMS), slog.Int64("input_tokens", usage.InputTokens),
 			slog.Int64("cached_input_tokens", usage.InputTokensDetails.CachedTokens),
 			slog.Int64("cache_write_tokens", usage.InputTokensDetails.CacheWriteTokens), slog.String("service_tier", serviceTier),
+			slog.Any("sdk_usage", sdkUsage),
 			slog.Int64("output_tokens", usage.OutputTokens), slog.Int64("total_tokens", usage.TotalTokens))
 	}
 }

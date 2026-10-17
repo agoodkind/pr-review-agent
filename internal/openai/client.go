@@ -455,7 +455,7 @@ func completeWith(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage, string),
+	report usageReporter,
 ) (string, string, error) {
 	params, err := newResponseParams(target, prompt, policy, schemaName, schema)
 	if err != nil {
@@ -478,6 +478,7 @@ func completeWith(
 		serviceTier   string
 		usage         responses.ResponseUsage
 		hasUsage      bool
+		sdkUsage      *quota.SDKUsage
 	)
 	completed := false
 	incompleteReason := ""
@@ -485,7 +486,7 @@ func completeWith(
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target, serviceTier))
 		if hasUsage {
-			report(usage, serviceTier)
+			report(usage, serviceTier, sdkUsage)
 		}
 	}()
 	for stream.Next() {
@@ -501,6 +502,10 @@ func completeWith(
 			if event.Response.JSON.Usage.Valid() {
 				usage = event.Response.Usage
 				hasUsage = true
+				sdkUsage = &quota.SDKUsage{
+					API: string(target.api), Model: responseModel, ResponseID: event.Response.ID,
+					UsageJSON: event.Response.Usage.RawJSON(),
+				}
 			}
 			switch responseTerminalEventType(event.Type) {
 			case terminalCompleted:

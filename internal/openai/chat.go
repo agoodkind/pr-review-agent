@@ -10,6 +10,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
+	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
@@ -20,7 +21,7 @@ func completeChat(
 	policy string,
 	schemaName string,
 	schema json.RawMessage,
-	report func(responses.ResponseUsage, string),
+	report usageReporter,
 ) (string, string, error) {
 	params := openaigo.ChatCompletionNewParams{
 		Model:           target.model,
@@ -50,6 +51,7 @@ func completeChat(
 	model := ""
 	serviceTier := ""
 	usage := openaigo.CompletionUsage{}
+	var sdkUsage *quota.SDKUsage
 	hasUsage := false
 	finished := false
 	finishReason := ""
@@ -62,7 +64,7 @@ func completeChat(
 		result.RejectedPredictionTokens = usage.CompletionTokensDetails.RejectedPredictionTokens
 		review.RecordModelUsage(ctx, result)
 		if hasUsage {
-			report(converted, serviceTier)
+			report(converted, serviceTier, sdkUsage)
 		}
 	}()
 	for stream.Next() {
@@ -76,6 +78,10 @@ func completeChat(
 		if chunk.JSON.Usage.Valid() {
 			usage = chunk.Usage
 			hasUsage = true
+			sdkUsage = &quota.SDKUsage{
+				API: string(target.api), Model: model, ResponseID: chunk.ID,
+				UsageJSON: chunk.Usage.RawJSON(),
+			}
 		}
 		for _, choice := range chunk.Choices {
 			content.WriteString(choice.Delta.Content)
