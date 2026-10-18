@@ -210,7 +210,7 @@ func (operation *deployment) execute(ctx context.Context) error {
 	if err := operation.upload(ctx, "deploy-candidate", operation.options.ServiceWrangler, operation.service, false); err != nil {
 		return err
 	}
-	if err := operation.registerDeploymentToken(ctx, operation.slot.Name); err != nil {
+	if err := operation.registerDeploymentToken(ctx, operation.slot); err != nil {
 		return err
 	}
 	if _, err := operation.drainRequest(ctx, operation.slot.Origin, "restart"); err != nil {

@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+var errDeploymentCredentialInactive = errors.New("candidate deployment credential is not active (HTTP 401)")
+
 type drainStatus struct {
 	ContainerRunning *bool `json:"container_running"`
 	AdmissionClosed  *bool `json:"admission_closed"`
@@ -23,7 +25,7 @@ type drainStatus struct {
 	Outstanding      *int  `json:"outstanding"`
 }
 
-func (operation *deployment) registerDeploymentToken(ctx context.Context, script string) error {
+func (operation *deployment) registerDeploymentToken(ctx context.Context, slot DeploymentSlot) error {
 	digest := sha256.Sum256([]byte(operation.client.token))
 	body, err := json.Marshal(struct {
 		Name string `json:"name"`
@@ -33,7 +35,7 @@ func (operation *deployment) registerDeploymentToken(ctx context.Context, script
 	if err != nil {
 		return errors.New("deployment token digest could not be encoded")
 	}
-	response, _, err := operation.client.request(ctx, http.MethodPut, "/accounts/"+operation.account+"/workers/scripts/"+script+"/secrets", body)
+	response, _, err := operation.client.request(ctx, http.MethodPut, "/accounts/"+operation.account+"/workers/scripts/"+slot.Name+"/secrets", body)
 	if err != nil {
 		return err
 	}
@@ -44,7 +46,30 @@ func (operation *deployment) registerDeploymentToken(ctx context.Context, script
 	if json.Unmarshal(response.Result, &binding) != nil || binding.Name != "DEPLOYMENT_TOKEN_SHA256" || binding.Type != "secret_text" {
 		return errors.New("cloudflare did not acknowledge the deployment digest binding")
 	}
-	return nil
+	return operation.waitDeploymentCredential(ctx, slot)
+}
+
+func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot DeploymentSlot) error {
+	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
+	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		_, err := operation.drainRequest(ctx, slot.Origin, "status")
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errDeploymentCredentialInactive) {
+			return err
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errDeploymentCredentialInactive
+		case <-timer.C:
+		}
+	}
 }
 
 func (operation *deployment) drainRequest(ctx context.Context, origin, action string) (drainStatus, error) {
@@ -67,6 +92,9 @@ func (operation *deployment) drainRequest(ctx context.Context, origin, action st
 		return status, fmt.Errorf("candidate drain transport failed: %w", err)
 	}
 	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusUnauthorized {
+		return status, errDeploymentCredentialInactive
+	}
 	if response.StatusCode != http.StatusOK {
 		return status, fmt.Errorf("candidate drain returned HTTP %d", response.StatusCode)
 	}
@@ -92,7 +120,7 @@ func (operation *deployment) drainRequest(ctx context.Context, origin, action st
 }
 
 func (operation *deployment) beginDrain(ctx context.Context, slot DeploymentSlot) (drainStatus, error) {
-	if err := operation.registerDeploymentToken(ctx, slot.Name); err != nil {
+	if err := operation.registerDeploymentToken(ctx, slot); err != nil {
 		return drainStatus{}, err
 	}
 	return operation.drainRequest(ctx, slot.Origin, "begin")

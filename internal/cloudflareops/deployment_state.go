@@ -85,7 +85,7 @@ func (settings workerSettings) selection(configuration DeploymentConfiguration) 
 		}
 		return deploymentSelection{Mode: "legacy", Service: ""}, nil
 	}
-	if mode.Text != "service" || !serviceExists || service.Type != "service" || service.Entrypoint != "ReviewService" || service.Environment != "" {
+	if mode.Text != "service" || !serviceExists || service.Type != "service" || service.Entrypoint != "ReviewService" || !defaultServiceEnvironment(service.Environment) {
 		return deploymentSelection{}, errors.New("deployed review service selection is invalid")
 	}
 	for _, slot := range configuration.Slots {
@@ -107,10 +107,14 @@ func inactiveSlot(configuration DeploymentConfiguration, selection deploymentSel
 
 func candidateOwnedByGateway(settings workerSettings, gateway string) error {
 	binding, exists := settings.binding("RUNTIME_CONFIGURATION")
-	if !exists || binding.Type != "service" || binding.Service != gateway || binding.Entrypoint != "RuntimeConfiguration" || binding.Environment != "" {
+	if !exists || binding.Type != "service" || binding.Service != gateway || binding.Entrypoint != "RuntimeConfiguration" || !defaultServiceEnvironment(binding.Environment) {
 		return errors.New("existing candidate Worker does not bind the expected gateway RuntimeConfiguration; refusing to overwrite it")
 	}
 	return nil
+}
+
+func defaultServiceEnvironment(environment string) bool {
+	return environment == "" || environment == "production"
 }
 
 func preserveBindings(before, after workerSettings) error {

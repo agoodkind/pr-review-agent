@@ -51,21 +51,23 @@ type testBindingMetadata struct {
 	ClassName   string            `json:"class_name,omitempty"`
 	Service     string            `json:"service,omitempty"`
 	Entrypoint  string            `json:"entrypoint,omitempty"`
+	Environment string            `json:"environment,omitempty"`
 	ValueSHA256 string            `json:"value_sha256,omitempty"`
 }
 
 // DeploymentTestResult records actual Cloudflare resources and readiness evidence.
 type DeploymentTestResult struct {
-	Gateway           string                 `json:"gateway"`
-	Slots             []DeploymentSlot       `json:"slots"`
-	Directory         string                 `json:"directory"`
-	Before            testDeploymentSnapshot `json:"before"`
-	AfterFailure      testDeploymentSnapshot `json:"after_failure"`
-	AfterPromotion    testDeploymentSnapshot `json:"after_promotion"`
-	Samples           int                    `json:"samples"`
-	FailedSamples     int                    `json:"failed_samples"`
-	CleanupComplete   bool                   `json:"cleanup_complete"`
-	CredentialRevoked bool                   `json:"credential_revoked"`
+	Gateway                   string                 `json:"gateway"`
+	Slots                     []DeploymentSlot       `json:"slots"`
+	Directory                 string                 `json:"directory"`
+	Before                    testDeploymentSnapshot `json:"before"`
+	AfterFailure              testDeploymentSnapshot `json:"after_failure"`
+	AfterPromotion            testDeploymentSnapshot `json:"after_promotion"`
+	Samples                   int                    `json:"samples"`
+	FailedSamples             int                    `json:"failed_samples"`
+	CleanupComplete           bool                   `json:"cleanup_complete"`
+	CredentialRevoked         bool                   `json:"credential_revoked"`
+	RejectedCandidateRevision string                 `json:"rejected_candidate_revision,omitempty"`
 }
 
 // MarshalJSON writes resource identifiers and generated test configuration privately.
@@ -150,6 +152,10 @@ func (operation *deployment) runTestDeploymentCases(ctx context.Context, options
 	deploymentOptions.Directory = filepath.Join(operation.directory, "mismatched-candidate")
 	deploymentOptions.Revision = strings.Repeat("0", 40)
 	result.Samples, result.FailedSamples, err = operation.testRejectedCandidate(ctx, deploymentOptions, options.BaselineRevision)
+	if err != nil {
+		return err
+	}
+	result.RejectedCandidateRevision, err = operation.probe(ctx, operation.configuration.Slots[0].Origin, options.Deployment.Revision)
 	if err != nil {
 		return err
 	}
@@ -276,7 +282,7 @@ func (operation *deployment) testSnapshot(ctx context.Context) (testDeploymentSn
 			digest := sha256.Sum256([]byte(binding.Text))
 			valueDigest = hex.EncodeToString(digest[:])
 		}
-		snapshot.Bindings[binding.Name] = testBindingMetadata{Type: binding.Type, NamespaceID: binding.NamespaceID, ClassName: binding.ClassName, Service: binding.Service, Entrypoint: binding.Entrypoint, ValueSHA256: valueDigest}
+		snapshot.Bindings[binding.Name] = testBindingMetadata{Type: binding.Type, NamespaceID: binding.NamespaceID, ClassName: binding.ClassName, Service: binding.Service, Entrypoint: binding.Entrypoint, Environment: binding.Environment, ValueSHA256: valueDigest}
 	}
 	snapshot.Revision, err = operation.probe(ctx, operation.configuration.GatewayOrigin, "")
 	if err != nil {
@@ -416,6 +422,9 @@ func (operation *deployment) testRejectedCandidate(ctx context.Context, options 
 	_, deploymentError := Deploy(ctx, options)
 	cancel()
 	samples := <-results
+	if samples.count == 0 {
+		return 0, 0, errors.New("availability proof did not measure any responses")
+	}
 	if samples.err != nil && !errors.Is(samples.err, context.Canceled) {
 		return samples.count, samples.failed, samples.err
 	}
