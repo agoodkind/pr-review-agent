@@ -84,14 +84,14 @@ async function startWorkers(configurations, port, evidence, credentials, phase) 
   return stop;
 }
 
-async function assertHealthy(origin) {
+async function assertHealthy(origin, expectedRevision) {
   const deadline = Date.now() + 120000;
   let lastStatus;
   while (Date.now() < deadline) {
     const response = await fetch(origin + "/", { signal: AbortSignal.timeout(120000) });
     lastStatus = response.status;
     if (response.status === 200) {
-      assert.match(response.headers.get("X-Pr-Agent-Revision") ?? "", /^[0-9a-f]{7,40}$/);
+      assert.equal(response.headers.get("X-Pr-Agent-Revision"), expectedRevision);
       assert.deepEqual(await response.json(), { status: "ok" });
       return response.headers.get("X-Pr-Agent-Revision");
     }
@@ -152,7 +152,7 @@ test("native service bindings use the production review container and restrict c
         assert.equal(stopped.status, 200);
         assert.deepEqual(await stopped.json(), { container_running: false });
       }
-      const revision = await assertHealthy(origin);
+      const revision = await assertHealthy(origin, expectedRevision);
       if (mode === "idle") {
         const deadline = Date.now() + 20000;
         let stopped = false;
@@ -171,7 +171,7 @@ test("native service bindings use the production review container and restrict c
           await new Promise(function (resolve) { setTimeout(resolve, 250); });
         }
         assert.equal(stopped, true, "atomic idle admission did not stop the empty service");
-        await assertHealthy(origin);
+        await assertHealthy(origin, expectedRevision);
         proof.phases.push({ mode, revision });
         continue;
       }
@@ -187,7 +187,7 @@ test("native service bindings use the production review container and restrict c
         assert.equal(unavailable.status, 503);
         await unavailable.body?.cancel();
         assert.deepEqual(await control("restart"), { container_running: false });
-        await assertHealthy(origin);
+        await assertHealthy(origin, expectedRevision);
         assert.deepEqual(await control("status"), open);
       }
       const body = "{}";
@@ -206,7 +206,7 @@ test("native service bindings use the production review container and restrict c
           headers: { "X-Hub-Signature-256": recoverySignature, "X-Github-Event": "pull_request", "X-Github-Delivery": randomUUID() } });
         assert.equal(interrupted.status, 200);
         assert.deepEqual(await interrupted.json(), { status: "interrupted for recovery test" });
-        await assertHealthy(origin);
+        await assertHealthy(origin, expectedRevision);
       }
       const rpcAttempt = await fetch(origin + "/getConfiguration", { headers: { "X-RPC-Method": "getConfiguration" } });
       assert.equal(rpcAttempt.status, 404);
@@ -260,7 +260,7 @@ test("native service bindings use the production review container and restrict c
         body: JSON.stringify({ action: "status", expected_revision: expectedRevision }) });
       assert.equal(unauthorized.status, 401);
       await unauthorized.body?.cancel();
-      await assertHealthy(origin);
+      await assertHealthy(origin, expectedRevision);
       const before = await stateWhen(expectedRevision, function (state) { return !state.handoff; });
       assert.equal(before.previous_container_running, true);
       assert.equal(before.complete, false);
@@ -290,7 +290,7 @@ test("native service bindings use the production review container and restrict c
       await interrupted.body?.cancel();
       gateway.vars.REVIEW_HANDOFF_REVISION = expectedRevision;
       await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
-      await assertHealthy(origin);
+      await assertHealthy(origin, expectedRevision);
       const settledDeadline = Date.now() + 120000;
       while (!stop.readOutput().split("\n").some(function (line) {
         return line.includes("webhook review settled") && line.includes(deliveryId);
@@ -301,6 +301,7 @@ test("native service bindings use the production review container and restrict c
         return line.includes("webhook review settled") && line.includes(deliveryId);
       }), "retained delivery did not complete the interrupted handoff without controller advance");
       const complete = await stateWhen(expectedRevision, function (state) { return state.complete; });
+      assert.equal(complete.candidate_revision, expectedRevision);
       assert.equal(complete.previous_container_running, false);
       gateway.vars.REVIEW_HANDOFF = "false";
       await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
@@ -313,7 +314,7 @@ test("native service bindings use the production review container and restrict c
       gateway.vars.REVIEW_HANDOFF = "true";
       await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
       await stateWhen(expectedRevision, function (state) { return state.complete; });
-      await assertHealthy(origin);
+      await assertHealthy(origin, expectedRevision);
       proof.phases.push({ mode: source + "-handoff", revision: expectedRevision, replaySettled: true, sourceFenced: true });
     } finally {
       await stop();

@@ -394,7 +394,7 @@ func writeReviewEventError(writer http.ResponseWriter, err error) {
 
 func (handler *handler) writeReadiness(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("X-Pr-Agent-Revision", version.Commit)
+	writer.Header().Set("X-Pr-Agent-Revision", version.SourceRevision())
 	if handler.dispatcher.Status().AdmissionClosed {
 		http.Error(writer, "review admission closed", http.StatusServiceUnavailable)
 		return

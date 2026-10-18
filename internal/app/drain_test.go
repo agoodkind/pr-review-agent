@@ -105,7 +105,7 @@ func TestDrainClosesAdmissionThroughRunningApplication(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = response.Body.Close()
-		if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("X-Pr-Agent-Revision") != version.Commit {
+		if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("X-Pr-Agent-Revision") != version.SourceRevision() {
 			t.Fatalf("drained health = %d revision %q", response.StatusCode, response.Header.Get("X-Pr-Agent-Revision"))
 		}
 	}

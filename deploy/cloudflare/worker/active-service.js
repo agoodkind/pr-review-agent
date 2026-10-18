@@ -31,8 +31,7 @@ function activeReviewService(env) {
 
 function revisionMatches(env, response) {
   const revision = response.headers.get("X-Pr-Agent-Revision") ?? "";
-  return response.status === 200 && /^[0-9a-f]{7,40}$/.test(revision) &&
-    env.REVIEW_HANDOFF_REVISION.startsWith(revision);
+  return response.status === 200 && revision === env.REVIEW_HANDOFF_REVISION;
 }
 
 async function handoffState(env, advance) {

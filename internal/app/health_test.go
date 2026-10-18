@@ -42,7 +42,7 @@ func TestHealthProbeChecksRunningServiceRevision(t *testing.T) {
 		}
 	})
 	origin := fmt.Sprintf("http://127.0.0.1:%d", port)
-	for _, expected := range []string{"", version.Commit, "ffffffffffffffffffffffffffffffffffffffff"} {
+	for _, expected := range []string{"", version.SourceRevision(), "ffffffffffffffffffffffffffffffffffffffff"} {
 		command := exec.CommandContext(t.Context(), "../../deploy/cloudflare/scripts/probe-health.sh")
 		command.Env = append(os.Environ(), "HEALTH_URL="+origin+"/", "EXPECTED_REVISION="+expected,
 			"MAX_ATTEMPTS=10", "RETRY_DELAY_SECONDS=0.1")
@@ -68,7 +68,7 @@ func TestHealthProbeChecksRunningServiceRevision(t *testing.T) {
 			t.Fatal(err)
 		}
 		revisions, present := response.Header[http.CanonicalHeaderKey("X-Pr-Agent-Revision")]
-		if response.StatusCode != http.StatusOK || !present || len(revisions) != 1 || revisions[0] != version.Commit {
+		if response.StatusCode != http.StatusOK || !present || len(revisions) != 1 || revisions[0] != version.SourceRevision() {
 			t.Fatalf("health response did not identify the running build: status=%d revision=%q", response.StatusCode, revisions)
 		}
 	}
