@@ -4,6 +4,7 @@ import runtime from "../../../runtime.json" with { type: "json" };
 
 import { createPrAgentEnvironment } from "./configuration.js";
 import { ProviderBudget } from "./budget-do.js";
+import { ensureUsageMaintenance } from "./budget.js";
 import { containerLifecycleEvent, containerStoppedEvent } from "./lifecycle.js";
 import { WebhookReplayQueue } from "./replay.js";
 import { routeRequest } from "./router.js";
@@ -43,4 +44,9 @@ export class PrAgentContainer extends Container {
 
 }
 
-export default { fetch: routeRequest, scheduled: scheduledReassessment };
+function scheduled(controller, env, context) {
+  scheduledReassessment(controller, env, context);
+  context.waitUntil(ensureUsageMaintenance(env));
+}
+
+export default { fetch: routeRequest, scheduled };

@@ -42,6 +42,8 @@ The Cloudflare quota store records admission timestamps and reported input, outp
 
 The store writes each complete SDK usage object as JSON text with its API, reported model, and response identifier. OpenAI adapters call SDK `RawJSON`, which returns unknown fields and explicit nulls while leaving omitted fields absent. Gemini adapters serialize the final cumulative SDK usage metadata; the Gemini SDK cannot expose unknown wire fields or distinguish an omitted scalar from zero. Each report counts the final cumulative snapshot once. The Worker writes and reads the supplied JSON text without changing its numbers.
 
+The SQL history stores the complete SDK object once. Duplicate detection stores a SHA-256 digest of that object. A bounded background scan converts existing duplicate SDK objects into digests without changing SQL history. The scan stops after migration completes when retention cleanup is disabled.
+
 `PROVIDER_USAGE_MAX_BYTES` bounds each complete report request, and `PROVIDER_USAGE_PAGE_BYTES` bounds each encoded history page. The page budget must exceed the report budget and fit the Go client's response limit. The client reads successive pages with the original sequence snapshot; native usage details do not change the canonical quota counters.
 
 Existing daily counters remain authoritative for legacy daily quotas. The daily totals do not contain timestamps or token-category splits and are not converted into invented events. Timestamped collection begins when the quota store receives its first query or report for a provider. Diagnostics identify the measured history boundary when it does not cover the requested span.
@@ -49,3 +51,19 @@ Existing daily counters remain authoritative for legacy daily quotas. The daily 
 The app's quota is independent of provider API or subscription limits. An app denial, provider quota refusal, or provider rate limit can select the next configured fallback without repeating the refused request. The `daily_budget` failure-appearance key applies to app quota denials for every window mode. The `rate_limited` key applies to provider throttling.
 
 The [OpenAI rate-limit calculation](https://developers.openai.com/api/docs/guides/rate-limits) uses the larger of the output limit and a prompt-size estimate for admission.
+
+## Retention
+
+`PROVIDER_USAGE_RETENTION` configures storage cleanup independently of token limits.
+
+| Field | Meaning |
+| --- | --- |
+| `max_age` | Elapsed duration of retained usage history. `0s` disables deletion. |
+| `cleanup_interval` | Positive elapsed duration between background cleanup batches. |
+| `batch_size` | Maximum records processed per SQL or key prefix scan in each batch, from 1 through 10000. |
+
+Cleanup retains at least the longest configured rolling or fixed quota duration and the current legacy daily accounting window. A configured cron quota requires disabled retention cleanup because the Worker does not calculate calendar reset boundaries.
+
+Each batch removes expired event rows, cache and service-tier details, native SDK records, duplicate-detection records, and old legacy counters. A persistent admission-time boundary rejects later reports for removed history with HTTP 410. Disabling cleanup afterward does not remove that boundary or restore deleted records. History queries report the retained-history boundary, and the Go client rejects a history boundary change during pagination.
+
+An enabled cleanup schedule processes a bounded batch at each interval. A backlog can retain records beyond their configured age until subsequent batches remove them. Database allocation can remain larger than retained payloads after deletion because SQLite reuses freed pages.

@@ -27,14 +27,18 @@ async function unusedPort() {
   return port;
 }
 
-async function startRuntime(port, persistPath) {
+async function startRuntime(port, persistPath, retention) {
   const wrangler = path.join(cloudflareDirectory, "node_modules/.bin/wrangler");
   const operatorDigest = createHash("sha256").update("test-operator-token").digest("hex");
-  const child = spawn(wrangler, [
+  const arguments_ = [
     "dev", "--config", "test/budget.wrangler.jsonc", "--local",
     "--port", String(port), "--inspector-port", "0", "--persist-to", persistPath,
     "--var", `OPERATOR_TOKEN_SHA256:${operatorDigest}`,
-  ], { cwd: cloudflareDirectory, stdio: ["ignore", "pipe", "pipe"] });
+  ];
+  if (retention !== undefined) {
+    arguments_.push("--var", `PROVIDER_USAGE_RETENTION:${JSON.stringify(retention)}`);
+  }
+  const child = spawn(wrangler, arguments_, { cwd: cloudflareDirectory, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   try {
     await new Promise(function (resolve, reject) {
@@ -125,6 +129,72 @@ async function operatorRequest(port, body, expectedStatus = 200, authorization =
     return response.json();
   }
 }
+
+test("retention preserves disabled history and removes expired reports without permitting replay", async function () {
+  const persistPath = await mkdtemp(path.join(os.tmpdir(), "pr-agent-retention-"));
+  const port = await unusedPort();
+  const oldAdmission = Date.now() - 72 * 3600000;
+  const recentAdmission = Date.now() - 3600000;
+  const sdk = { api: "responses", usage_json: '{"input_tokens":11,"future":null}' };
+  const disabled = { max_age: "0s", cleanup_interval: "100ms", batch_size: 1 };
+  const stats = () => operatorRequest(port, JSON.stringify({ action: "storage_stats" }));
+  async function until(predicate) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const result = await stats();
+      if (predicate(result)) {
+        return result;
+      }
+      await new Promise(function (resolve) { setTimeout(resolve, 50); });
+    }
+    assert.fail("usage maintenance did not complete");
+  }
+  let runtime;
+  try {
+    runtime = await startRuntime(port, persistPath, disabled);
+    const daily = await check(port, providerId);
+    const oldDay = new Date(oldAdmission).toISOString().slice(0, 10);
+    await reportUsage(port, providerId, oldAdmission, { report_id: "old-sdk", sdk_usage: sdk,
+      legacy_day: oldDay, legacy_tokens: 18 });
+    await reportUsage(port, providerId, oldAdmission + 1, { report_id: "old-second" });
+    await reportUsage(port, providerId, recentAdmission, { report_id: "retained-sdk", sdk_usage: sdk,
+      legacy_day: daily.day, legacy_tokens: 18 });
+    const before = await until(function (result) { return result.retention.sdk_migration_complete && result.retention.next_maintenance_ms === null; });
+    assert.equal(before.events, 3);
+    assert.equal(before.sdk_records, 2);
+    assert.equal(before.retention.cutoff_ms, 0);
+    assert.ok(before.database_bytes > 0);
+    await stopRuntime(runtime);
+    runtime = await startRuntime(port, persistPath, { ...disabled, max_age: "1h" });
+    const after = await until(function (result) { return result.events === 1 && result.sdk_records === 1; });
+    assert.equal(after.details, 1);
+    assert.equal(after.sdk_payload_bytes, Buffer.byteLength(JSON.stringify(sdk)));
+    assert.equal(after.retention.configured_max_age_ms, 3600000);
+    assert.equal(after.retention.effective_max_age_ms, 86400000);
+    assert.equal(after.retention.enabled, true);
+    assert.ok(after.retention.cutoff_ms > oldAdmission && after.retention.cutoff_ms < recentAdmission);
+    const retained = await queryUsage(port, providerId, 0, Date.now());
+    assert.equal(retained.events.length, 1);
+    assert.deepEqual(retained.events[0].sdk_usage, sdk);
+    assert.ok(retained.history_start_ms >= after.retention.cutoff_ms);
+    const expired = { action: "report_usage", provider_id: providerId, model: modelId,
+      admitted_at_ms: oldAdmission, input_tokens: 11, output_tokens: 7, total_tokens: 20,
+      report_id: "old-sdk", sdk_usage: sdk, legacy_day: oldDay, legacy_tokens: 18 };
+    await budgetRequest(port, expired, 410);
+    await reportUsage(port, providerId, recentAdmission, { report_id: "retained-sdk", sdk_usage: sdk,
+      legacy_day: daily.day, legacy_tokens: 18 });
+    assert.equal((await check(port, providerId)).used, 18);
+    await budgetRequest(port, { provider_id: providerId, model: modelId, day: oldDay, tokens: 18 }, 410);
+    await stopRuntime(runtime);
+    runtime = await startRuntime(port, persistPath, disabled);
+    await budgetRequest(port, expired, 410);
+    assert.equal((await queryUsage(port, providerId, 0, Date.now())).events.length, 1);
+    await operatorRequest(port, JSON.stringify({ action: "storage_stats", tokens: 1 }), 403);
+  } finally {
+    await stopRuntime(runtime);
+    await rm(persistPath, { recursive: true, force: true });
+  }
+});
 
 test("operator authentication reads actual counters and rejects usage writes", async function () {
   const persistPath = await mkdtemp(path.join(os.tmpdir(), "pr-agent-operator-"));

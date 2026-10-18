@@ -28,6 +28,9 @@ const USAGE_READ_FIELDS = new Set([
 ]);
 
 function operatorCanRead(payload) {
+  if (payload.action === "storage_stats") {
+    return Object.keys(payload).length === 1;
+  }
   const fields = Object.hasOwn(payload, "action") ? USAGE_READ_FIELDS : DAILY_READ_FIELDS;
   if (Object.hasOwn(payload, "action") && payload.action !== "query_usage") {
     return false;
@@ -60,7 +63,7 @@ export async function handleProviderBudget(request, env, verifySignature) {
       return new Response("operator token permits counter reads only", { status: 403 });
     }
     if (Object.hasOwn(payload, "action")) {
-      if (payload.action !== "query_usage" && payload.action !== "report_usage") {
+      if (payload.action !== "query_usage" && payload.action !== "report_usage" && payload.action !== "storage_stats") {
         return new Response("invalid budget action", { status: 400 });
       }
       pathname = `/${payload.action}`;
@@ -74,4 +77,11 @@ export async function handleProviderBudget(request, env, verifySignature) {
     method: "POST",
     body,
   }));
+}
+
+export async function ensureUsageMaintenance(env) {
+  const response = await env.PROVIDER_BUDGET.getByName("provider-budgets").fetch(new Request("https://budget/ensure_maintenance", { method: "POST" }));
+  if (!response.ok) {
+    throw new Error("usage storage maintenance initialization failed");
+  }
 }
