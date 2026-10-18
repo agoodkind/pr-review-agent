@@ -250,7 +250,7 @@ func metrics(opts options, output io.Writer) error {
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		if _, err := fmt.Fprintln(stdout, "pragent-ops deploy --preflight --token-file PATH"); err != nil {
+		if _, err := fmt.Fprintln(stdout, "pragent-ops deploy --preflight --token-file PATH\npragent-ops deployment-test --help"); err != nil {
 			return err
 		}
 		_, err := fmt.Fprintln(stdout, "pragent-ops storage --runtime runtime.json --operator-token-file PATH\npragent-ops stats --since 24h --account-token-file PATH\npragent-ops logs --since 7d --account-token-file PATH\npragent-ops metrics --input CAPTURE/events.ndjson\npragent-ops counters --runtime runtime.json --operator-token-file PATH\npragent-ops operator-token --account-token-file PATH\npragent-ops probe --provider ID --credential-file PATH\npragent-ops prose-eval --dataset testdata/prose-eval.json --provider ID --credential-file PATH\npragent-ops review-bodies --repository OWNER/REPO --pull-request NUMBER --installation-id ID --app-private-key-file PATH\npragent-ops review-details --repository OWNER/REPO --pull-request NUMBER --installation-id ID --summary-comment-id ID --source-check-run-id ID --app-private-key-file PATH\nEach subcommand accepts --help. Raw telemetry is saved only in private files.")
@@ -299,7 +299,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	case metricsCommand:
 		return metrics(opts, stdout)
 	default:
-		return errors.New("command must be deploy, stats, storage, logs, metrics, counters, operator-token, probe, prose-eval, review-bodies, or review-details")
+		return errors.New("command must be deploy, deployment-test, stats, storage, logs, metrics, counters, operator-token, probe, prose-eval, review-bodies, or review-details")
 	}
 }
 
