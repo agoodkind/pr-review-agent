@@ -69,6 +69,7 @@ type deployment struct {
 	activeRevision  string
 	candidateExists bool
 	handoff         deploymentHandoff
+	environment     []string
 }
 
 // Deploy preserves the selected application while it validates an independent candidate.
@@ -137,7 +138,7 @@ func prepareDeployment(options DeploymentOptions) (*deployment, error) {
 			return nil, errors.New("candidate Worker name must differ from gateway name")
 		}
 	}
-	return &deployment{client: nil, options: options, configuration: configuration, gateway: gateway, service: service, account: account, name: name, before: workerSettings{Bindings: nil}, selection: deploymentSelection{Mode: "", Service: ""}, slot: DeploymentSlot{Name: "", Origin: ""}, directory: "", activeRevision: "", candidateExists: false, handoff: deploymentHandoff{Enabled: false, Revision: "", Service: ""}, healthClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &deployment{client: nil, options: options, configuration: configuration, gateway: gateway, service: service, account: account, name: name, before: workerSettings{Bindings: nil}, selection: deploymentSelection{Mode: "", Service: ""}, slot: DeploymentSlot{Name: "", Origin: ""}, directory: "", activeRevision: "", candidateExists: false, handoff: deploymentHandoff{Enabled: false, Revision: "", Service: ""}, environment: os.Environ(), healthClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func (operation *deployment) preflight(ctx context.Context) error {
@@ -292,7 +293,7 @@ func (operation *deployment) upload(ctx context.Context, stage, template string,
 	}
 	command := exec.CommandContext(ctx, "node", args...)
 	command.Dir = directory
-	command.Env = deploymentEnvironment(operation.client.token, operation.account, operation.directory)
+	command.Env = deploymentEnvironment(operation.environment, operation.client.token, operation.account, operation.directory)
 	command.Stdout, command.Stderr = log, log
 	if err := command.Run(); err != nil {
 		slog.WarnContext(ctx, "Deployment stage failed", "stage", stage, "log", log.Name())
@@ -301,9 +302,9 @@ func (operation *deployment) upload(ctx context.Context, stage, template string,
 	return nil
 }
 
-func deploymentEnvironment(token, account, directory string) []string {
+func deploymentEnvironment(inherited []string, token, account, directory string) []string {
 	environment := make([]string, 0)
-	for _, entry := range os.Environ() {
+	for _, entry := range inherited {
 		if strings.HasPrefix(entry, "CLOUDFLARE_") || strings.HasPrefix(entry, "WRANGLER_") {
 			continue
 		}
@@ -345,7 +346,7 @@ func (operation *deployment) waitCandidate(ctx context.Context) error {
 			slog.WarnContext(ctx, "Active gateway readiness failed during warmup")
 			return fmt.Errorf("active gateway failed during candidate warmup: %w", err)
 		}
-		_, lastError = operation.probe(ctx, operation.slot.Origin, operation.options.Revision)
+		lastError = operation.probeExactRevision(ctx, operation.slot.Origin, operation.options.Revision)
 		if lastError == nil {
 			return nil
 		}
@@ -358,4 +359,15 @@ func (operation *deployment) waitCandidate(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
+}
+
+func (operation *deployment) probeExactRevision(ctx context.Context, origin, revision string) error {
+	actual, err := operation.probe(ctx, origin, revision)
+	if err != nil {
+		return err
+	}
+	if actual != revision {
+		return fmt.Errorf("health revision %q does not equal expected full revision %s", actual, revision)
+	}
+	return nil
 }

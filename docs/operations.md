@@ -259,7 +259,7 @@ The script requires Python 3 and OpenSSL. Add `--status` to inspect the installa
 
 The Worker stores each signed GitHub delivery before forwarding the delivery to the container. The Durable Object retains the delivery until the service confirms that the review has finished or the event requires no review. The replay alarm retries pending deliveries after a container interruption.
 
-1. Confirm that the routed service answers `GET /` with HTTP `200` and the expected `X-Pr-Agent-Revision`. The gateway handles `GET /health` without checking the review application.
+1. Confirm that the routed service answers `GET /` with HTTP `200` and the expected `X-Pr-Agent-Revision`. The gateway answers `GET /health` without checking the review application.
 2. Compare the deployed Worker version and container image digest with the release record.
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
@@ -270,10 +270,11 @@ Use the [isolated deployment harness](../deploy/cloudflare/scripts/test-deployme
 node deploy/cloudflare/scripts/test-deployment.mjs \
     --account-token-file /path/to/cloudflare-account-token \
     --baseline-run BASELINE_RUN_ID --baseline-revision BASELINE_COMMIT \
+    --baseline-worker-revision PRIOR_WORKER_COMMIT \
     --candidate-run CANDIDATE_RUN_ID --candidate-revision CANDIDATE_COMMIT
 ```
 
-Select distinct full commits and their completed CI packaging runs. Authenticate `gh` with package publication permission and start Docker before running the harness. The command prints its private evidence directory after successful cleanup and credential revocation. Preserve that directory if a check fails.
+Select distinct full application commits and their completed CI packaging runs. Select the prior Worker commit for the initial gateway. The harness uploads the current committed Worker during deployment and checks the transition from the prior Durable Object implementation. The default candidate timeout permits Cloudflare's deferred code update; use `--candidate-timeout` to change the elapsed limit. Authenticate `gh` with package publication permission and start Docker before running the harness. The command prints its private evidence directory after successful cleanup and credential revocation. Preserve that directory if a check fails.
 
 Test discussion webhooks against the deployed service:
 

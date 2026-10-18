@@ -22,6 +22,7 @@ func deploymentTest(ctx context.Context, args []string, stdout, stderr io.Writer
 	set.StringVar(&options.Deployment.Revision, "revision", "", "Actual full candidate commit.")
 	set.StringVar(&options.BaselineImage, "baseline-image", "", "Actual isolated baseline image digest.")
 	set.StringVar(&options.BaselineRevision, "baseline-revision", "", "Actual full baseline commit.")
+	set.StringVar(&options.BaselineWrangler, "baseline-wrangler", "", "Prepared actual prior Worker configuration for isolated bootstrap.")
 	set.StringVar(&options.Deployment.TokenFile, "token-file", "", "Existing deployment credential file.")
 	set.StringVar(&options.Deployment.AccountTokenFile, "account-token-file", "", "Account token file for temporary scoped deployment permission.")
 	set.DurationVar(&options.Deployment.CredentialTTL, "credential-ttl", 90*time.Minute, "Temporary deployment credential expiration.")

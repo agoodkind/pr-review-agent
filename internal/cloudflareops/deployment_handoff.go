@@ -89,7 +89,7 @@ func (operation *deployment) startHandoff(ctx context.Context) error {
 
 func (operation *deployment) resumeHandoff(ctx context.Context) error {
 	slog.InfoContext(ctx, "Persisted handoff resume started", "candidate", operation.handoff.Service, "revision", operation.handoff.Revision)
-	if _, err := operation.probe(ctx, operation.slot.Origin, operation.handoff.Revision); err != nil {
+	if err := operation.probeExactRevision(ctx, operation.slot.Origin, operation.handoff.Revision); err != nil {
 		return err
 	}
 	if err := operation.writeDeploymentToken(ctx, operation.name); err != nil {
@@ -144,7 +144,7 @@ func (operation *deployment) finishHandoff(ctx context.Context) error {
 	if err := preserveBindings(operation.before, settings); err != nil {
 		return err
 	}
-	if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, revision); err != nil {
+	if err := operation.probeExactRevision(ctx, operation.configuration.GatewayOrigin, revision); err != nil {
 		return err
 	}
 	return nil
@@ -186,7 +186,7 @@ func (operation *deployment) gatewayHandoffControl(ctx context.Context, action, 
 	if status.Handoff == nil || status.CandidateReady == nil || status.PreviousContainerRunning == nil || status.Complete == nil {
 		return status, errors.New("gateway handoff control omitted required state")
 	}
-	if *status.Complete && (!*status.Handoff || !*status.CandidateReady || *status.PreviousContainerRunning || !reportedRevisionPattern.MatchString(status.CandidateRevision) || !strings.HasPrefix(revision, status.CandidateRevision)) {
+	if *status.Complete && (!*status.Handoff || !*status.CandidateReady || *status.PreviousContainerRunning || status.CandidateRevision != revision) {
 		return status, errors.New("gateway handoff completion does not prove candidate readiness and stopped previous process")
 	}
 	return status, nil

@@ -28,6 +28,7 @@ type DeploymentTestOptions struct {
 	Deployment       DeploymentOptions
 	BaselineImage    string
 	BaselineRevision string
+	BaselineWrangler string
 }
 
 type testContainerApplication struct {
@@ -149,7 +150,7 @@ func TestDeployment(ctx context.Context, options DeploymentTestOptions) (result 
 
 func (operation *deployment) runTestDeploymentCases(ctx context.Context, options DeploymentTestOptions, result *DeploymentTestResult) (returnErr error) {
 	slog.InfoContext(ctx, "Isolated legacy bootstrap started", "gateway", operation.name)
-	if err := operation.bootstrapTestGateway(ctx, options.BaselineImage, options.BaselineRevision); err != nil {
+	if err := operation.bootstrapTestGateway(ctx, options.BaselineWrangler, options.BaselineImage, options.BaselineRevision); err != nil {
 		return err
 	}
 	var err error
@@ -254,7 +255,7 @@ func (operation *deployment) testSecondSlot(ctx context.Context, options Deploym
 	if err != nil {
 		return err
 	}
-	result.StoppedPreviousRunning = *state.ContainerRunning
+	result.StoppedPreviousRunning = state.containerRunning()
 	if result.StoppedPreviousRunning {
 		return errors.New("delayed source health request restarted the stopped previous application")
 	}
@@ -300,9 +301,19 @@ func (operation *deployment) requireFreshTestWorkers(ctx context.Context) error 
 	return nil
 }
 
-func (operation *deployment) bootstrapTestGateway(ctx context.Context, image, revision string) error {
+func (operation *deployment) bootstrapTestGateway(ctx context.Context, template, image, revision string) error {
+	configuration, err := readWrangler(template)
+	if err != nil {
+		return err
+	}
+	if configuration.stringField("name") != operation.name || configuration.stringField("account_id") != operation.account {
+		return errors.New("baseline Worker must use the registered isolated gateway identity")
+	}
+	if err := validateTestBaselineBindings(configuration); err != nil {
+		return err
+	}
 	var containers []map[string]json.RawMessage
-	if json.Unmarshal(operation.gateway["containers"], &containers) != nil || len(containers) != 1 {
+	if json.Unmarshal(configuration["containers"], &containers) != nil || len(containers) != 1 {
 		return errors.New("test gateway requires one legacy container")
 	}
 	encoded, err := json.Marshal(map[string]string{"PR_REVIEW_AGENT_IMAGE": image})
@@ -310,13 +321,49 @@ func (operation *deployment) bootstrapTestGateway(ctx context.Context, image, re
 		return errors.New("baseline image could not be encoded")
 	}
 	containers[0]["image_vars"] = encoded
-	if err := setWranglerValue(operation.gateway, "containers", containers); err != nil {
+	if err := setWranglerValue(wranglerConfiguration(containers[0]), "name", operation.name); err != nil {
 		return err
 	}
-	if err := operation.upload(ctx, "bootstrap-legacy", operation.options.Wrangler, operation.gateway, false); err != nil {
+	if err := setWranglerValue(configuration, "containers", containers); err != nil {
+		return err
+	}
+	if err := operation.upload(ctx, "bootstrap-legacy", template, configuration, false); err != nil {
 		return err
 	}
 	return operation.waitTestGateway(ctx, revision)
+}
+
+func validateTestBaselineBindings(configuration wranglerConfiguration) error {
+	var durable struct {
+		Bindings []map[string]json.RawMessage `json:"bindings"`
+	}
+	if json.Unmarshal(configuration["durable_objects"], &durable) != nil || len(durable.Bindings) == 0 {
+		return errors.New("baseline Worker requires local Durable Object bindings")
+	}
+	fields := map[string]bool{"name": true, "class_name": true}
+	for _, binding := range durable.Bindings {
+		for field := range binding {
+			if !fields[field] {
+				return errors.New("baseline Durable Object bindings must reference local classes without external namespace or script fields")
+			}
+		}
+	}
+	var migrations []map[string]json.RawMessage
+	if json.Unmarshal(configuration["migrations"], &migrations) != nil || len(migrations) == 0 {
+		return errors.New("baseline Worker requires fresh local SQLite migrations")
+	}
+	for _, migration := range migrations {
+		for field := range migration {
+			if field != "tag" && field != "new_sqlite_classes" {
+				return errors.New("baseline migrations must create only local SQLite classes")
+			}
+		}
+	}
+	var services []serviceBinding
+	if raw, exists := configuration["services"]; exists && (json.Unmarshal(raw, &services) != nil || len(services) > 0) {
+		return errors.New("baseline Worker must not reference external services")
+	}
+	return nil
 }
 
 func (operation *deployment) waitTestGateway(ctx context.Context, revision string) error {

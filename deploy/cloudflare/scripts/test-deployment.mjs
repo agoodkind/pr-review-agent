@@ -12,16 +12,20 @@ import { prepareServiceTestbed } from "./service-testbed.mjs";
 const execute = promisify(execFile);
 const sourceDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = path.resolve(sourceDirectory, "../..");
+const workerChanges = await execute("git", ["status", "--porcelain", "--", "deploy/cloudflare/worker", "deploy/cloudflare/service"], { cwd: repository });
+if (workerChanges.stdout.trim() !== "") throw new Error("Commit Worker source changes before running the isolated deployment proof");
 const { values } = parseArgs({ options: {
   "account-token-file": { type: "string" },
   "baseline-run": { type: "string" }, "baseline-revision": { type: "string" },
+  "baseline-worker-revision": { type: "string" },
   "candidate-run": { type: "string" }, "candidate-revision": { type: "string" },
   "output-dir": { type: "string" },
+  "candidate-timeout": { type: "string", default: "6m" },
 } });
-for (const name of ["account-token-file", "baseline-run", "baseline-revision", "candidate-run", "candidate-revision"]) {
+for (const name of ["account-token-file", "baseline-run", "baseline-revision", "baseline-worker-revision", "candidate-run", "candidate-revision"]) {
   if (!values[name]) throw new Error(`Missing --${name}`);
 }
-for (const name of ["baseline-revision", "candidate-revision"]) {
+for (const name of ["baseline-revision", "baseline-worker-revision", "candidate-revision"]) {
   if (!/^[a-f0-9]{40}$/.test(values[name])) throw new Error(`Invalid --${name}`);
 }
 for (const name of ["baseline-run", "candidate-run"]) {
@@ -35,12 +39,20 @@ const gatewayName = prefix + "-gateway";
 const slotNames = [prefix + "-service-a", prefix + "-service-b"];
 const sourceGateway = JSON.parse(await fs.readFile(path.join(sourceDirectory, "wrangler.jsonc"), "utf8"));
 const sourceDeployment = JSON.parse(await fs.readFile(path.join(sourceDirectory, "deployment.json"), "utf8"));
+const sourcePackage = JSON.parse(await fs.readFile(path.join(sourceDirectory, "package.json"), "utf8"));
+const priorPackage = JSON.parse((await execute("git", ["show", values["baseline-worker-revision"] + ":deploy/cloudflare/package.json"], { cwd: repository })).stdout);
+if (sourcePackage.dependencies["@cloudflare/containers"] !== priorPackage.dependencies["@cloudflare/containers"]) {
+  throw new Error("The prior Worker requires a different Container SDK version");
+}
 const hostname = new URL(sourceDeployment.gateway_origin).hostname;
 const workersDomain = hostname.slice(hostname.indexOf(".") + 1);
 if (!workersDomain.endsWith(".workers.dev")) throw new Error("Expected a configured workers.dev subdomain");
 const gatewayOrigin = `https://${gatewayName}.${workersDomain}`;
+const sourceCommit = (await execute("git", ["rev-parse", "HEAD"], { cwd: repository })).stdout.trim();
 await writeJSON(path.join(directory, "resources.json"), { prefix, account: sourceGateway.account_id,
-  gateway: gatewayName, slots: slotNames, gateway_origin: gatewayOrigin });
+  gateway: gatewayName, slots: slotNames, gateway_origin: gatewayOrigin,
+  baseline_worker_revision: values["baseline-worker-revision"], candidate_worker_revision: sourceCommit,
+  container_sdk: sourcePackage.dependencies["@cloudflare/containers"] });
 
 async function writeJSON(filename, value) {
   await fs.writeFile(filename, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
@@ -131,12 +143,22 @@ const deploymentDirectory = path.join(fixture.repository, "deploy", "cloudflare"
 const gatewayPath = path.join(deploymentDirectory, "gateway.json");
 const servicePath = path.join(deploymentDirectory, "service.json");
 const deploymentPath = path.join(deploymentDirectory, "deployment.json");
+const baselineGatewayPath = path.join(deploymentDirectory, "baseline-gateway.json");
+const priorSource = path.join(directory, "prior-source");
+await fs.mkdir(priorSource, { mode: 0o700 });
+await run("prior-worker-source", "git", ["archive", "--format=tar", "--output=" + path.join(priorSource, "worker.tar"), values["baseline-worker-revision"], "deploy/cloudflare/worker"]);
+await run("prior-worker-extract", "tar", ["-xf", path.join(priorSource, "worker.tar"), "-C", priorSource]);
+await fs.cp(path.join(priorSource, "deploy/cloudflare/worker"), path.join(deploymentDirectory, "prior-worker"), { recursive: true });
+const baselineGateway = structuredClone(fixture.gateway);
+baselineGateway.main = path.join(deploymentDirectory, "prior-worker/index.js");
+await writeJSON(baselineGatewayPath, baselineGateway);
 await writeJSON(gatewayPath, fixture.gateway);
 await writeJSON(servicePath, fixture.service);
 await writeJSON(deploymentPath, { gateway_origin: gatewayOrigin,
   slots: slotNames.map(function (name) { return { name, origin: `https://${name}.${workersDomain}` }; }),
-  candidate_timeout: "3m", probe_interval: "2s" });
+  candidate_timeout: values["candidate-timeout"], probe_interval: "2s" });
 await run("cloudflare-test", "go", ["run", "./cmd/pragent-ops", "deployment-test", "--wrangler", gatewayPath,
+  "--baseline-wrangler", baselineGatewayPath,
   "--service-wrangler", servicePath, "--deployment", deploymentPath, "--baseline-image", baselineImage,
   "--baseline-revision", baseline.revision, "--image", candidateImage, "--revision", candidate.revision,
   "--account-token-file", values["account-token-file"], "--output-dir", path.join(directory, "cloudflare")]);
