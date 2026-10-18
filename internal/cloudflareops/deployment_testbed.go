@@ -114,7 +114,7 @@ func TestDeployment(ctx context.Context, options DeploymentTestOptions) (result 
 		return result, err
 	}
 	result.Gateway, result.Slots, result.Directory = operation.name, operation.configuration.Slots, operation.directory
-	credentials, err := AcquireCredentials(ctx, CredentialOptions{TokenFile: options.Deployment.TokenFile, AccountTokenFile: options.Deployment.AccountTokenFile, Account: operation.account, TTL: options.Deployment.CredentialTTL, APIURL: APIURL, PermissionName: "", PermissionNames: []string{"Workers Scripts Write", "Workers Containers Write"}})
+	credentials, err := AcquireCredentials(ctx, CredentialOptions{TokenFile: options.Deployment.TokenFile, AccountTokenFile: options.Deployment.AccountTokenFile, Account: operation.account, TTL: options.Deployment.CredentialTTL, APIURL: APIURL, PermissionNames: []string{"Workers Scripts Write", "Workers Containers Write"}})
 	if err != nil {
 		return result, err
 	}

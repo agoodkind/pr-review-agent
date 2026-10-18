@@ -89,7 +89,7 @@ func (operation *deployment) startHandoff(ctx context.Context) error {
 
 func (operation *deployment) resumeHandoff(ctx context.Context) error {
 	slog.InfoContext(ctx, "Persisted handoff resume started", "candidate", operation.handoff.Service, "revision", operation.handoff.Revision)
-	if err := operation.probeExactRevision(ctx, operation.slot.Origin, operation.handoff.Revision); err != nil {
+	if _, err := operation.probe(ctx, operation.slot.Origin, operation.handoff.Revision); err != nil {
 		return err
 	}
 	if err := operation.writeDeploymentToken(ctx, operation.name); err != nil {
@@ -144,7 +144,7 @@ func (operation *deployment) finishHandoff(ctx context.Context) error {
 	if err := preserveBindings(operation.before, settings); err != nil {
 		return err
 	}
-	if err := operation.probeExactRevision(ctx, operation.configuration.GatewayOrigin, revision); err != nil {
+	if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, revision); err != nil {
 		return err
 	}
 	return nil

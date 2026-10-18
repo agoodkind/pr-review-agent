@@ -176,7 +176,6 @@ type CredentialOptions struct {
 	Account          string
 	TTL              time.Duration
 	APIURL           string
-	PermissionName   string
 	PermissionNames  []string
 }
 
@@ -287,10 +286,7 @@ func AcquireCredentials(ctx context.Context, options CredentialOptions) (credent
 func (client *Client) tokenBody(ctx context.Context, options CredentialOptions) ([]byte, error) {
 	names := options.PermissionNames
 	if len(names) == 0 {
-		names = []string{options.PermissionName}
-	}
-	if len(options.PermissionNames) > 0 && options.PermissionName != "" {
-		return nil, errors.New("select PermissionName or PermissionNames, not both")
+		names = []string{""}
 	}
 	permissions := make([]permissionGroup, 0, len(names))
 	seen := make(map[string]bool)

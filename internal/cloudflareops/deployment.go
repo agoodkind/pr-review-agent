@@ -82,7 +82,7 @@ func Deploy(ctx context.Context, options DeploymentOptions) (_ DeploymentResult,
 	if options.Preflight {
 		permissions = []string{"Workers Scripts Read"}
 	}
-	credentials, err := AcquireCredentials(ctx, CredentialOptions{TokenFile: options.TokenFile, AccountTokenFile: options.AccountTokenFile, Account: operation.account, TTL: options.CredentialTTL, APIURL: APIURL, PermissionName: "", PermissionNames: permissions})
+	credentials, err := AcquireCredentials(ctx, CredentialOptions{TokenFile: options.TokenFile, AccountTokenFile: options.AccountTokenFile, Account: operation.account, TTL: options.CredentialTTL, APIURL: APIURL, PermissionNames: permissions})
 	if err != nil {
 		return DeploymentResult{}, err
 	}
@@ -329,7 +329,7 @@ func (operation *deployment) probe(ctx context.Context, origin, revision string)
 	if response.StatusCode != http.StatusOK {
 		return actual, fmt.Errorf("health returned HTTP %d", response.StatusCode)
 	}
-	if revision != "" && (!reportedRevisionPattern.MatchString(actual) || !strings.HasPrefix(revision, actual)) {
+	if revision != "" && actual != revision {
 		return actual, fmt.Errorf("health revision %q does not match expected revision %s", actual, revision)
 	}
 	return actual, nil
@@ -346,7 +346,7 @@ func (operation *deployment) waitCandidate(ctx context.Context) error {
 			slog.WarnContext(ctx, "Active gateway readiness failed during warmup")
 			return fmt.Errorf("active gateway failed during candidate warmup: %w", err)
 		}
-		lastError = operation.probeExactRevision(ctx, operation.slot.Origin, operation.options.Revision)
+		_, lastError = operation.probe(ctx, operation.slot.Origin, operation.options.Revision)
 		if lastError == nil {
 			return nil
 		}
@@ -359,15 +359,4 @@ func (operation *deployment) waitCandidate(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
-}
-
-func (operation *deployment) probeExactRevision(ctx context.Context, origin, revision string) error {
-	actual, err := operation.probe(ctx, origin, revision)
-	if err != nil {
-		return err
-	}
-	if actual != revision {
-		return fmt.Errorf("health revision %q does not equal expected full revision %s", actual, revision)
-	}
-	return nil
 }

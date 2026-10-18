@@ -46,7 +46,7 @@ func registerOperator(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	credentials, err := cloudflareops.AcquireCredentials(ctx, cloudflareops.CredentialOptions{
 		TokenFile: opts.tokenFile, AccountTokenFile: opts.accountTokenFile,
-		Account: opts.account, TTL: 15 * time.Minute, PermissionName: "Workers Scripts Write",
+		Account: opts.account, TTL: 15 * time.Minute, PermissionNames: []string{"Workers Scripts Write"},
 	})
 	if err != nil {
 		return err
