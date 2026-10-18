@@ -9,7 +9,7 @@ import usageDetails from "./budget-details.sql";
 import usageSDK from "./budget-sdk.sql";
 import storageStats from "./budget-storage-stats.sql";
 import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
-import { maintainUsageStorage, normalizeSDKFingerprint, sdkFingerprint } from "./budget-retention.js";
+import { dayMilliseconds, maintainUsageStorage, normalizeSDKFingerprint, sdkFingerprint } from "./budget-retention.js";
 
 const MAXIMUM_PAGE_SIZE = 500;
 
@@ -62,7 +62,6 @@ async function migrateLegacyUsage(transaction, day, providerId, model) {
 }
 
 const durationUnits = { ns: 0.000001, us: 0.001, ms: 1, s: 1000, m: 60000, h: 3600000 };
-const dayMilliseconds = 86400000;
 
 function durationMilliseconds(value, name, allowZero = false) {
   if (typeof value !== "string" || !/^(\d+(?:\.\d+)?(?:ns|us|ms|s|m|h))+$/.test(value)) {
@@ -231,7 +230,7 @@ export class ProviderBudget extends DurableObject {
     try {
       await this.ctx.storage.transaction(async (transaction) => {
         const cutoff = (await transaction.get("usage_retention_cutoff_ms")) ?? 0;
-        if (admittedAt < cutoff || (hasLegacyDay && Date.parse(legacyDay + "T00:00:00Z") + 86400000 <= cutoff)) {
+        if (admittedAt < cutoff || (hasLegacyDay && Date.parse(legacyDay + "T00:00:00Z") + dayMilliseconds <= cutoff)) {
           throw new UsageExpiredError("usage report predates retained history; do not replay expired usage");
         }
         const reportKey = `usage_report:${reportId}`;
@@ -364,7 +363,7 @@ export class ProviderBudget extends DurableObject {
     const key = budgetKey("reported_tokens", reportedDay, providerId, model);
     const accepted = await this.ctx.storage.transaction(async function (transaction) {
       const cutoff = (await transaction.get("usage_retention_cutoff_ms")) ?? 0;
-      if (Date.parse(reportedDay + "T00:00:00Z") + 86400000 <= cutoff) {
+      if (Date.parse(reportedDay + "T00:00:00Z") + dayMilliseconds <= cutoff) {
         return false;
       }
       await migrateLegacyUsage(transaction, reportedDay, providerId, model);

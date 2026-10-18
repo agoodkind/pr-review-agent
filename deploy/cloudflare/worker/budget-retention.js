@@ -3,7 +3,7 @@ import retentionSDK from "./budget-retention-sdk.sql";
 import retentionDetails from "./budget-retention-details.sql";
 import retentionEvent from "./budget-retention-event.sql";
 
-const dayMilliseconds = 86400000;
+export const dayMilliseconds = 86400000;
 
 export async function sdkFingerprint(serialized) {
   if (serialized === "null") {
