@@ -68,6 +68,7 @@ func TestDrainClosesAdmissionThroughRunningApplication(t *testing.T) {
 		{`{"action":"begin"}`, false, http.StatusUnauthorized, false},
 		{`{"action":"status"}`, true, http.StatusOK, false},
 		{`{"action":"invalid"}`, true, http.StatusBadRequest, false},
+		{`{"action":"idle"}`, true, http.StatusOK, true},
 		{`{"action":"begin"}`, true, http.StatusOK, true},
 		{`{"action":"begin"}`, true, http.StatusOK, true},
 		{`{"action":"status"}`, true, http.StatusOK, true},

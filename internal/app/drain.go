@@ -27,13 +27,16 @@ func (handler *handler) handleDrain(writer http.ResponseWriter, request *http.Re
 	var payload struct {
 		Action string `json:"action"`
 	}
-	if json.Unmarshal(body, &payload) != nil || (payload.Action != "begin" && payload.Action != "status") {
+	if json.Unmarshal(body, &payload) != nil || (payload.Action != "begin" && payload.Action != "status" && payload.Action != "idle") {
 		http.Error(writer, "invalid drain action", http.StatusBadRequest)
 		return
 	}
 	status := handler.dispatcher.Status()
 	if payload.Action == "begin" {
 		status = handler.dispatcher.StopAdmission()
+	}
+	if payload.Action == "idle" {
+		status = handler.dispatcher.StopAdmissionIfIdle()
 	}
 	writer.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(writer).Encode(status); err != nil {

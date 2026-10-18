@@ -56,6 +56,20 @@ func (dispatcher *Dispatcher) statusLocked() Status {
 func (dispatcher *Dispatcher) StopAdmission() Status {
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+	return dispatcher.stopAdmissionLocked()
+}
+
+// StopAdmissionIfIdle closes admission only when accepted work has finished.
+func (dispatcher *Dispatcher) StopAdmissionIfIdle() Status {
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	if dispatcher.queued+dispatcher.running != 0 {
+		return dispatcher.statusLocked()
+	}
+	return dispatcher.stopAdmissionLocked()
+}
+
+func (dispatcher *Dispatcher) stopAdmissionLocked() Status {
 	if !dispatcher.closed {
 		dispatcher.closed = true
 		close(dispatcher.jobs)

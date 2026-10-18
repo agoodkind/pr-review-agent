@@ -19,6 +19,9 @@ func TestStoppedAdmissionPreservesAcceptedQueueStatus(t *testing.T) {
 	if before.AdmissionClosed || before.Queued != 2 || before.Running != 0 || before.Outstanding != 2 {
 		t.Fatalf("accepted status = %+v", before)
 	}
+	if status := dispatcher.StopAdmissionIfIdle(); status != before {
+		t.Fatalf("idle check changed accepted work or closed admission: %+v", status)
+	}
 	for range 2 {
 		status := dispatcher.StopAdmission()
 		if !status.AdmissionClosed || status.Queued != 2 || status.Running != 0 || status.Outstanding != 2 {
@@ -26,6 +29,26 @@ func TestStoppedAdmissionPreservesAcceptedQueueStatus(t *testing.T) {
 		}
 		if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "late"}) {
 			t.Fatal("closed admission accepted another job")
+		}
+	}
+}
+
+func TestIdleClosureRejectsConcurrentAdmission(t *testing.T) {
+	for range 100 {
+		dispatcher := queue.NewDispatcher(1, 1, nil, slog.Default())
+		accepted := make(chan bool, 1)
+		go func() {
+			accepted <- dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "concurrent"})
+		}()
+		dispatcher.StopAdmissionIfIdle()
+		wasAccepted := <-accepted
+		status := dispatcher.Status()
+		if wasAccepted {
+			if status.AdmissionClosed || status.Outstanding != 1 {
+				t.Fatalf("idle closure discarded accepted work: %+v", status)
+			}
+		} else if !status.AdmissionClosed || status.Outstanding != 0 {
+			t.Fatalf("idle closure did not reject admission: %+v", status)
 		}
 	}
 }
