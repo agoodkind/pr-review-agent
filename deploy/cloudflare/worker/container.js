@@ -2,7 +2,74 @@ import { Container } from "@cloudflare/containers";
 import { containerLifecycleEvent, containerStoppedEvent } from "./lifecycle.js";
 import { signServiceBody } from "./signature.js";
 
+const HANDOFF_PAUSED = "review_handoff_paused";
+
 export class ReviewContainer extends Container {
+  forwardingRequests = 0;
+
+  async fetch(request) {
+    this.forwardingRequests += 1;
+    try {
+      if (await this.ctx.storage.get(HANDOFF_PAUSED) === true) {
+        return new Response("review work is paused for deployment", { status: 503 });
+      }
+      return await super.fetch(request);
+    } finally {
+      this.forwardingRequests -= 1;
+    }
+  }
+
+  async handoffStatus() {
+    const paused = await this.ctx.storage.get(HANDOFF_PAUSED) === true;
+    return { container_running: this.ctx.container.running, paused,
+      forwarding_requests: this.forwardingRequests };
+  }
+
+  async pauseForHandoff() {
+    await this.ctx.storage.put(HANDOFF_PAUSED, true);
+  }
+
+  async readiness() {
+    if (await this.ctx.storage.get(HANDOFF_PAUSED) === true) {
+      return new Response("review service is paused for deployment", { status: 503 });
+    }
+    if (!this.ctx.container.running) {
+      return new Response("review service is stopped", { status: 503 });
+    }
+    if (this.env.RUNTIME_CONFIGURATION) {
+      this.configureRuntime(await this.env.RUNTIME_CONFIGURATION.getConfiguration());
+    }
+    try {
+      return await this.ctx.container.getTcpPort(this.defaultPort).fetch(new Request("http://container/", {
+        signal: AbortSignal.timeout(5000),
+      }));
+    } catch {
+      return new Response("review service health is unavailable", { status: 503 });
+    }
+  }
+
+  async stopForHandoff() {
+    await this.pauseForHandoff();
+    if (this.forwardingRequests > 0) {
+      return this.handoffStatus();
+    }
+    const result = await this.ctx.blockConcurrencyWhile(async () => {
+      try {
+        const state = await this.readDrainState("begin");
+        if (state.container_running && state.admission_closed && state.outstanding === 0 && this.forwardingRequests === 0) {
+          await this.destroy();
+        }
+        return { ok: true, state: await this.handoffStatus() };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    });
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.state;
+  }
+
   configureRuntime(configuration) {
     if (!configuration || !Number.isInteger(configuration.port) || configuration.port < 1 ||
         configuration.port > 65535 || typeof configuration.sleepAfter !== "string" ||
@@ -60,10 +127,22 @@ export class ReviewContainer extends Container {
     }
     const result = await this.ctx.blockConcurrencyWhile(async () => {
       try {
+        if (action === "begin") {
+          await this.pauseForHandoff();
+        }
         const state = await this.readDrainState(action === "restart" ? "status" : action);
-        if (action === "restart" && state.container_running && state.admission_closed && state.outstanding === 0) {
-          await this.destroy();
-          return { ok: true, state: { container_running: false } };
+        if (action === "restart" && this.forwardingRequests === 0) {
+          if (state.container_running && state.admission_closed && state.outstanding === 0) {
+            await this.destroy();
+            if (this.ctx.container.running) {
+              throw new Error("review service has not stopped");
+            }
+            await this.ctx.storage.delete(HANDOFF_PAUSED);
+            return { ok: true, state: { container_running: false } };
+          }
+          if (!state.container_running || (!state.admission_closed && state.outstanding === 0)) {
+            await this.ctx.storage.delete(HANDOFF_PAUSED);
+          }
         }
         return { ok: true, state };
       } catch (error) {

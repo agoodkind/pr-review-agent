@@ -13,9 +13,10 @@ import { reassessmentCallback } from "./reassessment.js";
 /** @typedef {{version: number, generation: string}} QueueExpectation */
 /** @typedef {{counts: Record<string, number>, since_ms: number, last_update_ms: number}} TransitionCounts */
 /** @typedef {{getByName: (name: string) => {fetch: (request: Request) => Promise<Response>}}} FetchNamespace */
-/** @typedef {{fetch: (request: Request) => Promise<Response>, interruptForRecoveryTest: () => Promise<void>}} ReviewServiceBinding */
+/** @typedef {{container_running: boolean, paused: boolean, forwarding_requests: number}} HandoffStatus */
+/** @typedef {{fetch: (request: Request) => Promise<Response>, interruptForRecoveryTest: () => Promise<void>, handoffStatus: () => Promise<HandoffStatus>, stopForHandoff: () => Promise<HandoffStatus>, readiness: () => Promise<Response>}} ReviewServiceBinding */
 /** @typedef {{getByName: (name: string) => ReviewServiceBinding}} ReviewNamespace */
-/** @typedef {{GITHUB_WEBHOOK_SECRET: string, OPERATOR_TOKEN_SHA256: string, REPLAY_QUEUE: FetchNamespace, PR_AGENT: ReviewNamespace, REVIEW_SERVICE_MODE: "legacy" | "service", REVIEW_SERVICE?: ReviewServiceBinding}} WorkerEnvironment */
+/** @typedef {{GITHUB_WEBHOOK_SECRET: string, OPERATOR_TOKEN_SHA256: string, REPLAY_QUEUE: FetchNamespace, PR_AGENT: ReviewNamespace, REVIEW_SERVICE_MODE: "legacy" | "service", REVIEW_SERVICE?: ReviewServiceBinding, REVIEW_HANDOFF?: "true" | "false", REVIEW_HANDOFF_REVISION?: string, CANDIDATE_REVIEW_SERVICE?: ReviewServiceBinding, DEPLOYMENT_TOKEN_SHA256?: string}} WorkerEnvironment */
 
 const TARGET_PREFIX = "target:";
 const DUE_PREFIX = "target-due:";

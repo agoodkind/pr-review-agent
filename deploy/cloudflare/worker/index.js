@@ -17,6 +17,19 @@ export class PrAgentContainer extends ReviewContainer {
   sleepAfter = runtime.CONTAINER_SLEEP_AFTER;
   envVars = createPrAgentEnvironment(env);
 
+  async stopForHandoff() {
+    if (this.env.REVIEW_HANDOFF !== "true") {
+      throw new Error("legacy review service can stop only during deployment handoff");
+    }
+    await this.pauseForHandoff();
+    if (this.forwardingRequests === 0 && this.ctx.container.running &&
+        await this.ctx.storage.get("review_handoff_stop_requested") !== true) {
+      await this.stop();
+      await this.ctx.storage.put("review_handoff_stop_requested", true);
+    }
+    return this.handoffStatus();
+  }
+
 }
 
 export class RuntimeConfiguration extends WorkerEntrypoint {

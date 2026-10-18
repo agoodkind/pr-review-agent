@@ -9,10 +9,13 @@ import { deliverySettled, entryFromDelivery, forwardFailed } from "./replaylogic
 import { REASSESSMENT_PATH, handleReassessments } from "./reassessment.js";
 import { isRecoveryTestEvent } from "./recovery-test.js";
 import { SERVICE_LOG_PATH, handleServiceLogs, verifyServiceLogSignature } from "./servicelogs.js";
-import { fetchActiveReviewService, interruptActiveReviewService } from "./active-service.js";
+import { DEPLOYMENT_CONTROL_PATH, fetchActiveReviewService, handleDeploymentControl, interruptActiveReviewService } from "./active-service.js";
 
 export async function routeRequest(request, env) {
   const url = new URL(request.url);
+  if (url.pathname === DEPLOYMENT_CONTROL_PATH) {
+    return handleDeploymentControl(request, env);
+  }
   if (url.pathname === REASSESSMENT_PATH) {
     return handleReassessments(request, env);
   }
@@ -39,7 +42,10 @@ export async function routeRequest(request, env) {
     }
     if (isRecoveryTestEvent(metadata.eventType, body)) {
       console.log(JSON.stringify({ message: "live interruption requested", deliveryId: metadata.deliveryId }));
-      await interruptActiveReviewService(env);
+      const interrupted = await interruptActiveReviewService(env);
+      if (interrupted instanceof Response) {
+        return interrupted;
+      }
       console.log(JSON.stringify({ message: "live interruption completed", deliveryId: metadata.deliveryId }));
       return Response.json({ status: "interrupted for recovery test" });
     }

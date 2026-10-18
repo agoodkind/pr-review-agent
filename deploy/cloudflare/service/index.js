@@ -26,6 +26,18 @@ export class ReviewService extends WorkerEntrypoint {
   drain(action) {
     return this.env.REVIEW_CONTAINER.getByName("review-service").drain(action);
   }
+
+  handoffStatus() {
+    return this.env.REVIEW_CONTAINER.getByName("review-service").handoffStatus();
+  }
+
+  readiness() {
+    return this.env.REVIEW_CONTAINER.getByName("review-service").readiness();
+  }
+
+  stopForHandoff() {
+    return this.env.REVIEW_CONTAINER.getByName("review-service").stopForHandoff();
+  }
 }
 
 export default {
