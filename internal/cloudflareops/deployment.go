@@ -33,13 +33,14 @@ type DeploymentOptions struct {
 
 // DeploymentResult identifies the original route and the independently prepared candidate.
 type DeploymentResult struct {
-	Gateway         string `json:"gateway"`
-	PreviousMode    string `json:"previous_mode"`
-	PreviousService string `json:"previous_service,omitempty"`
-	Candidate       string `json:"candidate"`
-	Revision        string `json:"revision,omitempty"`
-	Promoted        bool   `json:"promoted"`
-	Directory       string `json:"directory"`
+	Gateway                string `json:"gateway"`
+	PreviousMode           string `json:"previous_mode"`
+	PreviousService        string `json:"previous_service,omitempty"`
+	Candidate              string `json:"candidate"`
+	Revision               string `json:"revision,omitempty"`
+	Promoted               bool   `json:"promoted"`
+	Directory              string `json:"directory"`
+	PendingHandoffRevision string `json:"pending_handoff_revision,omitempty"`
 }
 
 // MarshalJSON encodes public deployment identifiers without settings or credentials.
@@ -67,6 +68,7 @@ type deployment struct {
 	healthClient    *http.Client
 	activeRevision  string
 	candidateExists bool
+	handoff         deploymentHandoff
 }
 
 // Deploy preserves the selected application while it validates an independent candidate.
@@ -88,7 +90,7 @@ func Deploy(ctx context.Context, options DeploymentOptions) (_ DeploymentResult,
 	if err := operation.preflight(ctx); err != nil {
 		return DeploymentResult{}, err
 	}
-	result := DeploymentResult{Gateway: operation.name, PreviousMode: operation.selection.Mode, PreviousService: operation.selection.Service, Candidate: operation.slot.Name, Revision: options.Revision, Promoted: false, Directory: ""}
+	result := DeploymentResult{Gateway: operation.name, PreviousMode: operation.selection.Mode, PreviousService: operation.selection.Service, Candidate: operation.slot.Name, Revision: options.Revision, Promoted: false, Directory: "", PendingHandoffRevision: operation.handoff.Revision}
 	if options.Preflight {
 		return result, nil
 	}
@@ -106,10 +108,6 @@ func Deploy(ctx context.Context, options DeploymentOptions) (_ DeploymentResult,
 	result.Promoted = true
 	if err := WriteJSON(filepath.Join(operation.directory, "result.json"), result); err != nil {
 		return result, err
-	}
-	if err := operation.drainPrevious(ctx); err != nil {
-		slog.WarnContext(ctx, "Verified candidate promoted but previous service drain failed")
-		return result, fmt.Errorf("candidate promoted; previous service drain failed: %w", err)
 	}
 	return result, nil
 }
@@ -139,7 +137,7 @@ func prepareDeployment(options DeploymentOptions) (*deployment, error) {
 			return nil, errors.New("candidate Worker name must differ from gateway name")
 		}
 	}
-	return &deployment{client: nil, options: options, configuration: configuration, gateway: gateway, service: service, account: account, name: name, before: workerSettings{Bindings: nil}, selection: deploymentSelection{Mode: "", Service: ""}, slot: DeploymentSlot{Name: "", Origin: ""}, directory: "", activeRevision: "", candidateExists: false, healthClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &deployment{client: nil, options: options, configuration: configuration, gateway: gateway, service: service, account: account, name: name, before: workerSettings{Bindings: nil}, selection: deploymentSelection{Mode: "", Service: ""}, slot: DeploymentSlot{Name: "", Origin: ""}, directory: "", activeRevision: "", candidateExists: false, handoff: deploymentHandoff{Enabled: false, Revision: "", Service: ""}, healthClient: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 func (operation *deployment) preflight(ctx context.Context) error {
@@ -155,7 +153,21 @@ func (operation *deployment) preflight(ctx context.Context) error {
 		return err
 	}
 	operation.before, operation.selection = settings, selection
+	operation.handoff, err = settings.handoff(operation.configuration)
+	if err != nil {
+		return err
+	}
+	if operation.handoff.Enabled && selection.Mode == "service" && operation.handoff.Service == selection.Service {
+		return errors.New("handoff candidate must differ from the active service")
+	}
 	operation.slot = inactiveSlot(operation.configuration, selection)
+	if operation.handoff.Enabled {
+		for _, slot := range operation.configuration.Slots {
+			if slot.Name == operation.handoff.Service {
+				operation.slot = slot
+			}
+		}
+	}
 	operation.activeRevision, err = operation.probe(ctx, operation.configuration.GatewayOrigin, "")
 	if err != nil {
 		slog.WarnContext(ctx, "Active gateway readiness failed")
@@ -180,6 +192,9 @@ func (operation *deployment) preflight(ctx context.Context) error {
 }
 
 func (operation *deployment) execute(ctx context.Context) error {
+	if operation.handoff.Enabled {
+		return operation.resumeHandoff(ctx)
+	}
 	if err := configureCandidate(operation.service, operation.slot, operation.account, operation.name, operation.options.Image); err != nil {
 		return err
 	}
@@ -222,32 +237,7 @@ func (operation *deployment) execute(ctx context.Context) error {
 	if err := operation.requireOriginalSelection(ctx); err != nil {
 		return err
 	}
-	selection := deploymentSelection{Mode: "service", Service: operation.slot.Name}
-	if err := configureGateway(operation.gateway, selection, operation.before); err != nil {
-		return err
-	}
-	if err := operation.upload(ctx, "promote-candidate", operation.options.Wrangler, operation.gateway, true); err != nil {
-		return err
-	}
-	settings, _, err := operation.client.workerSettings(ctx, operation.account, operation.name, false)
-	if err != nil {
-		return err
-	}
-	selected, err := settings.selection(operation.configuration)
-	if err != nil {
-		return err
-	}
-	if selected != selection {
-		return errors.New("gateway did not select the verified candidate")
-	}
-	if err := preserveBindings(operation.before, settings); err != nil {
-		return err
-	}
-	if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, operation.options.Revision); err != nil {
-		slog.WarnContext(ctx, "Promoted gateway readiness failed")
-		return fmt.Errorf("promoted gateway failed verification: %w", err)
-	}
-	return nil
+	return operation.startHandoff(ctx)
 }
 
 func (operation *deployment) requireOriginalSelection(ctx context.Context) error {
@@ -261,6 +251,13 @@ func (operation *deployment) requireOriginalSelection(ctx context.Context) error
 	}
 	if selection != operation.selection {
 		return errors.New("active service changed during candidate preparation; refusing promotion")
+	}
+	handoff, err := settings.handoff(operation.configuration)
+	if err != nil {
+		return err
+	}
+	if handoff != operation.handoff {
+		return errors.New("deployment handoff changed during preparation; refusing to replace its candidate")
 	}
 	return preserveBindings(operation.before, settings)
 }

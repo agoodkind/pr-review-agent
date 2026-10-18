@@ -10,6 +10,6 @@
       "origin": "https://agoodkind-pr-review-service-b.alex-ee7.workers.dev"
     }
   ],
-  "candidate_timeout": "10m",
+  "candidate_timeout": "20m",
   "probe_interval": "5s"
 }

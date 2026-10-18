@@ -39,10 +39,12 @@ type testContainerApplication struct {
 }
 
 type testDeploymentSnapshot struct {
-	Selection    deploymentSelection            `json:"selection"`
-	Revision     string                         `json:"revision"`
-	Bindings     map[string]testBindingMetadata `json:"bindings"`
-	Applications []testContainerApplication     `json:"applications"`
+	Selection          deploymentSelection            `json:"selection"`
+	Revision           string                         `json:"revision"`
+	Bindings           map[string]testBindingMetadata `json:"bindings"`
+	Applications       []testContainerApplication     `json:"applications"`
+	WorkerDeploymentID string                         `json:"worker_deployment_id"`
+	WorkerVersionID    string                         `json:"worker_version_id"`
 }
 
 type testBindingMetadata struct {
@@ -68,6 +70,22 @@ type DeploymentTestResult struct {
 	CleanupComplete           bool                   `json:"cleanup_complete"`
 	CredentialRevoked         bool                   `json:"credential_revoked"`
 	RejectedCandidateRevision string                 `json:"rejected_candidate_revision,omitempty"`
+	PromotionSamples          testAvailabilityCounts `json:"promotion_samples"`
+	SecondPromotionSamples    testAvailabilityCounts `json:"second_promotion_samples"`
+	AfterSecondPromotion      testDeploymentSnapshot `json:"after_second_promotion"`
+	StoppedPreviousStatus     int                    `json:"stopped_previous_status"`
+	StoppedPreviousRunning    bool                   `json:"stopped_previous_running"`
+}
+
+type testAvailabilityCounts struct {
+	Count  int `json:"count"`
+	Failed int `json:"failed"`
+}
+
+type observedTestDeployment struct {
+	deployment      DeploymentResult
+	deploymentError error
+	samples         testAvailabilityCounts
 }
 
 // MarshalJSON writes resource identifiers and generated test configuration privately.
@@ -168,7 +186,8 @@ func (operation *deployment) runTestDeploymentCases(ctx context.Context, options
 	}
 	deploymentOptions.Revision = options.Deployment.Revision
 	deploymentOptions.Directory = filepath.Join(operation.directory, "healthy-candidate")
-	promotion, err := Deploy(ctx, deploymentOptions)
+	promotion, samples, err := operation.testSuccessfulCandidate(ctx, deploymentOptions, []string{options.BaselineRevision, options.Deployment.Revision}, "promotion-availability.ndjson")
+	result.PromotionSamples = samples
 	if err != nil {
 		return err
 	}
@@ -184,6 +203,60 @@ func (operation *deployment) runTestDeploymentCases(ctx context.Context, options
 	}
 	if !reportedRevisionPattern.MatchString(result.AfterPromotion.Revision) || !strings.HasPrefix(options.Deployment.Revision, result.AfterPromotion.Revision) {
 		return errors.New("promoted test gateway did not report the expected revision")
+	}
+	return operation.testSecondSlot(ctx, deploymentOptions, result)
+}
+
+func (operation *deployment) testSecondSlot(ctx context.Context, options DeploymentOptions, result *DeploymentTestResult) error {
+	options.Directory = filepath.Join(operation.directory, "second-candidate")
+	promotion, samples, err := operation.testSuccessfulCandidate(ctx, options, []string{options.Revision}, "second-promotion-availability.ndjson")
+	result.SecondPromotionSamples = samples
+	if err != nil {
+		return err
+	}
+	if promotion.Candidate != operation.configuration.Slots[1].Name {
+		return errors.New("second deployment did not choose the independent second slot")
+	}
+	result.AfterSecondPromotion, err = operation.testSnapshot(ctx)
+	if err != nil {
+		return err
+	}
+	if result.AfterSecondPromotion.Selection.Service != promotion.Candidate || !strings.HasPrefix(options.Revision, result.AfterSecondPromotion.Revision) {
+		return errors.New("second slot did not become the expected active revision")
+	}
+	first, second := "", ""
+	for _, application := range result.AfterSecondPromotion.Applications {
+		if application.Name == operation.configuration.Slots[0].Name {
+			first = application.ID
+		}
+		if application.Name == operation.configuration.Slots[1].Name {
+			second = application.ID
+		}
+	}
+	if first == "" || second == "" || first == second {
+		return errors.New("review slots do not have independent container applications")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, operation.configuration.Slots[0].Origin+"/", nil)
+	if err != nil {
+		return errors.New("delayed source health request could not be created")
+	}
+	response, err := operation.healthClient.Do(request)
+	if err != nil {
+		slog.WarnContext(ctx, "Delayed source health transport failed")
+		return fmt.Errorf("delayed source health transport failed: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	result.StoppedPreviousStatus = response.StatusCode
+	if response.StatusCode != http.StatusServiceUnavailable {
+		return errors.New("delayed source health request did not preserve the handoff fence")
+	}
+	state, err := operation.drainRequest(ctx, operation.configuration.Slots[0].Origin, "status")
+	if err != nil {
+		return err
+	}
+	result.StoppedPreviousRunning = *state.ContainerRunning
+	if result.StoppedPreviousRunning {
+		return errors.New("delayed source health request restarted the stopped previous application")
 	}
 	return nil
 }
@@ -289,7 +362,35 @@ func (operation *deployment) testSnapshot(ctx context.Context) (testDeploymentSn
 		return snapshot, err
 	}
 	snapshot.Applications, err = operation.testApplications(ctx)
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.WorkerDeploymentID, snapshot.WorkerVersionID, err = operation.testWorkerVersion(ctx)
 	return snapshot, err
+}
+
+func (operation *deployment) testWorkerVersion(ctx context.Context) (string, string, error) {
+	response, _, err := operation.client.request(ctx, http.MethodGet, "/accounts/"+operation.account+"/workers/scripts/"+operation.name+"/deployments", nil)
+	if err != nil {
+		return "", "", err
+	}
+	var history struct {
+		Deployments []struct {
+			ID       string `json:"id"`
+			Versions []struct {
+				ID         string  `json:"version_id"`
+				Percentage float64 `json:"percentage"`
+			} `json:"versions"`
+		} `json:"deployments"`
+	}
+	if json.Unmarshal(response.Result, &history) != nil || len(history.Deployments) == 0 {
+		return "", "", errors.New("test Worker deployment history is unavailable")
+	}
+	current := history.Deployments[0]
+	if current.ID == "" || len(current.Versions) != 1 || current.Versions[0].ID == "" || current.Versions[0].Percentage != 100 {
+		return "", "", errors.New("test Worker does not select one complete version")
+	}
+	return current.ID, current.Versions[0].ID, nil
 }
 
 func (operation *deployment) testApplications(ctx context.Context) ([]testContainerApplication, error) {
@@ -352,7 +453,7 @@ type testReadinessSample struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-func (operation *deployment) sampleTestGateway(ctx context.Context, revision string, writer io.Writer) (int, int, error) {
+func (operation *deployment) sampleTestGateway(ctx context.Context, revisions []string, writer io.Writer) (int, int, error) {
 	encoder := json.NewEncoder(writer)
 	count, failed := 0, 0
 	for {
@@ -361,7 +462,7 @@ func (operation *deployment) sampleTestGateway(ctx context.Context, revision str
 			return count, failed, context.Canceled
 		}
 		count++
-		if sample.Status != http.StatusOK || !reportedRevisionPattern.MatchString(sample.Revision) || !strings.HasPrefix(revision, sample.Revision) {
+		if sample.Status != http.StatusOK || !testRevisionAllowed(sample.Revision, revisions) {
 			failed++
 		}
 		if err := encoder.Encode(sample); err != nil {
@@ -375,6 +476,18 @@ func (operation *deployment) sampleTestGateway(ctx context.Context, revision str
 		case <-timer.C:
 		}
 	}
+}
+
+func testRevisionAllowed(actual string, revisions []string) bool {
+	if !reportedRevisionPattern.MatchString(actual) {
+		return false
+	}
+	for _, revision := range revisions {
+		if strings.HasPrefix(revision, actual) {
+			return true
+		}
+	}
+	return false
 }
 
 func (operation *deployment) readTestGateway(ctx context.Context) testReadinessSample {
@@ -396,10 +509,39 @@ func (operation *deployment) readTestGateway(ctx context.Context) testReadinessS
 }
 
 func (operation *deployment) testRejectedCandidate(ctx context.Context, options DeploymentOptions, baseline string) (int, int, error) {
-	file, err := os.OpenFile(filepath.Join(operation.directory, "availability.ndjson"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	observed, err := operation.observeTestDeployment(ctx, options, []string{baseline}, "availability.ndjson")
+	if err != nil {
+		return observed.samples.Count, observed.samples.Failed, err
+	}
+	if !errors.Is(observed.deploymentError, errCandidateReadiness) {
+		if observed.deploymentError == nil {
+			return observed.samples.Count, observed.samples.Failed, errors.New("mismatched candidate unexpectedly promoted")
+		}
+		slog.WarnContext(ctx, "Candidate test failed before expected readiness comparison")
+		return observed.samples.Count, observed.samples.Failed, fmt.Errorf("candidate did not fail its expected readiness comparison: %w", observed.deploymentError)
+	}
+	return observed.samples.Count, observed.samples.Failed, nil
+}
+
+func (operation *deployment) testSuccessfulCandidate(ctx context.Context, options DeploymentOptions, revisions []string, filename string) (DeploymentResult, testAvailabilityCounts, error) {
+	observed, err := operation.observeTestDeployment(ctx, options, revisions, filename)
+	if err != nil {
+		return observed.deployment, observed.samples, err
+	}
+	if observed.deploymentError != nil {
+		return observed.deployment, observed.samples, observed.deploymentError
+	}
+	if !observed.deployment.Promoted {
+		return observed.deployment, observed.samples, errors.New("candidate did not promote")
+	}
+	return observed.deployment, observed.samples, nil
+}
+
+func (operation *deployment) observeTestDeployment(ctx context.Context, options DeploymentOptions, revisions []string, filename string) (observed observedTestDeployment, returnErr error) {
+	file, err := os.OpenFile(filepath.Join(operation.directory, filename), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		slog.WarnContext(ctx, "Availability evidence creation failed")
-		return 0, 0, fmt.Errorf("create availability evidence: %w", err)
+		return observed, fmt.Errorf("create availability evidence: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 	type sampleResult struct {
@@ -416,29 +558,23 @@ func (operation *deployment) testRejectedCandidate(ctx context.Context, options 
 				results <- sampleResult{count: 0, failed: 0, err: errors.New("availability sampler panicked")}
 			}
 		}()
-		count, failed, err := operation.sampleTestGateway(sampling, baseline, file)
+		count, failed, err := operation.sampleTestGateway(sampling, revisions, file)
 		results <- sampleResult{count: count, failed: failed, err: err}
 	}()
-	_, deploymentError := Deploy(ctx, options)
+	observed.deployment, observed.deploymentError = Deploy(ctx, options)
 	cancel()
 	samples := <-results
+	observed.samples = testAvailabilityCounts{Count: samples.count, Failed: samples.failed}
 	if samples.count == 0 {
-		return 0, 0, errors.New("availability proof did not measure any responses")
+		return observed, errors.New("availability proof did not measure any responses")
 	}
 	if samples.err != nil && !errors.Is(samples.err, context.Canceled) {
-		return samples.count, samples.failed, samples.err
+		return observed, samples.err
 	}
 	if samples.failed > 0 {
-		return samples.count, samples.failed, errors.New("active gateway failed during candidate upload or warmup")
+		return observed, errors.New("active gateway failed during candidate upload, handoff, or promotion")
 	}
-	if !errors.Is(deploymentError, errCandidateReadiness) {
-		if deploymentError == nil {
-			return samples.count, samples.failed, errors.New("mismatched candidate unexpectedly promoted")
-		}
-		slog.WarnContext(ctx, "Candidate test failed before expected readiness comparison")
-		return samples.count, samples.failed, fmt.Errorf("candidate did not fail its expected readiness comparison: %w", deploymentError)
-	}
-	return samples.count, samples.failed, nil
+	return observed, nil
 }
 
 func (operation *deployment) cleanupTestbed(ctx context.Context) error {

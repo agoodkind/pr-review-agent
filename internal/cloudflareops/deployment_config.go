@@ -159,7 +159,7 @@ func configureGateway(configuration wranglerConfiguration, selection deploymentS
 	}
 	services := make([]serviceBinding, 0)
 	for _, binding := range settings.Bindings {
-		if binding.Type == "service" && binding.Name != "REVIEW_SERVICE" {
+		if binding.Type == "service" && binding.Name != "REVIEW_SERVICE" && binding.Name != "CANDIDATE_REVIEW_SERVICE" {
 			services = append(services, serviceBinding{Name: binding.Name, Service: binding.Service, Entrypoint: binding.Entrypoint, Environment: binding.Environment})
 		}
 	}
@@ -193,6 +193,9 @@ func configureCandidate(configuration wranglerConfiguration, slot DeploymentSlot
 	var class string
 	if json.Unmarshal(containers[0]["class_name"], &class) != nil || class != "ReviewServiceContainer" {
 		return errors.New("candidate container must use ReviewServiceContainer")
+	}
+	if err := setWranglerValue(wranglerConfiguration(containers[0]), "name", slot.Name); err != nil {
+		return err
 	}
 	encoded, err := json.Marshal(map[string]string{"PR_REVIEW_AGENT_IMAGE": image})
 	if err != nil {

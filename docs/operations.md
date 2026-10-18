@@ -143,7 +143,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
 
 ## Deploy a release
 
-The deployment command starts an independent candidate application while the gateway continues selecting the active application. It promotes the candidate after the candidate returns HTTP `200` with the expected `X-Pr-Agent-Revision`. A failed candidate does not change the selected service. Before reusing an inactive application, the command closes its review admission and waits for its accepted work to finish. After promotion, the command closes admission on the previous application and keeps that application available for its remaining work.
+The deployment command starts an independent candidate application while the gateway continues selecting the active application. A failed candidate does not change the selected service. After the candidate returns HTTP `200` with the expected `X-Pr-Agent-Revision`, the gateway uses that candidate for readiness and retains review deliveries in its durable queue. The command finishes or stops the old process before enabling candidate review work. The old application and its image remain available for recovery.
 
 1. Install the Cloudflare dependencies with `npm ci` from the deployment directory. Set the public origins, independent Worker names, and elapsed readiness limits in [deployment.json](../deploy/cloudflare/deployment.json).
 
@@ -151,7 +151,7 @@ The deployment command starts an independent candidate application while the gat
    | --- | --- |
    | `gateway_origin` | Public endpoint that continues serving accepted webhook traffic. |
    | `slots` | Exactly two independent Worker names and their public readiness origins. |
-   | `candidate_timeout` | Maximum elapsed wait for candidate readiness. |
+   | `candidate_timeout` | Maximum elapsed wait for each readiness, draining, or handoff stage. |
    | `probe_interval` | Elapsed interval between readiness checks. |
 
 2. Read the current selection and test gateway readiness without changing Cloudflare:
@@ -164,8 +164,10 @@ The deployment command starts an independent candidate application while the gat
    Run this command from the repository root. The account token creates a temporary credential with Workers Scripts Read permission. The command revokes that credential and verifies rejection before it returns. Use `--token-file` instead when a suitable scoped credential already exists. The command derives the account and gateway name from the Wrangler template. An existing slot must bind the gateway's `RuntimeConfiguration` entrypoint before the command can replace that slot. An unknown active service stops deployment.
 3. Set `PR_REVIEW_AGENT_IMAGE` to the verified immutable image digest, `EXPECTED_REVISION` to the full release commit, and `CLOUDFLARE_API_TOKEN` to a credential with Worker and Container deployment permission. Run `npm run deploy` from the Cloudflare deployment directory.
 
-   The wrapper writes the credential to a temporary file with mode `0600` and invokes `pragent-ops deploy`. The Go command prepares gateway support with its existing selection, deploys the inactive candidate, and verifies both candidate readiness and continued gateway availability. It reads the selection again before promotion. Every gateway upload uses `--containers-rollout=none` to preserve the existing container application.
+   The wrapper writes the credential to a temporary file with mode `0600` and invokes `pragent-ops deploy`. The command verifies gateway control support before starting the handoff. The gateway retains the selected service binding during quiescence and enables candidate review work only after the old process stops. Final promotion selects the candidate and clears the handoff in one gateway upload. Every gateway upload uses `--containers-rollout=none` to preserve the existing container application.
 4. Require a successful result with `promoted:true`. Retain the private evidence directory from the command output. The directory contains stage logs and the selected Worker identifiers. Release jobs use the same command and serialize Cloudflare deployments.
+
+Run the same deployment command to resume an interrupted handoff. The command reuses the recorded candidate and revision without replacing its image. Durable queue retries can also finish quiescence and resume candidate review work. When a command requests a different revision, it first finishes the existing handoff and reports that the requested release remains pending. Run the command again to deploy that requested release.
 
 ## Change review rules
 

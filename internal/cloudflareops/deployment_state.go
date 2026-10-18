@@ -39,6 +39,43 @@ type deploymentSelection struct {
 	Service string `json:"service,omitempty"`
 }
 
+type deploymentHandoff struct {
+	Enabled  bool
+	Revision string
+	Service  string
+}
+
+func (settings workerSettings) handoff(configuration DeploymentConfiguration) (deploymentHandoff, error) {
+	var handoff deploymentHandoff
+	flag, exists := settings.binding("REVIEW_HANDOFF")
+	candidate, candidateExists := settings.binding("CANDIDATE_REVIEW_SERVICE")
+	if exists && flag.Type != plainTextBindingType {
+		return handoff, errors.New("deployed REVIEW_HANDOFF must use plain text")
+	}
+	if !exists || flag.Text == "false" {
+		if candidateExists {
+			return handoff, errors.New("candidate binding requires an enabled deployment handoff")
+		}
+		return handoff, nil
+	}
+	if flag.Type != plainTextBindingType || flag.Text != "true" {
+		return handoff, errors.New("deployed REVIEW_HANDOFF must contain the plain text true or false")
+	}
+	revision, revisionExists := settings.binding("REVIEW_HANDOFF_REVISION")
+	if !revisionExists || revision.Type != plainTextBindingType || !revisionPattern.MatchString(revision.Text) {
+		return handoff, errors.New("enabled handoff requires its full expected revision")
+	}
+	if !candidateExists || candidate.Type != serviceBindingType || candidate.Entrypoint != "ReviewService" || !defaultServiceEnvironment(candidate.Environment) {
+		return handoff, errors.New("enabled handoff requires a named candidate ReviewService binding")
+	}
+	for _, slot := range configuration.Slots {
+		if slot.Name == candidate.Service {
+			return deploymentHandoff{Enabled: true, Revision: revision.Text, Service: slot.Name}, nil
+		}
+	}
+	return handoff, errors.New("handoff candidate does not match a configured deployment slot")
+}
+
 func (client *Client) workerSettings(ctx context.Context, account, script string, allowMissing bool) (workerSettings, bool, error) {
 	response, status, err := client.request(ctx, http.MethodGet, "/accounts/"+account+"/workers/scripts/"+script+"/settings", nil)
 	if allowMissing && status == http.StatusNotFound && len(response.Errors) == 1 && response.Errors[0].Code == 10007 {
@@ -119,7 +156,7 @@ func defaultServiceEnvironment(environment string) bool {
 
 func preserveBindings(before, after workerSettings) error {
 	for _, binding := range before.Bindings {
-		if binding.Name == "REVIEW_SERVICE_MODE" || binding.Name == "REVIEW_SERVICE" {
+		if deploymentControlBindings[binding.Name] {
 			continue
 		}
 		current, exists := after.binding(binding.Name)
@@ -128,6 +165,14 @@ func preserveBindings(before, after workerSettings) error {
 		}
 	}
 	return nil
+}
+
+var deploymentControlBindings = map[string]bool{
+	"REVIEW_SERVICE_MODE":      true,
+	"REVIEW_SERVICE":           true,
+	"CANDIDATE_REVIEW_SERVICE": true,
+	"REVIEW_HANDOFF":           true,
+	"REVIEW_HANDOFF_REVISION":  true,
 }
 
 func validateGatewayBindings(configuration wranglerConfiguration, settings workerSettings) error {

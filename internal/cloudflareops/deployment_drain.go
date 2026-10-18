@@ -26,6 +26,13 @@ type drainStatus struct {
 }
 
 func (operation *deployment) registerDeploymentToken(ctx context.Context, slot DeploymentSlot) error {
+	if err := operation.writeDeploymentToken(ctx, slot.Name); err != nil {
+		return err
+	}
+	return operation.waitDeploymentCredential(ctx, slot)
+}
+
+func (operation *deployment) writeDeploymentToken(ctx context.Context, script string) error {
 	digest := sha256.Sum256([]byte(operation.client.token))
 	body, err := json.Marshal(struct {
 		Name string `json:"name"`
@@ -35,7 +42,7 @@ func (operation *deployment) registerDeploymentToken(ctx context.Context, slot D
 	if err != nil {
 		return errors.New("deployment token digest could not be encoded")
 	}
-	response, _, err := operation.client.request(ctx, http.MethodPut, "/accounts/"+operation.account+"/workers/scripts/"+slot.Name+"/secrets", body)
+	response, _, err := operation.client.request(ctx, http.MethodPut, "/accounts/"+operation.account+"/workers/scripts/"+script+"/secrets", body)
 	if err != nil {
 		return err
 	}
@@ -46,7 +53,7 @@ func (operation *deployment) registerDeploymentToken(ctx context.Context, slot D
 	if json.Unmarshal(response.Result, &binding) != nil || binding.Name != "DEPLOYMENT_TOKEN_SHA256" || binding.Type != "secret_text" {
 		return errors.New("cloudflare did not acknowledge the deployment digest binding")
 	}
-	return operation.waitDeploymentCredential(ctx, slot)
+	return nil
 }
 
 func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot DeploymentSlot) error {
@@ -159,17 +166,4 @@ func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlo
 		}
 	}
 	return nil
-}
-
-func (operation *deployment) drainPrevious(ctx context.Context) error {
-	if operation.selection.Mode == "legacy" {
-		return nil
-	}
-	for _, slot := range operation.configuration.Slots {
-		if slot.Name == operation.selection.Service {
-			_, err := operation.beginDrain(ctx, slot)
-			return err
-		}
-	}
-	return errors.New("previous service does not match a configured slot")
 }
