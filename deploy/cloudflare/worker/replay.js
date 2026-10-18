@@ -4,6 +4,7 @@ import runtime from "../../../runtime.json" with { type: "json" };
 import { deliverySettled, dueEntries, isOverdue, nextWakeAt, replayDelayMs } from "./replaylogic.js";
 import { reassessmentCallback } from "./reassessment.js";
 import { countQueueTransition, driftMutation, driftSnapshot, nextDriftWake, reconcileDrift } from "./drift.js";
+import { fetchActiveReviewService } from "./active-service.js";
 
 const KEY_PREFIX = "delivery:";
 const REASSESSMENT_PREFIX = "reassessment:";
@@ -84,12 +85,11 @@ export class WebhookReplayQueue extends DurableObject {
 
     let response = null;
     try {
-      const container = this.env.PR_AGENT.getByName("github-app");
-      response = await container.fetch(new Request(`https://replay${entry.path}`, {
+      response = await fetchActiveReviewService(new Request(`https://replay${entry.path}`, {
         method: "POST",
         headers: entry.headers,
         body: entry.body,
-      }));
+      }), this.env);
     } catch (error) {
       console.error(JSON.stringify({ message: "webhook replay failed", deliveryId: entry.id, error: String(error) }));
     }

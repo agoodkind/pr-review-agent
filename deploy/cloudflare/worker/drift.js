@@ -13,7 +13,9 @@ import { reassessmentCallback } from "./reassessment.js";
 /** @typedef {{version: number, generation: string}} QueueExpectation */
 /** @typedef {{counts: Record<string, number>, since_ms: number, last_update_ms: number}} TransitionCounts */
 /** @typedef {{getByName: (name: string) => {fetch: (request: Request) => Promise<Response>}}} FetchNamespace */
-/** @typedef {{GITHUB_WEBHOOK_SECRET: string, OPERATOR_TOKEN_SHA256: string, REPLAY_QUEUE: FetchNamespace, PR_AGENT: FetchNamespace}} WorkerEnvironment */
+/** @typedef {{fetch: (request: Request) => Promise<Response>, interruptForRecoveryTest: () => Promise<void>}} ReviewServiceBinding */
+/** @typedef {{getByName: (name: string) => ReviewServiceBinding}} ReviewNamespace */
+/** @typedef {{GITHUB_WEBHOOK_SECRET: string, OPERATOR_TOKEN_SHA256: string, REPLAY_QUEUE: FetchNamespace, PR_AGENT: ReviewNamespace, REVIEW_SERVICE_MODE: "legacy" | "service", REVIEW_SERVICE?: ReviewServiceBinding}} WorkerEnvironment */
 
 const TARGET_PREFIX = "target:";
 const DUE_PREFIX = "target-due:";

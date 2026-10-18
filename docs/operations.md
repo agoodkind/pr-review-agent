@@ -257,7 +257,7 @@ The script requires Python 3 and OpenSSL. Add `--status` to inspect the installa
 
 The Worker stores each signed GitHub delivery before forwarding the delivery to the container. The Durable Object retains the delivery until the service confirms that the review has finished or the event requires no review. The replay alarm retries pending deliveries after a container interruption.
 
-1. Confirm that the routed service answers `GET /health`.
+1. Confirm that the routed service answers `GET /` with HTTP `200` and the expected `X-Pr-Agent-Revision`. The gateway handles `GET /health` without checking the review application.
 2. Compare the deployed Worker version and container image digest with the release record.
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
@@ -299,4 +299,4 @@ Require only `linux/amd64`. Record the digest and current Worker version before 
 
 An unsuccessful candidate leaves the gateway selecting its previous application. Inspect the private stage log before attempting another deployment. Do not replace the active image to repair a candidate startup failure.
 
-If the container is unavailable, restore its recorded image digest and verify `GET /health`. The Durable Object retains accepted deliveries during the outage. After recovery, confirm that the replay queue has settled each accepted delivery. For events requiring review, inspect the affected pull request for a completed `PR-Agent Review` check. If a check remains in progress after the next retry interval, inspect the Worker log by delivery identifier and the service log by run identifier before requesting another review.
+If the container is unavailable, restore its recorded image digest and verify the routed `GET /` response. The Durable Object retains accepted deliveries during the outage. After recovery, confirm that the replay queue has settled each accepted delivery. For events requiring review, inspect the affected pull request for a completed `PR-Agent Review` check. If a check remains in progress after the next retry interval, inspect the Worker log by delivery identifier and the service log by run identifier before requesting another review.
