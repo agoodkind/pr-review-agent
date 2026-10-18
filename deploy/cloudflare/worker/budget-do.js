@@ -7,12 +7,15 @@ import usageSnapshot from "./budget-snapshot.sql";
 import usageQuery from "./budget-query.sql";
 import usageDetails from "./budget-details.sql";
 import usageSDK from "./budget-sdk.sql";
+import storageStats from "./budget-storage-stats.sql";
 import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
+import { dayMilliseconds, maintainUsageStorage, normalizeSDKFingerprint, sdkFingerprint } from "./budget-retention.js";
 
 const MAXIMUM_PAGE_SIZE = 500;
 
 class UsageOverflowError extends Error {}
 class UsageConflictError extends Error {}
+class UsageExpiredError extends Error {}
 
 function isNonnegativeInteger(value) {
   return Number.isSafeInteger(value) && value >= 0;
@@ -58,13 +61,95 @@ async function migrateLegacyUsage(transaction, day, providerId, model) {
   await transaction.delete(legacyKey);
 }
 
+const durationUnits = { ns: 0.000001, us: 0.001, ms: 1, s: 1000, m: 60000, h: 3600000 };
+
+function durationMilliseconds(value, name, allowZero = false) {
+  if (typeof value !== "string" || !/^(\d+(?:\.\d+)?(?:ns|us|ms|s|m|h))+$/.test(value)) {
+    throw new Error(`${name} requires an elapsed duration such as 24h`);
+  }
+  let result = 0;
+  for (const part of value.matchAll(/(\d+(?:\.\d+)?)(ns|us|ms|s|m|h)/g)) {
+    result += Number(part[1]) * durationUnits[part[2]];
+  }
+  if (!Number.isSafeInteger(result) || result < 0 || (!allowZero && result === 0)) {
+    throw new Error(`${name} requires a positive whole number of milliseconds`);
+  }
+  return result;
+}
+
+function usageRetentionSettings(override) {
+  const configured = override ?? runtime.PROVIDER_USAGE_RETENTION;
+  const settings = typeof configured === "string" ? JSON.parse(configured) : configured;
+  if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
+    throw new Error("PROVIDER_USAGE_RETENTION requires max_age, cleanup_interval, and batch_size");
+  }
+  const maximumAge = durationMilliseconds(settings.max_age, "PROVIDER_USAGE_RETENTION.max_age", true);
+  const interval = durationMilliseconds(settings.cleanup_interval, "PROVIDER_USAGE_RETENTION.cleanup_interval");
+  if (!Number.isSafeInteger(settings.batch_size) || settings.batch_size <= 0 || settings.batch_size > 10000) {
+    throw new Error("PROVIDER_USAGE_RETENTION.batch_size must be between 1 and 10000");
+  }
+  let effectiveAge = maximumAge;
+  if (maximumAge > 0) {
+    for (const provider of runtime.PROVIDERS) {
+      if (provider.disabled === true) {
+        continue;
+      }
+      if (provider.daily_token_limit > 0) {
+        effectiveAge = Math.max(effectiveAge, dayMilliseconds);
+      }
+      const windows = (provider.token_limits ?? []).map(function (limit) { return limit.window; });
+      if (provider.token_limit > 0) {
+        windows.push(provider.token_window);
+      }
+      for (const window of windows) {
+        if (window?.mode === "cron") {
+          throw new Error(`provider ${provider.id} uses a cron token window; set PROVIDER_USAGE_RETENTION.max_age to 0s before enabling that window`);
+        }
+        if (window?.mode !== "rolling" && window?.mode !== "fixed") {
+          throw new Error(`provider ${provider.id} requires a valid rolling or fixed quota window for retention`);
+        }
+        effectiveAge = Math.max(effectiveAge, durationMilliseconds(window.duration, `provider ${provider.id} quota duration`));
+      }
+    }
+  }
+  return { maximumAge, effectiveAge, interval, batchSize: settings.batch_size };
+}
+
 export class ProviderBudget extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.ctx.storage.sql.exec(usageSchema);
+    this.retention = usageRetentionSettings(env.PROVIDER_USAGE_RETENTION);
+    this.ctx.blockConcurrencyWhile(() => this.ensureMaintenance());
   }
 
-  queryUsage(payload) {
+  async ensureMaintenance() {
+    const migrated = await this.ctx.storage.get("usage_sdk_digest_migration_version");
+    if ((this.retention.maximumAge > 0 || migrated !== 1) && await this.ctx.storage.getAlarm() === null) {
+      await this.ctx.storage.setAlarm(Date.now() + this.retention.interval);
+    }
+  }
+
+  async alarm() {
+    if (await maintainUsageStorage(this.ctx.storage, this.retention, Date.now())) {
+      await this.ctx.storage.setAlarm(Date.now() + this.retention.interval);
+    }
+  }
+
+  async storageStats() {
+    return Response.json({ ...this.ctx.storage.sql.exec(storageStats).one(),
+      database_bytes: this.ctx.storage.sql.databaseSize,
+      retention: { enabled: this.retention.maximumAge > 0,
+        configured_max_age_ms: this.retention.maximumAge,
+        effective_max_age_ms: this.retention.effectiveAge,
+        cleanup_interval_ms: this.retention.interval, batch_size: this.retention.batchSize,
+        cutoff_ms: (await this.ctx.storage.get("usage_retention_cutoff_ms")) ?? 0,
+        next_maintenance_ms: await this.ctx.storage.getAlarm(),
+        sdk_migration_complete: await this.ctx.storage.get("usage_sdk_digest_migration_version") === 1 },
+    });
+  }
+
+  async queryUsage(payload) {
     const { provider_id: providerId, model, start_ms: start, end_ms: end,
       include_start: includeStart, include_end: includeEnd, after_sequence: after,
       snapshot_sequence: requestedSnapshot, page_size: pageSize } = payload;
@@ -81,8 +166,9 @@ export class ProviderBudget extends DurableObject {
       return new Response("invalid usage snapshot", { status: 400 });
     }
     const snapshot = requestedSnapshot === 0 ? latest : requestedSnapshot;
-    const historyStart = this.ctx.storage.sql.exec(usageHistory, providerId, Date.now())
+    const initialHistoryStart = this.ctx.storage.sql.exec(usageHistory, providerId, Date.now())
       .one().history_start_ms;
+    const historyStart = Math.max(initialHistoryStart, (await this.ctx.storage.get("usage_retention_cutoff_ms")) ?? 0);
     const rows = this.ctx.storage.sql.exec(usageQuery, providerId, model, after, snapshot,
       start, Number(includeStart), start, end, Number(includeEnd), end, pageSize + 1)
       .toArray();
@@ -139,15 +225,20 @@ export class ProviderBudget extends DurableObject {
             !isNonnegativeInteger(legacyTokens)))) {
       return new Response("invalid usage report", { status: 400 });
     }
+    const serializedSDK = JSON.stringify(sdkUsage ?? null);
+    const sdkDigest = await sdkFingerprint(serializedSDK);
     try {
       await this.ctx.storage.transaction(async (transaction) => {
+        const cutoff = (await transaction.get("usage_retention_cutoff_ms")) ?? 0;
+        if (admittedAt < cutoff || (hasLegacyDay && Date.parse(legacyDay + "T00:00:00Z") + dayMilliseconds <= cutoff)) {
+          throw new UsageExpiredError("usage report predates retained history; do not replay expired usage");
+        }
         const reportKey = `usage_report:${reportId}`;
         const fingerprint = JSON.stringify([providerId, model, admittedAt,
           inputTokens, outputTokens, totalTokens, legacyDay, legacyTokens]);
         const detailsKey = `usage_report_details:${reportId}`;
         const detailsFingerprint = JSON.stringify([cachedInput, cacheWrites, serviceTier]);
         const sdkKey = `usage_report_sdk:${reportId}`;
-        const sdkFingerprint = JSON.stringify(sdkUsage ?? null);
         if (reportId !== undefined) {
           const previous = await transaction.get(reportKey);
           if (previous !== undefined) {
@@ -159,8 +250,11 @@ export class ProviderBudget extends DurableObject {
               throw new UsageConflictError("report identity already contains different usage details");
             }
             const previousSDK = (await transaction.get(sdkKey)) ?? "null";
-            if (previousSDK !== sdkFingerprint) {
+            if (await normalizeSDKFingerprint(previousSDK) !== sdkDigest) {
               throw new UsageConflictError("report identity already contains different SDK usage");
+            }
+            if (previousSDK !== sdkDigest) {
+              await transaction.put(sdkKey, sdkDigest);
             }
             return;
           }
@@ -180,12 +274,12 @@ export class ProviderBudget extends DurableObject {
         this.ctx.storage.sql.exec(usageDetails, inserted.sequence,
           cachedInput ?? null, cacheWrites ?? null, serviceTier ?? null);
         if (sdkUsage !== undefined && sdkUsage !== null) {
-          this.ctx.storage.sql.exec(usageSDK, inserted.sequence, sdkFingerprint);
+          this.ctx.storage.sql.exec(usageSDK, inserted.sequence, serializedSDK);
         }
         if (reportId !== undefined) {
           await transaction.put(reportKey, fingerprint);
           await transaction.put(detailsKey, detailsFingerprint);
-          await transaction.put(sdkKey, sdkFingerprint);
+          await transaction.put(sdkKey, sdkDigest);
         }
       });
     } catch (error) {
@@ -194,6 +288,9 @@ export class ProviderBudget extends DurableObject {
       }
       if (error instanceof UsageConflictError) {
         return new Response(error.message, { status: 409 });
+      }
+      if (error instanceof UsageExpiredError) {
+        return new Response(error.message, { status: 410 });
       }
       console.error(JSON.stringify({ message: "model usage storage failed",
         report_id: reportId, provider_id: providerId, model, error: String(error) }));
@@ -207,6 +304,13 @@ export class ProviderBudget extends DurableObject {
       return new Response("not found", { status: 404 });
     }
     const pathname = new URL(request.url).pathname;
+    if (pathname === "/ensure_maintenance") {
+      await this.ensureMaintenance();
+      return Response.json({ scheduled: true });
+    }
+    if (pathname === "/storage_stats") {
+      return this.storageStats();
+    }
     if (pathname !== "/check" && pathname !== "/report" && pathname !== "/reserve" &&
         pathname !== "/query_usage" && pathname !== "/report_usage") {
       return new Response("not found", { status: 404 });
@@ -257,11 +361,19 @@ export class ProviderBudget extends DurableObject {
       return new Response("invalid usage", { status: 400 });
     }
     const key = budgetKey("reported_tokens", reportedDay, providerId, model);
-    await this.ctx.storage.transaction(async function (transaction) {
+    const accepted = await this.ctx.storage.transaction(async function (transaction) {
+      const cutoff = (await transaction.get("usage_retention_cutoff_ms")) ?? 0;
+      if (Date.parse(reportedDay + "T00:00:00Z") + dayMilliseconds <= cutoff) {
+        return false;
+      }
       await migrateLegacyUsage(transaction, reportedDay, providerId, model);
       const used = (await transaction.get(key)) ?? 0;
       await transaction.put(key, used + tokens);
+      return true;
     });
+    if (!accepted) {
+      return new Response("usage report predates retained history; do not replay expired usage", { status: 410 });
+    }
     return Response.json({ reported: true });
   }
 }

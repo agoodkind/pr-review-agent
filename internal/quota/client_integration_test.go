@@ -105,6 +105,18 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	if err != nil || len(history.Events) != 1 || history.Events[0].TotalTokens != 300 {
 		t.Fatalf("operator history query failed: %+v, %v", history, err)
 	}
+	storageCommand := exec.CommandContext(t.Context(), "go", "run", "../../cmd/pragent-ops", "storage", "--runtime", runtimePath, "--operator-token-file", tokenFile)
+	storageOutput, err := storageCommand.Output()
+	if err != nil {
+		t.Fatalf("storage CLI failed: %v", err)
+	}
+	var storage quota.StorageStats
+	if err := json.Unmarshal(storageOutput, &storage); err != nil {
+		t.Fatal(err)
+	}
+	if storage.DatabaseBytes <= 0 || storage.Events != 1 || storage.Details != 1 || storage.SDKRecords != 0 || storage.Retention.Enabled || storage.Retention.CutoffMS != 0 {
+		t.Fatalf("storage CLI returned incorrect persisted state: %+v", storage)
+	}
 	if err := operator.Report(t.Context(), quota.ReportRequest{ProviderID: "operator_test", Model: "test_model", AdmittedAtMS: now.UnixMilli(), Usage: quota.Usage{TotalTokens: 1}}); err == nil {
 		t.Fatal("operator token permitted a usage report")
 	}

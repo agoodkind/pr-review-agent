@@ -73,6 +73,15 @@ The summary distinguishes app quota denials, provider API exhaustion, and unclas
        --operator-token-file /path/to/account-token
    ```
 3. Read the printed counter artifact. Use `--provider` with an exact configured provider ID to inspect one provider.
+4. Inspect current usage database allocation, retained row counts, SDK payload bytes, and retention state:
+
+   ```bash
+   go run ./cmd/pragent-ops storage \
+       --runtime runtime.json \
+       --operator-token-file /path/to/account-token
+   ```
+
+   The command prints JSON statistics without SDK metadata. Database bytes include SQLite allocation; SDK payload bytes count only the stored SDK JSON.
 
 The operator token permits counter reads. Usage reports and reservations require the existing webhook signature. The CLI also accepts `--signing-key-file` for signed counter reads; supply only one authentication file.
 
