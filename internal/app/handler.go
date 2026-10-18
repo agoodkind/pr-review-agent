@@ -17,6 +17,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/reassessment"
+	"goodkind.io/pr-review-agent/internal/version"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
 
@@ -147,6 +148,7 @@ const (
 	routeRoot    routePath = "/"
 	routeHealth  routePath = "/health"
 	routeWebhook routePath = "/api/v1/github_webhooks"
+	routeDrain   routePath = "/internal/v1/drain"
 )
 
 type handler struct {
@@ -198,13 +200,15 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			writeMethodNotAllowed(writer)
 			return
 		}
-		writeStatusOK(writer)
+		handler.writeReadiness(writer)
 	case routeHealth:
 		if request.Method != http.MethodGet {
 			writeMethodNotAllowed(writer)
 			return
 		}
-		writeStatusOK(writer)
+		handler.writeReadiness(writer)
+	case routeDrain:
+		handler.handleDrain(writer, request)
 	case routeWebhook:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowed(writer)
@@ -388,8 +392,13 @@ func writeReviewEventError(writer http.ResponseWriter, err error) {
 	http.Error(writer, "malformed payload", http.StatusBadRequest)
 }
 
-func writeStatusOK(writer http.ResponseWriter) {
+func (handler *handler) writeReadiness(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("X-Pr-Agent-Revision", version.SourceRevision())
+	if handler.dispatcher.Status().AdmissionClosed {
+		http.Error(writer, "review admission closed", http.StatusServiceUnavailable)
+		return
+	}
 	writer.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(writer).Encode(map[string]string{"status": "ok"}); err != nil {
 		http.Error(writer, "encode response failed", http.StatusInternalServerError)

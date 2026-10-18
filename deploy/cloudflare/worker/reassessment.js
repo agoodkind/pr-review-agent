@@ -1,6 +1,10 @@
 import { verifyServiceLogSignature } from "./servicelogs.js";
 import { authenticateOperator } from "./operator.js";
 import { REVIEW_SETTINGS_HEADER, REVIEW_SETTINGS_SIGNATURE_HEADER, createReviewSettingsHeader, signReviewSettings } from "./configuration.js";
+import { fetchActiveReviewService } from "./active-service.js";
+import { signServiceBody } from "./signature.js";
+
+export { signServiceBody as reassessmentSignature };
 
 export const REASSESSMENT_PATH = "/internal/v1/reassessments";
 export const REASSESSMENT_SIGNATURE = "X-Pr-Agent-Reassessment-Signature";
@@ -31,24 +35,17 @@ export async function handleReassessments(request, env) {
   return env.REPLAY_QUEUE.getByName("webhook-replays").fetch(new Request("https://replay/reassessments", { method: "POST", body }));
 }
 
-/** @param {string} secret @param {string} body @returns {Promise<string>} */
-export async function reassessmentSignature(secret, body) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-  return "sha256=" + [...new Uint8Array(digest)].map(function hex(byte) { return byte.toString(16).padStart(2, "0"); }).join("");
-}
-
 /** @param {import("./drift.js").WorkerEnvironment} env @param {Record<string, unknown>} payload @returns {Promise<Response>} */
 export async function reassessmentCallback(env, payload) {
   const body = JSON.stringify(payload);
-  const signature = await reassessmentSignature(env.GITHUB_WEBHOOK_SECRET, body);
+  const signature = await signServiceBody(env.GITHUB_WEBHOOK_SECRET, body);
   const settings = createReviewSettingsHeader();
   const settingsSignature = await signReviewSettings(env.GITHUB_WEBHOOK_SECRET, settings, body);
-  return env.PR_AGENT.getByName("github-app").fetch(new Request("https://reassessment/internal/v1/reassessment", {
+  return fetchActiveReviewService(new Request("https://reassessment/internal/v1/reassessment", {
     method: "POST",
     headers: { "Content-Type": "application/json", [REASSESSMENT_SIGNATURE]: signature, [REVIEW_SETTINGS_HEADER]: settings, [REVIEW_SETTINGS_SIGNATURE_HEADER]: settingsSignature },
     body,
-  }));
+  }), env);
 }
 
 /** @param {ScheduledController} controller @param {import("./drift.js").WorkerEnvironment} env @param {ExecutionContext} context @returns {void} */

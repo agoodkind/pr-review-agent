@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { once } from "node:events";
-import fs from "node:fs";
 import http from "node:http";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
@@ -24,6 +21,7 @@ try {
 
 function createEnvironment(forwardedRequests) {
   return {
+    REVIEW_SERVICE_MODE: "legacy",
     PR_AGENT: {
       getByName(name) {
         assert.equal(name, "github-app");
@@ -81,6 +79,7 @@ function signBody(body) {
 
 function createFailingEnvironment(mode, queued) {
   return {
+    REVIEW_SERVICE_MODE: "legacy",
     GITHUB_WEBHOOK_SECRET: testWebhookSecret, // gitleaks:allow
     PR_AGENT: {
       getByName() {
@@ -241,6 +240,7 @@ test("another webhook request settles a queued delivery after service completion
 // binding and read as some other fault.
 function createForwardingEnvironment(events, queued) {
   return {
+    REVIEW_SERVICE_MODE: "legacy",
     GITHUB_WEBHOOK_SECRET: testWebhookSecret, // gitleaks:allow
     PR_AGENT: {
       getByName(name) {
@@ -478,23 +478,8 @@ test("health probe exits when the endpoint returns HTTP 200", async function (co
   });
 });
 
-
 test("an unlisted binding never reaches the Go service", function () {
   const environment = createPrAgentEnvironment({ UNLISTED_BINDING: "fixture" });
 
   assert.equal("UNLISTED_BINDING" in environment, false);
-});
-
-test("release image selection writes the exact immutable digest", async function () {
-  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pr-agent-cloudflare-"));
-  const configPath = path.join(temporaryDirectory, "wrangler.jsonc");
-  fs.copyFileSync("wrangler.jsonc", configPath);
-  const image = `ghcr.io/agoodkind/pr-review-agent@sha256:${"a".repeat(64)}`;
-
-  await execFileAsync(process.execPath, ["scripts/configure-image.mjs", configPath], {
-    env: { ...process.env, PR_REVIEW_AGENT_IMAGE: image },
-  });
-
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  assert.equal(config.containers[0].image_vars.PR_REVIEW_AGENT_IMAGE, image);
 });

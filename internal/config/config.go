@@ -122,6 +122,7 @@ var runtimeConfigKeys = map[string]struct{}{
 	"PROVIDER_BUDGET_REPORT":         {},
 	"PROVIDER_USAGE_MAX_BYTES":       {},
 	"PROVIDER_USAGE_PAGE_BYTES":      {},
+	"PROVIDER_USAGE_RETENTION":       {},
 	"SERVICE_FAILURE_APPEARANCE":     {},
 	"GITHUB_APP_ID":                  {},
 	"GITHUB_BOT_LOGIN":               {},
@@ -299,7 +300,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 			values[name] = strconv.FormatBool(value)
 			continue
 		}
-		if name == "REASSESSMENT" || name == "PROVIDER_BUDGET_REPORT" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
+		if name == "REASSESSMENT" || name == "PROVIDER_BUDGET_REPORT" || name == "PROVIDER_USAGE_RETENTION" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
 			values[name] = string(raw)
 			continue
 		}

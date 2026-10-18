@@ -1,0 +1,5 @@
+ARG PR_REVIEW_AGENT_IMAGE
+FROM ${PR_REVIEW_AGENT_IMAGE}
+COPY runtime.json /runtime.json
+COPY config /config
+USER 65532:65532

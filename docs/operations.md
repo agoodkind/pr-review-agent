@@ -141,6 +141,34 @@ Deploy `ghcr.io/agoodkind/pr-review-agent` by digest. The image runs as user `65
 
 Use `GET /health` for container readiness. Use `GET /` for the routed service status. Neither endpoint sends a model request.
 
+## Deploy a release
+
+The deployment command starts an independent candidate application while the gateway continues selecting the active application. A failed candidate does not change the selected service. After the candidate returns HTTP `200` with the expected `X-Pr-Agent-Revision`, the gateway uses that candidate for readiness and retains review deliveries in its durable queue. The command finishes or stops the old process before enabling candidate review work. The old application and its image remain available for recovery.
+
+1. Install the Cloudflare dependencies with `npm ci` from the deployment directory. Set the public origins, independent Worker names, and elapsed readiness limits in [deployment.json](../deploy/cloudflare/deployment.json).
+
+   | Setting | Purpose |
+   | --- | --- |
+   | `gateway_origin` | Public endpoint that continues serving accepted webhook traffic. |
+   | `slots` | Exactly two independent Worker names and their public readiness origins. |
+   | `candidate_timeout` | Maximum elapsed wait for each readiness, draining, or handoff stage. |
+   | `probe_interval` | Elapsed interval between readiness checks. |
+
+2. Read the current selection and test gateway readiness without changing Cloudflare:
+
+   ```bash
+   go run ./cmd/pragent-ops deploy --preflight \
+       --account-token-file /path/to/cloudflare-account-token
+   ```
+
+   Run this command from the repository root. The account token creates a temporary credential with Workers Scripts Read permission. The command revokes that credential and verifies rejection before it returns. Use `--token-file` instead when a suitable scoped credential already exists. The command derives the account and gateway name from the Wrangler template. An existing slot must bind the gateway's `RuntimeConfiguration` entrypoint before the command can replace that slot. An unknown active service stops deployment.
+3. Set `PR_REVIEW_AGENT_IMAGE` to the verified immutable image digest, `EXPECTED_REVISION` to the full release commit, and `CLOUDFLARE_API_TOKEN` to a credential with Worker and Container deployment permission. Run `npm run deploy` from the Cloudflare deployment directory.
+
+   The wrapper writes the credential to a temporary file with mode `0600` and invokes `pragent-ops deploy`. The command verifies gateway control support before starting the handoff. The gateway retains the selected service binding during quiescence and enables candidate review work only after the old process stops. Final promotion selects the candidate and clears the handoff in one gateway upload. Every gateway upload uses `--containers-rollout=none` to preserve the existing container application.
+4. Require a successful result with `promoted:true`. Retain the private evidence directory from the command output. The directory contains stage logs and the selected Worker identifiers. Release jobs use the same command and serialize Cloudflare deployments.
+
+Run the same deployment command to resume an interrupted handoff. The command reuses the recorded candidate and revision without replacing its image. Durable queue retries can also finish quiescence and resume candidate review work. When a command requests a different revision, it first finishes the existing handoff and reports that the requested release remains pending. Run the command again to deploy that requested release.
+
 ## Change review rules
 
 1. Edit the [rule catalog](../config/review-rules.json) or [prompt configuration](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
@@ -157,7 +185,7 @@ Use `GET /health` for container readiness. Use `GET /` for the routed service st
    The catalog's category settings define fixed importance and which rules apply to generated review text. The shipped prose category requires importance `10`. A rule without fixed category importance or an override uses the model's score. `REVIEW_MIN_IMPORTANCE` controls publication after these scores are applied.
 3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make build`. Verify findings and corrections with the live procedure in [acceptance.md](acceptance.md), then merge the change to deploy it.
 
-4. Confirm that the Release workflow completed successfully. The committed Cloudflare configuration contains an invalid image placeholder. For a manual deployment, set `PR_REVIEW_AGENT_IMAGE` to the verified image digest and run `npm run deploy` from `deploy/cloudflare`.
+4. Confirm that the Release workflow completed successfully. Use the [release deployment procedure](#deploy-a-release) for manual deployment.
 
 ## Clear hidden review bodies
 
@@ -229,12 +257,24 @@ The script requires Python 3 and OpenSSL. Add `--status` to inspect the installa
 
 ## Verify a release
 
-The Worker stores each signed GitHub delivery before forwarding the delivery to the container. The Durable Object retains the delivery until the service confirms that the review has finished or the event requires no review. A container rollout can interrupt a review. The replay alarm retries pending deliveries at intervals of at most five minutes after the old container exits.
+The Worker stores each signed GitHub delivery before forwarding the delivery to the container. The Durable Object retains the delivery until the service confirms that the review has finished or the event requires no review. The replay alarm retries pending deliveries after a container interruption.
 
-1. Confirm that the routed service answers `GET /health`.
+1. Confirm that the routed service answers `GET /` with HTTP `200` and the expected `X-Pr-Agent-Revision`. The gateway answers `GET /health` without checking the review application.
 2. Compare the deployed Worker version and container image digest with the release record.
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
+
+Use the [isolated deployment harness](../deploy/cloudflare/scripts/test-deployment.mjs) to test candidate rejection and promotion without production traffic. The harness publishes separate test images with isolated runtime configuration, creates generated test Workers, records continuous availability samples and application images, and cleans up the registered Cloudflare resources. Each source archive requires a valid packaging attestation for its exact commit.
+
+```bash
+node deploy/cloudflare/scripts/test-deployment.mjs \
+    --account-token-file /path/to/cloudflare-account-token \
+    --baseline-run BASELINE_RUN_ID --baseline-revision BASELINE_COMMIT \
+    --baseline-worker-revision PRIOR_WORKER_COMMIT \
+    --candidate-run CANDIDATE_RUN_ID --candidate-revision CANDIDATE_COMMIT
+```
+
+Select distinct full application commits and their completed CI packaging runs. Select the prior Worker commit for the initial gateway. The harness uploads the current committed Worker during deployment and checks the transition from the prior Durable Object implementation. The default candidate timeout permits Cloudflare's deferred code update; use `--candidate-timeout` to change the elapsed limit. Authenticate `gh` with package publication permission and start Docker before running the harness. The command prints its private evidence directory after successful cleanup and credential revocation. Preserve that directory if a check fails.
 
 Test discussion webhooks against the deployed service:
 
@@ -271,6 +311,6 @@ Require only `linux/amd64`. Record the digest and current Worker version before 
 
 ## Recover a failed deployment
 
-Restore the recorded Worker version and image digest when readiness, routing, startup, or log checks fail. Do not continue live lifecycle testing after rollback.
+An unsuccessful candidate does not change the gateway's selected application. Inspect the private stage log before attempting another deployment. Do not replace the active image to repair a candidate startup failure.
 
-If the container is unavailable, restore its recorded image digest and verify `GET /health`. The Durable Object retains accepted deliveries during the outage. After recovery, confirm that the replay queue has settled each accepted delivery. For events requiring review, inspect the affected pull request for a completed `PR-Agent Review` check. If a check remains in progress after the next retry interval, inspect the Worker log by delivery identifier and the service log by run identifier before requesting another review.
+If the container is unavailable, restore its recorded image digest and verify the routed `GET /` response. The Durable Object retains accepted deliveries during the outage. After recovery, confirm that the replay queue has settled each accepted delivery. For events requiring review, inspect the affected pull request for a completed `PR-Agent Review` check. If a check remains in progress after the next retry interval, inspect the Worker log by delivery identifier and the service log by run identifier before requesting another review.

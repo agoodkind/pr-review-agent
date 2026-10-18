@@ -2,6 +2,7 @@
   "name": "pr-agent-reassessment-test",
   "main": "reassessment-fixture.js",
   "compatibility_date": "2026-08-12",
+  "vars": { "REVIEW_SERVICE_MODE": "legacy" },
   "durable_objects": {
     "bindings": [{ "name": "REPLAY_QUEUE", "class_name": "WebhookReplayQueue" }]
   },

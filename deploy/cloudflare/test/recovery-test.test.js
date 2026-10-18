@@ -36,6 +36,7 @@ function interruptPayload() {
 
 function environment(events) {
   return {
+    REVIEW_SERVICE_MODE: "legacy",
     GITHUB_WEBHOOK_SECRET: webhookSecret, // gitleaks:allow
     PR_AGENT: {
       getByName() {

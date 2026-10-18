@@ -1,0 +1,15 @@
+{
+  "gateway_origin": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev",
+  "slots": [
+    {
+      "name": "agoodkind-pr-review-service-a",
+      "origin": "https://agoodkind-pr-review-service-a.alex-ee7.workers.dev"
+    },
+    {
+      "name": "agoodkind-pr-review-service-b",
+      "origin": "https://agoodkind-pr-review-service-b.alex-ee7.workers.dev"
+    }
+  ],
+  "candidate_timeout": "20m",
+  "probe_interval": "5s"
+}

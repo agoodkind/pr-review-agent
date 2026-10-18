@@ -25,8 +25,56 @@ type Dispatcher struct {
 	started   bool
 	closed    bool
 	queued    int
+	running   int
 	mu        sync.Mutex
 	wg        sync.WaitGroup
+}
+
+// Status reports accepted review work and admission state.
+type Status struct {
+	AdmissionClosed bool `json:"admission_closed"`
+	Queued          int  `json:"queued"`
+	Running         int  `json:"running"`
+	Outstanding     int  `json:"outstanding"`
+}
+
+// Status reads a consistent snapshot of accepted review work.
+func (dispatcher *Dispatcher) Status() Status {
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	return dispatcher.statusLocked()
+}
+
+func (dispatcher *Dispatcher) statusLocked() Status {
+	return Status{
+		AdmissionClosed: dispatcher.closed, Queued: dispatcher.queued,
+		Running: dispatcher.running, Outstanding: dispatcher.queued + dispatcher.running,
+	}
+}
+
+// StopAdmission rejects new jobs while accepted jobs continue running.
+func (dispatcher *Dispatcher) StopAdmission() Status {
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	return dispatcher.stopAdmissionLocked()
+}
+
+// StopAdmissionIfIdle closes admission only when accepted work has finished.
+func (dispatcher *Dispatcher) StopAdmissionIfIdle() Status {
+	dispatcher.mu.Lock()
+	defer dispatcher.mu.Unlock()
+	if dispatcher.queued+dispatcher.running != 0 {
+		return dispatcher.statusLocked()
+	}
+	return dispatcher.stopAdmissionLocked()
+}
+
+func (dispatcher *Dispatcher) stopAdmissionLocked() Status {
+	if !dispatcher.closed {
+		dispatcher.closed = true
+		close(dispatcher.jobs)
+	}
+	return dispatcher.statusLocked()
 }
 
 // NewDispatcher creates a bounded worker pool.
@@ -41,6 +89,7 @@ func NewDispatcher(capacity int, workers int, runner Runner, logger *slog.Logger
 		started:   false,
 		closed:    false,
 		queued:    0,
+		running:   0,
 		mu:        sync.Mutex{},
 		wg:        sync.WaitGroup{},
 	}
@@ -118,11 +167,15 @@ func nextRunnableJob(
 func (dispatcher *Dispatcher) markStarted() {
 	dispatcher.mu.Lock()
 	dispatcher.queued--
+	dispatcher.running++
 	dispatcher.mu.Unlock()
 }
 
 func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) {
 	defer func() {
+		dispatcher.mu.Lock()
+		dispatcher.running--
+		dispatcher.mu.Unlock()
 		if recovered := recover(); recovered != nil {
 			dispatcher.logger.ErrorContext(
 				ctx,
@@ -161,12 +214,7 @@ func (dispatcher *Dispatcher) Enqueue(job domain.ReviewJob) bool {
 
 // Shutdown waits for accepted jobs to finish or until the context is cancelled.
 func (dispatcher *Dispatcher) Shutdown(ctx context.Context) error {
-	dispatcher.mu.Lock()
-	if !dispatcher.closed {
-		dispatcher.closed = true
-		close(dispatcher.jobs)
-	}
-	dispatcher.mu.Unlock()
+	dispatcher.StopAdmission()
 
 	done := make(chan struct{})
 	go func() {

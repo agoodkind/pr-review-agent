@@ -1,0 +1,27 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "SERVICE_NAME_IS_WRITTEN_BY_pragent-ops_deploy",
+  "account_id": "ACCOUNT_IS_WRITTEN_BY_pragent-ops_deploy",
+  "main": "service/index.js",
+  "compatibility_date": "2026-08-12",
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  "containers": [{
+    "class_name": "ReviewServiceContainer",
+    "image": "./Dockerfile",
+    "image_vars": {
+      "PR_REVIEW_AGENT_IMAGE": "IMAGE_DIGEST_IS_WRITTEN_BY_pragent-ops_deploy"
+    },
+    "instance_type": "basic",
+    "max_instances": 1
+  }],
+  "durable_objects": {
+    "bindings": [{ "name": "REVIEW_CONTAINER", "class_name": "ReviewServiceContainer" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ReviewServiceContainer"] }],
+  "services": [{
+    "binding": "RUNTIME_CONFIGURATION",
+    "service": "GATEWAY_NAME_IS_WRITTEN_BY_pragent-ops_deploy",
+    "entrypoint": "RuntimeConfiguration"
+  }]
+}
