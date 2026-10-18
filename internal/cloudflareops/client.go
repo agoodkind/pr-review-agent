@@ -177,6 +177,7 @@ type CredentialOptions struct {
 	TTL              time.Duration
 	APIURL           string
 	PermissionName   string
+	PermissionNames  []string
 }
 
 // Credentials retains recovery metadata until revocation and rejection are verified.
@@ -284,11 +285,27 @@ func AcquireCredentials(ctx context.Context, options CredentialOptions) (credent
 }
 
 func (client *Client) tokenBody(ctx context.Context, options CredentialOptions) ([]byte, error) {
-	permissionID, err := client.permissionID(ctx, options.PermissionName)
-	if err != nil {
-		return nil, err
+	names := options.PermissionNames
+	if len(names) == 0 {
+		names = []string{options.PermissionName}
 	}
-	body, err := json.Marshal(tokenRequest{Name: "pragent-ops-temporary", ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339), Policies: []tokenPolicy{{Effect: "allow", PermissionGroups: []permissionGroup{{ID: permissionID}}, Resources: map[string]string{"com.cloudflare.api.account." + options.Account: "*"}}}})
+	if len(options.PermissionNames) > 0 && options.PermissionName != "" {
+		return nil, errors.New("select PermissionName or PermissionNames, not both")
+	}
+	permissions := make([]permissionGroup, 0, len(names))
+	seen := make(map[string]bool)
+	for _, name := range names {
+		if seen[name] {
+			return nil, errors.New("temporary token permission names must be distinct")
+		}
+		seen[name] = true
+		permissionID, err := client.permissionID(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		permissions = append(permissions, permissionGroup{ID: permissionID})
+	}
+	body, err := json.Marshal(tokenRequest{Name: "pragent-ops-temporary", ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339), Policies: []tokenPolicy{{Effect: "allow", PermissionGroups: permissions, Resources: map[string]string{"com.cloudflare.api.account." + options.Account: "*"}}}})
 	if err != nil {
 		slog.WarnContext(ctx, "Temporary token policy encoding failed")
 		return nil, fmt.Errorf("encode temporary token policy: %w", err)
