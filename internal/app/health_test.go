@@ -42,12 +42,13 @@ func TestHealthProbeChecksRunningServiceRevision(t *testing.T) {
 		}
 	})
 	origin := fmt.Sprintf("http://127.0.0.1:%d", port)
-	for _, expected := range []string{"", version.SourceRevision(), "ffffffffffffffffffffffffffffffffffffffff"} {
+	revision := version.SourceRevision()
+	for _, expected := range []string{"", revision, revision + "0", "ffffffffffffffffffffffffffffffffffffffff"} {
 		command := exec.CommandContext(t.Context(), "../../deploy/cloudflare/scripts/probe-health.sh")
 		command.Env = append(os.Environ(), "HEALTH_URL="+origin+"/", "EXPECTED_REVISION="+expected,
 			"MAX_ATTEMPTS=10", "RETRY_DELAY_SECONDS=0.1")
 		output, err := command.CombinedOutput()
-		if expected == "ffffffffffffffffffffffffffffffffffffffff" {
+		if expected != "" && expected != revision {
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 				t.Fatalf("probe accepted a different service revision: %v: %s", err, output)

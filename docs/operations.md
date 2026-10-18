@@ -311,6 +311,6 @@ Require only `linux/amd64`. Record the digest and current Worker version before 
 
 ## Recover a failed deployment
 
-An unsuccessful candidate leaves the gateway selecting its previous application. Inspect the private stage log before attempting another deployment. Do not replace the active image to repair a candidate startup failure.
+An unsuccessful candidate does not change the gateway's selected application. Inspect the private stage log before attempting another deployment. Do not replace the active image to repair a candidate startup failure.
 
 If the container is unavailable, restore its recorded image digest and verify the routed `GET /` response. The Durable Object retains accepted deliveries during the outage. After recovery, confirm that the replay queue has settled each accepted delivery. For events requiring review, inspect the affected pull request for a completed `PR-Agent Review` check. If a check remains in progress after the next retry interval, inspect the Worker log by delivery identifier and the service log by run identifier before requesting another review.

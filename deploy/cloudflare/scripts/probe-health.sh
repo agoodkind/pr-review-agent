@@ -16,7 +16,7 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt++)); do
             if [[ -z "$EXPECTED_REVISION" ]]; then
                 exit 0
             fi
-            if [[ "$revision" =~ ^[0-9a-f]{7,40}$ && "$EXPECTED_REVISION" == "$revision"* ]]; then
+            if [[ "$revision" == "$EXPECTED_REVISION" ]]; then
                 exit 0
             fi
             echo "Container revision ${revision:-missing} does not match expected $EXPECTED_REVISION on attempt $attempt of $MAX_ATTEMPTS."
