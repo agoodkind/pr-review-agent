@@ -181,4 +181,6 @@ jobs:
         run: npm exec wrangler deploy
         working-directory: deploy/cloudflare
       - run: scripts/probe-health.sh
+        env:
+          EXPECTED_REVISION: ${{ github.sha }}
         working-directory: deploy/cloudflare

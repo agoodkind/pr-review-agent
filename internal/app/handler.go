@@ -17,6 +17,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/reassessment"
+	"goodkind.io/pr-review-agent/internal/version"
 	"goodkind.io/pr-review-agent/internal/webhook"
 )
 
@@ -390,6 +391,7 @@ func writeReviewEventError(writer http.ResponseWriter, err error) {
 
 func writeStatusOK(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("X-Pr-Agent-Revision", version.Commit)
 	writer.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(writer).Encode(map[string]string{"status": "ok"}); err != nil {
 		http.Error(writer, "encode response failed", http.StatusInternalServerError)
