@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-var errDeploymentCredentialInactive = errors.New("candidate deployment credential is not active (HTTP 401)")
+var (
+	errDeploymentCredentialInactive = errors.New("candidate deployment credential is not active (HTTP 401)")
+	errDeploymentControlUnpublished = errors.New("candidate deployment control is not published (HTTP 404)")
+)
 
 type drainStatusWire struct {
 	ContainerRunning *bool `json:"container_running"`
@@ -88,14 +91,15 @@ func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot 
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, errDeploymentCredentialInactive) {
+		if !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errDeploymentControlUnpublished) {
 			return err
 		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return errDeploymentCredentialInactive
+			slog.WarnContext(ctx, "Candidate deployment control availability exceeded its elapsed limit")
+			return fmt.Errorf("candidate deployment control did not become available before its timeout: %w", err)
 		case <-timer.C:
 		}
 	}
@@ -123,6 +127,9 @@ func (operation *deployment) drainRequest(ctx context.Context, origin, action st
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusUnauthorized {
 		return nil, errDeploymentCredentialInactive
+	}
+	if response.StatusCode == http.StatusNotFound {
+		return nil, errDeploymentControlUnpublished
 	}
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("candidate drain returned HTTP %d", response.StatusCode)

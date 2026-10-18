@@ -202,7 +202,7 @@ func (operation *deployment) runTestDeploymentCases(ctx context.Context, options
 	if result.AfterPromotion.Selection.Mode != "service" || result.AfterPromotion.Selection.Service != promotion.Candidate {
 		return errors.New("test gateway did not select the verified candidate")
 	}
-	if !reportedRevisionPattern.MatchString(result.AfterPromotion.Revision) || !strings.HasPrefix(options.Deployment.Revision, result.AfterPromotion.Revision) {
+	if result.AfterPromotion.Revision != options.Deployment.Revision {
 		return errors.New("promoted test gateway did not report the expected revision")
 	}
 	return operation.testSecondSlot(ctx, deploymentOptions, result)
@@ -210,10 +210,17 @@ func (operation *deployment) runTestDeploymentCases(ctx context.Context, options
 
 func (operation *deployment) testSecondSlot(ctx context.Context, options DeploymentOptions, result *DeploymentTestResult) error {
 	options.Directory = filepath.Join(operation.directory, "second-candidate")
-	promotion, samples, err := operation.testSuccessfulCandidate(ctx, options, []string{options.Revision}, "second-promotion-availability.ndjson")
-	result.SecondPromotionSamples = samples
+	observed, err := operation.observeTestDeployment(ctx, options, []string{options.Revision}, "second-promotion-availability.ndjson", operation.deployWithInterruptedHandoff)
+	result.SecondPromotionSamples = observed.samples
 	if err != nil {
 		return err
+	}
+	if observed.deploymentError != nil {
+		return observed.deploymentError
+	}
+	promotion := observed.deployment
+	if !promotion.Promoted {
+		return errors.New("resumed second candidate did not promote")
 	}
 	if promotion.Candidate != operation.configuration.Slots[1].Name {
 		return errors.New("second deployment did not choose the independent second slot")
@@ -222,7 +229,7 @@ func (operation *deployment) testSecondSlot(ctx context.Context, options Deploym
 	if err != nil {
 		return err
 	}
-	if result.AfterSecondPromotion.Selection.Service != promotion.Candidate || !strings.HasPrefix(options.Revision, result.AfterSecondPromotion.Revision) {
+	if result.AfterSecondPromotion.Selection.Service != promotion.Candidate || options.Revision != result.AfterSecondPromotion.Revision {
 		return errors.New("second slot did not become the expected active revision")
 	}
 	first, second := "", ""
@@ -417,7 +424,11 @@ func (operation *deployment) testSnapshot(ctx context.Context) (testDeploymentSn
 }
 
 func (operation *deployment) testWorkerVersion(ctx context.Context) (string, string, error) {
-	response, _, err := operation.client.request(ctx, http.MethodGet, "/accounts/"+operation.account+"/workers/scripts/"+operation.name+"/deployments", nil)
+	return operation.testWorkerVersionNamed(ctx, operation.name)
+}
+
+func (operation *deployment) testWorkerVersionNamed(ctx context.Context, name string) (string, string, error) {
+	response, _, err := operation.client.request(ctx, http.MethodGet, "/accounts/"+operation.account+"/workers/scripts/"+name+"/deployments", nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -556,7 +567,7 @@ func (operation *deployment) readTestGateway(ctx context.Context) testReadinessS
 }
 
 func (operation *deployment) testRejectedCandidate(ctx context.Context, options DeploymentOptions, baseline string) (int, int, error) {
-	observed, err := operation.observeTestDeployment(ctx, options, []string{baseline}, "availability.ndjson")
+	observed, err := operation.observeTestDeployment(ctx, options, []string{baseline}, "availability.ndjson", Deploy)
 	if err != nil {
 		return observed.samples.Count, observed.samples.Failed, err
 	}
@@ -571,7 +582,7 @@ func (operation *deployment) testRejectedCandidate(ctx context.Context, options 
 }
 
 func (operation *deployment) testSuccessfulCandidate(ctx context.Context, options DeploymentOptions, revisions []string, filename string) (DeploymentResult, testAvailabilityCounts, error) {
-	observed, err := operation.observeTestDeployment(ctx, options, revisions, filename)
+	observed, err := operation.observeTestDeployment(ctx, options, revisions, filename, Deploy)
 	if err != nil {
 		return observed.deployment, observed.samples, err
 	}
@@ -584,7 +595,7 @@ func (operation *deployment) testSuccessfulCandidate(ctx context.Context, option
 	return observed.deployment, observed.samples, nil
 }
 
-func (operation *deployment) observeTestDeployment(ctx context.Context, options DeploymentOptions, revisions []string, filename string) (observed observedTestDeployment, returnErr error) {
+func (operation *deployment) observeTestDeployment(ctx context.Context, options DeploymentOptions, revisions []string, filename string, deploy func(context.Context, DeploymentOptions) (DeploymentResult, error)) (observed observedTestDeployment, returnErr error) {
 	file, err := os.OpenFile(filepath.Join(operation.directory, filename), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		slog.WarnContext(ctx, "Availability evidence creation failed")
@@ -608,7 +619,7 @@ func (operation *deployment) observeTestDeployment(ctx context.Context, options 
 		count, failed, err := operation.sampleTestGateway(sampling, revisions, file)
 		results <- sampleResult{count: count, failed: failed, err: err}
 	}()
-	observed.deployment, observed.deploymentError = Deploy(ctx, options)
+	observed.deployment, observed.deploymentError = deploy(ctx, options)
 	cancel()
 	samples := <-results
 	observed.samples = testAvailabilityCounts{Count: samples.count, Failed: samples.failed}
