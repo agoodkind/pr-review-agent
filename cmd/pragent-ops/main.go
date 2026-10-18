@@ -262,6 +262,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if args[0] == "deploy" {
 		return deploy(ctx, args[1:], stdout, stderr)
 	}
+	if args[0] == "deployment-test" {
+		return deploymentTest(ctx, args[1:], stdout, stderr)
+	}
 	if args[0] == "storage" {
 		return storage(ctx, args[1:], stdout, stderr)
 	}

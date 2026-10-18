@@ -262,6 +262,17 @@ The Worker stores each signed GitHub delivery before forwarding the delivery to 
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
 
+Use the [isolated deployment harness](../deploy/cloudflare/scripts/test-deployment.mjs) to test candidate rejection and promotion without production traffic. The harness publishes separate test images with isolated runtime configuration, creates generated test Workers, records continuous availability samples and application images, and cleans up the registered Cloudflare resources. Each source archive requires a valid packaging attestation for its exact commit.
+
+```bash
+node deploy/cloudflare/scripts/test-deployment.mjs \
+    --account-token-file /path/to/cloudflare-account-token \
+    --baseline-run BASELINE_RUN_ID --baseline-revision BASELINE_COMMIT \
+    --candidate-run CANDIDATE_RUN_ID --candidate-revision CANDIDATE_COMMIT
+```
+
+Select distinct full commits and their completed CI packaging runs. Authenticate `gh` with package publication permission and start Docker before running the harness. The command prints its private evidence directory after successful cleanup and credential revocation. Preserve that directory if a check fails.
+
 Test discussion webhooks against the deployed service:
 
 1. Keep the pull request in [recovery-test.json](../deploy/cloudflare/recovery-test.json) open with at least one unresolved review thread started by the PR Agent.

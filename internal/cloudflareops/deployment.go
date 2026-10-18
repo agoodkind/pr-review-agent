@@ -15,6 +15,8 @@ import (
 	"time"
 )
 
+var errCandidateReadiness = errors.New("candidate did not become healthy before promotion")
+
 // DeploymentOptions selects public templates and file-backed deployment credentials.
 type DeploymentOptions struct {
 	Wrangler         string
@@ -355,7 +357,7 @@ func (operation *deployment) waitCandidate(ctx context.Context) error {
 		case <-ctx.Done():
 			timer.Stop()
 			slog.WarnContext(ctx, "Candidate warmup exceeded its elapsed limit", "candidate", operation.slot.Name)
-			return fmt.Errorf("candidate did not become healthy before promotion: %w", errors.Join(lastError, ctx.Err()))
+			return fmt.Errorf("%w: %w", errCandidateReadiness, errors.Join(lastError, ctx.Err()))
 		case <-timer.C:
 		}
 	}
