@@ -28,7 +28,11 @@ func PolicyHeader(policy reviewrules.Policy, minimumImportance int, importance r
 	data.MinimumImportance = minimumImportance
 	data.Rules = rules
 	data.UntrustedPolicy = untrusted
-	return renderPrompt(policy, "review.system", data)
+	header, err := renderPrompt(policy, "review.system", data)
+	if err != nil {
+		return "", err
+	}
+	return header + "\n" + policy.FileReviewInstructions(), nil
 }
 
 // ReconciliationPolicy applies the configured prose rules to thread decisions.

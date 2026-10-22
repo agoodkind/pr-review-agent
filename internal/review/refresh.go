@@ -101,6 +101,10 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	if current.Head != job.Head {
 		return true, nil
 	}
+	if hasState && ((state.PolicyRevision != "" && bindCheckpointPolicy(state, current, service.reviewPolicy, settings).PolicyRevision != state.PolicyRevision) ||
+		(state.PolicyRevision == "" && len(inputs.assessment.omissions) > 0)) {
+		return false, errReviewContextChanged
+	}
 	metadata := inputs.assessment.metadata
 	recorded := inputs.assessment.metadataRecorded
 	if inputs.assessment.metadataError != nil {
@@ -175,6 +179,9 @@ func (service *Service) refreshReviewedCheck(
 ) error {
 	logger := gklog.L(ctx)
 	withheld, err := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
+	if errors.Is(err, errReviewContextChanged) {
+		return service.reassessChangedContext(ctx, job, reviews, settings)
+	}
 	if err != nil {
 		logger.ErrorContext(ctx, "refresh reviewed check", slog.String("err", err.Error()))
 		var statuses []ProviderStatus
@@ -427,10 +434,13 @@ func (service *Service) applyRefreshedVerdict(
 		refreshed.threads, service.botLogin, job.PullRequestRef,
 	)
 	summary := Summary{
-		Head:             job.Head,
-		Decision:         refreshed.decision,
-		DecisionReason:   refreshed.decisionReason,
-		ApprovalWithheld: refreshed.approvalWithheld,
+		FileAssessmentNote: "", Head: job.Head,
+		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
+		FileAssessments:            nil,
+		FileAssessmentsDisplay:     service.reviewPolicy.FileAssessmentsDisplay(),
+		Decision:                   refreshed.decision,
+		DecisionReason:             refreshed.decisionReason,
+		ApprovalWithheld:           refreshed.approvalWithheld,
 		Report: Report{
 			Summary:     "",
 			Walkthrough: nil,

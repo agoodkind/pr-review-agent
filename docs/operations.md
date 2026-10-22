@@ -9,13 +9,13 @@ The service accepts `opened`, `reopened`, `ready_for_review`, `synchronize`, and
 
 Mention `@goodkind-io-pr-agent` in a new top-level pull request comment to request a full review. A review label also requests a full review. Replies to the service's inline findings and changes to thread resolution refresh the verdict. The GitHub App requires `issue_comment`, `pull_request_review_comment`, `pull_request_review_thread`, and `pull_request` subscriptions.
 
-Ordinary push reviews examine the changes since the last reviewed commit. The first review examines the whole pull request. The service updates one summary comment with the purpose, changes, verdict, and actionable metadata findings. File findings appear inline. Title, description, and commit-message findings identify the source lines in the summary. The reviewer includes an exact replacement or deletion when a safe correction is available. A verified metadata defect still requests changes when an exact correction is unavailable. Collapsed details report models, duration, usage, estimated cost, coverage, and thread identifiers.
+Reviews examine current pull request source and metadata. The service updates one summary comment with the purpose, changes, verdict, and actionable metadata findings. File findings appear inline. Title, description, and commit-message findings identify the source lines in the summary. The reviewer includes an exact replacement or deletion when a safe correction is available. A verified metadata defect still requests changes when an exact correction is unavailable. Collapsed details report models, duration, usage, estimated cost, coverage, and thread identifiers.
 
-The hidden state marker records the last reviewed commit, pending and completed chunks, run identifier, and status. Every summary update includes the marker. Resumed reviews reuse completed file chunks. Completed metadata chunks require a matching head and metadata revision. When the cached metadata record does not match, the service reviews the current metadata chunks again before approval.
+The hidden state marker records the last reviewed commit, pending and completed chunks, run identifier, status, and review context identity. Every summary update includes the marker. Resumed reviews reuse compatible completed chunks. A changed comparison, rule policy, or pull request context invalidates incompatible work and file exclusions. Older checkpoints retain their historical baseline but cannot establish compatibility for unfinished fragments.
 
-An edit limited to the title or description reuses completed file coverage and reviews current metadata. When edit coalescing is enabled, distinct deliveries postpone the queued review until the configured interval has elapsed since the latest edit. Superseded queued checks conclude `skipped` without model requests. A base-branch change, an edit to another field, or an edit without field details starts an immediate full review. Explicit full-review triggers also supersede pending metadata edits. Missing file coverage requires ordinary source review.
+A title or description edit requires reassessment when it changes the saved review context. When edit coalescing is enabled, distinct deliveries postpone the queued review until the configured interval has elapsed since the latest edit. Superseded queued checks conclude `skipped` without model requests. A base-branch change, an edit to another field, or an edit without field details starts an immediate full review. Explicit full-review triggers also supersede pending metadata edits. Missing file coverage requires ordinary source review.
 
-The service declines a delta that exceeds its configured admission limits before sending model requests. The summary reports the measured size. The check concludes `action_required`, and the last reviewed commit does not advance. Subsequent pushes include the unreviewed range until a review completes or the pull request is split.
+The service checks the configured file limit before sending model requests. It assesses large files before calculating the chunk limit. A justified content exclusion can avoid unnecessary payload review. A remaining delta that exceeds its configured limit receives a specific size notice and an `action_required` check. The last reviewed commit does not advance until assessment completes.
 
 Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
 
@@ -31,7 +31,9 @@ Missing private completion evidence requires a new assessment after the configur
 
 The queue waits for measured app quota availability. Other operational failures use exponential backoff. A successful check does not end retry when the assessment remains incomplete. A completed assessment ends retry even when an unresolved finding requires changes. The summary reports the scheduled retry time and reassessment identifier.
 
-The service measures the complete rendered input against its configured prompt budget. It trims surplus file context and splits chunks when needed. A provider response that stops at its output limit also triggers splitting. A single hunk that cannot fit or finish requires a decision about whether its unread content is necessary for the verdict.
+The service measures complete serialized provider requests, including system instructions, response schemas, source rows, and supporting context. It reduces optional context and divides large hunks into complete fragments while preserving source coordinates. A provider response that stops at its output limit also triggers division. An indivisible source row or required relationship assessment that exceeds the configured limit remains an explicit gap.
+
+The reviewer assesses generated, encrypted, binary, dependency, and external content according to the purpose of the parent change. A category alone does not justify an exclusion. Submodule review examines the parent repository's old and new commit pointers and related parent configuration. It does not retrieve nested upstream file differences. Accepted content exclusions represent completed scope decisions rather than failed reviews. Necessary missing content prevents approval and identifies the file and unresolved assessment.
 
 Each finding requires source evidence and a valid target. The loaded rule policy determines importance before the publication threshold applies. Duplicate identities suppress repeated findings. The service reconciles its existing threads against current source before publication.
 
@@ -77,7 +79,7 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
 | `REVIEW_CHUNK_TIMEOUT` | Timeout for one model request |
 | `REVIEW_CHUNK_CONCURRENCY` | Maximum chunks reviewed concurrently within one review |
-| `REVIEW_MAX_PROMPT_BYTES` | Chunk and context text budget, in bytes |
+| `REVIEW_MAX_PROMPT_BYTES` | Complete serialized provider request budget, in bytes |
 | `REVIEW_MODEL_PRICING` | Estimated dollars per million input, cached input, and output tokens by model |
 | `PORT` | Sets the container listener port and the Worker connection port |
 | `CONTAINER_SLEEP_AFTER` | Container idle duration |
@@ -104,6 +106,26 @@ Use the [rule-change procedure](#change-review-rules) to edit `metadata_findings
 | `hidden` | The summary omits the section. Review decisions and stored findings remain active. |
 
 The renderer excludes findings with IDs that already appear in published inline comments. Findings that GitHub refused to publish inline remain in the summary. The service stores those unpublished findings separately so later thread refreshes can compare their IDs. Older summaries without that record retain their unpublished findings until a full review writes the record.
+
+## Configure file review scope
+
+Use the [rule-change procedure](#change-review-rules) to configure contextual file assessments and their display. Exclusion permissions allow the reviewer to decide whether supplied evidence justifies skipping content inspection. They do not skip matching files automatically.
+
+File review settings:
+
+| Setting | Behavior |
+| --- | --- |
+| `file_classification.allowed_exclusions` | Permits content exclusions for selected categories after evidence validation. |
+| `file_classification.instructions` | Defines shared scope guidance, including parent-only submodule review. |
+| `file_classification.path_instructions` | Adds trusted guidance for paths matching Go `path.Match` patterns. A star matches within one path component. |
+| `file_classification.maximum_reason_bytes` | Bounds each persisted assessment reason. |
+| `file_classification.maximum_evidence_references` | Bounds the supplied evidence references in each assessment. |
+| `file_classification.maximum_persisted_bytes` | Bounds the complete hidden assessment record and visible assessment table separately. An incomplete record cannot justify approval. |
+| `file_assessments_display` | Selects `collapsed`, `expanded`, or `hidden` assessment details without changing review decisions. |
+| `relationship_review.enabled` | Adds joint source review for related fragments from separate requests. |
+| `relationship_review.maximum_pairs` | Bounds joint assessments. Necessary relationships beyond the limit remain explicit gaps. |
+
+The reviewer can exclude ciphertext during a credential rotation when parent source establishes the relevant behavior. Hidden permission changes still require evidence about those permissions. Generated executable SQL still requires review of its behavior. Classification reasons and evidence references appear in Review details by default.
 
 ## Configure provider order
 

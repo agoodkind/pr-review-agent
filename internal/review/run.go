@@ -69,6 +69,7 @@ type chunkPass struct {
 	collector       *findingCollector
 	models          modelSet
 	overviewByChunk map[int][]string
+	reviewedChunks  map[string]bool
 	published       []domain.Finding
 	metadata        []domain.Finding
 	metadataSeen    map[string]struct{}
@@ -76,15 +77,16 @@ type chunkPass struct {
 	failures        []chunkFailure
 	// unreadable names hunks this service could not get a whole answer about.
 	// It is the run's own observation, not anything the model reported.
-	unreadable  []unreadHunk
-	coverage    bool
-	requests    int
-	posted      int
-	failed      int
-	panicked    *chunkPanicError
-	votes       int
-	omissionsOK bool
-	decision    omissionDecision
+	unreadable    []unreadHunk
+	coverage      bool
+	requests      int
+	posted        int
+	failed        int
+	panicked      *chunkPanicError
+	assessmentErr error
+	votes         int
+	omissionsOK   bool
+	decision      omissionDecision
 }
 
 // chunkPanicError marks a chunk that panicked, so the run reports an internal
@@ -127,6 +129,7 @@ func newChunkPass(
 		collector:       newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
 		models:          modelSet{names: nil, seen: nil},
 		overviewByChunk: make(map[int][]string),
+		reviewedChunks:  make(map[string]bool),
 		published:       make([]domain.Finding, 0),
 		metadata:        nil,
 		metadataSeen:    make(map[string]struct{}),
@@ -138,10 +141,12 @@ func newChunkPass(
 		posted:          0,
 		failed:          0,
 		panicked:        nil,
+		assessmentErr:   nil,
 		votes:           0,
 		omissionsOK:     true,
 		decision: omissionDecision{
-			chunk: 0, acceptable: false, reason: "", recorded: false, complete: false,
+			assessments: nil,
+			chunk:       0, acceptable: false, reason: "", recorded: false, complete: false,
 		},
 	}
 }
@@ -199,6 +204,11 @@ func (pass *chunkPass) structuralShortfall() structuralShortfall {
 	defer pass.mu.Unlock()
 	shortfall := classifyStructuralShortfall(pass.work)
 	shortfall.Hunks = append(shortfall.Hunks, sortedUnreadHunks(pass.unreadable)...)
+	shortfall.Hunks = slices.DeleteFunc(shortfall.Hunks, func(hunk unreadHunk) bool {
+		return slices.ContainsFunc(pass.decision.assessments, func(assessment domain.FileAssessment) bool {
+			return assessment.Path == hunk.Path && assessment.Action == domain.FileActionReview && assessment.Reviewed
+		})
+	})
 	return shortfall
 }
 
@@ -324,17 +334,6 @@ func (service *Service) reviewDelta(
 		state:      state,
 	}
 	reviewChunks := work.chunks
-	if len(reviewChunks) == 0 && pass.structuralShortfall().present() {
-		reviewChunks = []diff.Chunk{{
-			Index:            1,
-			Total:            1,
-			Text:             "No changed lines were available to review.",
-			Pieces:           nil,
-			Paths:            nil,
-			Metadata:         nil,
-			CoverageComplete: true,
-		}}
-	}
 	fatal := service.reviewChunksConcurrently(ctx, job, head, reviewChunks, pass, tracker)
 	// A panic ends the run rather than leaving a chunk pending: it is a defect
 	// here, not a provider having a bad minute, and the next push would hit it
@@ -345,9 +344,18 @@ func (service *Service) reviewDelta(
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
-	if pass.hasUnreadableHunks() {
+	completed := tracker.snapshot().Completed
+	pass.mu.Lock()
+	for _, id := range completed {
+		pass.reviewedChunks[id] = true
+	}
+	pass.mu.Unlock()
+	if pass.structuralShortfall().present() {
 		if err := service.decideUnreadableHunks(ctx, pass); err == nil {
 			tracker.completeUnreadChunks()
+		} else if !errors.Is(err, ErrAssessmentIncomplete) {
+			logger.ErrorContext(ctx, "File scope assessment failed", slog.String("err", err.Error()))
+			pass.recordAssessmentFailure(err)
 		}
 	}
 	// A completed chunk can retain an unread hunk from an earlier pass. The
@@ -603,7 +611,7 @@ func (service *Service) settleChunk(
 	case ctx.Err() != nil:
 		// A stopping service is not one failed chunk.
 		return fmt.Errorf("review cancelled: %w", ctx.Err())
-	case errors.Is(err, errCommentRefused):
+	case errors.Is(err, errCommentRefused) && !settled.outcome.shortfall && !settled.outcome.unread:
 		// GitHub answered and refused. The chunk was read and its comment can
 		// never post, so it is finished rather than owed. The summary carries the
 		// finding instead, and the run still requests changes.
@@ -652,10 +660,10 @@ func (service *Service) checkpoint(
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
 		Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
 			renderMetadataFindings(pass.metadataFindings()) + "\n" +
-			encodeMetadataRecord(metadataReviewRecord{
-				Head: head, Revision: diff.PullRequestRevision(pass.work.PullRequest), Findings: pass.metadataFindings(),
-				Omissions: metadataOmissions(pass.structuralShortfall().Hunks), OmissionsAccepted: pass.acceptsOmissions(), DecisionReason: pass.decisionReason(),
-			}),
+			encodeFileAssessments(pass.fileAssessments(), service.reviewPolicy.FileAssessmentMaximumBytes()) + "\n" + encodeMetadataRecord(metadataReviewRecord{
+			Head: head, Revision: diff.PullRequestRevision(pass.work.PullRequest), Findings: pass.metadataFindings(),
+			Omissions: metadataOmissions(pass.structuralShortfall().Hunks), OmissionsAccepted: pass.acceptsOmissions(), DecisionReason: pass.decisionReason(),
+		}),
 		State: tracker.state,
 	})
 	if err != nil {
@@ -695,13 +703,28 @@ func (service *Service) reviewOneChunk(
 		gklog.L(ctx).ErrorContext(ctx, "Pull request prompt rendering failed", "err", err)
 		return nothing, err
 	}
-	omissions, err := omissionPrompt(promptShortfall, pass.work.Files, pass.settings.maximumPromptBytes, service.reviewPolicy)
+	omissions, err := sourceScopePrompt(promptShortfall, service.reviewPolicy)
 	if err != nil {
 		cancel()
 		gklog.L(ctx).ErrorContext(ctx, "Unread content prompt rendering failed", "err", err)
 		return nothing, err
 	}
-	analysis, err := reviewChunk(
+	var refusedPublication, transientPublication error
+	observe := func(fragment diff.Chunk, result domain.ReviewResult) error {
+		pass.recordOverview(chunk.Index, result.Overview)
+		pass.recordOmissionDecision(chunk.Index, result, service.reviewPolicy)
+		publicationErr := service.postChunkFindings(ctx, job, head, fragment, result.Findings, pass)
+		if errors.Is(publicationErr, errHeadMoved) || ctx.Err() != nil {
+			return publicationErr
+		}
+		if errors.Is(publicationErr, errCommentRefused) {
+			refusedPublication = errors.Join(refusedPublication, publicationErr)
+		} else {
+			transientPublication = errors.Join(transientPublication, publicationErr)
+		}
+		return nil
+	}
+	analysis, err := reviewChunkObserved(
 		callCtx,
 		service.model,
 		chunk,
@@ -709,29 +732,29 @@ func (service *Service) reviewOneChunk(
 		service.reviewPolicy,
 		pass.settings.maximumPromptBytes,
 		pass.work.Files,
-		pass.disputePrompt+pullRequestContext+omissions,
+		pass.disputePrompt+pullRequestContext,
 		&models,
 		&requests,
 		service.now,
+		observe,
+		omissions,
 	)
 	cancel()
 	pass.recordCall(models, requests)
-	if err != nil {
-		return nothing, err
-	}
 	pass.recordUnreadable(analysis.Unreadable)
 
-	findings := make([]domain.Finding, 0)
-	for _, result := range analysis.Results {
-		pass.recordOverview(chunk.Index, result.Overview)
-		pass.recordOmissionDecision(chunk.Index, result)
-		findings = append(findings, result.Findings...)
-	}
 	// Any unread hunk keeps its chunk owed until the final omission decision.
 	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
-	shortfall := len(analysis.Unreadable) > 0 && !unread
-	return chunkOutcome{unread: unread, shortfall: shortfall},
-		service.postChunkFindings(ctx, job, head, chunk, findings, pass)
+	shortfall := len(analysis.Unreadable) > 0 && !unread || err != nil && len(analysis.Results) > 0
+	publicationErr := transientPublication
+	if publicationErr == nil {
+		publicationErr = refusedPublication
+	}
+	combined := errors.Join(err, publicationErr)
+	if combined != nil {
+		gklog.L(ctx).WarnContext(ctx, "Chunk review or finding publication remains incomplete", slog.Any("err", combined))
+	}
+	return chunkOutcome{unread: unread, shortfall: shortfall}, combined
 }
 
 // postCandidate pairs one finding with its rendered comment, so ordering

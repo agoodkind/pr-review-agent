@@ -450,6 +450,7 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckCompletions(t, 1)
 	before := fixture.githubState.summaryCommentBody()
+	beforeCalls := fixture.clydeState.requestCount()
 
 	labeled := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
@@ -462,8 +463,8 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	_ = labeled.Body.Close()
 
 	time.Sleep(300 * time.Millisecond)
-	if calls := fixture.clydeState.requestCount(); calls != 2 {
-		t.Fatalf("clyde requests = %d, want 2 from the completed review: an unrelated label adds none", calls)
+	if calls := fixture.clydeState.requestCount(); calls != beforeCalls {
+		t.Fatalf("The unrelated label changed provider requests from %d to %d.", beforeCalls, calls)
 	}
 	if count := fixture.githubState.submitReviewCount(); count != 1 {
 		t.Fatalf("submit review count = %d, want 1", count)
@@ -898,7 +899,8 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	if first.StatusCode != http.StatusAccepted {
 		t.Fatalf("first status = %d, want 202", first.StatusCode)
 	}
-	fixture.waitForClydeCalls(t, 2)
+	fixture.waitForCheckCompletions(t, 1)
+	beforeCalls := fixture.clydeState.requestCount()
 
 	second := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
@@ -909,8 +911,8 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 		t.Fatalf("second status = %d, want 202", second.StatusCode)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if fixture.clydeState.requestCount() != 2 {
-		t.Fatalf("clyde requests = %d, want 2", fixture.clydeState.requestCount())
+	if calls := fixture.clydeState.requestCount(); calls != beforeCalls {
+		t.Fatalf("The duplicate delivery changed provider requests from %d to %d.", beforeCalls, calls)
 	}
 }
 
@@ -1467,14 +1469,15 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	}
 
 	runWebhook(t, "delivery-first-app")
+	beforeCalls := clydeState.requestCount()
 	if githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count after first app = %d, want 1", githubState.submitReviewCount())
 	}
 
 	runWebhook(t, "delivery-second-app")
 	time.Sleep(200 * time.Millisecond)
-	if clydeState.requestCount() != 2 {
-		t.Fatalf("clyde requests after fresh app = %d, want 2", clydeState.requestCount())
+	if calls := clydeState.requestCount(); calls != beforeCalls {
+		t.Fatalf("The new app instance changed provider requests from %d to %d for the reviewed head.", beforeCalls, calls)
 	}
 	if githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count after fresh app = %d, want 1", githubState.submitReviewCount())

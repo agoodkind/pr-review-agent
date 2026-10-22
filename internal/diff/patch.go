@@ -369,7 +369,10 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 	if lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
-	start := coordinates.newStart - 1
+	start := coordinates.newStart
+	if coordinates.newCount > 0 {
+		start--
+	}
 	end := start + coordinates.newCount
 	if start < 0 || start > len(lines) || end < start || end > len(lines) {
 		// A mismatch means the patch and fetched source disagree. Keep the

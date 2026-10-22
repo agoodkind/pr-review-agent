@@ -326,10 +326,11 @@ func (service *Service) writeFailureSummary(
 		return summaryCommentContent{
 			Prose: failureProse,
 			State: marker.State{
-				LastReviewed: existing.LastReviewed,
-				RunID:        job.DeliveryID,
-				Status:       marker.StateFailed,
-				Pending:      existing.Pending,
+				PolicyRevision: existing.PolicyRevision,
+				LastReviewed:   existing.LastReviewed,
+				RunID:          job.DeliveryID,
+				Status:         marker.StateFailed,
+				Pending:        existing.Pending,
 				// The chunks already read carry forward for the same reason the
 				// pending ones do. Dropping them here would send the next run
 				// over work this pull request has already paid for.

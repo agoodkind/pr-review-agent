@@ -11,7 +11,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-func TestARejectedOmissionWithoutFindingsPublishesOnlyAComment(t *testing.T) {
+func TestAnIncompleteFileAssessmentWithoutFindingsDoesNotSubmitAVerdict(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         oversizedHunkCollector{},
 		minimumImportance: 9,
@@ -24,23 +24,23 @@ func TestARejectedOmissionWithoutFindingsPublishesOnlyAComment(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
-		t.Fatalf("event = %v, want COMMENT without an actionable finding", fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("an incomplete assessment submitted a native verdict: %v", fixture.state.lastSubmitReview)
 	}
 }
 
-func TestARejectedOmissionRefreshRemovesABlockWithoutAnInlineFinding(t *testing.T) {
+func TestAStaleOmissionDecisionDoesNotEraseNewInlineFindings(t *testing.T) {
 	fixture := rejectedOmissionFixture(t)
 	seedStateNaming(fixture, testHeadSHA)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
-		t.Fatalf("event = %v, want COMMENT without an actionable finding", fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("a stale omission decision submitted a native verdict: %v", fixture.state.lastSubmitReview)
 	}
-	if len(fixture.state.dismissals) != 1 {
-		t.Fatalf("dismissals = %v, want the unsupported earlier block removed", fixture.state.dismissals)
+	if len(fixture.state.streamedComments) != 1 || len(fixture.state.dismissals) != 0 {
+		t.Fatalf("the fresh actionable finding requires its standing block: comments=%v dismissals=%v", fixture.state.streamedComments, fixture.state.dismissals)
 	}
 }
 

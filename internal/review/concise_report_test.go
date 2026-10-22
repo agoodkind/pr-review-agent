@@ -74,7 +74,7 @@ func TestCompletedReviewKeepsProseConciseAndFoldsActualUsage(t *testing.T) {
 		"| Estimated output cost | $0.00200000 |", "| Estimated total cost | $0.00310000 |",
 		"| Requests with priced usage | `1` of `2` |", "The estimate excludes its cost.",
 		"`review-alias`", "`review-model`", "`report-alias`", "`unpriced-report-model`", "| unknown |",
-		"| Coverage complete | yes |",
+		"| All file content inspected | yes |",
 	} {
 		if !strings.Contains(details, want) {
 			t.Fatalf("actual review details omit %q: %s", want, details)

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
@@ -243,7 +244,7 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		Chunks: nil,
 	}
 	selection := collectPublicationState(nil, nil, summaryCommentTestBotLogin)
-	settings := reviewSettings{minimumImportance: 1, maxFiles: 100, maxChunks: 60, chunkTimeout: time.Minute}
+	settings := reviewSettings{minimumImportance: 1, maxFiles: 100, maxChunks: 60, chunkTimeout: time.Minute, maximumPromptBytes: config.MaximumPromptBytes}
 	pass := newChunkPass(
 		work,
 		settings,
@@ -374,7 +375,7 @@ func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
 	service := &Service{model: model, chunkTimeout: booted, reviewPolicy: policytest.Load(t)}
 	pass := newChunkPass(
 		deltaWork{Files: nil, Chunks: nil},
-		reviewSettings{minimumImportance: 1, maxFiles: 10, maxChunks: 10, chunkTimeout: carried},
+		reviewSettings{minimumImportance: 1, maxFiles: 10, maxChunks: 10, chunkTimeout: carried, maximumPromptBytes: config.MaximumPromptBytes},
 		&publicationState{},
 		disputeContext{},
 		"",

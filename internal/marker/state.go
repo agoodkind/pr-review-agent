@@ -33,16 +33,17 @@ const statePrefix = "<!-- pr-review-agent:state:v1 "
 var statePattern = regexp.MustCompile(
 	`<!-- pr-review-agent:state:v1 last_reviewed=([0-9a-f]{40}|[0-9a-f]{64})? run=(\S+) ` +
 		`status=(reviewing|done|skipped|failed) pending=(\S*)(?: completed=(\S*))?` +
-		`(?: forced_by=(\S*))?(?: unread=(\S*))? -->`,
+		`(?: forced_by=(\S*))?(?: unread=(\S*))?(?: policy=(\S*))? -->`,
 )
 
 // State is the durable review position kept on the one top level comment. It
 // is the only memory the service has, so a new invocation reads it to learn
 // what has been reviewed and what remains.
 type State struct {
-	LastReviewed domain.HeadSHA
-	RunID        string
-	Status       string
+	PolicyRevision string
+	LastReviewed   domain.HeadSHA
+	RunID          string
+	Status         string
 	// Pending names the chunks the last run could not read. It is what the
 	// pull request reports, and what keeps LastReviewed from advancing.
 	Pending []string
@@ -73,10 +74,21 @@ type State struct {
 	Unread []string
 }
 
+// WithPolicyRevision clears incompatible unfinished work and records its review context.
+func (state State) WithPolicyRevision(revision string) State {
+	if state.PolicyRevision != revision {
+		state.Pending = nil
+		state.Completed = nil
+		state.Unread = nil
+	}
+	state.PolicyRevision = revision
+	return state
+}
+
 // EncodeState renders the state as one HTML comment line.
 func EncodeState(state State) string {
 	return fmt.Sprintf(
-		"%slast_reviewed=%s run=%s status=%s pending=%s completed=%s forced_by=%s unread=%s%s",
+		"%slast_reviewed=%s run=%s status=%s pending=%s completed=%s forced_by=%s unread=%s policy=%s%s",
 		statePrefix,
 		state.LastReviewed,
 		state.RunID,
@@ -85,6 +97,7 @@ func EncodeState(state State) string {
 		strings.Join(state.Completed, ","),
 		state.ForcedBy,
 		strings.Join(state.Unread, ","),
+		state.PolicyRevision,
 		markerSuffix,
 	)
 }
@@ -92,7 +105,7 @@ func EncodeState(state State) string {
 // DecodeState finds and parses the state marker anywhere in a comment body.
 func DecodeState(body string) (State, bool) {
 	matches := statePattern.FindStringSubmatch(body)
-	if len(matches) != 8 {
+	if len(matches) != 9 {
 		return emptyState(), false
 	}
 	head := domain.HeadSHA("")
@@ -104,13 +117,14 @@ func DecodeState(body string) (State, bool) {
 		head = parsed
 	}
 	return State{
-		LastReviewed: head,
-		RunID:        matches[2],
-		Status:       matches[3],
-		Pending:      splitIDs(matches[4]),
-		Completed:    splitIDs(matches[5]),
-		ForcedBy:     matches[6],
-		Unread:       splitIDs(matches[7]),
+		PolicyRevision: matches[8],
+		LastReviewed:   head,
+		RunID:          matches[2],
+		Status:         matches[3],
+		Pending:        splitIDs(matches[4]),
+		Completed:      splitIDs(matches[5]),
+		ForcedBy:       matches[6],
+		Unread:         splitIDs(matches[7]),
 	}, true
 }
 
@@ -125,7 +139,7 @@ func splitIDs(value string) []string {
 
 func emptyState() State {
 	return State{
-		LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil,
+		LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil, PolicyRevision: "",
 	}
 }
 

@@ -45,7 +45,7 @@ func (service *Service) reviewCurrentMetadata(
 	}
 	record := metadataReviewRecord{
 		Head: pullRequest.Head, Revision: diff.PullRequestRevision(pullRequest), Findings: nil,
-		Omissions:         classifyStructuralShortfall(deltaWork{PullRequest: pullRequest, Files: nil, Metadata: input.Metadata, Chunks: chunks}).Hunks,
+		Omissions:         classifyStructuralShortfall(deltaWork{FileAssessments: nil, AssessmentModels: nil, PullRequest: pullRequest, Files: nil, Metadata: input.Metadata, Chunks: chunks}).Hunks,
 		OmissionsAccepted: true, DecisionReason: "",
 	}
 	seen := make(map[string]struct{})

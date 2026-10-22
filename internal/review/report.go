@@ -119,7 +119,7 @@ func (service *Service) generateReport(
 	}
 	reportCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	defer cancel()
-	prompt, err := reportPrompt(pullRequest, pass.overviews(), pass.settings.maximumPromptBytes, service.reviewPolicy)
+	prompt, err := BuildReportPrompt(service.model, pullRequest, pass.overviews(), pass.settings.maximumPromptBytes, service.reviewPolicy)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "Final report prompt rendering failed", "err", err)
 		return fallback, false
@@ -138,7 +138,9 @@ func (service *Service) generateReport(
 	return report, true
 }
 
-func reportPrompt(
+// BuildReportPrompt fits optional change context into the complete provider request.
+func BuildReportPrompt(
+	model Model,
 	pullRequest githubapp.PullRequest,
 	overviews []string,
 	maximumBytes int,
@@ -150,15 +152,19 @@ func reportPrompt(
 		body.WriteString("\n- ")
 		body.WriteString(overview)
 	}
-	var data reviewrules.PromptData
-	data.Input = policy.WrapUntrusted("")
-	prefix, err := renderPrompt(policy, "report.input", data)
-	if err != nil {
-		return "", err
-	}
-	input := policy.EscapeUntrusted(body.String())
-	data.Input = policy.WrapUntrusted(truncateUTF8(input, max(maximumBytes-len(prefix), 0)))
-	return renderPrompt(policy, "report.input", data)
+	return boundStagePrompt(body.String(), maximumBytes, func(context string, omitted bool) (string, error) {
+		var data reviewrules.PromptData
+		data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(context))
+		prompt, err := renderPrompt(policy, "report.input", data)
+		if err != nil || !omitted {
+			return prompt, err
+		}
+		var noteData reviewrules.PromptData
+		note, err := renderPrompt(policy, "report.context_omitted", noteData)
+		return prompt + "\n\n" + note, err
+	}, func(prompt string) (int, error) {
+		return reportPromptBytes(model, prompt)
+	})
 }
 
 func fallbackReport(overviews []string) Report {

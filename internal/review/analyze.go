@@ -339,19 +339,30 @@ func reviewChunk(
 	models *modelSet,
 	requests *int,
 	now func() time.Time,
+	requiredSupport ...string,
+) (chunkAnalysis, error) {
+	return reviewChunkObserved(ctx, model, chunk, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, nil, requiredSupport...)
+}
+
+func reviewChunkObserved(
+	ctx context.Context, model Model, chunk diff.Chunk, minimumImportance int,
+	policy reviewrules.Policy, maximumBytes int, files []diff.FileContext, disputes string,
+	models *modelSet, requests *int, now func() time.Time,
+	observe func(diff.Chunk, domain.ReviewResult) error, requiredSupport ...string,
 ) (chunkAnalysis, error) {
 	logger := gklog.L(ctx)
 	nothing := chunkAnalysis{Results: nil, Unreadable: nil}
-	bounded, err := BoundReviewChunks([]diff.Chunk{chunk}, files, minimumImportance, disputes, policy, maximumBytes)
+	required := strings.Join(requiredSupport, "")
+	bounded, err := BoundModelReviewChunksWithContext(model, []diff.Chunk{chunk}, files, minimumImportance, required, disputes, policy, maximumBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "Review input size preparation failed", "err", err)
 		return nothing, err
 	}
 	if len(bounded) > 1 {
-		return reviewChunkParts(ctx, model, bounded, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now)
+		return reviewChunkParts(ctx, model, bounded, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, observe, required)
 	}
 	chunk = bounded[0]
-	prompt, err := BuildPrompt(chunk, minimumImportance, disputes, policy, maximumBytes)
+	prompt, err := BuildModelReviewPrompt(model, chunk, minimumImportance, required, disputes, policy, maximumBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "Review prompt rendering failed", "err", err)
 		return nothing, err
@@ -377,10 +388,14 @@ func reviewChunk(
 			slog.Int("paths", len(chunk.Paths)),
 			slog.Int("prompt_bytes", len(prompt)),
 		)
-		return chunkAnalysis{
+		analysis := chunkAnalysis{
 			Results:    []domain.ReviewResult{completion.Result},
 			Unreadable: nil,
-		}, nil
+		}
+		if observe != nil {
+			return analysis, observe(chunk, completion.Result)
+		}
+		return analysis, nil
 	}
 	// Every request that failed is timed here, before the truncation branch
 	// decides what to do about it. A truncated request still spent its duration
@@ -398,7 +413,8 @@ func reviewChunk(
 		slog.Int("prompt_bytes", len(prompt)),
 		slog.String("err", err.Error()),
 	)
-	if !truncated(err) {
+	var sizeFailure *diff.PromptSizeError
+	if !truncated(err) && !errors.As(err, &sizeFailure) {
 		return nothing, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
 	}
 
@@ -420,17 +436,17 @@ func reviewChunk(
 		slog.Int("chunk", chunk.Index),
 		slog.Int("hunks", len(chunk.Pieces)),
 	)
-	return reviewChunkParts(ctx, model, []diff.Chunk{first, second}, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now)
+	return reviewChunkParts(ctx, model, []diff.Chunk{first, second}, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, observe, required)
 }
 
-func reviewChunkParts(ctx context.Context, model Model, chunks []diff.Chunk, minimumImportance int, policy reviewrules.Policy, maximumBytes int, files []diff.FileContext, disputes string, models *modelSet, requests *int, now func() time.Time) (chunkAnalysis, error) {
+func reviewChunkParts(ctx context.Context, model Model, chunks []diff.Chunk, minimumImportance int, policy reviewrules.Policy, maximumBytes int, files []diff.FileContext, disputes string, models *modelSet, requests *int, now func() time.Time, observe func(diff.Chunk, domain.ReviewResult) error, required string) (chunkAnalysis, error) {
 	combined := chunkAnalysis{Results: nil, Unreadable: nil}
 	for _, chunk := range chunks {
-		part, err := reviewChunk(ctx, model, chunk, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now)
-		if err != nil {
-			return chunkAnalysis{Results: nil, Unreadable: nil}, err
-		}
+		part, err := reviewChunkObserved(ctx, model, chunk, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, observe, required)
 		combined.merge(part)
+		if err != nil {
+			return combined, err
+		}
 	}
 	return combined, nil
 }
@@ -513,6 +529,28 @@ func renderChunkPrompt(chunk diff.Chunk, minimumImportance int, disputes string,
 	data.Input = policy.WrapUntrusted(chunk.Text)
 	data.Anchors = policy.WrapUntrusted(string(anchors))
 	data.Disputes = disputes
+	for _, path := range chunk.Paths {
+		instruction := policy.FileClassificationPathInstructions(path)
+		if instruction == "" {
+			continue
+		}
+		var pathData reviewrules.PromptData
+		pathData.Path, pathData.Input = policy.EscapeUntrusted(path), instruction
+		text, err := renderPrompt(policy, "review.path_instructions", pathData)
+		if err != nil {
+			return "", err
+		}
+		data.Disputes = text + "\n" + data.Disputes
+	}
+	if chunk.RelationshipReview {
+		var relationshipData reviewrules.PromptData
+		relationshipData.Path = strings.Join(chunk.Paths, ", ")
+		instructions, err := renderPrompt(policy, "relationship.input", relationshipData)
+		if err != nil {
+			return "", err
+		}
+		data.Disputes = instructions + "\n" + data.Disputes
+	}
 	data.Index = chunk.Index
 	data.Total = chunk.Total
 	return renderPrompt(policy, "review.input", data)
