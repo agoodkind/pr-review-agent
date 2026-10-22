@@ -57,6 +57,11 @@ func assessmentPaths(shortfall structuralShortfall) []string {
 }
 
 func validateFileAssessments(result domain.ReviewResult, shortfall structuralShortfall, files []diff.FileContext, policy reviewrules.Policy) ([]domain.FileAssessment, bool) {
+	validated, accepted, _ := validateFileAssessmentsDetailed(result, shortfall, files, policy)
+	return validated, accepted
+}
+
+func validateFileAssessmentsDetailed(result domain.ReviewResult, shortfall structuralShortfall, files []diff.FileContext, policy reviewrules.Policy) ([]domain.FileAssessment, bool, error) {
 	paths := assessmentPaths(shortfall)
 	index := BuildFileIndex(files)
 	accepted := true
@@ -69,26 +74,16 @@ func validateFileAssessments(result domain.ReviewResult, shortfall structuralSho
 	seen := make(map[string]bool)
 	for _, assessment := range result.FileAssessments {
 		file, exists := index[assessment.Path]
-		if !exists || !slices.Contains(paths, assessment.Path) || seen[assessment.Path] || assessment.Validate() != nil || assessment.Identity != assessmentIdentity(file, policy) {
-			return nil, false
+		if !exists || !slices.Contains(paths, assessment.Path) {
+			return nil, false, assessmentValidationFailure(AssessmentTarget, 0, 1)
+		}
+		if seen[assessment.Path] {
+			return nil, false, assessmentValidationFailure(AssessmentDuplicate, 2, 1)
+		}
+		if err := validateAssessmentFields(assessment, file, files, policy); err != nil {
+			return nil, false, err
 		}
 		seen[assessment.Path] = true
-		if len(assessment.Reason) > policy.FileAssessmentMaximumReasonBytes() || len(assessment.Evidence) > policy.FileAssessmentMaximumEvidenceReferences() {
-			return nil, false
-		}
-		fileEvidence := false
-		for _, reference := range assessment.Evidence {
-			if reference == assessmentEvidenceID(file, policy) {
-				fileEvidence = true
-				continue
-			}
-			if reference != "pull_request" && reference != "changed_files" && !relatedEvidenceExists(reference, files, policy) {
-				return nil, false
-			}
-		}
-		if !fileEvidence {
-			return nil, false
-		}
 		assessment.Reason = sanitizeDecisionReason(assessment.Reason)
 		reviewed := assessment.Action == domain.FileActionReview && assessment.Reviewed
 		excluded := assessment.PermitsContentExclusion() && !assessment.Reviewed && policy.AllowsContentExclusion(assessment.ContentKind)
@@ -98,13 +93,47 @@ func validateFileAssessments(result domain.ReviewResult, shortfall structuralSho
 		validated = append(validated, assessment)
 	}
 	if len(validated) != len(paths) {
-		return validated, false
+		return validated, false, assessmentValidationFailure(AssessmentMissing, len(validated), len(paths))
 	}
 	if len(validated) > 0 && encodeFileAssessments(validated, policy.FileAssessmentMaximumBytes()) == "" {
-		return nil, false
+		payload, err := json.Marshal(validated)
+		if err != nil {
+			return nil, false, assessmentValidationFailure(AssessmentContract, 0, 1)
+		}
+		size := len(fileAssessmentMarkerPrefix) + base64.RawURLEncoding.EncodedLen(len(payload)) + len(" -->")
+		return nil, false, assessmentValidationFailure(AssessmentPersistenceLimit, size, policy.FileAssessmentMaximumBytes())
 	}
 	slices.SortFunc(validated, func(left, right domain.FileAssessment) int { return strings.Compare(left.Path, right.Path) })
-	return validated, accepted
+	return validated, accepted, nil
+}
+
+func validateAssessmentFields(assessment domain.FileAssessment, file diff.FileContext, files []diff.FileContext, policy reviewrules.Policy) error {
+	if err := assessment.Validate(); err != nil {
+		return normalizeFileAssessmentError(err)
+	}
+	if assessment.Identity != assessmentIdentity(file, policy) {
+		return assessmentValidationFailure(AssessmentIdentity, 0, 1)
+	}
+	if count := len(assessment.Reason); count > policy.FileAssessmentMaximumReasonBytes() {
+		return assessmentValidationFailure(AssessmentReasonLimit, count, policy.FileAssessmentMaximumReasonBytes())
+	}
+	if count := len(assessment.Evidence); count > policy.FileAssessmentMaximumEvidenceReferences() {
+		return assessmentValidationFailure(AssessmentEvidenceLimit, count, policy.FileAssessmentMaximumEvidenceReferences())
+	}
+	fileEvidence := false
+	for _, reference := range assessment.Evidence {
+		if reference == assessmentEvidenceID(file, policy) {
+			fileEvidence = true
+			continue
+		}
+		if reference != "pull_request" && reference != "changed_files" && !relatedEvidenceExists(reference, files, policy) {
+			return assessmentValidationFailure(AssessmentUnknownEvidence, 1, 0)
+		}
+	}
+	if !fileEvidence {
+		return assessmentValidationFailure(AssessmentFileEvidence, 0, 1)
+	}
+	return nil
 }
 
 func (pass *chunkPass) fileWasReviewed(path string) bool {

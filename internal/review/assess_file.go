@@ -23,6 +23,7 @@ func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, f
 	}
 	shortfall := structuralShortfall{Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}}}
 	var data reviewrules.PromptData
+	data.Path = path
 	instruction, err := renderPrompt(policy, "omissions.decision", data)
 	if err != nil {
 		return "", err
@@ -48,11 +49,24 @@ func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.P
 	}
 	completion, err := model.Review(ctx, prompt)
 	if err != nil {
+		if ctx.Err() == nil {
+			err = normalizeFileAssessmentError(err)
+		}
 		slog.ErrorContext(ctx, "assess file content", slog.String("path", path), slog.Any("err", err))
 		return completion, fmt.Errorf("assess file content for %s: %w", path, err)
 	}
 	if err := completion.Result.Validate(); err != nil {
-		return completion, fmt.Errorf("validate file assessment: %w", err)
+		return completion, fmt.Errorf("validate file assessment: %w", normalizeFileAssessmentError(err))
+	}
+	if count := len(completion.Result.FileAssessments); count != 1 {
+		code := AssessmentExtra
+		if count == 0 {
+			code = AssessmentMissing
+		}
+		return completion, assessmentValidationFailure(code, count, 1)
+	}
+	if completion.Result.FileAssessments[0].Path != path {
+		return completion, assessmentValidationFailure(AssessmentTarget, 0, 1)
 	}
 	input := diff.ReviewInput{PullRequest: pullRequest, Files: files, Metadata: nil, MergeBase: ""}
 	_, decisions, err := PlanFileContentReview(input, completion.Result.FileAssessments, policy)
@@ -62,9 +76,9 @@ func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.P
 	completion.Result.FileAssessments = decisions
 	file := BuildFileIndex(files)[path]
 	shortfall := structuralShortfall{Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}}}
-	validated, accepted := validateFileAssessments(completion.Result, shortfall, files, policy)
-	if len(validated) != 1 {
-		return completion, ErrAssessmentIncomplete
+	validated, accepted, err := validateFileAssessmentsDetailed(completion.Result, shortfall, files, policy)
+	if err != nil {
+		return completion, err
 	}
 	for _, reference := range validated[0].Evidence {
 		marker := reference
@@ -72,7 +86,7 @@ func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.P
 			marker = "Evidence ID: " + reference + "\n"
 		}
 		if !strings.Contains(prompt, marker) {
-			return completion, fmt.Errorf("file assessment cited evidence outside the supplied request: %w", ErrAssessmentIncomplete)
+			return completion, assessmentValidationFailure(AssessmentUnsuppliedEvidence, 1, 0)
 		}
 	}
 	completion.Result.FileAssessments = validated

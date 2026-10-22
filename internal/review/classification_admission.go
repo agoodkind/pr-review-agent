@@ -10,6 +10,7 @@ import (
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 func (service *Service) classifyLargeInput(ctx context.Context, input diff.ReviewInput, settings reviewSettings) (diff.ReviewInput, []domain.FileAssessment, []string, error) {
@@ -24,10 +25,18 @@ func (service *Service) classifyLargeInput(ctx context.Context, input diff.Revie
 		completion, err := AssessFileContent(callCtx, service.model, input.PullRequest, input.Files, file.Path, service.reviewPolicy, settings.maximumPromptBytes)
 		cancel()
 		if errors.Is(err, ErrAssessmentIncomplete) {
-			logger.WarnContext(ctx, "Large file requires content review because its assessment did not establish an exclusion", slog.String("path", file.Path))
-			continue
-		}
-		if err != nil {
+			attributes := []slog.Attr{slog.String("path", file.Path), slog.Any("err", err)}
+			var rejection *AssessmentValidationError
+			if errors.As(err, &rejection) {
+				attributes = append(attributes, slog.String("assessment_code", string(rejection.Code)), slog.String("assessment_field", rejection.Field), slog.Int("assessment_observed", rejection.Observed), slog.Int("assessment_limit", rejection.Limit))
+			}
+			logger.LogAttrs(ctx, slog.LevelWarn, "Large file classification remains unresolved; ordinary source review will continue", attributes...)
+			unresolved, fallbackErr := UnresolvedFileAssessment(file, service.reviewPolicy)
+			if fallbackErr != nil {
+				return input, nil, nil, fallbackErr
+			}
+			completion.Result.FileAssessments = []domain.FileAssessment{unresolved}
+		} else if err != nil {
 			logger.WarnContext(ctx, "Large file assessment failed", "path", file.Path, "err", err)
 			return input, nil, nil, fmt.Errorf("assess large file %s: %w", file.Path, err)
 		}
@@ -38,4 +47,19 @@ func (service *Service) classifyLargeInput(ctx context.Context, input diff.Revie
 	}
 	contentInput, assessments, err := PlanFileContentReview(input, assessments, service.reviewPolicy)
 	return contentInput, assessments, models, err
+}
+
+// UnresolvedFileAssessment records an incomplete decision against current file evidence.
+func UnresolvedFileAssessment(file diff.FileContext, policy reviewrules.Policy) (domain.FileAssessment, error) {
+	var data reviewrules.PromptData
+	reason, err := renderPrompt(policy, "coverage.classification_incomplete", data)
+	if err != nil {
+		return domain.FileAssessment{}, err
+	}
+	return domain.FileAssessment{
+		ContentReviewRequirement: domain.ContentReviewUncertain,
+		Reviewed:                 false, Path: file.Path, Identity: assessmentIdentity(file, policy),
+		ContentKind: reviewrules.ContentUnknown, Action: domain.FileActionGap,
+		Reason: reason, Evidence: []string{assessmentEvidenceID(file, policy)},
+	}, nil
 }

@@ -297,7 +297,7 @@ func (result ReviewResult) Validate() error {
 			return err
 		}
 		if assessed[assessment.Path] {
-			return errors.New("duplicate file assessment")
+			return &FileAssessmentValidationError{Field: "duplicate_path"}
 		}
 		assessed[assessment.Path] = true
 	}
