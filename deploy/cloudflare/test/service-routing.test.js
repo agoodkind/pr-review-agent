@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +10,12 @@ import test from "node:test";
 import { prepareServiceTestbed } from "../scripts/service-testbed.mjs";
 
 const directory = fileURLToPath(new URL("..", import.meta.url));
+
+async function writeGatewayConfiguration(file, configuration) {
+  const temporary = file + "." + randomUUID() + ".tmp";
+  await writeFile(temporary, JSON.stringify(configuration), { mode: 0o600, flag: "wx" });
+  await rename(temporary, file);
+}
 
 async function unusedPort() {
   const server = net.createServer();
@@ -27,6 +33,8 @@ async function startWorkers(configurations, port, evidence, credentials, phase) 
   }
   const child = spawn(path.join(directory, "node_modules/.bin/wrangler"), arguments_, {
     cwd: directory, stdio: ["ignore", "pipe", "pipe"],
+    // Poll the configuration files this fixture replaces during reloads.
+    env: { ...process.env, CHOKIDAR_USEPOLLING: "true" },
   });
   let output = "";
   const logPath = path.join(evidence, phase + ".log");
@@ -194,7 +202,7 @@ test("native service bindings use the production review container and restrict c
       await writeFile(path.join(fixture, "runtime.json"), JSON.stringify(runtime));
     }
     gateway.vars.REVIEW_SERVICE_MODE = mode === "legacy" ? "legacy" : "service";
-    await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
+    await writeGatewayConfiguration(gatewayPath, gateway);
     const configurations = mode === "candidate" || mode === "idle" ? [servicePath, gatewayPath] : [gatewayPath, servicePath];
     const stop = await startWorkers(configurations, port, evidence, redactions, mode);
     try {
@@ -290,7 +298,7 @@ test("native service bindings use the production review container and restrict c
       { binding: "REVIEW_SERVICE", service: service.name, entrypoint: "ReviewService" },
       { binding: "CANDIDATE_REVIEW_SERVICE", service: candidate.name, entrypoint: "ReviewService" },
     ];
-    await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
+    await writeGatewayConfiguration(gatewayPath, gateway);
     const stop = await startWorkers([gatewayPath, servicePath, nextServicePath], port, evidence, redactions, source + "-handoff");
     async function failureEvidence(lastResponse) {
       const diagnostic = { phase: source + "-handoff", expectedRevision, ...lastResponse };
@@ -337,7 +345,7 @@ test("native service bindings use the production review container and restrict c
       assert.equal(before.previous_container_running, true);
       assert.equal(before.complete, false);
       gateway.vars.REVIEW_HANDOFF = "true";
-      await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
+      await writeGatewayConfiguration(gatewayPath, gateway);
       await stateWhen("0".repeat(40), function (state) { return state.handoff; });
       const wrongCandidate = await fetch(origin + "/");
       assert.equal(wrongCandidate.status, 503);
@@ -361,7 +369,7 @@ test("native service bindings use the production review container and restrict c
       assert.equal(interrupted.status, 503);
       await interrupted.body?.cancel();
       gateway.vars.REVIEW_HANDOFF_REVISION = expectedRevision;
-      await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
+      await writeGatewayConfiguration(gatewayPath, gateway);
       await assertHealthy(origin, expectedRevision, failureEvidence);
       const settledDeadline = Date.now() + 120000;
       while (!stop.readOutput().split("\n").some(function (line) {
@@ -376,7 +384,7 @@ test("native service bindings use the production review container and restrict c
       assert.equal(complete.candidate_revision, expectedRevision);
       assert.equal(complete.previous_container_running, false);
       gateway.vars.REVIEW_HANDOFF = "false";
-      await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
+      await writeGatewayConfiguration(gatewayPath, gateway);
       await stateWhen(expectedRevision, function (state) { return !state.handoff; });
       const delayed = await fetch(origin + "/");
       assert.equal(delayed.status, 503, "delayed source fetch bypassed the persisted handoff fence");
@@ -384,7 +392,7 @@ test("native service bindings use the production review container and restrict c
       const fenced = await stateWhen(expectedRevision, function (state) { return !state.handoff; });
       assert.equal(fenced.previous_container_running, false, "delayed source fetch restarted the stopped source");
       gateway.vars.REVIEW_HANDOFF = "true";
-      await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
+      await writeGatewayConfiguration(gatewayPath, gateway);
       await assertHealthy(origin, expectedRevision, failureEvidence);
       await stateWhen(expectedRevision, function (state) { return state.complete; });
       proof.phases.push({ mode: source + "-handoff", revision: expectedRevision, replaySettled: true, sourceFenced: true });
