@@ -69,8 +69,8 @@ Extend [review.go](../../../internal/domain/review.go), the shared [schema.go](.
 - [x] Validate file identities and evidence references. Reject fabricated evidence, missing decisions, and incompatible saved state.
 - [x] Review necessary readable content through the recovered and partitioned text path. Require reasons for exclusions.
 - [x] Derive aggregate omission acceptance from complete per-file decisions. Keep actual content coverage separate from approval eligibility.
-- [ ] Verify the specification's contextual distinctions with actual configured providers through existing opt-in evaluation tooling. Include generated SQL and both encrypted-vault scenarios.
-- [ ] Run schema, policy, provider, coverage, and live evaluation checks. Commit this change independently.
+- [x] Verify the specification's contextual distinctions with actual configured providers through existing opt-in evaluation tooling. Include generated SQL and both encrypted-vault scenarios.
+- [x] Run schema, policy, provider, coverage, and live evaluation checks. Commit this change independently.
 
 ## Task 4: Preserve context, progress, and diagnostic detail
 
