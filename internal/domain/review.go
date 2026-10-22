@@ -282,14 +282,25 @@ func (finding Finding) Target() FindingTarget {
 // OmissionsAcceptable judges only the omission metadata supplied with the diff.
 // The service still determines what was read and reports every omission.
 type ReviewResult struct {
-	Overview            string    `json:"overview"`
-	OmissionsAcceptable bool      `json:"omissions_acceptable"`
-	DecisionReason      string    `json:"decision_reason"`
-	Findings            []Finding `json:"findings"`
+	Overview            string           `json:"overview"`
+	OmissionsAcceptable bool             `json:"omissions_acceptable"`
+	DecisionReason      string           `json:"decision_reason"`
+	Findings            []Finding        `json:"findings"`
+	FileAssessments     []FileAssessment `json:"file_assessments"`
 }
 
 // Validate rejects invalid findings and exact duplicates.
 func (result ReviewResult) Validate() error {
+	assessed := make(map[string]bool, len(result.FileAssessments))
+	for _, assessment := range result.FileAssessments {
+		if err := assessment.Validate(); err != nil {
+			return err
+		}
+		if assessed[assessment.Path] {
+			return errors.New("duplicate file assessment")
+		}
+		assessed[assessment.Path] = true
+	}
 	seen := make(map[string]struct{}, len(result.Findings))
 	for _, finding := range result.Findings {
 		if err := finding.Validate(); err != nil {

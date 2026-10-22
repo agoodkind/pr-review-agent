@@ -150,17 +150,21 @@ type Piece struct {
 // It keeps the pieces it was built from, so a caller that cannot process the
 // whole chunk can split it without re-deriving anything from the diff.
 type Chunk struct {
-	Index            int
-	Total            int
-	Text             string
-	Pieces           []Piece
-	Paths            []string
-	Metadata         []MetadataSource
-	CoverageComplete bool
+	RelationshipReview bool
+	Index              int
+	Total              int
+	Text               string
+	Pieces             []Piece
+	Paths              []string
+	Metadata           []MetadataSource
+	CoverageComplete   bool
 }
 
 // Split divides between pieces or complete source rows within one file piece.
 func (chunk Chunk) Split() (Chunk, Chunk, bool) {
+	if chunk.RelationshipReview {
+		return emptyChunk(), emptyChunk(), false
+	}
 	if len(chunk.Pieces) == 1 {
 		first, second, ok := splitFilePiece(chunk.Pieces[0])
 		if ok {
@@ -178,13 +182,14 @@ func (chunk Chunk) Split() (Chunk, Chunk, bool) {
 
 func emptyChunk() Chunk {
 	return Chunk{
-		Index:            0,
-		Total:            0,
-		Text:             "",
-		Pieces:           nil,
-		Paths:            nil,
-		Metadata:         nil,
-		CoverageComplete: true,
+		RelationshipReview: false,
+		Index:              0,
+		Total:              0,
+		Text:               "",
+		Pieces:             nil,
+		Paths:              nil,
+		Metadata:           nil,
+		CoverageComplete:   true,
 	}
 }
 
@@ -610,22 +615,24 @@ func (builder *chunkBuilder) addPath(path string) {
 func (builder *chunkBuilder) build() (Chunk, bool) {
 	if builder.text == "" {
 		return Chunk{
-			Index:            0,
-			Total:            0,
-			Text:             "",
-			Pieces:           nil,
-			Paths:            nil,
-			Metadata:         nil,
-			CoverageComplete: true,
+			RelationshipReview: false,
+			Index:              0,
+			Total:              0,
+			Text:               "",
+			Pieces:             nil,
+			Paths:              nil,
+			Metadata:           nil,
+			CoverageComplete:   true,
 		}, false
 	}
 	return Chunk{
-		Index:            0,
-		Total:            0,
-		Text:             builder.text,
-		Pieces:           builder.pieces,
-		Paths:            builder.paths,
-		Metadata:         builder.metadata,
-		CoverageComplete: builder.coverageComplete,
+		RelationshipReview: false,
+		Index:              0,
+		Total:              0,
+		Text:               builder.text,
+		Pieces:             builder.pieces,
+		Paths:              builder.paths,
+		Metadata:           builder.metadata,
+		CoverageComplete:   builder.coverageComplete,
 	}, true
 }

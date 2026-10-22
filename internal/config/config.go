@@ -77,8 +77,8 @@ const (
 	DeliveryCacheTTL = 24 * time.Hour
 	// MaximumWebhookBytes is the maximum accepted webhook body size.
 	MaximumWebhookBytes = 2 * 1024 * 1024
-	// MaximumPromptBytes is the maximum model prompt size for one batch.
-	MaximumPromptBytes = 80000
+	// MaximumPromptBytes is the default complete provider request size for one batch.
+	MaximumPromptBytes = 256 * 1024
 	// MaximumOutputTokens is the maximum model completion size.
 	MaximumOutputTokens = 8000
 	// MaximumChunkConcurrency is how many chunks of one delta are reviewed at

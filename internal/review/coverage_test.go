@@ -295,8 +295,8 @@ func TestAnUnreadChunkIsNotRecordedAsReadSoALaterRunStillHoldsTheBaseline(t *tes
 	}
 }
 
-// A placed actionable finding still blocks when the run also rejects an omission.
-func TestAOversizedHunkReceivesAReasonedRequestChangesVerdict(t *testing.T) {
+// A preflight assessment does not supply changed-line anchors for publication.
+func TestAnAssessmentCannotPublishAnUnanchoredFinding(t *testing.T) {
 	result := coverageFinding()
 	result.DecisionReason = "The unread change cannot be checked from the available context."
 	fixture := newServiceFixture(t, serviceFixtureOptions{
@@ -308,27 +308,22 @@ func TestAOversizedHunkReceivesAReasonedRequestChangesVerdict(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
-		t.Fatalf("event = %v, want REQUEST_CHANGES", fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("an unfinished file assessment submitted a native verdict: %v", fixture.state.lastSubmitReview)
 	}
-	if len(fixture.state.streamedComments) != 1 {
-		t.Fatalf("inline comments = %v, want the actionable finding", fixture.state.streamedComments)
-	}
-	comment := fixture.state.streamedComments[0]
-	if comment["path"] != coverageReadablePath || comment["line"] != float64(2) {
-		t.Fatalf("inline comment = %v, want the finding on %s:2", comment, coverageReadablePath)
+	if len(fixture.state.streamedComments) != 0 {
+		t.Fatalf("preflight output created inline comments without supplied anchors: %v", fixture.state.streamedComments)
 	}
 	body := failureSummaryComment(t, fixture)
-	for _, want := range []string{coverageUnreadablePath, result.DecisionReason, "### Omissions"} {
+	for _, want := range []string{coverageUnreadablePath, "### Omissions"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary comment does not contain %q:\n%s", want, body)
 		}
 	}
 }
 
-// Accepting the same omission approves when the current pull request explains
-// the change and no actionable finding remains.
-func TestAOversizedHunkCanBeAcceptedFromCurrentContext(t *testing.T) {
+// An aggregate acceptance cannot replace a current file assessment and evidence.
+func TestAnAggregateAnswerCannotAcceptUnreadFileContent(t *testing.T) {
 	result := domain.ReviewResult{
 		OmissionsAcceptable: true,
 		DecisionReason:      "The stated purpose and readable changes explain the unread change.",
@@ -342,11 +337,11 @@ func TestAOversizedHunkCanBeAcceptedFromCurrentContext(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
-		t.Fatalf("event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastSubmitReview["event"] == string(domain.ReviewDecisionApprove) {
+		t.Fatal("an aggregate answer approved unread content without a file assessment")
 	}
 	body := failureSummaryComment(t, fixture)
-	for _, want := range []string{coverageUnreadablePath, result.DecisionReason, "### Omissions"} {
+	for _, want := range []string{coverageUnreadablePath, "### Omissions"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary comment does not contain %q:\n%s", want, body)
 		}

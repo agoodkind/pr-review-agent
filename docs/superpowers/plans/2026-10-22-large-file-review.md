@@ -65,10 +65,10 @@ Extend [review.go](../../../internal/domain/review.go), the shared [schema.go](.
 
 **Interfaces:** Add per-file assessments to `domain.ReviewResult`. Each assessment contains a current file identity, content kind, review action, reason, and references to supplied evidence. The model schema and configured prompts use the same contract.
 
-- [ ] Collect bounded evidence from actual content, change metadata, related changes, generation declarations, and available checks.
-- [ ] Validate file identities and evidence references. Reject fabricated evidence, missing decisions, and incompatible saved state.
-- [ ] Review necessary readable content through the recovered and partitioned text path. Require reasons for exclusions.
-- [ ] Derive aggregate omission acceptance from complete per-file decisions. Keep actual content coverage separate from approval eligibility.
+- [x] Collect bounded evidence from actual content, change metadata, related changes, and supplied generation or validation information. Do not invent unavailable check results.
+- [x] Validate file identities and evidence references. Reject fabricated evidence, missing decisions, and incompatible saved state.
+- [x] Review necessary readable content through the recovered and partitioned text path. Require reasons for exclusions.
+- [x] Derive aggregate omission acceptance from complete per-file decisions. Keep actual content coverage separate from approval eligibility.
 - [ ] Verify the specification's contextual distinctions with actual configured providers through existing opt-in evaluation tooling. Include generated SQL and both encrypted-vault scenarios.
 - [ ] Run schema, policy, provider, coverage, and live evaluation checks. Commit this change independently.
 
@@ -78,13 +78,13 @@ Extend existing chunk identities, assessment snapshots, and omission records. Re
 
 **Interfaces:** Save comparison revisions, region coordinates, and relevant policy revision with compatible progress. Record reviewed regions, accepted content exclusions, and unresolved regions separately.
 
-- [ ] Resume unfinished work without reposting existing inline findings. Invalidate incompatible checkpoints and exclusions.
-- [ ] Include provider system instructions and response schemas in complete request accounting before partitioning input. Verify the actual provider request boundary rather than only `review.input`.
-- [ ] Assess shared behavior across fragments with bounded source context and a configured relationship review. Keep necessary unseen dependencies as gaps.
-- [ ] Render classification reasons and evidence references in the existing configurable details section.
+- [x] Resume unfinished work without reposting existing inline findings. Invalidate incompatible checkpoints and exclusions.
+- [x] Include provider system instructions and response schemas in complete request accounting before partitioning input. Verify the actual provider request boundary rather than only `review.input`.
+- [x] Assess shared behavior across fragments with bounded source context and a configured relationship review. Keep necessary unseen dependencies as gaps.
+- [x] Render classification reasons and evidence references in the existing configurable details section.
 - [ ] Verify a moved head, changed policy, accepted exclusions, essential missing content, and resumed publication through real-dependency integration boundaries.
 - [ ] Run complete required checks and review the branch against the specification. Prepare a pull request with the actual implemented scope and evidence.
 
 ## Delivery Scope
 
-Tasks 1 and 2 form the first independently reviewable milestone. Tasks 3 and 4 complete contextual classification and reporting. Do not describe the full feature as implemented before all tasks and required verification finish. Keep production deployment separate from source and test completion.
+Complete all four tasks as one delivery. Verify required checks and resolve review findings before merging. Deploy through the independent candidate process, confirm the exact active revision, and run the deployed classification scenarios through real GitHub deliveries. Restore the dedicated fixture after testing. Source verification does not establish production behavior.

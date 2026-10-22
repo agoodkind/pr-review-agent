@@ -47,6 +47,9 @@ func boundChunk(chunk Chunk, files map[string]FileContext, maximumBytes int, mea
 	if size <= maximumBytes {
 		return []Chunk{chunk}, nil
 	}
+	if chunk.RelationshipReview {
+		return nil, &PromptSizeError{Actual: size, Limit: maximumBytes}
+	}
 	if len(chunk.Pieces) > 1 {
 		return boundSplitChunk(chunk, files, maximumBytes, measure)
 	}
@@ -127,6 +130,7 @@ func oversizedChunk(chunk Chunk, maximumBytes int, measure func(Chunk) (int, err
 	piece.CoverageComplete = false
 	piece.Oversized = true
 	bounded := chunkFromPieces([]Piece{piece}, chunk.Index, chunk.Total)
+	bounded.RelationshipReview = chunk.RelationshipReview
 	size, err := measure(bounded)
 	if err != nil {
 		return nil, err

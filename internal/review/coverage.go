@@ -57,45 +57,51 @@ type structuralShortfall struct {
 }
 
 type omissionDecision struct {
-	chunk      int
-	acceptable bool
-	reason     string
-	recorded   bool
-	complete   bool
+	assessments []domain.FileAssessment
+	chunk       int
+	acceptable  bool
+	reason      string
+	recorded    bool
+	complete    bool
 }
 
 func (pass *chunkPass) decidedOmissions() bool {
+	structural := pass.structuralShortfall().present()
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
-	return pass.votes > 0 && (len(pass.unreadable) == 0 || pass.decision.complete)
+	return pass.votes > 0 && (!structural || pass.decision.complete)
 }
 
 func (pass *chunkPass) acceptsOmissions() bool {
+	structural := pass.structuralShortfall().present()
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	return pass.votes > 0 && pass.omissionsOK &&
-		(len(pass.unreadable) == 0 || pass.decision.complete)
+		(!structural || pass.decision.complete)
 }
 
-func (pass *chunkPass) hasUnreadableHunks() bool {
-	pass.mu.Lock()
-	defer pass.mu.Unlock()
-	return len(pass.unreadable) > 0
-}
-
-func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewResult) {
+func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewResult, policies ...reviewrules.Policy) {
+	for index := range result.FileAssessments {
+		result.FileAssessments[index].Reviewed = false
+	}
+	var policy reviewrules.Policy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	assessments, accepted := validateFileAssessments(result, pass.structuralShortfall(), pass.work.Files, policy)
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	pass.votes++
-	if !result.OmissionsAcceptable {
+	if !accepted {
 		pass.omissionsOK = false
 	}
 	candidate := omissionDecision{
-		chunk:      chunk,
-		acceptable: result.OmissionsAcceptable,
-		reason:     sanitizeDecisionReason(result.DecisionReason),
-		recorded:   true,
-		complete:   false,
+		assessments: assessments,
+		chunk:       chunk,
+		acceptable:  accepted,
+		reason:      sanitizeDecisionReason(result.DecisionReason),
+		recorded:    true,
+		complete:    false,
 	}
 	preferRejected := !candidate.acceptable && pass.decision.acceptable
 	sameDecision := candidate.acceptable == pass.decision.acceptable
@@ -110,17 +116,23 @@ func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewRes
 
 // replaceOmissionDecision records the answer that saw every omission. Earlier
 // chunk answers could not include a hunk that became unread during their calls.
-func (pass *chunkPass) replaceOmissionDecision(result domain.ReviewResult) {
+func (pass *chunkPass) replaceOmissionDecision(result domain.ReviewResult, policies ...reviewrules.Policy) {
+	var policy reviewrules.Policy
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	assessments, accepted := validateFileAssessments(result, pass.structuralShortfall(), pass.work.Files, policy)
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	pass.votes = 1
-	pass.omissionsOK = result.OmissionsAcceptable
+	pass.omissionsOK = accepted
 	pass.decision = omissionDecision{
-		chunk:      0,
-		acceptable: result.OmissionsAcceptable,
-		reason:     sanitizeDecisionReason(result.DecisionReason),
-		recorded:   true,
-		complete:   true,
+		assessments: assessments,
+		chunk:       0,
+		acceptable:  accepted,
+		reason:      sanitizeDecisionReason(result.DecisionReason),
+		recorded:    true,
+		complete:    true,
 	}
 }
 
@@ -189,6 +201,11 @@ func sortedUnreadHunks(hunks []unreadHunk) []unreadHunk {
 // same verdict about the same oversized hunk.
 func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 	hunks := make([]unreadHunk, 0)
+	for _, assessment := range work.FileAssessments {
+		if assessment.Action == domain.FileActionExclude || assessment.Action == domain.FileActionGap || assessment.Action == domain.FileActionInspectRelated {
+			hunks = append(hunks, unreadHunk{Path: assessment.Path, Header: "", Reason: sanitizeDecisionReason(assessment.Reason), Target: nil})
+		}
+	}
 	for _, file := range work.Files {
 		if !file.Gap.Recurs() {
 			continue
@@ -232,6 +249,9 @@ func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, max
 	for _, hunk := range hunks {
 		row := fmt.Sprintf("Source: %s\nRange: %s\nReason: %s\n\n",
 			escapeOmissionPromptText(hunk.sourceLabel(), policy), escapeOmissionPromptText(hunk.Header, policy), escapeOmissionPromptText(hunk.Reason, policy))
+		if file, found := BuildFileIndex(files)[hunk.Path]; found {
+			row += assessmentPromptRow(file, policy)
+		}
 		if metadata.Len()+len(row)+omittedNoticeBudget > metadataBudget {
 			break
 		}
@@ -255,6 +275,20 @@ func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, max
 			break
 		}
 		preview := omissionContentPreview(file.CurrentContent, min(maximumPullRequestDescriptionBytes, previewBudget), policy)
+		metadata.WriteString(header)
+		metadata.WriteString(preview)
+		metadata.WriteString("\n\n")
+	}
+	for _, file := range files {
+		if seen[file.Path] || file.CurrentContent == "" {
+			continue
+		}
+		header := fmt.Sprintf("Related evidence ID: related:%s\nChanged parent file: %s\nCurrent content excerpt:\n", assessmentIdentity(file, policy), escapeOmissionPromptText(file.Path, policy))
+		remaining := metadataBudget - metadata.Len() - len(header) - 2
+		if remaining <= 0 {
+			break
+		}
+		preview := omissionContentPreview(file.CurrentContent, min(maximumPullRequestDescriptionBytes, remaining), policy)
 		metadata.WriteString(header)
 		metadata.WriteString(preview)
 		metadata.WriteString("\n\n")
@@ -283,12 +317,51 @@ func omissionContentPreview(content string, maximumBytes int, policy reviewrules
 // off. The model sees the current pull request, its discussions, the readable
 // summaries, and every unread hunk. Findings still require changed lines.
 func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPass) error {
-	logger := gklog.L(ctx)
 	shortfall := pass.structuralShortfall()
-	if !shortfall.present() || !pass.hasUnreadableHunks() {
+	if !shortfall.present() {
 		return nil
 	}
+	var fileDecisions []domain.FileAssessment
+	for _, path := range assessmentPaths(shortfall) {
+		if assessment, exists := preflightExclusion(pass.work.FileAssessments, path); exists {
+			fileDecisions = append(fileDecisions, assessment)
+			continue
+		}
+		callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
+		completion, err := AssessFileContent(callCtx, service.model, pass.work.PullRequest, pass.work.Files, path, service.reviewPolicy, pass.settings.maximumPromptBytes)
+		cancel()
+		models := modelSet{names: nil, seen: nil}
+		models.add(completion.Model)
+		pass.recordCall(models, 1)
+		if err != nil {
+			return err
+		}
+		if completion.Result.FileAssessments[0].Action == domain.FileActionReview && pass.fileWasReviewed(path) {
+			completion.Result.FileAssessments[0].Reviewed = true
+		}
+		fileDecisions = append(fileDecisions, completion.Result.FileAssessments...)
+	}
+	metadata := false
+	for _, hunk := range shortfall.Hunks {
+		metadata = metadata || hunk.Target != nil
+	}
+	if !metadata {
+		reason := assessmentDecisionReason(fileDecisions)
+		limitReason, err := assessmentPersistenceReason(fileDecisions, service.reviewPolicy)
+		if err != nil {
+			return err
+		}
+		if limitReason != "" {
+			reason = limitReason
+		}
+		pass.replaceOmissionDecision(domain.ReviewResult{Overview: "", OmissionsAcceptable: true, DecisionReason: reason, Findings: nil, FileAssessments: fileDecisions}, service.reviewPolicy)
+		return nil
+	}
+	return service.decideUnreadableMetadata(ctx, pass, shortfall, fileDecisions)
+}
 
+func (service *Service) decideUnreadableMetadata(ctx context.Context, pass *chunkPass, shortfall structuralShortfall, fileDecisions []domain.FileAssessment) error {
+	logger := gklog.L(ctx)
 	var reviewed strings.Builder
 	for _, overview := range pass.overviews() {
 		if value := sanitizeReportText(overview); value != "" {
@@ -316,11 +389,10 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 	contextText +=
 		pass.disputePrompt + "The readable parts were summarized as follows:\n" +
 			service.reviewPolicy.WrapUntrusted(reviewed.String())
-	if len(required) > pass.settings.maximumPromptBytes {
-		required = truncateUTF8(required, pass.settings.maximumPromptBytes)
+	prompt, err := BoundReviewPrompt(service.model, required, contextText, pass.settings.maximumPromptBytes)
+	if err != nil {
+		return err
 	}
-	maximumContext := max(pass.settings.maximumPromptBytes-len(required), 0)
-	prompt := required + truncateUTF8(contextText, maximumContext)
 
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	defer cancel()
@@ -338,7 +410,13 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 		logger.ErrorContext(ctx, "validate unread change decision", slog.String("err", err.Error()))
 		return fmt.Errorf("validate unread change decision: %w", err)
 	}
-	pass.replaceOmissionDecision(completion.Result)
+	completion.Result.FileAssessments = fileDecisions
+	if reason, err := assessmentPersistenceReason(fileDecisions, service.reviewPolicy); err != nil {
+		return err
+	} else if reason != "" {
+		completion.Result.DecisionReason = reason
+	}
+	pass.replaceOmissionDecision(completion.Result, service.reviewPolicy)
 	logger.InfoContext(
 		ctx,
 		"unread changes decided from current pull request",
@@ -357,7 +435,7 @@ func pullRequestPrompt(
 	var contextText strings.Builder
 	fmt.Fprintf(
 		&contextText,
-		"Title: %s\nDescription: %s\nChanged files:",
+		"Title: %s\nDescription: %s\nEvidence ID: pull_request\nChanged files:",
 		truncateUTF8(escapeOmissionPromptText(pullRequest.Title, policy), maximumPullRequestDescriptionBytes),
 		truncateUTF8(escapeOmissionPromptText(pullRequest.Body, policy), maximumPullRequestDescriptionBytes),
 	)
@@ -369,6 +447,7 @@ func pullRequestPrompt(
 			escapeOmissionPromptText(file.Status, policy),
 		)
 	}
+	contextText.WriteString("\nEvidence ID: changed_files\n")
 	var data reviewrules.PromptData
 	data.Input = policy.WrapUntrusted(contextText.String())
 	return renderPrompt(policy, "pull_request.input", data)
@@ -537,21 +616,18 @@ func (service *Service) concludeStructurallyIncomplete(
 	summary.Models = pass.analysis().Models
 	summary.Usage = UsageFromContext(ctx)
 	failures := pass.unreadChunks()
-	statuses := providerStatuses(failures)
+	failureState := pass.scopeFailures(ctx)
+	statuses := failureState.statuses
 	disposition := domain.AssessmentDeclined
-	var classes []string
-	if len(failures) > 0 {
+	if failureState.cause != nil {
 		disposition = domain.AssessmentIncomplete
-		for _, class := range chunkFailureClasses(failures) {
-			classes = append(classes, string(class))
-		}
 	}
-	recordAssessment(ctx, disposition, &summary, classes, quotaRecovery(statuses))
-	cause := joinedChunkFailures(ctx, failures)
+	recordAssessment(ctx, disposition, &summary, failureState.classNames(), quotaRecovery(statuses))
+	cause := failureState.cause
 	addAttemptedModels(&summary, statuses)
 	conclusion := checkConclusionDeclined
 	if !pass.decidedOmissions() || pass.acceptsOmissions() {
-		conclusion = service.presentedConclusion(chunkFailureClasses(failures), conclusion)
+		conclusion = service.presentedConclusion(failureState.classes, conclusion)
 	}
 	if reportCalled {
 		current, err := service.github.GetPullRequest(
@@ -567,36 +643,29 @@ func (service *Service) concludeStructurallyIncomplete(
 		}
 	}
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
-	notice := structuralShortfallNotice(summary.Head, shortfall, len(state.Pending))
+	var scopeData reviewrules.PromptData
+	scopeData.Input = renderUnreadHunks(shortfall.Hunks)
+	scopeData.Index = len(shortfall.Hunks)
+	scopeData.Total = len(state.Pending)
+	notice, err := renderPrompt(service.reviewPolicy, "coverage.pending", scopeData)
+	if err != nil {
+		return err
+	}
+	title, err := renderPrompt(service.reviewPolicy, "coverage.check_title", scopeData)
+	if err != nil {
+		return err
+	}
 	if reason := chunkFailureReason(failures); reason != "" {
 		notice = reason + "\n\n" + notice
 	}
-	if len(failures) > 0 {
+	if cause != nil {
 		notice += "\n\n" + service.terminalFailureDetail(ctx, job, cause)
 	}
-	publicationCtx, cancelPublication := service.publicationContext(ctx)
-	defer cancelPublication()
-	if _, err := persistAssessment(publicationCtx, checkRun.ID); err != nil {
-		return err
+	publication := pendingScopePublication{
+		job: job, checkRunID: checkRun.ID, state: state, summary: summary,
+		notice: notice, title: title, conclusion: conclusion, statuses: statuses,
 	}
-	if err := service.upsertSummaryComment(publicationCtx, job, summaryCommentContent{
-		Prose: RenderUnreadableBody(summary, notice, statuses...) + reassessmentNotice(ctx),
-		State: state,
-	}); err != nil {
-		return service.failCheck(
-			publicationCtx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err,
-		)
-	}
-	if err := service.completeCheckRun(
-		publicationCtx,
-		job.InstallationID,
-		job.Repository,
-		checkRun.ID,
-		conclusion,
-		unreadableCheckTitle(len(shortfall.Hunks)),
-		notice+"\n\n"+RenderDetails(summary, statuses...),
-	); err != nil {
-		logger.WarnContext(ctx, "complete unread-content review check", slog.String("err", err.Error()))
+	if err := service.publishPendingScope(ctx, publication, progress); err != nil {
 		return errors.Join(err, dismissErr)
 	}
 	logger.InfoContext(
@@ -614,32 +683,13 @@ func (service *Service) concludeStructurallyIncomplete(
 	return nil
 }
 
-// unreadableCheckTitle is the one line a reader sees in the checks list.
-//
-// It says the count and no more. Every path is in the summary below it, where
-// length is not a constraint and a long path cannot crowd out the sentence.
-func unreadableCheckTitle(count int) string {
-	return fmt.Sprintf("The review has not decided whether %s may be omitted.", hunkCount(count))
-}
-
-func structuralShortfallNotice(
-	head domain.HeadSHA,
-	shortfall structuralShortfall,
-	pending int,
-) string {
-	return strings.Join([]string{
-		fmt.Sprintf("The review did not read %s on `%s`.", hunkCount(len(shortfall.Hunks)), shortHead(head)),
-		renderUnreadHunks(shortfall.Hunks),
-		"The review has not decided whether these unread changes are necessary for its verdict.",
-		remainingWorkSentence(pending),
-	}, "\n\n")
-}
-
-func remainingWorkSentence(pending int) string {
-	if pending == 0 {
-		return "Everything else on this head was reviewed, and anything found there is already inline."
+func renderPendingScopeBody(summary Summary, notice string, policy reviewrules.Policy, statuses ...ProviderStatus) (string, error) {
+	var data reviewrules.PromptData
+	verdict, err := renderPrompt(policy, "coverage.verdict_pending", data)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("%s went unread as well. Apply the `%s` label to review the unfinished chunks.", chunkCount(pending), domain.RerunReviewLabel)
+	return renderUnreadableBody(summary, notice, verdict, statuses...), nil
 }
 
 // maximumListedUnreadHunks bounds the list a notice prints.
@@ -704,15 +754,6 @@ func escapeUnreadHunkText(text string) string {
 	return strings.ReplaceAll(withoutLines, "`", string(rune(0x2CB)))
 }
 
-// hunkCount names a number of unread hunks without the plural mismatch a bare
-// count leaves in a sentence a person reads.
-func hunkCount(count int) string {
-	if count == 1 {
-		return "1 hunk"
-	}
-	return fmt.Sprintf("%d hunks", count)
-}
-
 // RenderUnreadableBody renders the visible comment for a head this service
 // cannot read whole.
 //
@@ -720,6 +761,10 @@ func hunkCount(count int) string {
 // none: that marker means this head was reviewed, and this comment says the
 // opposite.
 func RenderUnreadableBody(summary Summary, notice string, statuses ...ProviderStatus) string {
+	return renderUnreadableBody(summary, notice, "The review submitted no verdict.", statuses...)
+}
+
+func renderUnreadableBody(summary Summary, notice, verdict string, statuses ...ProviderStatus) string {
 	parts := []string{
 		"## Review",
 		"### Summary\n\n" + renderReportSummary(summary.Report),
@@ -727,7 +772,7 @@ func RenderUnreadableBody(summary Summary, notice string, statuses ...ProviderSt
 		"### Omissions\n\n" + notice,
 		verdictSectionStart,
 		"### Verdict",
-		"The review submitted no verdict.",
+		verdict,
 	}
 	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
 		parts = append(parts, fallback)

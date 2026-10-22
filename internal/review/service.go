@@ -373,6 +373,7 @@ func (service *Service) reviewOwedWork(
 ) error {
 	head := job.Head
 	state, hasState := service.loadDurableState(ctx, job)
+	state = bindCheckpointPolicy(state, pullRequest, service.reviewPolicy, settings)
 	// Forcing is something a delivery does once, not on every attempt of itself.
 	// A delivery is admitted again whenever its check run is short of completed,
 	// and the check run is created before the review publishes anything, so the
@@ -454,6 +455,7 @@ func (service *Service) reviewOwedWork(
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
 	pass := newChunkPass(work, settings, &selection, disputes, disputePrompt)
+	pass.seedFileAssessments(service.reviewPolicy)
 	for _, finding := range retainedMetadata {
 		pass.metadata = append(pass.metadata, finding)
 		pass.metadataSeen[metadataFindingKey(finding)] = struct{}{}
@@ -480,6 +482,7 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	progress.applyPublished(pass.publishedFindings())
 	progress.metadata = pass.metadataFindings()
 	progress.metadataRevision = diff.PullRequestRevision(pass.work.PullRequest)
+	progress.fileAssessments = pass.fileAssessments()
 	logChunkFailures(ctx, unread, len(pass.work.Chunks), pass.requestCount())
 	logger.InfoContext(
 		ctx,
@@ -644,7 +647,10 @@ func (service *Service) newProgress(
 	settings reviewSettings,
 	startedAt time.Time,
 ) *reviewProgress {
-	return newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced, service.reviewPolicy.MetadataFindingsDisplay())
+	progress := newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced, service.reviewPolicy.MetadataFindingsDisplay())
+	progress.fileAssessmentsDisplay = service.reviewPolicy.FileAssessmentsDisplay()
+	progress.fileAssessmentMaximumBytes = service.reviewPolicy.FileAssessmentMaximumBytes()
+	return progress
 }
 
 // checkAlreadySucceeded reports whether this head already carries a completed
@@ -753,28 +759,31 @@ func (service *Service) publish(
 			Summary:     "",
 			Walkthrough: nil,
 		},
-		Blocking:                blocking,
-		Models:                  analysis.Models,
-		Usage:                   UsageFromContext(ctx),
-		Duration:                service.now().Sub(startedAt),
-		FilesReviewed:           analysis.FilesReviewed,
-		Chunks:                  analysis.Chunks,
-		CoverageComplete:        analysis.CoverageComplete,
-		MinimumImportance:       settings.minimumImportance,
-		Observed:                analysis.Observed,
-		Eligible:                analysis.Anchored,
-		Published:               published,
-		Fallback:                fallback,
-		Metadata:                metadata,
-		MetadataRevision:        diff.PullRequestRevision(pass.work.PullRequest),
-		MetadataFindingsDisplay: service.reviewPolicy.MetadataFindingsDisplay(),
-		PriorReviews:            traceReviews(reviews, service.botLogin),
-		Threads:                 traceThreads(threads, service.botLogin),
-		Reached:                 "",
-		Failed:                  false,
-		Forced:                  job.Forced,
-		Omissions:               nil,
-		OmissionsAccepted:       omissionsAccepted,
+		Blocking:                   blocking,
+		Models:                     analysis.Models,
+		Usage:                      UsageFromContext(ctx),
+		Duration:                   service.now().Sub(startedAt),
+		FilesReviewed:              analysis.FilesReviewed,
+		Chunks:                     analysis.Chunks,
+		CoverageComplete:           analysis.CoverageComplete,
+		MinimumImportance:          settings.minimumImportance,
+		Observed:                   analysis.Observed,
+		Eligible:                   analysis.Anchored,
+		Published:                  published,
+		Fallback:                   fallback,
+		Metadata:                   metadata,
+		MetadataRevision:           diff.PullRequestRevision(pass.work.PullRequest),
+		MetadataFindingsDisplay:    service.reviewPolicy.MetadataFindingsDisplay(),
+		PriorReviews:               traceReviews(reviews, service.botLogin),
+		Threads:                    traceThreads(threads, service.botLogin),
+		Reached:                    "",
+		Failed:                     false,
+		Forced:                     job.Forced,
+		Omissions:                  nil,
+		OmissionsAccepted:          omissionsAccepted,
+		FileAssessments:            pass.fileAssessments(),
+		FileAssessmentsDisplay:     service.reviewPolicy.FileAssessmentsDisplay(),
+		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
 	}
 	if omissionsDecided {
 		summary.Omissions = shortfall.Hunks

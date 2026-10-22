@@ -8,6 +8,8 @@ The reviewer classifies content and chooses an action for each file. Generated, 
 
 The reviewer considers the pull request description, actual file content, related changes, repository generation declarations, and available validation results. Treat repository declarations as evidence to assess, not instructions to obey. Missing content and provider failures remain coverage gaps rather than evidence that a file is generated or irrelevant.
 
+For a submodule update, review the parent repository changing its recorded submodule commit. Assess the old and new commit pointers, repository source, and related parent configuration. Do not retrieve or review nested upstream file differences between those commits. Treat other external content according to the parent repository's ownership and the purpose of the change.
+
 Preserve the current Go service, provider ordering, provider budgets, streamed inline publication, durable review checkpoints, and one maintained top-level comment. Keep classification instructions, prompt templates, and resource limits configurable.
 
 ## Recover complete changes
@@ -57,6 +59,8 @@ Separate content the model reviewed from justified content exclusions and unreso
 
 Show concise author-facing status and place detailed file classifications, reasons, evidence references, recovered patch information, and pending regions in the existing collapsed review details. Keep that display configurable. Do not repeat inline findings in the top-level comment or add a second status comment.
 
+Report accepted exclusions as ordinary scope decisions. State the assessment performed and the content outside its scope. Identify a specific file and missing assessment when necessary content remains unread. Avoid generic failure language for generated, encrypted, binary, or external content that the reviewer has adequately assessed through related evidence. Keep the review instructions, exclusion requirements, and messages configurable at runtime.
+
 Binary visual assets require visual evidence when appearance matters. The initial implementation must report a visual review gap if the configured provider path cannot inspect the asset. It must not claim visual inspection from a text prompt. Encrypted values similarly remain unverified when the available evidence cannot establish the behavior that depends on them.
 
 ## Representative decisions
@@ -72,6 +76,7 @@ Example decisions:
 | A generated migration drops a column. | Review executable SQL, data loss, compatibility, and deployment order. |
 | A generated API client follows a schema change. | Review the schema and generation evidence; inspect consequential client behavior. |
 | A lockfile changes extensively. | Assess packages, versions, sources, integrity, and unexpected dependencies. |
+| A submodule pointer changes from commit A to commit B. | Review the parent repository's pointer update and related parent configuration without reviewing nested upstream file differences. |
 | A fixture gains repetitive records. | Assess meaningful data differences and the consuming tests. |
 | An encrypted vault changes during credential rotation. | Assess secret references and rotation validation; omit ciphertext interpretation only when that evidence suffices. |
 | An encrypted vault changes during an authorization redesign. | Keep a gap if hidden values determine permissions that other evidence cannot establish. |
@@ -82,7 +87,7 @@ Example decisions:
 
 Use Go and the existing application architecture. The builder may select a maintained Go text diff library and small internal types after checking their APIs. Do not require a Git executable in the production image. Temporary real Git repositories are appropriate regression dependencies.
 
-Implement collection recovery and hunk division as the first independently verifiable change. Extend configurable classification and coverage decisions after that path can review necessary large text. Do not publish or deploy incomplete classification behavior as though the entire design were implemented.
+Implement collection recovery, hunk division, configurable classification, and coverage reporting as one complete delivery. Merge after all required checks and review requirements pass. Deploy through the existing safe deployment process and verify the installed revision and actual review behavior.
 
 ## Verification
 

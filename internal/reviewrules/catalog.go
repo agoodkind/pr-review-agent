@@ -3,6 +3,7 @@ package reviewrules
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,12 +58,15 @@ type untrustedMarkers struct {
 }
 
 type promptsFile struct {
-	MetadataFindingsDisplay FindingDisplay         `json:"metadata_findings_display"`
-	UntrustedMarkers        untrustedMarkers       `json:"untrusted_markers"`
-	Limits                  FormattingLimits       `json:"limits"`
-	Templates               map[string]string      `json:"templates"`
-	ProviderDetails         []ProviderDetailColumn `json:"provider_details"`
-	FailureCodes            []FailureCode          `json:"failure_codes"`
+	RelationshipReview      RelationshipReviewPolicy `json:"relationship_review"`
+	FileAssessmentsDisplay  FindingDisplay           `json:"file_assessments_display"`
+	FileClassification      FileClassificationPolicy `json:"file_classification"`
+	MetadataFindingsDisplay FindingDisplay           `json:"metadata_findings_display"`
+	UntrustedMarkers        untrustedMarkers         `json:"untrusted_markers"`
+	Limits                  FormattingLimits         `json:"limits"`
+	Templates               map[string]string        `json:"templates"`
+	ProviderDetails         []ProviderDetailColumn   `json:"provider_details"`
+	FailureCodes            []FailureCode            `json:"failure_codes"`
 }
 
 // FormattingLimits bounds generated reports using the loaded configuration.
@@ -73,6 +77,8 @@ type FormattingLimits struct {
 
 // PromptData is the concrete interpolation contract for configured templates.
 type PromptData struct {
+	Path              string
+	Relationship      string
 	SummaryURL        string
 	Provider          string
 	Model             string
@@ -103,6 +109,10 @@ type Catalog struct {
 
 // Policy stores one loaded catalog and its configured prompt templates.
 type Policy struct {
+	relationshipReview      RelationshipReviewPolicy
+	fingerprint             string
+	fileAssessmentsDisplay  FindingDisplay
+	fileClassification      FileClassificationPolicy
 	metadataFindingsDisplay FindingDisplay
 	catalog                 Catalog
 	templates               map[string]*template.Template
@@ -125,20 +135,8 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	if err := validateFindingDisplay(prompts.MetadataFindingsDisplay); err != nil {
+	if err := validatePromptSettings(prompts); err != nil {
 		return Policy{}, err
-	}
-	if prompts.UntrustedMarkers.Begin == "" || prompts.UntrustedMarkers.End == "" || prompts.UntrustedMarkers.EscapedBegin == "" || prompts.UntrustedMarkers.EscapedEnd == "" {
-		return Policy{}, fmt.Errorf("prompt configuration requires all input markers")
-	}
-	if prompts.Limits.SummarySentences <= 0 || prompts.Limits.WalkthroughItems <= 0 {
-		return Policy{}, fmt.Errorf("prompt formatting limits must be positive")
-	}
-	if err := validateProviderColumns(prompts.ProviderDetails); err != nil {
-		return Policy{}, err
-	}
-	if len(prompts.Templates) == 0 {
-		return Policy{}, fmt.Errorf("prompt configuration requires templates")
 	}
 	compiled := make(map[string]*template.Template, len(prompts.Templates))
 	for name, body := range prompts.Templates {
@@ -162,18 +160,67 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	if _, exists := compiled["native.summary_link"]; !exists {
 		return Policy{}, fmt.Errorf("required prompt template %q is missing", "native.summary_link")
 	}
-	for _, name := range []string{"inline.footer", "failure.class.other", "failure.class.deadline", "failure.class.provider_unavailable", "failure.class.panic", "failure.class.daily_budget", "failure.class.usage_exceeded", "failure.class.rate_limited", "failure.dismiss", "failure.provider", "failure.service", "failure.details", "failure.row", "catalog.review", "catalog.output", "catalog.rule", "review.system", "review.input", "report.system", "report.input", "reconcile.system", "reconcile.input", "consolidate.system", "consolidate.input", "consolidate.across.input", "disputes.input", "omissions.none", "omissions.input", "omissions.decision", "pull_request.input", "structured.output", "untrusted.policy", "probe.user", "schema.finding.surface", "schema.finding.commit_sha", "schema.finding.correction_action", "schema.finding.path", "schema.finding.start_line", "schema.finding.end_line"} {
+	if err := validateRelationshipTemplates(prompts.RelationshipReview, compiled); err != nil {
+		return Policy{}, err
+	}
+	for _, name := range []string{"review.context_omitted", "review.path_instructions", "omissions.deferred", "coverage.pending", "coverage.check_title", "coverage.verdict_pending", "coverage.persistence_limit", "inline.footer", "failure.class.other", "failure.class.deadline", "failure.class.provider_unavailable", "failure.class.panic", "failure.class.daily_budget", "failure.class.usage_exceeded", "failure.class.rate_limited", "failure.dismiss", "failure.provider", "failure.service", "failure.details", "failure.row", "catalog.review", "catalog.output", "catalog.rule", "review.system", "review.input", "report.system", "report.input", "reconcile.system", "reconcile.input", "consolidate.system", "consolidate.input", "consolidate.across.input", "disputes.input", "omissions.none", "omissions.input", "omissions.decision", "pull_request.input", "structured.output", "untrusted.policy", "probe.user", "schema.finding.surface", "schema.finding.commit_sha", "schema.finding.correction_action", "schema.finding.path", "schema.finding.start_line", "schema.finding.end_line"} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
 		}
 	}
+	encoded, err := json.Marshal(struct {
+		Rules   catalogFile `json:"rules"`
+		Prompts promptsFile `json:"prompts"`
+	}{Rules: rules, Prompts: prompts})
+	if err != nil {
+		slog.Warn("Review policy identity encoding failed", "err", err)
+		return Policy{}, fmt.Errorf("encode review policy identity: %w", err)
+	}
 	return Policy{
+		relationshipReview:      prompts.RelationshipReview,
+		fingerprint:             fmt.Sprintf("%x", sha256.Sum256(encoded)),
+		fileAssessmentsDisplay:  prompts.FileAssessmentsDisplay,
+		fileClassification:      prompts.FileClassification,
 		metadataFindingsDisplay: prompts.MetadataFindingsDisplay,
 		catalog:                 Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
 		untrustedMarkers: prompts.UntrustedMarkers, limits: prompts.Limits,
 		providerDetails: prompts.ProviderDetails,
 		failureCodes:    prompts.FailureCodes,
 	}, nil
+}
+
+// Fingerprint identifies the loaded rules and prompt configuration.
+func (policy Policy) Fingerprint() string { return policy.fingerprint }
+
+// FileAssessmentsDisplay controls file assessment details in the review summary.
+func (policy Policy) FileAssessmentsDisplay() FindingDisplay { return policy.fileAssessmentsDisplay }
+
+func validatePromptSettings(prompts promptsFile) error {
+	if err := validateFindingDisplay(prompts.MetadataFindingsDisplay); err != nil {
+		return err
+	}
+	if prompts.FileAssessmentsDisplay != FindingsExpanded && prompts.FileAssessmentsDisplay != FindingsCollapsed && prompts.FileAssessmentsDisplay != FindingsHidden {
+		return fmt.Errorf("file_assessments_display must be expanded, collapsed, or hidden")
+	}
+	if err := prompts.FileClassification.Validate(); err != nil {
+		return err
+	}
+	if err := prompts.RelationshipReview.Validate(); err != nil {
+		return err
+	}
+	if prompts.UntrustedMarkers.Begin == "" || prompts.UntrustedMarkers.End == "" || prompts.UntrustedMarkers.EscapedBegin == "" || prompts.UntrustedMarkers.EscapedEnd == "" {
+		return fmt.Errorf("prompt configuration requires all input markers")
+	}
+	if prompts.Limits.SummarySentences <= 0 || prompts.Limits.WalkthroughItems <= 0 {
+		return fmt.Errorf("prompt formatting limits must be positive")
+	}
+	if err := validateProviderColumns(prompts.ProviderDetails); err != nil {
+		return err
+	}
+	if len(prompts.Templates) == 0 {
+		return fmt.Errorf("prompt configuration requires templates")
+	}
+	return nil
 }
 
 func compileTemplate(name, body string) (*template.Template, error) {

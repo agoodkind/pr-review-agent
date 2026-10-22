@@ -20,12 +20,15 @@ const shortHeadLength = 7
 // comment and the check run both render from this one value, so the two can
 // never disagree.
 type Summary struct {
-	Head              domain.HeadSHA
-	Decision          domain.ReviewDecision
-	DecisionReason    string
-	ApprovalWithheld  bool
-	Report            Report
-	OmissionsAccepted bool
+	FileAssessmentMaximumBytes int
+	FileAssessments            []domain.FileAssessment
+	FileAssessmentsDisplay     reviewrules.FindingDisplay
+	Head                       domain.HeadSHA
+	Decision                   domain.ReviewDecision
+	DecisionReason             string
+	ApprovalWithheld           bool
+	Report                     Report
+	OmissionsAccepted          bool
 	// Blocking states what a requesting-changes verdict is waiting on, one
 	// entry per cause. A block that names nothing reads as a silent repeat, so
 	// a blocking verdict always carries at least one entry here.
@@ -101,6 +104,7 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 		rows = append(rows, [2]string{"Reached", formatReached(summary.Reached)})
 	} else {
 		rows = append(rows, [2]string{"Coverage complete", formatYesNo(summary.CoverageComplete)})
+		rows = append(rows, [2]string{"Scope assessment complete", formatYesNo(summary.CoverageComplete || summary.OmissionsAccepted)})
 	}
 	rows = append(
 		rows,
@@ -118,7 +122,10 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	var builder strings.Builder
 	builder.WriteString("<details>\n<summary>Review details</summary>\n\n")
 	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
-		builder.WriteString("#### Omission decision\n\n" + reason + "\n\n")
+		builder.WriteString("#### Review scope\n\n" + reason + "\n\n")
+	}
+	if summary.FileAssessmentsDisplay == reviewrules.FindingsCollapsed {
+		builder.WriteString(renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes))
 	}
 	builder.WriteString("| | |\n| --- | --- |\n")
 	for _, row := range rows {
@@ -142,7 +149,10 @@ func RenderBody(summary Summary) string {
 		"### Changes\n\n" + renderWalkthrough(summary.Report),
 		renderVerdictSection(summary, false),
 	}
-	if len(summary.Omissions) > 0 {
+	if summary.FileAssessmentsDisplay == reviewrules.FindingsExpanded {
+		parts = append(parts, renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes))
+	}
+	if len(summary.Omissions) > 0 && !summary.OmissionsAccepted {
 		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
 	}
 	parts = append(parts, RenderDetails(summary), marker.Summary()+"\n"+RenderVerdictBody(summary))
@@ -241,6 +251,9 @@ func renderFallbackFindings(findings []domain.Finding) string {
 func RenderVerdictBody(summary Summary) string {
 	parts := make([]string, 0, 5)
 	parts = append(parts, marker.Review(summary.Head, summary.Decision))
+	if assessments := encodeFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes); assessments != "" {
+		parts = append(parts, assessments)
+	}
 	if summary.ApprovalWithheld || summary.Decision == domain.ReviewDecisionComment {
 		parts = append(parts, approvalWithheldMarker)
 	}
@@ -289,7 +302,7 @@ const withdrawnBlockNote = "The blocking review on this commit was dismissed by 
 // the comment is the only place a reader learns why.
 func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool, details, reportPrefix string) string {
 	parts := []string{reportPrefix, renderVerdictSection(summary, blockWithdrawn)}
-	if len(summary.Omissions) > 0 {
+	if len(summary.Omissions) > 0 && !summary.OmissionsAccepted {
 		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
 	}
 	parts = append(
@@ -301,6 +314,9 @@ func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool, details, re
 }
 
 func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bool) string {
+	if len(summary.FileAssessments) == 0 {
+		summary.FileAssessments = decodeFileAssessments(existingBody)
+	}
 	prose := stripMaintenanceFailure(stripDurableStateMarker(existingBody))
 	fallbackRecord, recordedFallback := readFallbackRecord(prose, summary.Head)
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && recordedFallback {
@@ -546,6 +562,12 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 		if trimmed := strings.TrimSpace(note); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
+	}
+	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
+		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
+	}
+	if record := encodeFallbackRecord(summary); record != "" {
+		parts = append(parts, record)
 	}
 	if metadata := renderSummaryMetadata(summary); metadata != "" {
 		parts = append(parts, metadata)
