@@ -86,7 +86,7 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	sqlSources := map[domain.HeadSHA][]string{domain.HeadSHA(live.fixture.head): strings.Split(sql, "\n")}
 	live.await(t, ctx, "generated_sql", func(snapshot reviewBodySnapshot, body string) bool {
 		kind, action, found := largeFileAssessment(body, sqlPath)
-		if found && ((kind != "generated" && kind != "source") || action != "review") {
+		if !found || (kind != "generated" && kind != "source") || action != "review" {
 			return false
 		}
 		if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
