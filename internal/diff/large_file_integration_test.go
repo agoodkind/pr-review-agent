@@ -78,6 +78,41 @@ func TestSingleGitHunkSplitsRecursivelyWithOriginalCoordinates(t *testing.T) {
 	assertLargeGitCoverage(t, change, input, parts)
 }
 
+func TestGitPrefixDeletionKeepsBoundedContextAtZeroNewStart(t *testing.T) {
+	deleted := make([]string, 100)
+	for index := range deleted {
+		deleted[index] = fmt.Sprintf("deleted prefix line %03d", index)
+	}
+	surviving := make([]string, 1000)
+	for index := range surviving {
+		surviving[index] = fmt.Sprintf("surviving source line %04d %s", index, strings.Repeat("s", 60))
+	}
+	after := strings.Join(surviving, "\n") + "\n"
+	change := largeGitChange{before: strings.Join(deleted, "\n") + "\n" + after, after: after, status: "modified", added: map[int]string{}, removed: deleted}
+	input := largeGitReviewInput(t, change)
+	if !strings.Contains(input.Files[0].Patch, "@@ -1,100 +0,0 @@") {
+		t.Fatal("The Git fixture must delete a prefix with a zero new-side start.")
+	}
+	chunks, err := diff.ChunkInput(input, largeGitPromptBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := policytest.Load(t)
+	bounded, err := review.BoundReviewChunks(chunks, input.Files, 7, "", policy, largeGitPromptBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, chunk := range bounded {
+		if _, err := review.BuildPrompt(chunk, 7, "", policy, largeGitPromptBytes); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertLargeGitCoverage(t, change, input, bounded)
+	if !strings.Contains(bounded[0].Text, surviving[0]) {
+		t.Fatal("The deletion review must include context from the surviving file's first line.")
+	}
+}
+
 func TestIndivisibleGitLineRetainsAnExplicitCoverageGap(t *testing.T) {
 	line := strings.Repeat("x", largeGitPromptBytes*3)
 	change := largeGitChange{before: "", after: line + "\n", status: "added", added: map[int]string{1: line}, removed: nil}
