@@ -170,11 +170,11 @@ func assertRecoveredRepositoryFiles(t *testing.T, source *repositorySource, inpu
 			t.Fatalf("The recoverable text file %s remains incomplete.", file.Path)
 		}
 		if file.Status != "removed" {
-			actual, err := source.GetFile(t.Context(), 1, domain.Repository{}, file.Path, source.head)
-			if err != nil || file.CurrentContent != string(actual) {
+			actual := largeGitCommand(t, source.directory, "show", string(source.head)+":"+file.Path)
+			if file.CurrentContent != actual {
 				t.Fatalf("Recovered current content does not match the immutable head for %s.", file.Path)
 			}
-			if err := diff.ValidatePatchContent(file.Patch, string(actual)); err != nil {
+			if err := diff.ValidatePatchContent(file.Patch, actual); err != nil {
 				t.Fatalf("Recovered patch does not match head content for %s: %v", file.Path, err)
 			}
 		}

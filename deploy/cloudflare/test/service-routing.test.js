@@ -240,12 +240,14 @@ test("native service bindings use the production review container and restrict c
     const stop = await startWorkers([gatewayPath, servicePath, nextServicePath], port, evidence, redactions, source + "-handoff");
     async function stateWhen(expected, predicate) {
       const deadline = Date.now() + 120000;
+      let lastState;
       while (Date.now() < deadline) {
         const response = await fetch(origin + "/internal/v1/deployment", { method: "POST",
           headers: { Authorization: `Bearer ${deploymentToken}` },
           body: JSON.stringify({ action: "status", expected_revision: expected }) });
         if (response.ok) {
           const state = await response.json();
+          lastState = state;
           if (predicate(state)) return state;
         } else {
           assert.ok([409, 503].includes(response.status), `deployment status failed with HTTP ${response.status}`);
@@ -253,7 +255,7 @@ test("native service bindings use the production review container and restrict c
         }
         await new Promise(function (resolve) { setTimeout(resolve, 250); });
       }
-      assert.fail("actual deployment state did not satisfy the handoff assertion");
+      assert.fail(`actual deployment state did not satisfy the ${source} handoff assertion: ${JSON.stringify(lastState)}`);
     }
     try {
       const unauthorized = await fetch(origin + "/internal/v1/deployment", { method: "POST",
@@ -313,8 +315,8 @@ test("native service bindings use the production review container and restrict c
       assert.equal(fenced.previous_container_running, false, "delayed source fetch restarted the stopped source");
       gateway.vars.REVIEW_HANDOFF = "true";
       await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
-      await stateWhen(expectedRevision, function (state) { return state.complete; });
       await assertHealthy(origin, expectedRevision);
+      await stateWhen(expectedRevision, function (state) { return state.complete; });
       proof.phases.push({ mode: source + "-handoff", revision: expectedRevision, replaySettled: true, sourceFenced: true });
     } finally {
       await stop();

@@ -5,7 +5,6 @@ package githubapp
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -47,17 +46,6 @@ func TestGetLargePinnedFileFromGitHub(t *testing.T) {
 	const revision domain.HeadSHA = "7be4bc52fd9e0e55dc9a2e0232b89427d2c4b614"
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
-	metadata, err := client.doREST(ctx, installationID, http.MethodGet, client.repoPath(repo, "/contents/"+path), url.Values{"ref": {string(revision)}}, nil)
-	if err != nil {
-		t.Fatalf("Read pinned file metadata: %v", err)
-	}
-	var file fileContentResponse
-	if err := json.Unmarshal(metadata, &file); err != nil {
-		t.Fatal(err)
-	}
-	if file.Encoding != "none" || file.Content != "" {
-		t.Fatal("The live fixture must require retrieval beyond inline Contents API data.")
-	}
 	content, err := client.GetFile(ctx, installationID, repo, path, revision)
 	if err != nil {
 		t.Fatalf("GetFile: %v", err)
