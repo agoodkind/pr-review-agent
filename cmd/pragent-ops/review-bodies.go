@@ -298,19 +298,19 @@ func captureReviewBodies(ctx context.Context, client *githubapp.Client, installa
 	var err error
 	snapshot.PullRequest, err = client.GetPullRequest(ctx, installationID, repo, number)
 	if err != nil {
-		return snapshot, errors.New("pull request metadata could not be read")
+		return snapshot, err
 	}
 	snapshot.Reviews, err = client.ListReviews(ctx, installationID, repo, number)
 	if err != nil {
-		return snapshot, errors.New("pull request reviews could not be read")
+		return snapshot, err
 	}
 	snapshot.Comments, err = client.ListIssueComments(ctx, installationID, repo, number)
 	if err != nil {
-		return snapshot, errors.New("pull request summary comments could not be read")
+		return snapshot, err
 	}
 	snapshot.Threads, err = client.ListReviewThreads(ctx, installationID, repo, number)
 	if err != nil {
-		return snapshot, errors.New("pull request inline comments could not be read")
+		return snapshot, err
 	}
 	return snapshot, nil
 }

@@ -147,9 +147,16 @@ func liveReviewBodyCapture(t *testing.T, ctx context.Context, client *githubapp.
 	t.Helper()
 	snapshot, err := captureReviewBodies(ctx, client, opts.installationID, repo, opts.pullRequest)
 	if err != nil {
-		t.Fatal("The live GitHub fixture snapshot could not be read.")
+		t.Fatalf("The live GitHub fixture snapshot could not be read: %s", liveReviewBodyReadFailure(ctx, err))
 	}
 	return snapshot
+}
+
+func liveReviewBodyReadFailure(ctx context.Context, failure error) string {
+	if err := ctx.Err(); err != nil {
+		return fmt.Sprintf("%v; polling context: %v", failure, err)
+	}
+	return failure.Error()
 }
 
 func liveReviewBodySnapshotsEqual(first, second reviewBodySnapshot) bool {

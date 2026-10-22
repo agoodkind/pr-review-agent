@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { mkdtemp, rename, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -135,6 +135,28 @@ async function containerDiagnostics(gatewayName, serviceName) {
   return Promise.all(names.map(async function (name) {
     return { name, ...await dockerDiagnostic(["logs", "--tail", "40", name]) };
   }));
+}
+
+async function assertHandoffConflictRetries(origin, revision, deploymentToken, evidence) {
+  const tokenFile = path.join(evidence, "handoff-control-test-token");
+  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
+  try {
+    await new Promise(function (resolve, reject) {
+      execFile("go", ["test", "-tags=integration", "./internal/cloudflareops", "-run", "^TestGatewayHandoffConflictRetriesNative$", "-count=1", "-v", "-timeout=30s"], {
+        cwd: path.resolve(directory, "../.."), timeout: 120000, maxBuffer: 32768, encoding: "utf8",
+        env: { ...process.env, PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+          PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile },
+      }, function (error, stdout, stderr) {
+        const output = (stdout + stderr).replaceAll(deploymentToken, "[redacted]");
+        void writeFile(path.join(evidence, "handoff-control-test.log"), output, { mode: 0o600 }).then(function () {
+          if (error) reject(new Error(`native handoff control regression failed: ${output}`));
+          else resolve();
+        }, reject);
+      });
+    });
+  } finally {
+    await unlink(tokenFile);
+  }
 }
 
 async function assertHealthy(origin, expectedRevision, failureEvidence) {
@@ -344,6 +366,9 @@ test("native service bindings use the production review container and restrict c
       const before = await stateWhen(expectedRevision, function (state) { return !state.handoff; });
       assert.equal(before.previous_container_running, true);
       assert.equal(before.complete, false);
+      if (source === "service") {
+        await assertHandoffConflictRetries(origin, expectedRevision, deploymentToken, evidence);
+      }
       gateway.vars.REVIEW_HANDOFF = "true";
       await writeGatewayConfiguration(gatewayPath, gateway);
       await stateWhen("0".repeat(40), function (state) { return state.handoff; });
