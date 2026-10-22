@@ -147,7 +147,7 @@ func (service *Service) collectAndAdmit(
 		}
 	}
 
-	work.Chunks, err = PrepareRelationshipChunks(service.model, work.Chunks, work.Files, settings.minimumImportance, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
+	work.Chunks, err = PrepareRelationshipChunks(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
 	if err != nil {
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}

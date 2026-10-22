@@ -29,8 +29,14 @@ type relationshipFunction struct {
 	shared     map[string]struct{}
 }
 
-// PrepareRelationshipChunks appends bounded joint source assessments before admission.
-func PrepareRelationshipChunks(model Model, chunks []diff.Chunk, files []diff.FileContext, minimumImportance int, support string, policy reviewrules.Policy, maximumBytes int) ([]diff.Chunk, error) {
+type relationshipPromptContext struct {
+	required string
+	optional string
+}
+
+// PrepareRelationshipChunks reserves required scope before fitting optional context.
+func PrepareRelationshipChunks(model Model, chunks []diff.Chunk, files []diff.FileContext, minimumImportance int, required, optional string, policy reviewrules.Policy, maximumBytes int) ([]diff.Chunk, error) {
+	support := relationshipPromptContext{required: required, optional: optional}
 	settings := policy.RelationshipReview()
 	if !settings.Enabled {
 		return chunks, nil
@@ -81,7 +87,7 @@ func PrepareRelationshipChunks(model Model, chunks []diff.Chunk, files []diff.Fi
 	return result, nil
 }
 
-func subdivideRelationshipSources(model Model, chunks []diff.Chunk, files []diff.FileContext, minimumImportance int, support string, policy reviewrules.Policy, maximumBytes int) ([]diff.Chunk, error) {
+func subdivideRelationshipSources(model Model, chunks []diff.Chunk, files []diff.FileContext, minimumImportance int, support relationshipPromptContext, policy reviewrules.Policy, maximumBytes int) ([]diff.Chunk, error) {
 	paths := make(map[string]bool)
 	pairs := sourceRelationshipPairs(chunks, files, policy.RelationshipReview().MaximumPairs+1)
 	if len(pairs) > policy.RelationshipReview().MaximumPairs {
@@ -116,7 +122,7 @@ func subdivideRelationshipSources(model Model, chunks []diff.Chunk, files []diff
 	return result, nil
 }
 
-func divideRelationshipSource(model Model, chunk diff.Chunk, minimumImportance int, support string, policy reviewrules.Policy, maximumBytes int) ([]diff.Chunk, error) {
+func divideRelationshipSource(model Model, chunk diff.Chunk, minimumImportance int, support relationshipPromptContext, policy reviewrules.Policy, maximumBytes int) ([]diff.Chunk, error) {
 	piece := chunk.Pieces[0]
 	pair := relationshipPair{path: piece.Path, left: piece, right: piece, reason: "source_budget"}
 	joint, err := renderRelationshipPair(pair, true, policy)
@@ -153,7 +159,7 @@ func relationshipSourceChunk(piece diff.Piece) diff.Chunk {
 	return diff.Chunk{RelationshipReview: false, Index: 1, Total: 1, Text: piece.Text, Pieces: []diff.Piece{piece}, Paths: []string{piece.Path}, Metadata: metadata, CoverageComplete: piece.CoverageComplete}
 }
 
-func prepareRelationshipPair(model Model, pair relationshipPair, minimumImportance int, support string, policy reviewrules.Policy, maximumBytes int) (diff.Chunk, error) {
+func prepareRelationshipPair(model Model, pair relationshipPair, minimumImportance int, support relationshipPromptContext, policy reviewrules.Policy, maximumBytes int) (diff.Chunk, error) {
 	for _, compact := range []bool{false, true} {
 		joint, err := renderRelationshipPair(pair, compact, policy)
 		if err != nil {
@@ -170,8 +176,8 @@ func prepareRelationshipPair(model Model, pair relationshipPair, minimumImportan
 	return relationshipGap(pair.path, "relationship_request_limit", 1, policy)
 }
 
-func relationshipRequestBytes(model Model, chunk diff.Chunk, minimumImportance int, support string, policy reviewrules.Policy, maximumBytes int) (int, error) {
-	prompt, err := BuildModelReviewPrompt(model, chunk, minimumImportance, "", support, policy, maximumBytes)
+func relationshipRequestBytes(model Model, chunk diff.Chunk, minimumImportance int, support relationshipPromptContext, policy reviewrules.Policy, maximumBytes int) (int, error) {
+	prompt, err := BuildModelReviewPrompt(model, chunk, minimumImportance, support.required, support.optional, policy, maximumBytes)
 	if err != nil {
 		var exceeded *diff.PromptSizeError
 		if errors.As(err, &exceeded) {
