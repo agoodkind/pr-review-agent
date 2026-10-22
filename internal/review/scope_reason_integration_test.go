@@ -9,10 +9,70 @@ import (
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
+
+func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
+	policy := policytest.Load(t)
+	file := classificationGitFile(t, "credentials.vault", "$ANSIBLE_VAULT;1.1;AES256\n61616161\n", "$ANSIBLE_VAULT;1.1;AES256\n62626262\n")
+	pr := githubapp.PullRequest{Head: domain.HeadSHA(testHeadSHA), Title: "Update fixture content"}
+	for _, scenario := range []struct {
+		name        string
+		action      domain.FileReviewAction
+		requirement domain.ContentReviewRequirement
+		scope       string
+	}{
+		{name: "ordinary technical findings", scope: "yes"},
+		{name: "ordinary content review", action: domain.FileActionReview, requirement: domain.ContentReviewRequired, scope: "yes"},
+		{name: "necessary semantic gap", action: domain.FileActionGap, requirement: domain.ContentReviewRequired, scope: "no"},
+		{name: "necessary related evidence", action: domain.FileActionInspectRelated, requirement: domain.ContentReviewRequired, scope: "no"},
+		{name: "accepted exclusion", action: domain.FileActionExclude, requirement: domain.ContentReviewUnnecessary, scope: "yes"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			var assessments []domain.FileAssessment
+			input := diff.ReviewInput{PullRequest: pr, Files: []diff.FileContext{file}}
+			planned := input
+			if scenario.action != "" {
+				assessment := classificationAssessment(t, file, policy, scenario.requirement, scenario.action, reviewrules.ContentEncrypted)
+				var err error
+				planned, assessments, err = review.PlanFileContentReview(input, []domain.FileAssessment{assessment}, policy)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			excluded := scenario.action == domain.FileActionExclude
+			if !excluded {
+				assertPlannedChangedRows(t, planned, file)
+			}
+			var summary review.Summary
+			summary.Head = pr.Head
+			summary.Decision = domain.ReviewDecisionRequestChanges
+			summary.CoverageComplete = !excluded
+			summary.OmissionsAccepted = excluded
+			summary.FileAssessments = assessments
+			summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
+			summary.MetadataRevision = diff.PullRequestRevision(pr)
+			body := review.RenderBody(summary)
+			if !strings.Contains(body, "| Review scope assessed | "+scenario.scope+" |") {
+				t.Fatal("The scope row must distinguish inspected content from unresolved semantic requirements.")
+			}
+			content := "yes"
+			if excluded {
+				content = "no"
+			}
+			if !strings.Contains(body, "| All file content inspected | "+content+" |") {
+				t.Fatal("The content inspection row must preserve the actual planned source coverage.")
+			}
+			head, found := marker.FindReview(body)
+			if !found || head != pr.Head || !review.MetadataMatches(body, pr.Head, summary.MetadataRevision) {
+				t.Fatal("The rendered assessment must preserve its current review and metadata records.")
+			}
+		})
+	}
+}
 
 func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 	policy := policytest.Load(t)

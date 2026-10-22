@@ -105,7 +105,7 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 		rows = append(rows, [2]string{"Reached", formatReached(summary.Reached)})
 	} else {
 		rows = append(rows, [2]string{"All file content inspected", formatYesNo(summary.CoverageComplete)})
-		rows = append(rows, [2]string{"Review scope assessed", formatYesNo(summary.CoverageComplete || summary.OmissionsAccepted)})
+		rows = append(rows, [2]string{"Review scope assessed", formatYesNo(reviewScopeAssessed(summary))})
 	}
 	rows = append(
 		rows,
@@ -143,6 +143,15 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	builder.WriteString(renderUsageDetails(summary.Usage))
 	builder.WriteString("\n</details>")
 	return builder.String()
+}
+
+func reviewScopeAssessed(summary Summary) bool {
+	for _, assessment := range summary.FileAssessments {
+		if assessment.Action == domain.FileActionGap || assessment.Action == domain.FileActionInspectRelated {
+			return false
+		}
+	}
+	return summary.CoverageComplete || summary.OmissionsAccepted
 }
 
 func acceptedFileScope(summary Summary) bool {
