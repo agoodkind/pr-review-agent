@@ -540,35 +540,36 @@ func (live *largeFileServiceFixture) await(t *testing.T, parent context.Context,
 	for ctx.Err() == nil {
 		live.guard(t, ctx)
 		snapshot := liveReviewBodyCapture(t, ctx, live.fixture.client, live.fixture.opts, live.fixture.repo)
-		check, found, err := live.fixture.client.FindCheckRun(ctx, live.fixture.opts.installationID, live.fixture.repo, domain.HeadSHA(live.fixture.head), config.ReviewCheckName)
-		if err != nil {
-			t.Fatalf("The deployed classification check for scenario %s on head %s could not be read: %s", scenario, live.fixture.head, liveReviewBodyReadFailure(ctx, err))
-		}
-		if found && check.Status == "completed" && check.ID > live.minimumCheck {
-			for _, comment := range snapshot.Comments {
-				state, valid := marker.DecodeState(comment.Body)
-				head, marked := marker.FindReview(comment.Body)
-				if comment.Author != live.fixture.bot || !valid || !marked || string(head) != live.fixture.head || state.RunID != check.ExternalID || largeFileDetail(comment.Body, "Forced run") != "yes" || !review.MetadataMatches(comment.Body, head, diff.PullRequestRevision(snapshot.PullRequest)) || !accepts(snapshot, comment.Body) {
-					continue
-				}
-				requests, requestErr := strconv.Atoi(strings.Trim(largeFileDetail(comment.Body, "Requests"), "`"))
-				if requestErr != nil || requests < 1 || largeFileDetail(comment.Body, "Model") == "unknown" {
-					t.Fatal("The classification result did not report actual provider requests and a model.")
-				}
-				for _, label := range []string{"Requests reporting usage", "Input tokens", "Output tokens", "Total tokens"} {
-					value, err := strconv.ParseInt(strings.Trim(largeFileDetail(comment.Body, label), "`"), 10, 64)
-					if err != nil || value <= 0 {
-						t.Fatalf("The completed classification review did not report positive %s.", label)
-					}
-				}
-				details, err := live.fixture.client.GetCheckRunDetails(ctx, live.fixture.opts.installationID, live.fixture.repo, check.ID)
-				if err != nil {
-					t.Fatalf("The completed classification check %d details could not be read: %s", check.ID, liveReviewBodyReadFailure(ctx, err))
-				}
-				live.health(t, ctx)
-				largeFileSave(t, live.evidence, scenario+".json", largeFileServiceEvidence{Scenario: scenario, Revision: live.revision, Snapshot: snapshot, Check: details})
-				return
+		for _, comment := range snapshot.Comments {
+			state, valid := marker.DecodeState(comment.Body)
+			head, marked := marker.FindReview(comment.Body)
+			if comment.Author != live.fixture.bot || !valid || !marked || string(head) != live.fixture.head || state.RunID == "" || largeFileDetail(comment.Body, "Forced run") != "yes" || !review.MetadataMatches(comment.Body, head, diff.PullRequestRevision(snapshot.PullRequest)) {
+				continue
 			}
+			check, found, err := live.fixture.client.FindCheckRunByExternalID(ctx, live.fixture.opts.installationID, live.fixture.repo, head, config.ReviewCheckName, state.RunID)
+			if err != nil {
+				t.Fatalf("The deployed classification check for scenario %s on head %s and run %s could not be read: %s", scenario, live.fixture.head, state.RunID, liveReviewBodyReadFailure(ctx, err))
+			}
+			if !found || check.Status != "completed" || check.ID <= live.minimumCheck || check.ExternalID != state.RunID || !accepts(snapshot, comment.Body) {
+				continue
+			}
+			requests, requestErr := strconv.Atoi(strings.Trim(largeFileDetail(comment.Body, "Requests"), "`"))
+			if requestErr != nil || requests < 1 || largeFileDetail(comment.Body, "Model") == "unknown" {
+				t.Fatal("The classification result did not report actual provider requests and a model.")
+			}
+			for _, label := range []string{"Requests reporting usage", "Input tokens", "Output tokens", "Total tokens"} {
+				value, err := strconv.ParseInt(strings.Trim(largeFileDetail(comment.Body, label), "`"), 10, 64)
+				if err != nil || value <= 0 {
+					t.Fatalf("The completed classification review did not report positive %s.", label)
+				}
+			}
+			details, err := live.fixture.client.GetCheckRunDetails(ctx, live.fixture.opts.installationID, live.fixture.repo, check.ID)
+			if err != nil {
+				t.Fatalf("The completed classification check %d details could not be read: %s", check.ID, liveReviewBodyReadFailure(ctx, err))
+			}
+			live.health(t, ctx)
+			largeFileSave(t, live.evidence, scenario+".json", largeFileServiceEvidence{Scenario: scenario, Revision: live.revision, Snapshot: snapshot, Check: details})
+			return
 		}
 		select {
 		case <-ctx.Done():
