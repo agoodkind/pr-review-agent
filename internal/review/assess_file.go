@@ -15,29 +15,34 @@ import (
 // ErrAssessmentIncomplete requires further review when a response cannot justify a file decision.
 var ErrAssessmentIncomplete = errors.New("the file assessment requires current file decisions and supplied evidence")
 
-// AssessFileContent assesses one unread file against the supplied parent pull request.
-func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int) (Completion, error) {
-	var empty Completion
+// BuildFileAssessmentPrompt preserves supplied scope evidence within the actual provider budget.
+func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int) (string, error) {
 	file, found := BuildFileIndex(files)[path]
 	if !found {
-		return empty, errors.New("file assessment requires a supplied changed file")
+		return "", errors.New("file assessment requires a supplied changed file")
 	}
 	shortfall := structuralShortfall{Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}}}
 	var data reviewrules.PromptData
 	instruction, err := renderPrompt(policy, "omissions.decision", data)
 	if err != nil {
-		return empty, err
+		return "", err
 	}
 	instruction += "\n" + policy.FileClassificationPathInstructions(path) + "\n"
 	omissions, err := omissionPrompt(shortfall, files, maximumBytes, policy)
 	if err != nil {
-		return empty, err
+		return "", err
 	}
 	parent, err := pullRequestPrompt(pullRequest, files, policy)
 	if err != nil {
-		return empty, err
+		return "", err
 	}
-	prompt, err := BoundReviewPrompt(model, instruction+omissions, parent, maximumBytes)
+	return BoundReviewPrompt(model, instruction+omissions, parent, maximumBytes)
+}
+
+// AssessFileContent assesses one unread file against the supplied parent pull request.
+func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int) (Completion, error) {
+	var empty Completion
+	prompt, err := BuildFileAssessmentPrompt(model, pullRequest, files, path, policy, maximumBytes)
 	if err != nil {
 		return empty, err
 	}
@@ -49,9 +54,14 @@ func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.P
 	if err := completion.Result.Validate(); err != nil {
 		return completion, fmt.Errorf("validate file assessment: %w", err)
 	}
-	for index := range completion.Result.FileAssessments {
-		completion.Result.FileAssessments[index].Reviewed = false
+	input := diff.ReviewInput{PullRequest: pullRequest, Files: files, Metadata: nil, MergeBase: ""}
+	_, decisions, err := PlanFileContentReview(input, completion.Result.FileAssessments, policy)
+	if err != nil {
+		return completion, err
 	}
+	completion.Result.FileAssessments = decisions
+	file := BuildFileIndex(files)[path]
+	shortfall := structuralShortfall{Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}}}
 	validated, accepted := validateFileAssessments(completion.Result, shortfall, files, policy)
 	if len(validated) != 1 {
 		return completion, ErrAssessmentIncomplete

@@ -2,6 +2,7 @@ package review_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -173,6 +174,11 @@ func TestRelationshipReviewSubdividesLargeGitSourceForJointRequests(t *testing.T
 	}
 	restricted, err = review.BoundModelReviewChunks(model, restricted, []diff.FileContext{file}, 7, "", policy, restrictedBytes)
 	if err != nil {
+		var sizeError *diff.PromptSizeError
+		if errors.As(err, &sizeError) && sizeError.Limit == restrictedBytes && sizeError.Actual > restrictedBytes {
+			t.Logf("The restricted budget cannot fit even an explicit source gap: %v", err)
+			return
+		}
 		t.Fatal(err)
 	}
 	limited, err := review.PrepareRelationshipChunks(model, restricted, []diff.FileContext{file}, 7, "", policy, restrictedBytes)

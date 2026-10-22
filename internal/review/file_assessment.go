@@ -91,7 +91,7 @@ func validateFileAssessments(result domain.ReviewResult, shortfall structuralSho
 		}
 		assessment.Reason = sanitizeDecisionReason(assessment.Reason)
 		reviewed := assessment.Action == domain.FileActionReview && assessment.Reviewed
-		excluded := assessment.Action == domain.FileActionExclude && !assessment.Reviewed && policy.AllowsContentExclusion(assessment.ContentKind)
+		excluded := assessment.PermitsContentExclusion() && !assessment.Reviewed && policy.AllowsContentExclusion(assessment.ContentKind)
 		if !reviewed && !excluded {
 			accepted = false
 		}
@@ -150,7 +150,7 @@ func (pass *chunkPass) fileAssessments() []domain.FileAssessment {
 
 func preflightExclusion(assessments []domain.FileAssessment, path string) (domain.FileAssessment, bool) {
 	for _, assessment := range assessments {
-		if assessment.Path == path && assessment.Action == domain.FileActionExclude {
+		if assessment.Path == path && assessment.PermitsContentExclusion() {
 			return assessment, true
 		}
 	}
@@ -167,7 +167,7 @@ func (pass *chunkPass) seedFileAssessments(policy reviewrules.Policy) {
 	pass.mu.Unlock()
 	var excluded []domain.FileAssessment
 	for _, assessment := range pass.work.FileAssessments {
-		if assessment.Action == domain.FileActionExclude {
+		if assessment.PermitsContentExclusion() {
 			excluded = append(excluded, assessment)
 		}
 	}
@@ -183,6 +183,11 @@ func (pass *chunkPass) seedFileAssessments(policy reviewrules.Policy) {
 func encodeFileAssessments(assessments []domain.FileAssessment, maximumBytes ...int) string {
 	if len(assessments) == 0 || len(maximumBytes) != 1 || maximumBytes[0] <= 0 {
 		return ""
+	}
+	for _, assessment := range assessments {
+		if assessment.Validate() != nil || (assessment.Action == domain.FileActionExclude && !assessment.PermitsContentExclusion()) {
+			return ""
+		}
 	}
 	encoded, err := json.Marshal(assessments)
 	if err != nil {
@@ -214,7 +219,7 @@ func decodeFileAssessments(body string) []domain.FileAssessment {
 	}
 	seen := make(map[string]bool)
 	for _, assessment := range assessments {
-		if assessment.Validate() != nil || seen[assessment.Path] {
+		if assessment.Validate() != nil || seen[assessment.Path] || (assessment.Action == domain.FileActionExclude && !assessment.PermitsContentExclusion()) {
 			return nil
 		}
 		seen[assessment.Path] = true
