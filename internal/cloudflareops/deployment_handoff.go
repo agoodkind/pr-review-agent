@@ -202,12 +202,14 @@ func (operation *deployment) waitHandoffControl(ctx context.Context, action, rev
 	for {
 		if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, ""); err != nil {
 			if ctx.Err() != nil {
+				slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
 				return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w", action, errors.Join(lastError, ctx.Err(), err))
 			}
 			return err
 		}
 		status, err := operation.gatewayHandoffControl(ctx, action, revision)
 		if ctx.Err() != nil {
+			slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
 			return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w", action, errors.Join(lastError, err, ctx.Err()))
 		}
 		if err == nil && (!complete || *status.Complete) {
@@ -222,6 +224,7 @@ func (operation *deployment) waitHandoffControl(ctx context.Context, action, rev
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
 			return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w", action, errors.Join(lastError, ctx.Err()))
 		case <-timer.C:
 		}
