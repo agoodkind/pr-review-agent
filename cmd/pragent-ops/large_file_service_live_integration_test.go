@@ -30,8 +30,15 @@ const (
 	largeFileDefaultCaseTimeout = 7 * time.Minute
 	largeFileSuiteOverhead      = 5 * time.Minute
 	largeFileCleanupTimeout     = 8 * time.Minute
-	largeFileScenarioCount      = 5
 )
+
+var largeFileScenarioIDs = []string{
+	"generated_sql",
+	"credential_rotation",
+	"hidden_authorization",
+	"gitlink_initial",
+	"gitlink_updated",
+}
 
 var largeFileFixturePaths = []string{
 	largeFileFixturePrefix + "generated.sql",
@@ -76,7 +83,8 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	if os.Getenv("PR_AGENT_LIVE_LARGE_FILE_TEST") != "1" {
 		t.Skip("Set PR_AGENT_LIVE_LARGE_FILE_TEST=1 to exercise the deployed classification service.")
 	}
-	caseTimeout, suiteTimeout := largeFileLiveTimeouts(t)
+	selected := largeFileLiveScenarios(t)
+	caseTimeout, suiteTimeout := largeFileLiveTimeouts(t, len(selected))
 	live := largeFileServiceSetup(t)
 	live.caseTimeout = caseTimeout
 	ctx, cancel := context.WithTimeout(t.Context(), suiteTimeout)
@@ -90,66 +98,108 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 		live.restore(t, cleanupCtx)
 	})
 
-	sqlPath := largeFileFixturePrefix + "generated.sql"
-	sql := largeFileSQL(live.limit)
-	live.stage(t, ctx, "Add generated migration review fixture", "The generated migration adds audit records. Existing classification_active_users records must remain intact. The fixture contains an unintended DROP TABLE statement that requires an inline finding. The test reviews the SQL without executing it.", map[string]string{sqlPath: sql}, "")
-	sqlSources := map[domain.HeadSHA][]string{domain.HeadSHA(live.fixture.head): strings.Split(sql, "\n")}
-	live.await(t, ctx, "generated_sql", func(snapshot reviewBodySnapshot, body string) bool {
-		kind, action, found := largeFileAssessment(body, sqlPath)
-		if !found || (kind != "generated" && kind != "source") || action != "review" {
-			return false
-		}
-		if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
-			return false
-		}
-		for _, label := range []string{"Files reviewed", "Diff chunks"} {
-			count, err := strconv.Atoi(strings.Trim(largeFileDetail(body, label), "`"))
-			if err != nil || count <= 0 {
+	if selected["generated_sql"] {
+		sqlPath := largeFileFixturePrefix + "generated.sql"
+		sql := largeFileSQL(live.limit)
+		live.stage(t, ctx, "Add generated migration review fixture", "The generated migration adds audit records. Existing classification_active_users records must remain intact. The fixture contains an unintended DROP TABLE statement that requires an inline finding. The test reviews the SQL without executing it.", map[string]string{sqlPath: sql}, "")
+		sqlSources := map[domain.HeadSHA][]string{domain.HeadSHA(live.fixture.head): strings.Split(sql, "\n")}
+		live.await(t, ctx, "generated_sql", func(snapshot reviewBodySnapshot, body string) bool {
+			kind, action, found := largeFileAssessment(body, sqlPath)
+			if !found || (kind != "generated" && kind != "source") || action != "review" {
 				return false
 			}
-		}
-		return live.openSQLFinding(t, ctx, snapshot, sqlPath, sql, sqlSources)
-	})
+			if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
+				return false
+			}
+			for _, label := range []string{"Files reviewed", "Diff chunks"} {
+				count, err := strconv.Atoi(strings.Trim(largeFileDetail(body, label), "`"))
+				if err != nil || count <= 0 {
+					return false
+				}
+			}
+			return live.openSQLFinding(t, ctx, snapshot, sqlPath, sql, sqlSources)
+		})
+	}
 
 	vaultPath := largeFileFixturePrefix + "credentials.vault"
 	authorizationPath := largeFileFixturePrefix + "authorization.go"
 	ciphertext := largeFileCiphertext(live.limit)
-	rotation := "package fixture\n\n// The compiled role remains independent of the encrypted authentication token.\nconst CredentialSource = \"credentials.vault\"\nconst CredentialReference = \"service_token\"\n\nfunc AllowedRole(_ map[string]string) string { return \"reader\" }\n"
-	live.stage(t, ctx, "Add encrypted credential rotation fixture", "Rotate the service_token authentication credential in credentials.vault. AllowedRole in authorization.go returns reader independently of the token. The test ciphertext does not contain real credentials. The fixture does not supply external validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: rotation}, "")
-	live.await(t, ctx, "credential_rotation", func(_ reviewBodySnapshot, body string) bool {
-		_, action, found := largeFileAssessment(body, vaultPath)
-		return found && action == "exclude" && largeFileDetail(body, "Review scope assessed") == "yes"
-	})
+	if selected["credential_rotation"] {
+		rotation := "package fixture\n\n// The compiled role remains independent of the encrypted authentication token.\nconst CredentialSource = \"credentials.vault\"\nconst CredentialReference = \"service_token\"\n\nfunc AllowedRole(_ map[string]string) string { return \"reader\" }\n"
+		live.stage(t, ctx, "Add encrypted credential rotation fixture", "Rotate the service_token authentication credential in credentials.vault. AllowedRole in authorization.go returns reader independently of the token. The test ciphertext does not contain real credentials. The fixture does not supply external validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: rotation}, "")
+		live.await(t, ctx, "credential_rotation", func(_ reviewBodySnapshot, body string) bool {
+			_, action, found := largeFileAssessment(body, vaultPath)
+			return found && action == "exclude" && largeFileDetail(body, "Review scope assessed") == "yes"
+		})
+	}
 
-	permissions := "package fixture\n\n// The encrypted document determines the role and allowed deletion resources.\nconst AuthorizationSource = \"credentials.vault\"\n\nfunc AllowedRole(vaultValues map[string]string) string { return vaultValues[\"role\"] }\n\nfunc DeletionResources(vaultValues map[string][]string) []string { return vaultValues[\"allowed_delete_resources\"] }\n"
-	live.stage(t, ctx, "Add encrypted authorization review fixture", "Change role and allowed_delete_resources inside credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The unchanged ciphertext is the same harmless test payload from the credential-rotation case. The fixture does not supply decrypted values or permission validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: permissions}, "")
-	live.await(t, ctx, "hidden_authorization", func(_ reviewBodySnapshot, body string) bool {
-		_, action, found := largeFileAssessment(body, vaultPath)
-		return found && action != "exclude" && largeFileDetail(body, "Review scope assessed") == "no"
-	})
+	if selected["hidden_authorization"] {
+		permissions := "package fixture\n\n// The encrypted document determines the role and allowed deletion resources.\nconst AuthorizationSource = \"credentials.vault\"\n\nfunc AllowedRole(vaultValues map[string]string) string { return vaultValues[\"role\"] }\n\nfunc DeletionResources(vaultValues map[string][]string) []string { return vaultValues[\"allowed_delete_resources\"] }\n"
+		live.stage(t, ctx, "Add encrypted authorization review fixture", "Change role and allowed_delete_resources inside credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The ciphertext uses the same harmless test payload as the credential-rotation case. The fixture does not supply decrypted values or permission validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: permissions}, "")
+		live.await(t, ctx, "hidden_authorization", func(_ reviewBodySnapshot, body string) bool {
+			_, action, found := largeFileAssessment(body, vaultPath)
+			return found && action != "exclude" && largeFileDetail(body, "Review scope assessed") == "no"
+		})
+	}
 
-	first := live.fixture.original.Head.SHA
-	second := clippedLiveGit(t, ctx, live.worktree, "rev-parse", first+"^")
-	live.stage(t, ctx, "Add pinned parent integration fixture", "Add a fixture gitlink pinned to an existing commit in this repository. Review the parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, first)
-	live.await(t, ctx, "gitlink_initial", func(_ reviewBodySnapshot, body string) bool {
-		return largeFileDetail(body, "All file content inspected") == "yes" && largeFileDetail(body, "Review scope assessed") == "yes"
-	})
-	live.stage(t, ctx, "Update pinned parent integration fixture", "Update the fixture gitlink to another existing commit in this repository. Review the changed parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, second)
-	live.await(t, ctx, "gitlink_updated", func(snapshot reviewBodySnapshot, body string) bool {
-		if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
-			return false
+	if selected["gitlink_initial"] || selected["gitlink_updated"] {
+		first := live.fixture.original.Head.SHA
+		second := clippedLiveGit(t, ctx, live.worktree, "rev-parse", first+"^")
+		if selected["gitlink_initial"] {
+			live.stage(t, ctx, "Add pinned parent integration fixture", "Add a fixture gitlink pinned to an existing commit in this repository. Review the parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, first)
+			live.await(t, ctx, "gitlink_initial", func(_ reviewBodySnapshot, body string) bool {
+				return largeFileDetail(body, "All file content inspected") == "yes" && largeFileDetail(body, "Review scope assessed") == "yes"
+			})
 		}
-		for _, thread := range snapshot.Threads {
-			finding, valid := marker.FindFinding(thread.RootComment.Body)
-			if valid && string(finding.Head) == live.fixture.head && thread.RootComment.Author == live.fixture.bot && !strings.HasPrefix(thread.RootComment.Path, largeFileFixturePrefix) && thread.RootComment.Path != ".gitmodules" && thread.RootComment.Path != live.fixture.filePath {
-				return false
-			}
+		if selected["gitlink_updated"] {
+			live.stage(t, ctx, "Update pinned parent integration fixture", "Update the fixture gitlink to another existing commit in this repository. Review the changed parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, second)
+			live.await(t, ctx, "gitlink_updated", func(snapshot reviewBodySnapshot, body string) bool {
+				if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
+					return false
+				}
+				for _, thread := range snapshot.Threads {
+					finding, valid := marker.FindFinding(thread.RootComment.Body)
+					if valid && string(finding.Head) == live.fixture.head && thread.RootComment.Author == live.fixture.bot && !strings.HasPrefix(thread.RootComment.Path, largeFileFixturePrefix) && thread.RootComment.Path != ".gitmodules" && thread.RootComment.Path != live.fixture.filePath {
+						return false
+					}
+				}
+				return true
+			})
 		}
-		return true
-	})
+	}
 }
 
-func largeFileLiveTimeouts(t *testing.T) (time.Duration, time.Duration) {
+func largeFileLiveScenarios(t *testing.T) map[string]bool {
+	t.Helper()
+	allowed := make(map[string]bool, len(largeFileScenarioIDs))
+	for _, scenario := range largeFileScenarioIDs {
+		allowed[scenario] = true
+	}
+	value, configured := os.LookupEnv("PR_AGENT_LIVE_SCENARIOS")
+	if !configured {
+		return allowed
+	}
+	selected := make(map[string]bool)
+	for _, entry := range strings.Split(value, ",") {
+		scenario := strings.TrimSpace(entry)
+		if scenario == "" {
+			t.Fatal("PR_AGENT_LIVE_SCENARIOS must contain nonempty comma-separated scenario IDs.")
+		}
+		if !allowed[scenario] {
+			t.Fatalf("PR_AGENT_LIVE_SCENARIOS contains an unknown scenario; choose only %s.", strings.Join(largeFileScenarioIDs, ", "))
+		}
+		if selected[scenario] {
+			t.Fatalf("PR_AGENT_LIVE_SCENARIOS repeats scenario %s; select each scenario once.", scenario)
+		}
+		selected[scenario] = true
+	}
+	if selected["gitlink_updated"] && !selected["gitlink_initial"] {
+		t.Fatal("The gitlink_updated scenario requires gitlink_initial; include both in PR_AGENT_LIVE_SCENARIOS.")
+	}
+	return selected
+}
+
+func largeFileLiveTimeouts(t *testing.T, scenarioCount int) (time.Duration, time.Duration) {
 	t.Helper()
 	caseTimeout := largeFileDefaultCaseTimeout
 	if value, configured := os.LookupEnv("PR_AGENT_LIVE_CASE_TIMEOUT"); configured {
@@ -160,10 +210,10 @@ func largeFileLiveTimeouts(t *testing.T) (time.Duration, time.Duration) {
 		caseTimeout = parsed
 	}
 	const maximumDuration = time.Duration(1<<63 - 1)
-	if caseTimeout > (maximumDuration-largeFileSuiteOverhead-largeFileCleanupTimeout-time.Minute)/largeFileScenarioCount {
+	if caseTimeout > (maximumDuration-largeFileSuiteOverhead-largeFileCleanupTimeout-time.Minute)/time.Duration(scenarioCount) {
 		t.Fatal("PR_AGENT_LIVE_CASE_TIMEOUT is too large to calculate the suite deadline; select a shorter positive duration.")
 	}
-	suiteTimeout := largeFileScenarioCount*caseTimeout + largeFileSuiteOverhead
+	suiteTimeout := time.Duration(scenarioCount)*caseTimeout + largeFileSuiteOverhead
 	required := suiteTimeout + largeFileCleanupTimeout
 	if deadline, limited := t.Deadline(); limited && time.Until(deadline) < required {
 		t.Fatalf("The live classification suite and cleanup require %s. Run go test with -timeout %s or longer; the current test deadline has %s remaining.", required, required+time.Minute, time.Until(deadline).Round(time.Second))
