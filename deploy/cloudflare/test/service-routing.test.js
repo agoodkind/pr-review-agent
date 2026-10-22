@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import net from "node:net";
@@ -30,9 +30,13 @@ async function startWorkers(configurations, port, evidence, credentials, phase) 
   });
   let output = "";
   const logPath = path.join(evidence, phase + ".log");
-  function sanitizedOutput() {
-    let sanitized = output.split("\n").filter(function (line) {
-      return !/env\..*(PRIVATE_KEY|SECRET|API_KEY|CLIENT_ID)/.test(line);
+  function sanitizeOutput(text) {
+    let binding = false;
+    let sanitized = text.split("\n").filter(function (line) {
+      if (/^env\./.test(line)) binding = true;
+      if (!binding) return true;
+      if (/\b(local|remote)(?: \[.*\])?\s*$/.test(line)) binding = false;
+      return false;
     }).join("\n");
     for (const value of credentials) {
       sanitized = sanitized.replaceAll(value, "[redacted]");
@@ -40,6 +44,7 @@ async function startWorkers(configurations, port, evidence, credentials, phase) 
     }
     return sanitized;
   }
+  function sanitizedOutput() { return sanitizeOutput(output); }
   child.stdout.on("data", function (data) { output += data; });
   child.stderr.on("data", function (data) { output += data; });
   const evidenceTimer = setInterval(function () {
@@ -81,24 +86,73 @@ async function startWorkers(configurations, port, evidence, credentials, phase) 
     await writeFile(logPath, sanitizedOutput(), { mode: 0o600 });
   };
   stop.readOutput = sanitizedOutput;
+  stop.sanitize = sanitizeOutput;
   return stop;
 }
 
-async function assertHealthy(origin, expectedRevision) {
+async function boundedErrorBody(response) {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let remaining = 4096;
+  try {
+    while (remaining > 0) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const part = value.subarray(0, remaining);
+      chunks.push(part);
+      remaining -= part.byteLength;
+    }
+  } finally {
+    await reader.cancel();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function dockerDiagnostic(arguments_) {
+  return new Promise(function (resolve) {
+    execFile("docker", arguments_, { timeout: 5000, maxBuffer: 16384, encoding: "utf8" }, function (error, stdout, stderr) {
+      resolve({ error: error ? String(error) : null, output: (stdout + stderr).slice(-6000) });
+    });
+  });
+}
+
+async function containerDiagnostics(gatewayName, serviceName) {
+  const listed = await dockerDiagnostic(["ps", "-a", "--filter", `name=workerd-${gatewayName}-`,
+    "--filter", `name=workerd-${serviceName}-`, "--format", "{{.Names}}"]);
+  if (listed.error) return listed;
+  const names = listed.output.trim().split("\n").filter(function (name) {
+    return (name.startsWith(`workerd-${gatewayName}-`) || name.startsWith(`workerd-${serviceName}-`)) && !name.endsWith("-proxy");
+  }).slice(0, 3);
+  return Promise.all(names.map(async function (name) {
+    return { name, ...await dockerDiagnostic(["logs", "--tail", "40", name]) };
+  }));
+}
+
+async function assertHealthy(origin, expectedRevision, failureEvidence) {
   const deadline = Date.now() + 120000;
   let lastStatus;
+  let lastBody = "";
+  let lastRevision = "";
   while (Date.now() < deadline) {
     const response = await fetch(origin + "/", { signal: AbortSignal.timeout(120000) });
     lastStatus = response.status;
+    lastRevision = response.headers.get("X-Pr-Agent-Revision") ?? "";
     if (response.status === 200) {
+      if (lastRevision !== expectedRevision && failureEvidence) {
+        lastBody = await boundedErrorBody(response);
+        const evidence = await failureEvidence({ lastStatus, lastBody, lastRevision });
+        assert.equal(lastRevision, expectedRevision, JSON.stringify(evidence));
+      }
       assert.equal(response.headers.get("X-Pr-Agent-Revision"), expectedRevision);
       assert.deepEqual(await response.json(), { status: "ok" });
       return response.headers.get("X-Pr-Agent-Revision");
     }
-    await response.body?.cancel();
+    lastBody = await boundedErrorBody(response);
     await new Promise(function (resolve) { setTimeout(resolve, 500); });
   }
-  assert.fail(`actual review service did not start; last HTTP status ${lastStatus}`);
+  const evidence = failureEvidence ? await failureEvidence({ lastStatus, lastBody, lastRevision }) : { lastStatus, lastBody, lastRevision };
+  assert.fail(`review service health check did not become ready: ${JSON.stringify(evidence)}`);
 }
 
 test("native service bindings use the production review container and restrict candidate HTTP", {
@@ -238,6 +292,22 @@ test("native service bindings use the production review container and restrict c
     ];
     await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
     const stop = await startWorkers([gatewayPath, servicePath, nextServicePath], port, evidence, redactions, source + "-handoff");
+    async function failureEvidence(lastResponse) {
+      const diagnostic = { phase: source + "-handoff", expectedRevision, ...lastResponse };
+      try {
+        const response = await fetch(origin + "/internal/v1/deployment", { method: "POST",
+          signal: AbortSignal.timeout(5000), headers: { Authorization: `Bearer ${deploymentToken}` },
+          body: JSON.stringify({ action: "status", expected_revision: gateway.vars.REVIEW_HANDOFF_REVISION }) });
+        diagnostic.deployment = { status: response.status, body: await boundedErrorBody(response) };
+      } catch (error) {
+        diagnostic.deployment = { error: String(error) };
+      }
+      diagnostic.workerOutput = stop.readOutput().split("\n").slice(-120).join("\n").slice(-12000);
+      diagnostic.containers = await containerDiagnostics(gateway.name, service.name);
+      const sanitized = stop.sanitize(JSON.stringify(diagnostic));
+      await writeFile(path.join(evidence, source + "-handoff-failure.json"), sanitized, { mode: 0o600 });
+      return JSON.parse(sanitized);
+    }
     async function stateWhen(expected, predicate) {
       const deadline = Date.now() + 120000;
       let lastState;
@@ -262,7 +332,7 @@ test("native service bindings use the production review container and restrict c
         body: JSON.stringify({ action: "status", expected_revision: expectedRevision }) });
       assert.equal(unauthorized.status, 401);
       await unauthorized.body?.cancel();
-      await assertHealthy(origin, expectedRevision);
+      await assertHealthy(origin, expectedRevision, failureEvidence);
       const before = await stateWhen(expectedRevision, function (state) { return !state.handoff; });
       assert.equal(before.previous_container_running, true);
       assert.equal(before.complete, false);
@@ -292,7 +362,7 @@ test("native service bindings use the production review container and restrict c
       await interrupted.body?.cancel();
       gateway.vars.REVIEW_HANDOFF_REVISION = expectedRevision;
       await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
-      await assertHealthy(origin, expectedRevision);
+      await assertHealthy(origin, expectedRevision, failureEvidence);
       const settledDeadline = Date.now() + 120000;
       while (!stop.readOutput().split("\n").some(function (line) {
         return line.includes("webhook review settled") && line.includes(deliveryId);
@@ -315,7 +385,7 @@ test("native service bindings use the production review container and restrict c
       assert.equal(fenced.previous_container_running, false, "delayed source fetch restarted the stopped source");
       gateway.vars.REVIEW_HANDOFF = "true";
       await writeFile(gatewayPath, JSON.stringify(gateway), { mode: 0o600 });
-      await assertHealthy(origin, expectedRevision);
+      await assertHealthy(origin, expectedRevision, failureEvidence);
       await stateWhen(expectedRevision, function (state) { return state.complete; });
       proof.phases.push({ mode: source + "-handoff", revision: expectedRevision, replaySettled: true, sourceFenced: true });
     } finally {
