@@ -29,11 +29,11 @@ const (
 	coverageReadablePath = "readable.go"
 	// coverageUnreadablePath is the file whose one hunk does not.
 	coverageUnreadablePath = "huge.go"
-	// coverageOversizedLines is enough added lines to put one hunk past the
-	// maximum prompt size on its own.
-	coverageOversizedLines = 2100
-	// coveragePaddingWidth is how wide each added line of that hunk is.
-	coveragePaddingWidth = 60
+	// coverageOversizedLines includes one readable anchor and one indivisible
+	// line that exceeds the complete request budget.
+	coverageOversizedLines = 2
+	// coveragePaddingWidth controls the indivisible line's byte count.
+	coveragePaddingWidth = 126000
 	// coveragePriorHead is a commit an earlier run reviewed, so the tests can
 	// tell a baseline that was held from one that was never set.
 	coveragePriorHead = "1111111111111111111111111111111111111111"
