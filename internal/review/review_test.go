@@ -238,7 +238,7 @@ func TestRenderDetailsReportsEveryReviewStatistic(t *testing.T) {
 		"| Head | `a3c4f1c` |",
 		"| Files reviewed | `3` |",
 		"| Diff chunks | `1` |",
-		"| Coverage complete | yes |",
+		"| All file content inspected | yes |",
 		"| Minimum importance | `9` |",
 		"| Findings observed | `2` at importance `8`, `10` |",
 		"| Findings eligible | `1` at importance `10` |",
@@ -350,7 +350,7 @@ func TestRenderFailureBodyReportsWhatTheReviewLearned(t *testing.T) {
 			t.Fatalf("failure body missing %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "Coverage complete") {
+	if strings.Contains(body, "All file content inspected") {
 		t.Fatalf("failure body claims coverage it never established:\n%s", body)
 	}
 }
@@ -722,7 +722,7 @@ func TestAHunkThatCannotSplitLeavesTheHeadUnapproved(t *testing.T) {
 	if !strings.Contains(body, "completion budget") {
 		t.Fatalf("summary comment does not name why the hunk went unread:\n%s", body)
 	}
-	if !strings.Contains(body, "| Coverage complete | no |") {
+	if !strings.Contains(body, "| All file content inspected | no |") {
 		t.Fatalf("summary comment claims coverage it never established:\n%s", body)
 	}
 	if len(fixture.state.streamedComments) != 0 {
@@ -5104,7 +5104,7 @@ func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 		"| Diff chunks | `1` |",
 		// A chunk nobody read is a slice of the head nobody covered, so the
 		// table says so rather than claiming coverage it never established.
-		"| Coverage complete | no |",
+		"| All file content inspected | no |",
 		"1 chunk could not be reviewed",
 		// The block names what is holding it, the unread chunk included.
 		"This head was not fully reviewed",
@@ -5132,7 +5132,7 @@ func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 	if !strings.Contains(checkSummary, "under run identifier `delivery-1`") {
 		t.Fatalf("check summary lost the pointer to the cause:\n%s", checkSummary)
 	}
-	for _, want := range []string{"Chunks left unread: 1.", "| Coverage complete | no |"} {
+	for _, want := range []string{"Chunks left unread: 1.", "| All file content inspected | no |"} {
 		if !strings.Contains(checkSummary, want) {
 			t.Fatalf("check summary missing %q:\n%s", want, checkSummary)
 		}

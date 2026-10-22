@@ -120,12 +120,12 @@ func TestANoticeWithPendingChunksDoesNotClaimTheRestWasReviewed(t *testing.T) {
 	if strings.Contains(withPending, "Everything else on this head was reviewed") {
 		t.Fatalf("the notice claims coverage it does not have:\n%s", withPending)
 	}
-	if !strings.Contains(withPending, "3 unfinished chunks") {
+	if !strings.Contains(withPending, "3 review chunks remain unfinished") {
 		t.Fatalf("the notice does not say what is still owed:\n%s", withPending)
 	}
 
 	clean := configuredScopeNotice(t, shortfall, 0)
-	if strings.Contains(clean, "unfinished chunks") {
+	if strings.Contains(clean, "remain unfinished") {
 		t.Fatalf("the notice claims unfinished chunks when only file assessment remains:\n%s", clean)
 	}
 }

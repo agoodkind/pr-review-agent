@@ -13,6 +13,11 @@ import (
 
 func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 	policy := policytest.Load(t)
+	var data reviewrules.PromptData
+	note, err := policy.Render("coverage.accepted", data)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assessment := domain.FileAssessment{
 		Path: "secrets/vault.yml", Identity: "pinned-file", ContentKind: "encrypted", Action: "exclude",
 		Reason:   "The rotation changes encrypted credentials and retains the existing secret references.",
@@ -24,6 +29,7 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 			summary.Head = domain.HeadSHA(strings.Repeat("a", 40))
 			summary.Decision = domain.ReviewDecisionApprove
 			summary.OmissionsAccepted = true
+			summary.FileAssessmentNote = note
 			summary.FileAssessments = []domain.FileAssessment{assessment}
 			summary.FileAssessmentsDisplay = display
 			summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
@@ -32,6 +38,9 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 				t.Fatal("An accepted content exclusion appeared as an unfinished review.")
 			}
 			details := strings.Index(body, "<details>")
+			if strings.Index(body, note) < details || !strings.Contains(body, "| All file content inspected | no |") || !strings.Contains(body, "| Review scope assessed | yes |") {
+				t.Fatal("An accepted exclusion must report completed scope and its configured explanation inside review details.")
+			}
 			assessmentPosition := strings.Index(body, "#### File assessments")
 			if display == reviewrules.FindingsCollapsed && (assessmentPosition < details || assessmentPosition < 0) {
 				t.Fatal("The collapsed file assessment did not appear inside review details.")
@@ -41,6 +50,13 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 			}
 			if display == reviewrules.FindingsHidden && assessmentPosition >= 0 {
 				t.Fatal("The hidden file assessment appeared in the visible report.")
+			}
+			summary.OmissionsAccepted = false
+			summary.ApprovalWithheld = true
+			summary.FileAssessments[0].Action = domain.FileActionGap
+			pending := review.RenderBody(summary)
+			if strings.Contains(pending, note) || !strings.Contains(pending, "| Review scope assessed | no |") {
+				t.Fatal("A real assessment gap must not claim an accepted exclusion or completed scope.")
 			}
 		})
 	}

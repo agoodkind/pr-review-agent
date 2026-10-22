@@ -434,10 +434,10 @@ func (service *Service) applyRefreshedVerdict(
 		refreshed.threads, service.botLogin, job.PullRequestRef,
 	)
 	summary := Summary{
+		FileAssessmentNote: "", Head: job.Head,
 		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
 		FileAssessments:            nil,
 		FileAssessmentsDisplay:     service.reviewPolicy.FileAssessmentsDisplay(),
-		Head:                       job.Head,
 		Decision:                   refreshed.decision,
 		DecisionReason:             refreshed.decisionReason,
 		ApprovalWithheld:           refreshed.approvalWithheld,

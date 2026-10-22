@@ -61,8 +61,8 @@ func preservedReviewDetails(body string, summary Summary) string {
 		return refreshThreadDetails(body[start:end], summary)
 	}
 	return fmt.Sprintf(
-		"%s\n\nThe completed review statistics are unavailable.\n\n| | |\n| --- | --- |\n| Head | `%s` |\n| Coverage complete | %s |\n| Minimum importance | `%d` |\n| Bot thread IDs | %s |\n| Bot threads open | `%d` |\n| Bot threads resolved | `%d` |\n\n</details>",
-		reviewDetailsStart, shortHead(summary.Head), formatYesNo(summary.CoverageComplete), summary.MinimumImportance,
+		"%s\n\nThe completed review statistics are unavailable.\n\n| | |\n| --- | --- |\n| Head | `%s` |\n| All file content inspected | %s |\n| Review scope assessed | %s |\n| Minimum importance | `%d` |\n| Bot thread IDs | %s |\n| Bot threads open | `%d` |\n| Bot threads resolved | `%d` |\n\n</details>",
+		reviewDetailsStart, shortHead(summary.Head), formatYesNo(summary.CoverageComplete), formatYesNo(summary.CoverageComplete || summary.OmissionsAccepted), summary.MinimumImportance,
 		formatThreadTraceIDs(summary.Threads), countOpenThreadTraces(summary.Threads), countResolvedThreadTraces(summary.Threads),
 	)
 }

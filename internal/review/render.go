@@ -20,6 +20,7 @@ const shortHeadLength = 7
 // comment and the check run both render from this one value, so the two can
 // never disagree.
 type Summary struct {
+	FileAssessmentNote         string
 	FileAssessmentMaximumBytes int
 	FileAssessments            []domain.FileAssessment
 	FileAssessmentsDisplay     reviewrules.FindingDisplay
@@ -103,8 +104,8 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	if summary.Failed {
 		rows = append(rows, [2]string{"Reached", formatReached(summary.Reached)})
 	} else {
-		rows = append(rows, [2]string{"Coverage complete", formatYesNo(summary.CoverageComplete)})
-		rows = append(rows, [2]string{"Scope assessment complete", formatYesNo(summary.CoverageComplete || summary.OmissionsAccepted)})
+		rows = append(rows, [2]string{"All file content inspected", formatYesNo(summary.CoverageComplete)})
+		rows = append(rows, [2]string{"Review scope assessed", formatYesNo(summary.CoverageComplete || summary.OmissionsAccepted)})
 	}
 	rows = append(
 		rows,
@@ -121,6 +122,9 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 
 	var builder strings.Builder
 	builder.WriteString("<details>\n<summary>Review details</summary>\n\n")
+	if acceptedFileScope(summary) && summary.FileAssessmentNote != "" {
+		builder.WriteString(summary.FileAssessmentNote + "\n\n")
+	}
 	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
 		builder.WriteString("#### Review scope\n\n" + reason + "\n\n")
 	}
@@ -139,6 +143,28 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	builder.WriteString(renderUsageDetails(summary.Usage))
 	builder.WriteString("\n</details>")
 	return builder.String()
+}
+
+func acceptedFileScope(summary Summary) bool {
+	if !summary.OmissionsAccepted || summary.Failed {
+		return false
+	}
+	excluded := false
+	for _, assessment := range summary.FileAssessments {
+		switch assessment.Action {
+		case domain.FileActionExclude:
+			excluded = true
+		case domain.FileActionReview:
+			if !assessment.Reviewed {
+				return false
+			}
+		case domain.FileActionInspectRelated, domain.FileActionGap:
+			return false
+		default:
+			return false
+		}
+	}
+	return excluded
 }
 
 // RenderBody renders the single visible GitHub review summary.

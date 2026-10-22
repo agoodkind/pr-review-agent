@@ -753,7 +753,7 @@ func (service *Service) publish(
 	}
 	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef)
 	summary := Summary{
-		Head:             head,
+		FileAssessmentNote: "", Head: head,
 		Decision:         decision,
 		DecisionReason:   pass.decisionReason(),
 		ApprovalWithheld: !approvalAllowed,
@@ -844,6 +844,14 @@ func (service *Service) publishVerdict(
 	state marker.State,
 ) error {
 	logger := gklog.L(ctx)
+	if acceptedFileScope(summary) {
+		var data reviewrules.PromptData
+		note, err := renderPrompt(service.reviewPolicy, "coverage.accepted", data)
+		if err != nil {
+			return err
+		}
+		summary.FileAssessmentNote = note
+	}
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.ErrorContext(ctx, "refresh reviews for the verdict", slog.String("err", err.Error()))

@@ -85,7 +85,7 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	live.stage(t, ctx, "Add generated migration review fixture", "The generated migration adds audit records. Existing classification_active_users records must remain intact. The fixture contains an unintended DROP TABLE statement that requires an inline finding. The test reviews the SQL without executing it.", map[string]string{sqlPath: sql}, "")
 	live.await(t, ctx, "generated_sql", func(snapshot reviewBodySnapshot, body string) bool {
 		kind, action, found := largeFileAssessment(body, sqlPath)
-		if !found || (kind != "generated" && kind != "source") || action != "review" || largeFileDetail(body, "Coverage complete") != "yes" {
+		if !found || (kind != "generated" && kind != "source") || action != "review" || largeFileDetail(body, "All file content inspected") != "yes" {
 			return false
 		}
 		line := strings.Count(sql[:strings.Index(sql, "DROP TABLE classification_active_users;")], "\n") + 1
@@ -105,25 +105,25 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	live.stage(t, ctx, "Add encrypted credential rotation fixture", "Rotate the service_token authentication credential in credentials.vault. AllowedRole in authorization.go returns reader independently of the token. The test ciphertext does not contain real credentials. The fixture does not supply external validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: rotation}, "")
 	live.await(t, ctx, "credential_rotation", func(_ reviewBodySnapshot, body string) bool {
 		_, action, found := largeFileAssessment(body, vaultPath)
-		return found && action == "exclude" && largeFileDetail(body, "Scope assessment complete") == "yes"
+		return found && action == "exclude" && largeFileDetail(body, "Review scope assessed") == "yes"
 	})
 
 	permissions := "package fixture\n\n// The encrypted document determines the role and allowed deletion resources.\nconst AuthorizationSource = \"credentials.vault\"\n\nfunc AllowedRole(vaultValues map[string]string) string { return vaultValues[\"role\"] }\n\nfunc DeletionResources(vaultValues map[string][]string) []string { return vaultValues[\"allowed_delete_resources\"] }\n"
 	live.stage(t, ctx, "Add encrypted authorization review fixture", "Change role and allowed_delete_resources inside credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The unchanged ciphertext is the same harmless test payload from the credential-rotation case. The fixture does not supply decrypted values or permission validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: permissions}, "")
 	live.await(t, ctx, "hidden_authorization", func(_ reviewBodySnapshot, body string) bool {
 		_, action, found := largeFileAssessment(body, vaultPath)
-		return found && action != "exclude" && largeFileDetail(body, "Scope assessment complete") == "no"
+		return found && action != "exclude" && largeFileDetail(body, "Review scope assessed") == "no"
 	})
 
 	first := live.fixture.original.Head.SHA
 	second := clippedLiveGit(t, ctx, live.worktree, "rev-parse", first+"^")
 	live.stage(t, ctx, "Add pinned parent integration fixture", "Add a fixture gitlink pinned to an existing commit in this repository. Review the parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, first)
 	live.await(t, ctx, "gitlink_initial", func(_ reviewBodySnapshot, body string) bool {
-		return largeFileDetail(body, "Coverage complete") == "yes" && largeFileDetail(body, "Scope assessment complete") == "yes"
+		return largeFileDetail(body, "All file content inspected") == "yes" && largeFileDetail(body, "Review scope assessed") == "yes"
 	})
 	live.stage(t, ctx, "Update pinned parent integration fixture", "Update the fixture gitlink to another existing commit in this repository. Review the changed parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, second)
 	live.await(t, ctx, "gitlink_updated", func(snapshot reviewBodySnapshot, body string) bool {
-		if largeFileDetail(body, "Coverage complete") != "yes" || largeFileDetail(body, "Scope assessment complete") != "yes" {
+		if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
 			return false
 		}
 		for _, thread := range snapshot.Threads {
