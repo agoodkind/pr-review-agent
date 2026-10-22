@@ -9,6 +9,8 @@ import (
 )
 
 // PlanFileContentReview validates scope decisions before selecting source for content review.
+// Conflicting exclusions become explicit gaps in the returned assessments.
+// The plan retains their source for content review and reports the unresolved requirement.
 func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAssessment, policy reviewrules.Policy) (diff.ReviewInput, []domain.FileAssessment, error) {
 	decisions := slices.Clone(assessments)
 	var shortfall structuralShortfall
