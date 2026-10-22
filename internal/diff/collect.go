@@ -87,7 +87,8 @@ type FileContext struct {
 	// Gap names why CoverageComplete is false, and is CoverageGapNone whenever
 	// it is true. Collection sets the two together, so a caller reading one
 	// never disagrees with the other.
-	Gap CoverageGap
+	Gap            CoverageGap
+	sourceMetadata string
 }
 
 // markGap records why this file could not be collected whole. It is the only
@@ -129,7 +130,7 @@ type ReviewInput struct {
 	MergeBase domain.HeadSHA
 }
 
-// Piece is one rendered diff hunk, the smallest unit a chunk can carry.
+// Piece contains one complete diff fragment and its source context.
 type Piece struct {
 	Path     string
 	Text     string
@@ -140,10 +141,9 @@ type Piece struct {
 	// when nobody could read it.
 	Header           string
 	CoverageComplete bool
-	// Oversized marks a hunk whose own text is larger than one whole chunk, so
-	// Text holds a placeholder rather than the diff. Nothing splits a hunk, so
-	// this piece is unreadable on every later run as well.
-	Oversized bool
+	// Oversized marks an indivisible fragment that exceeds one request.
+	Oversized   bool
+	fileContext *FileContext
 }
 
 // Chunk is one model input slice with complete hunks from one or more files.
@@ -159,10 +159,14 @@ type Chunk struct {
 	CoverageComplete bool
 }
 
-// Split divides one chunk into two smaller chunks and reports whether it could.
-// A chunk holding a single hunk cannot split, because a hunk is the smallest
-// unit the diff is cut into.
+// Split divides between pieces or complete source rows within one file piece.
 func (chunk Chunk) Split() (Chunk, Chunk, bool) {
+	if len(chunk.Pieces) == 1 {
+		first, second, ok := splitFilePiece(chunk.Pieces[0])
+		if ok {
+			return chunkFromPieces([]Piece{first}, chunk.Index, chunk.Total), chunkFromPieces([]Piece{second}, chunk.Index, chunk.Total), true
+		}
+	}
 	if len(chunk.Pieces) < 2 {
 		return emptyChunk(), emptyChunk(), false
 	}
@@ -236,7 +240,7 @@ func (collector *Collector) Collect(
 		return ReviewInput{}, fmt.Errorf("list changed files: %w", err)
 	}
 
-	files, err := collector.collectFiles(ctx, ref, pullRequest, changedFiles)
+	files, mergeBase, err := collector.collectFiles(ctx, ref, pullRequest, changedFiles, "")
 	if err != nil {
 		return ReviewInput{}, err
 	}
@@ -248,9 +252,7 @@ func (collector *Collector) Collect(
 		PullRequest: pullRequest,
 		Files:       files,
 		Metadata:    metadata,
-		// Listing the whole pull request compares nothing, so there is no commit
-		// the patches were measured from to report.
-		MergeBase: "",
+		MergeBase:   mergeBase,
 	}, nil
 }
 
@@ -308,7 +310,7 @@ func (collector *Collector) CollectRange(
 		)
 		return collector.Collect(ctx, ref, pullRequest)
 	}
-	files, err := collector.collectFiles(ctx, ref, pullRequest, changedFiles.Files)
+	files, mergeBase, err := collector.collectFiles(ctx, ref, pullRequest, changedFiles.Files, changedFiles.MergeBase)
 	if err != nil {
 		return ReviewInput{}, err
 	}
@@ -319,7 +321,7 @@ func (collector *Collector) CollectRange(
 	return ReviewInput{
 		PullRequest: pullRequest,
 		Files:       files,
-		MergeBase:   changedFiles.MergeBase,
+		MergeBase:   mergeBase,
 		Metadata:    metadata,
 	}, nil
 }
@@ -363,27 +365,28 @@ func (collector *Collector) collectFiles(
 	ref domain.PullRequestRef,
 	pullRequest githubapp.PullRequest,
 	changedFiles []githubapp.ChangedFile,
-) ([]FileContext, error) {
+	base domain.HeadSHA,
+) ([]FileContext, domain.HeadSHA, error) {
 	sort.Slice(changedFiles, func(left, right int) bool {
 		return changedFiles[left].Path < changedFiles[right].Path
 	})
 
 	files := make([]FileContext, 0, len(changedFiles))
+	recovery := newPatchRecovery(collector.source, ref, pullRequest, base)
 	for _, changedFile := range changedFiles {
-		file, err := collector.collectFile(ctx, ref, pullRequest, changedFile)
+		file, err := collectFile(ctx, changedFile, recovery)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		files = append(files, file)
 	}
-	return files, nil
+	return files, recovery.base, nil
 }
 
-func (collector *Collector) collectFile(
+func collectFile(
 	ctx context.Context,
-	ref domain.PullRequestRef,
-	pullRequest githubapp.PullRequest,
 	changedFile githubapp.ChangedFile,
+	recovery *patchRecovery,
 ) (FileContext, error) {
 	fileContext := FileContext{
 		Path:              changedFile.Path,
@@ -394,16 +397,19 @@ func (collector *Collector) collectFile(
 		ChangedRightHunks: map[int]int{},
 		CoverageComplete:  true,
 		Gap:               CoverageGapNone,
+		sourceMetadata:    "",
 	}
 
-	if isBinaryFile(changedFile) {
+	if fileLooksBinary(changedFile.Status, changedFile.Patch) {
 		fileContext.markGap(CoverageGapBinary)
 		return fileContext, nil
 	}
+	needsRecovery := patchNeedsRecovery(changedFile)
+	canRecover := recovery.base != "" || recovery.pr.Base != ""
 	if !changedFile.PatchPresent {
 		fileContext.markGap(CoverageGapPatchAbsent)
 	} else {
-		if !fileContext.collectChangedLines() {
+		if !fileContext.collectChangedLines() && !canRecover {
 			return fileContext, nil
 		}
 		parsed, err := parsePatch(changedFile.Patch)
@@ -411,47 +417,71 @@ func (collector *Collector) collectFile(
 			fileContext.markGap(CoverageGapPatchUnreadable)
 		}
 	}
-
-	if changedFile.Status == "removed" {
-		return fileContext, nil
+	if needsRecovery && fileContext.Gap == CoverageGapNone {
+		fileContext.markGap(CoverageGapPatchUnreadable)
 	}
 
-	content, err := collector.source.GetFile(
-		ctx,
-		ref.InstallationID,
-		ref.Repository,
-		changedFile.Path,
-		pullRequest.Head,
-	)
+	loaded, err := loadCurrentFile(ctx, recovery, &fileContext)
 	if err != nil {
-		if fileContext.Gap == CoverageGapPatchAbsent {
-			slog.WarnContext(ctx, "load omitted file context", slog.String("path", changedFile.Path), slog.String("err", err.Error()))
+		return FileContext{}, err
+	}
+	if !loaded {
+		return fileContext, nil
+	}
+	if needsRecovery && canRecover {
+		patch, err := recovery.recover(ctx, changedFile, fileContext.CurrentContent)
+		if errors.Is(err, ErrNonTextPatch) {
+			fileContext.Gap = CoverageGapBinary
+			fileContext.CoverageComplete = false
 			return fileContext, nil
 		}
-		gap := contentGapFor(err)
-		if !gap.Recurs() {
-			slog.ErrorContext(ctx, "load file content", slog.String("path", changedFile.Path), slog.String("err", err.Error()))
-			return FileContext{}, fmt.Errorf("load content for %s: %w", changedFile.Path, err)
+		if err != nil {
+			slog.ErrorContext(ctx, "recover file patch", slog.String("path", changedFile.Path), slog.String("err", err.Error()))
+			return FileContext{}, fmt.Errorf("recover patch for %s: %w", changedFile.Path, err)
 		}
-		fileContext.markGap(gap)
-		return fileContext, nil
+		fileContext.Patch = patch
+		fileContext.Gap = CoverageGapNone
+		fileContext.CoverageComplete = true
+		if !fileContext.collectChangedLines() {
+			return FileContext{}, fmt.Errorf("recovered patch for %s is invalid", changedFile.Path)
+		}
 	}
-	fileContext.CurrentContent = string(content)
 	return fileContext, nil
 }
 
-func isBinaryFile(changedFile githubapp.ChangedFile) bool {
-	if changedFile.Status == "binary" {
-		return true
+func loadCurrentFile(ctx context.Context, recovery *patchRecovery, file *FileContext) (bool, error) {
+	if file.Status == "removed" {
+		return true, nil
 	}
-	return strings.Contains(changedFile.Patch, "Binary files ")
+	content, err := recovery.readFile(ctx, file.Path, recovery.pr.Head)
+	if err == nil {
+		file.CurrentContent = string(content.Data)
+		file.sourceMetadata = content.Metadata
+		return true, nil
+	}
+	if file.Gap == CoverageGapPatchAbsent && recovery.base == "" && recovery.pr.Base == "" {
+		slog.WarnContext(ctx, "load omitted file context", slog.String("path", file.Path), slog.String("err", err.Error()))
+		return false, nil
+	}
+	gap := contentGapFor(err)
+	if !gap.Recurs() {
+		slog.ErrorContext(ctx, "load file content", slog.String("path", file.Path), slog.String("err", err.Error()))
+		return false, fmt.Errorf("load content for %s: %w", file.Path, err)
+	}
+	file.markGap(gap)
+	return false, nil
 }
 
 func fileLooksBinary(status string, patch string) bool {
 	if status == "binary" {
 		return true
 	}
-	return strings.Contains(patch, "Binary files ")
+	for line := range strings.SplitSeq(patch, "\n") {
+		if strings.HasPrefix(line, "Binary files ") && strings.HasSuffix(line, " differ") {
+			return true
+		}
+	}
+	return false
 }
 
 // ChunkInput splits review input into deterministic chunks no larger than maxSize bytes.
@@ -474,22 +504,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 			continue
 		}
 		for _, hunk := range parsed.hunks {
-			text := formatHunkChunk(file.Path, file.Status, file.CurrentContent, hunk, maxSize)
-			coverageComplete := file.CoverageComplete
-			oversized := len(text) > maxSize
-			if oversized {
-				text = formatOversizedHunkChunk(file.Path, maxSize)
-				coverageComplete = false
-			}
-			pieces = append(pieces, Piece{
-				Path:             file.Path,
-				Patch:            hunk.text,
-				Metadata:         nil,
-				Text:             text,
-				Header:           hunkCoordinates(hunk.header),
-				CoverageComplete: coverageComplete,
-				Oversized:        oversized,
-			})
+			pieces = append(pieces, fileHunkPieces(&file, hunk, maxSize)...)
 		}
 	}
 

@@ -109,7 +109,7 @@ func metadataPieces(source MetadataSource, maximumBytes int) []Piece {
 		pieces = append(pieces, Piece{
 			Patch: "",
 			Path:  "", Text: text, Header: fmt.Sprintf("lines %d-%d", fragment.StartLine, fragment.EndLine),
-			CoverageComplete: !oversized, Oversized: oversized, Metadata: &fragment,
+			CoverageComplete: !oversized, Oversized: oversized, Metadata: &fragment, fileContext: nil,
 		})
 		start = end
 	}

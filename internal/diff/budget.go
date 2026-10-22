@@ -47,17 +47,8 @@ func boundChunk(chunk Chunk, files map[string]FileContext, maximumBytes int, mea
 	if size <= maximumBytes {
 		return []Chunk{chunk}, nil
 	}
-	first, second, canSplit := chunk.Split()
-	if canSplit {
-		left, err := boundChunk(first, files, maximumBytes, measure)
-		if err != nil {
-			return nil, err
-		}
-		right, err := boundChunk(second, files, maximumBytes, measure)
-		if err != nil {
-			return nil, err
-		}
-		return append(left, right...), nil
+	if len(chunk.Pieces) > 1 {
+		return boundSplitChunk(chunk, files, maximumBytes, measure)
 	}
 	if len(chunk.Pieces) != 1 {
 		return nil, &PromptSizeError{Actual: size, Limit: maximumBytes}
@@ -79,21 +70,23 @@ func boundChunk(chunk Chunk, files map[string]FileContext, maximumBytes int, mea
 	}
 	hunk := parsed.hunks[0]
 	minimumContext := boundedCurrentContent(file.CurrentContent, hunk.coordinates, 1)
-	minimumText := formatHunkChunk(piece.Path, file.Status, "", hunk, 0)
+	minimumFile := file
+	minimumFile.CurrentContent = ""
+	minimumText := formatFileHunkChunk(&minimumFile, hunk, 0)
 	lower := len(minimumText) + len(minimumContext)
 	upper := len(piece.Text)
-	piece.Text = formatHunkChunk(piece.Path, file.Status, file.CurrentContent, hunk, lower)
+	piece.Text = formatFileHunkChunk(&file, hunk, lower)
 	best := chunkFromPieces([]Piece{piece}, chunk.Index, chunk.Total)
 	minimumSize, err := measure(best)
 	if err != nil {
 		return nil, err
 	}
 	if minimumSize > maximumBytes {
-		return oversizedChunk(chunk, maximumBytes, measure)
+		return boundSplitChunk(chunk, files, maximumBytes, measure)
 	}
 	for lower <= upper {
 		middle := lower + (upper-lower)/2
-		piece.Text = formatHunkChunk(piece.Path, file.Status, file.CurrentContent, hunk, middle)
+		piece.Text = formatFileHunkChunk(&file, hunk, middle)
 		candidate := chunkFromPieces([]Piece{piece}, chunk.Index, chunk.Total)
 		candidateSize, err := measure(candidate)
 		if err != nil {
@@ -107,6 +100,22 @@ func boundChunk(chunk Chunk, files map[string]FileContext, maximumBytes int, mea
 		}
 	}
 	return []Chunk{best}, nil
+}
+
+func boundSplitChunk(chunk Chunk, files map[string]FileContext, maximumBytes int, measure func(Chunk) (int, error)) ([]Chunk, error) {
+	first, second, ok := chunk.Split()
+	if !ok {
+		return oversizedChunk(chunk, maximumBytes, measure)
+	}
+	left, err := boundChunk(first, files, maximumBytes, measure)
+	if err != nil {
+		return nil, err
+	}
+	right, err := boundChunk(second, files, maximumBytes, measure)
+	if err != nil {
+		return nil, err
+	}
+	return append(left, right...), nil
 }
 
 func oversizedChunk(chunk Chunk, maximumBytes int, measure func(Chunk) (int, error)) ([]Chunk, error) {
