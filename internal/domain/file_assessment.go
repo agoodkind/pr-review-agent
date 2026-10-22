@@ -74,7 +74,7 @@ func (assessment FileAssessment) Validate() error {
 	return nil
 }
 
-// PermitsContentExclusion requires an explicit decision that inspection is unnecessary.
+// PermitsContentExclusion rejects saved assessments that do not include a review requirement.
 func (assessment FileAssessment) PermitsContentExclusion() bool {
 	return assessment.Action == FileActionExclude && assessment.ContentReviewRequirement == ContentReviewUnnecessary
 }
