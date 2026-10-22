@@ -41,6 +41,37 @@ func MarshalReviewSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 		descriptions["path"], descriptions["start_line"], descriptions["end_line"])), nil
 }
 
+// MarshalClassificationSchema preserves assessment constraints and forbids findings.
+func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, error) {
+	schema, err := MarshalReviewSchema(policy)
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(schema, &fields); err != nil {
+		return nil, requestEncodingError(err)
+	}
+	var properties map[string]json.RawMessage
+	if err := json.Unmarshal(fields["properties"], &properties); err != nil {
+		return nil, requestEncodingError(err)
+	}
+	var findings map[string]json.RawMessage
+	if err := json.Unmarshal(properties["findings"], &findings); err != nil {
+		return nil, requestEncodingError(err)
+	}
+	findings["maxItems"] = json.RawMessage("0")
+	properties["findings"], err = json.Marshal(findings)
+	if err != nil {
+		return nil, requestEncodingError(err)
+	}
+	fields["properties"], err = json.Marshal(properties)
+	if err != nil {
+		return nil, requestEncodingError(err)
+	}
+	encoded, err := json.Marshal(fields)
+	return encoded, requestEncodingError(err)
+}
+
 func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	var data reviewrules.PromptData
 	data.Total = policy.FileAssessmentMaximumReasonBytes()
@@ -87,10 +118,11 @@ func MarshalReportSchema(policy reviewrules.Policy) json.RawMessage {
 }
 
 const (
-	reviewSchemaName      = "review_result"
-	reportSchemaName      = "review_report"
-	reconcileSchemaName   = "thread_resolutions"
-	consolidateSchemaName = "finding_consolidation"
+	reviewSchemaName         = "review_result"
+	classificationSchemaName = "file_classification"
+	reportSchemaName         = "review_report"
+	reconcileSchemaName      = "thread_resolutions"
+	consolidateSchemaName    = "finding_consolidation"
 )
 
 // The review schema asks for findings, whether supplied omission metadata is
