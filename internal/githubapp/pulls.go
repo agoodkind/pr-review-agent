@@ -35,6 +35,8 @@ type changedFileResponse struct {
 	PreviousFilename string  `json:"previous_filename"`
 	Status           string  `json:"status"`
 	Patch            *string `json:"patch"`
+	Additions        *int    `json:"additions"`
+	Deletions        *int    `json:"deletions"`
 }
 
 type compareResponse struct {
@@ -65,6 +67,7 @@ type fileContentResponse struct {
 	Type            string `json:"type"`
 	SHA             string `json:"sha"`
 	SubmoduleGitURL string `json:"submodule_git_url"`
+	Size            *int   `json:"size"`
 }
 
 // GetPullRequest loads one pull request by number.
@@ -160,7 +163,11 @@ func (client *Client) ListChangedFiles(
 			return 0, errors.New("decode changed files page")
 		}
 		for _, item := range pageFiles {
-			files = append(files, decodeChangedFile(item))
+			file, err := decodeChangedFile(item)
+			if err != nil {
+				return 0, err
+			}
+			files = append(files, file)
 		}
 		return len(pageFiles), nil
 	})
@@ -204,6 +211,9 @@ func (client *Client) GetFile(
 		}
 		return []byte(fmt.Sprintf("Submodule repository: %s\nSubproject commit %s\n", response.SubmoduleGitURL, commit)), nil
 	}
+	if response.Encoding == "none" && response.Type == "file" {
+		return client.getFileBlob(ctx, installationID, repo, response)
+	}
 	if response.Encoding != "base64" {
 		return nil, errors.New("unsupported file encoding")
 	}
@@ -243,7 +253,11 @@ func (client *Client) Compare(
 			}
 		}
 		for _, item := range response.Files {
-			comparison.Files = append(comparison.Files, decodeChangedFile(item))
+			file, err := decodeChangedFile(item)
+			if err != nil {
+				return 0, err
+			}
+			comparison.Files = append(comparison.Files, file)
 		}
 		return len(response.Files), nil
 	})
@@ -253,17 +267,31 @@ func (client *Client) Compare(
 	return comparison, nil
 }
 
-func decodeChangedFile(item changedFileResponse) ChangedFile {
+func decodeChangedFile(item changedFileResponse) (ChangedFile, error) {
+	if item.Additions != nil && *item.Additions < 0 {
+		return ChangedFile{}, errors.New("changed file additions cannot be negative")
+	}
+	if item.Deletions != nil && *item.Deletions < 0 {
+		return ChangedFile{}, errors.New("changed file deletions cannot be negative")
+	}
 	changed := ChangedFile{
-		Path:         item.Filename,
-		PreviousPath: item.PreviousFilename,
-		Status:       item.Status,
-		Patch:        "",
-		PatchPresent: false,
+		Path:              item.Filename,
+		PreviousPath:      item.PreviousFilename,
+		Status:            item.Status,
+		Patch:             "",
+		PatchPresent:      false,
+		Additions:         0,
+		Deletions:         0,
+		ChangeCountsKnown: false,
+	}
+	if item.Additions != nil && item.Deletions != nil {
+		changed.Additions = *item.Additions
+		changed.Deletions = *item.Deletions
+		changed.ChangeCountsKnown = true
 	}
 	if item.Patch != nil {
 		changed.Patch = *item.Patch
 		changed.PatchPresent = true
 	}
-	return changed
+	return changed, nil
 }

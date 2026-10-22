@@ -53,6 +53,10 @@ type ChangedFile struct {
 	Status       string
 	Patch        string
 	PatchPresent bool
+	Additions    int
+	Deletions    int
+	// ChangeCountsKnown requires both counts in the GitHub response.
+	ChangeCountsKnown bool
 }
 
 // Review is one submitted pull request review.
@@ -174,6 +178,18 @@ func (client *Client) doREST(
 	query url.Values,
 	body json.RawMessage,
 ) ([]byte, error) {
+	return client.doRESTWithAccept(ctx, installationID, method, path, query, body, githubAcceptHeader)
+}
+
+func (client *Client) doRESTWithAccept(
+	ctx context.Context,
+	installationID int64,
+	method string,
+	path string,
+	query url.Values,
+	body json.RawMessage,
+	accept string,
+) ([]byte, error) {
 	target := client.restURL(path)
 	if len(query) > 0 {
 		target += "?" + query.Encode()
@@ -195,7 +211,7 @@ func (client *Client) doREST(
 		return nil, errors.New("create github request")
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", githubAcceptHeader)
+	request.Header.Set("Accept", accept)
 	request.Header.Set(githubAPIVersionHeader, githubAPIVersionValue)
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
@@ -214,7 +230,7 @@ func (client *Client) doREST(
 	responseBody, err := readLimitedBody(response.Body)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "read github response", slog.String("err", err.Error()))
-		return nil, errors.New("read github response")
+		return nil, fmt.Errorf("read github response: %w", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, newAPIError(response.StatusCode, sanitizeErrorBody(responseBody))
