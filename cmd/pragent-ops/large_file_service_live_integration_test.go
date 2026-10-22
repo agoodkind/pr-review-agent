@@ -26,6 +26,13 @@ import (
 
 const largeFileFixturePrefix = "docs/pr-agent-classification-fixture/"
 
+const (
+	largeFileDefaultCaseTimeout = 7 * time.Minute
+	largeFileSuiteOverhead      = 5 * time.Minute
+	largeFileCleanupTimeout     = 8 * time.Minute
+	largeFileScenarioCount      = 5
+)
+
 var largeFileFixturePaths = []string{
 	largeFileFixturePrefix + "generated.sql",
 	largeFileFixturePrefix + "credentials.vault",
@@ -46,6 +53,7 @@ type largeFileServiceFixture struct {
 	originalForce bool
 	minimumCheck  int64
 	localHead     string
+	caseTimeout   time.Duration
 }
 
 type largeFileServiceEvidence struct {
@@ -68,14 +76,16 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	if os.Getenv("PR_AGENT_LIVE_LARGE_FILE_TEST") != "1" {
 		t.Skip("Set PR_AGENT_LIVE_LARGE_FILE_TEST=1 to exercise the deployed classification service.")
 	}
+	caseTimeout, suiteTimeout := largeFileLiveTimeouts(t)
 	live := largeFileServiceSetup(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Minute)
+	live.caseTimeout = caseTimeout
+	ctx, cancel := context.WithTimeout(t.Context(), suiteTimeout)
 	defer cancel()
 	live.health(t, ctx)
 	original := liveReviewBodyCapture(t, ctx, live.fixture.client, live.fixture.opts, live.fixture.repo)
 	largeFileSave(t, live.evidence, "original.json", largeFileOriginalEvidence{Tree: live.originalTree, Snapshot: original})
 	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 8*time.Minute)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), largeFileCleanupTimeout)
 		defer cleanupCancel()
 		live.restore(t, cleanupCtx)
 	})
@@ -139,6 +149,28 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	})
 }
 
+func largeFileLiveTimeouts(t *testing.T) (time.Duration, time.Duration) {
+	t.Helper()
+	caseTimeout := largeFileDefaultCaseTimeout
+	if value, configured := os.LookupEnv("PR_AGENT_LIVE_CASE_TIMEOUT"); configured {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed <= 0 {
+			t.Fatal("Set PR_AGENT_LIVE_CASE_TIMEOUT to a positive duration such as 12m.")
+		}
+		caseTimeout = parsed
+	}
+	const maximumDuration = time.Duration(1<<63 - 1)
+	if caseTimeout > (maximumDuration-largeFileSuiteOverhead-largeFileCleanupTimeout-time.Minute)/largeFileScenarioCount {
+		t.Fatal("PR_AGENT_LIVE_CASE_TIMEOUT is too large to calculate the suite deadline; select a shorter positive duration.")
+	}
+	suiteTimeout := largeFileScenarioCount*caseTimeout + largeFileSuiteOverhead
+	required := suiteTimeout + largeFileCleanupTimeout
+	if deadline, limited := t.Deadline(); limited && time.Until(deadline) < required {
+		t.Fatalf("The live classification suite and cleanup require %s. Run go test with -timeout %s or longer; the current test deadline has %s remaining.", required, required+time.Minute, time.Until(deadline).Round(time.Second))
+	}
+	return caseTimeout, suiteTimeout
+}
+
 func (live *largeFileServiceFixture) openSQLFinding(t *testing.T, ctx context.Context, snapshot reviewBodySnapshot, path, sql string, sources map[domain.HeadSHA][]string) bool {
 	t.Helper()
 	const statement = "DROP TABLE classification_active_users;"
@@ -158,7 +190,7 @@ func (live *largeFileServiceFixture) openSQLFinding(t *testing.T, ctx context.Co
 		if !cached {
 			content, err := live.fixture.client.GetFile(ctx, live.fixture.opts.installationID, live.fixture.repo, path, finding.Head)
 			if err != nil {
-				t.Fatal("The immutable source for the existing SQL finding could not be verified.")
+				t.Fatalf("The immutable source for the existing SQL finding could not be verified: %s", liveReviewBodyReadFailure(ctx, err))
 			}
 			source = strings.Split(string(content), "\n")
 			sources[finding.Head] = source
@@ -424,7 +456,7 @@ func (live *largeFileServiceFixture) force(t *testing.T, ctx context.Context) {
 	t.Helper()
 	check, found, err := live.fixture.client.FindCheckRun(ctx, live.fixture.opts.installationID, live.fixture.repo, domain.HeadSHA(live.fixture.head), config.ReviewCheckName)
 	if err != nil {
-		t.Fatal("The prior fixture check could not be read before forcing full review.")
+		t.Fatalf("The prior fixture check could not be read before forcing full review: %s", liveReviewBodyReadFailure(ctx, err))
 	}
 	live.minimumCheck = 0
 	if found {
@@ -444,7 +476,7 @@ func (live *largeFileServiceFixture) health(t *testing.T, ctx context.Context) {
 	}
 	response, err := (&http.Client{Timeout: time.Minute}).Do(request)
 	if err != nil {
-		t.Fatal("The deployed review service could not confirm its revision.")
+		t.Fatalf("The deployed review service could not confirm its revision: %s", liveReviewBodyReadFailure(ctx, err))
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK || response.Header.Get("X-Pr-Agent-Revision") != live.revision {
@@ -454,14 +486,14 @@ func (live *largeFileServiceFixture) health(t *testing.T, ctx context.Context) {
 
 func (live *largeFileServiceFixture) await(t *testing.T, parent context.Context, scenario string, accepts func(reviewBodySnapshot, string) bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(parent, 7*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, live.caseTimeout)
 	defer cancel()
 	for ctx.Err() == nil {
 		live.guard(t, ctx)
 		snapshot := liveReviewBodyCapture(t, ctx, live.fixture.client, live.fixture.opts, live.fixture.repo)
 		check, found, err := live.fixture.client.FindCheckRun(ctx, live.fixture.opts.installationID, live.fixture.repo, domain.HeadSHA(live.fixture.head), config.ReviewCheckName)
 		if err != nil {
-			t.Fatal("The deployed classification check could not be read.")
+			t.Fatalf("The deployed classification check for scenario %s on head %s could not be read: %s", scenario, live.fixture.head, liveReviewBodyReadFailure(ctx, err))
 		}
 		if found && check.Status == "completed" && check.ID > live.minimumCheck {
 			for _, comment := range snapshot.Comments {
@@ -482,7 +514,7 @@ func (live *largeFileServiceFixture) await(t *testing.T, parent context.Context,
 				}
 				details, err := live.fixture.client.GetCheckRunDetails(ctx, live.fixture.opts.installationID, live.fixture.repo, check.ID)
 				if err != nil {
-					t.Fatal("The completed classification check details could not be read.")
+					t.Fatalf("The completed classification check %d details could not be read: %s", check.ID, liveReviewBodyReadFailure(ctx, err))
 				}
 				live.health(t, ctx)
 				largeFileSave(t, live.evidence, scenario+".json", largeFileServiceEvidence{Scenario: scenario, Revision: live.revision, Snapshot: snapshot, Check: details})
@@ -494,7 +526,7 @@ func (live *largeFileServiceFixture) await(t *testing.T, parent context.Context,
 		case <-time.After(5 * time.Second):
 		}
 	}
-	t.Fatalf("The deployed classification scenario %s did not establish its expected result on head %s.", scenario, live.fixture.head)
+	t.Fatalf("The deployed classification scenario %s did not establish its expected result on head %s within %s: %v.", scenario, live.fixture.head, live.caseTimeout, ctx.Err())
 }
 
 func largeFileSave[T largeFileEvidence](t *testing.T, directory, name string, value T) {
