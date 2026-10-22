@@ -34,6 +34,7 @@ type metadataReviewRecordJSON struct {
 }
 
 func encodeMetadataRecord(record metadataReviewRecord) string {
+	record.DecisionReason = scopeDecisionReason(record.DecisionReason, record.Omissions, nil)
 	modes := make(map[reviewrules.ID]reviewrules.Deduplication)
 	record.Findings = append([]domain.Finding(nil), record.Findings...)
 	for index := range record.Findings {
