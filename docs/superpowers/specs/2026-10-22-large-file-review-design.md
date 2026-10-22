@@ -90,7 +90,7 @@ Example decisions:
 | A lockfile changes extensively. | Assess packages, versions, sources, integrity, and unexpected dependencies. |
 | A submodule pointer changes from commit A to commit B. | Review the parent repository's pointer update and related parent configuration without reviewing nested upstream file differences. |
 | A fixture gains repetitive records. | Assess meaningful data differences and the consuming tests. |
-| An encrypted vault changes during credential rotation. | Assess secret references and rotation validation; omit ciphertext interpretation only when that evidence suffices. |
+| An encrypted vault changes during credential rotation. | Assess references and readable consumer behavior. Omit ciphertext interpretation when supplied evidence establishes the relevant behavior independently of hidden values. |
 | An encrypted vault changes during an authorization redesign. | Keep a gap if hidden values determine permissions that other evidence cannot establish. |
 | A PNG changes during a visual update. | Inspect visual evidence or retain a specific visual review gap. |
 | A compiled executable changes without source or build evidence. | Assess provenance and retain a gap if behavior cannot be established. |
