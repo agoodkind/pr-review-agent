@@ -43,7 +43,7 @@ func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	for _, path := range assessmentPaths(structuralShortfall{Hunks: snapshot.omissions}) {
 		covered := false
 		for _, assessment := range snapshot.fileAssessments {
-			if assessment.Path == path && (assessment.Action == domain.FileActionExclude || assessment.Action == domain.FileActionReview && assessment.Reviewed) {
+			if assessment.Path == path && (assessment.PermitsContentExclusion() || assessment.Action == domain.FileActionReview && assessment.Reviewed) {
 				covered = true
 			}
 		}

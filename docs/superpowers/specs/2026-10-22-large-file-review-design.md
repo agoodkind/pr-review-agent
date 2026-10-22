@@ -22,7 +22,19 @@ Record the effective comparison base and whether collection recovered the patch.
 
 ## Classify content and choose review work
 
-Record a content kind, review action, reason, and supporting evidence for each classification. Keep the kind and action independent. Use stable file identities bound to the current review revision. Validate model decisions against the files and evidence actually supplied.
+Record a content kind, content review requirement, review action, reason, and supporting evidence for each classification. Keep the kind, requirement, and action independent. Use stable file identities bound to the current review revision. Validate model decisions against the files and evidence actually supplied.
+
+The requirement establishes whether the changed content needs inspection.
+
+Content review requirements:
+
+| Value | Meaning |
+|---|---|
+| `required` | The changed content needs ordinary review. |
+| `unnecessary` | Supplied evidence establishes that content inspection is unnecessary. |
+| `uncertain` | Available evidence does not establish whether content inspection is necessary. |
+
+Accept an exclusion only with an `unnecessary` requirement and evidence that satisfies the current policy. Classification determines review scope and does not publish findings. A previewed defect does not complete review of remaining relevant changes. Retain an unresolved assessment when the requirement conflicts with a proposed exclusion. Completing content chunks does not resolve a distinct evidence gap.
 
 The review actions are:
 

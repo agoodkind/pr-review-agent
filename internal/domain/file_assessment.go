@@ -10,6 +10,18 @@ import (
 // FileReviewAction selects necessary work independently of the content category.
 type FileReviewAction string
 
+// ContentReviewRequirement records whether changed content needs inspection.
+type ContentReviewRequirement string
+
+const (
+	// ContentReviewRequired requires inspection of relevant changed behavior.
+	ContentReviewRequired ContentReviewRequirement = "required"
+	// ContentReviewUnnecessary permits a justified content exclusion.
+	ContentReviewUnnecessary ContentReviewRequirement = "unnecessary"
+	// ContentReviewUncertain requires further evidence before excluding content.
+	ContentReviewUncertain ContentReviewRequirement = "uncertain"
+)
+
 const (
 	// FileActionReview requires inspection of the changed content.
 	FileActionReview FileReviewAction = "review"
@@ -23,19 +35,25 @@ const (
 
 // FileAssessment records why one changed file requires or permits content inspection.
 type FileAssessment struct {
-	Reviewed    bool                    `json:"reviewed,omitempty"`
-	Path        string                  `json:"path"`
-	Identity    string                  `json:"identity"`
-	ContentKind reviewrules.ContentKind `json:"content_kind"`
-	Action      FileReviewAction        `json:"action"`
-	Reason      string                  `json:"reason"`
-	Evidence    []string                `json:"evidence"`
+	ContentReviewRequirement ContentReviewRequirement `json:"content_review_requirement"`
+	Reviewed                 bool                     `json:"reviewed,omitempty"`
+	Path                     string                   `json:"path"`
+	Identity                 string                   `json:"identity"`
+	ContentKind              reviewrules.ContentKind  `json:"content_kind"`
+	Action                   FileReviewAction         `json:"action"`
+	Reason                   string                   `json:"reason"`
+	Evidence                 []string                 `json:"evidence"`
 }
 
 // Validate checks the assessment contract before repository evidence validation.
 func (assessment FileAssessment) Validate() error {
 	if strings.TrimSpace(assessment.Path) == "" || strings.TrimSpace(assessment.Identity) == "" || strings.TrimSpace(assessment.Reason) == "" {
 		return errors.New("file assessment requires path, identity, and reason")
+	}
+	switch assessment.ContentReviewRequirement {
+	case ContentReviewRequired, ContentReviewUnnecessary, ContentReviewUncertain:
+	default:
+		return errors.New("file assessment content_review_requirement must be required, unnecessary, or uncertain")
 	}
 	switch assessment.ContentKind {
 	case reviewrules.ContentSource, reviewrules.ContentGenerated, reviewrules.ContentEncrypted, reviewrules.ContentBinary, reviewrules.ContentDependency, reviewrules.ContentData, reviewrules.ContentExternal, reviewrules.ContentUnknown:
@@ -54,4 +72,9 @@ func (assessment FileAssessment) Validate() error {
 		return errors.New("unknown content cannot receive a content exclusion")
 	}
 	return nil
+}
+
+// PermitsContentExclusion rejects saved assessments that do not include a review requirement.
+func (assessment FileAssessment) PermitsContentExclusion() bool {
+	return assessment.Action == FileActionExclude && assessment.ContentReviewRequirement == ContentReviewUnnecessary
 }

@@ -18,13 +18,13 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 		return strings.Compare(left.Path, right.Path)
 	})
 	var builder strings.Builder
-	builder.WriteString("#### File assessments\n\nThe table records the assessment scope for each classified file.\n\n| File | Content | Assessment | Reason | Evidence |\n| --- | --- | --- | --- | --- |\n")
+	builder.WriteString("#### File assessments\n\nThe table records the assessment scope for each classified file.\n\n| File | Content | Assessment | Content review requirement | Reason | Evidence |\n| --- | --- | --- | --- | --- | --- |\n")
 	listed := 0
 	const noticeAllowance = 256
 	for _, assessment := range ordered[:min(len(ordered), maximumListedUnreadHunks)] {
-		row := fmt.Sprintf("| %s | %s | %s | %s | %s |\n",
+		row := fmt.Sprintf("| %s | %s | %s | %s | %s | %s |\n",
 			assessmentTableCell(assessment.Path), assessmentTableCell(string(assessment.ContentKind)),
-			assessmentTableCell(string(assessment.Action)), assessmentTableCell(assessment.Reason),
+			assessmentTableCell(string(assessment.Action)), assessmentTableCell(string(assessment.ContentReviewRequirement)), assessmentTableCell(assessment.Reason),
 			assessmentTableCell(strings.Join(assessment.Evidence, ", ")))
 		if builder.Len()+len(row)+noticeAllowance > maximumBytes {
 			break

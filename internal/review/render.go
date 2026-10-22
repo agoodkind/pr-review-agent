@@ -153,6 +153,9 @@ func acceptedFileScope(summary Summary) bool {
 	for _, assessment := range summary.FileAssessments {
 		switch assessment.Action {
 		case domain.FileActionExclude:
+			if !assessment.PermitsContentExclusion() {
+				return false
+			}
 			excluded = true
 		case domain.FileActionReview:
 			if !assessment.Reviewed {

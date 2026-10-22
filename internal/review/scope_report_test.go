@@ -19,7 +19,8 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	assessment := domain.FileAssessment{
-		Path: "secrets/vault.yml", Identity: "pinned-file", ContentKind: "encrypted", Action: "exclude",
+		ContentReviewRequirement: domain.ContentReviewUnnecessary,
+		Path:                     "secrets/vault.yml", Identity: "pinned-file", ContentKind: "encrypted", Action: "exclude",
 		Reason:   "The rotation changes encrypted credentials and retains the existing secret references.",
 		Evidence: []string{"file:pinned-file", "changed_files"},
 	}
