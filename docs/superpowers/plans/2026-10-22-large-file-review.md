@@ -31,31 +31,33 @@ Invalidate progress and exclusions when the comparison or relevant policy change
 
 ## Task 1: Divide one oversized hunk
 
-Modify [collect.go](../../../internal/diff/collect.go), [patch.go](../../../internal/diff/patch.go), and [budget.go](../../../internal/diff/budget.go). Add a focused hunk partition implementation and a real Git integration test in the same package.
+Modify [collect.go](../../../internal/diff/collect.go), [patch.go](../../../internal/diff/patch.go), and [budget.go](../../../internal/diff/budget.go). Add [split.go](../../../internal/diff/split.go) for hunk partitioning and [large_file_integration_test.go](../../../internal/diff/large_file_integration_test.go) for real Git regression tests.
 
 **Interfaces:** Preserve `ChunkInput(ReviewInput, int) ([]Chunk, error)`, `BoundChunks`, `Chunk.Split`, and `ChangedSourceRows`. Add an internal partitioner that consumes a complete `parsedHunk` and produces smaller complete hunks or reports that division is impossible.
 
-- [ ] Partition content rows while advancing old and new coordinates independently. Keep newline markers attached to their source row.
-- [ ] Extend `Chunk.Split` to divide one file piece. Keep metadata splitting unchanged.
-- [ ] Partition large hunks before constructing oversized placeholders in `ChunkInput` and the final request budget path. Keep an indivisible oversized line explicit.
-- [ ] Preserve original file anchor maps and render context around each fragment.
-- [ ] Add `TestLargeGitHunkRetainsChangedRowsWithinPromptBudget` through a real temporary Git repository and production `ChunkInput`, `BoundReviewChunks`, and `ChangedSourceRows`. Assert exact added-line coordinates, deletion preservation, bounded prompts, and complete coverage.
-- [ ] Exercise additions, deletion-only changes, replacements, Unicode, and missing final newlines. Rewrite tests that require large multiline hunks to remain unreadable.
-- [ ] Run `go test ./internal/diff ./internal/review` and scoped quality checks. Commit this change independently.
+This milestone enforces the existing rendered review-input limit. Task 4 adds accounting for provider system instructions and response schemas before claiming a complete provider request limit.
+
+- [x] Partition content rows while advancing old and new coordinates independently. Keep newline markers attached to their source row.
+- [x] Extend `Chunk.Split` to divide one file piece. Keep metadata splitting unchanged.
+- [x] Partition large hunks before constructing oversized placeholders in `ChunkInput` and the rendered input budget path. Keep an indivisible oversized line explicit.
+- [x] Preserve original file anchor maps and render context around each fragment.
+- [x] Add `TestLargeGitHunkRetainsChangedRowsWithinPromptBudget` through a real temporary Git repository and production `ChunkInput`, `BoundReviewChunks`, and `ChangedSourceRows`. Assert exact added-line coordinates, deletion preservation, bounded prompts, and complete coverage.
+- [x] Exercise additions, deletion-only changes, replacements, Unicode, and missing final newlines. Rewrite tests that require large multiline hunks to remain unreadable.
+- [x] Run `go test ./internal/diff ./internal/review` and scoped quality checks. Commit this change independently.
 
 ## Task 2: Recover omitted or incomplete patches
 
-Modify [client.go](../../../internal/githubapp/client.go), [pulls.go](../../../internal/githubapp/pulls.go), and collection code. Add a focused reconstruction implementation in the diff package.
+Modify [client.go](../../../internal/githubapp/client.go), [pulls.go](../../../internal/githubapp/pulls.go), and collection code. Add [recover.go](../../../internal/diff/recover.go) for reconstruction and [recovery_integration_test.go](../../../internal/diff/recovery_integration_test.go) for real Git collection tests. Generate unified patches with [go-udiff](https://github.com/aymanbagabas/go-udiff).
 
 **Interfaces:** Extend `githubapp.ChangedFile` with validated addition and deletion metadata. Distinguish absent counts from zero. Retain the collector's public source interface where possible. The internal reconstruction function consumes pinned old and new bytes and returns a complete unified text patch or an explicit non-text result.
 
-- [ ] Preserve change counts at the GitHub JSON boundary.
-- [ ] Resolve the effective merge base before full pull request reconstruction. Use `PreviousPath` for renamed files.
-- [ ] Retrieve full bytes when the Contents API omits inline content. Reuse authenticated endpoints and bounded responses.
-- [ ] Reconstruct absent, malformed, incomplete, or count-mismatched text patches with a selected Go library. Validate reconstructed rows against the head content.
-- [ ] Keep binary, unavailable, and over-limit content explicit.
-- [ ] Add production-path tests with real Git objects and an opt-in real GitHub check. Cover comparison bases, additions, removals, renames, and truncation after a complete earlier hunk.
-- [ ] Run collection, GitHub client, review, and scoped quality checks. Commit this change independently.
+- [x] Preserve change counts at the GitHub JSON boundary.
+- [x] Resolve the effective merge base before full pull request reconstruction. Use `PreviousPath` for renamed files.
+- [x] Retrieve full bytes when the Contents API omits inline content. Reuse authenticated endpoints and bounded responses.
+- [x] Reconstruct absent, malformed, incomplete, or count-mismatched text patches with a selected Go library. Validate reconstructed rows against the head content.
+- [x] Keep binary, unavailable, and over-limit content explicit.
+- [x] Add production-path tests with real Git objects and an opt-in real GitHub check. Cover comparison bases, additions, removals, renames, and truncation after a complete earlier hunk.
+- [x] Run collection, GitHub client, review, and scoped quality checks. Commit this change independently.
 
 ## Task 3: Add contextual per-file assessments
 
@@ -77,6 +79,7 @@ Extend existing chunk identities, assessment snapshots, and omission records. Re
 **Interfaces:** Save comparison revisions, region coordinates, and relevant policy revision with compatible progress. Record reviewed regions, accepted content exclusions, and unresolved regions separately.
 
 - [ ] Resume unfinished work without reposting existing inline findings. Invalidate incompatible checkpoints and exclusions.
+- [ ] Include provider system instructions and response schemas in complete request accounting before partitioning input. Verify the actual provider request boundary rather than only `review.input`.
 - [ ] Assess shared behavior across fragments with bounded source context and a configured relationship review. Keep necessary unseen dependencies as gaps.
 - [ ] Render classification reasons and evidence references in the existing configurable details section.
 - [ ] Verify a moved head, changed policy, accepted exclusions, essential missing content, and resumed publication through real-dependency integration boundaries.
