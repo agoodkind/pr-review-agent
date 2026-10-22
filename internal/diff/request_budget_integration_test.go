@@ -1,6 +1,7 @@
 package diff_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
+	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/review"
@@ -112,6 +114,34 @@ func TestClientRejectsOversizedCompleteRequestBeforeProviderCalls(t *testing.T) 
 	if !errors.As(err, &refusal) || refusal.Actual != size || refusal.Limit != size-1 || completion.Model != "" {
 		t.Fatalf("The complete request must fail locally at its configured byte limit: result %+v, error %v.", completion, err)
 	}
+}
+
+func TestClientUsesDeliveryRequestBudget(t *testing.T) {
+	policy := policytest.Load(t)
+	prompt := "Review the supplied change."
+	client := requestBudgetClient(policy, config.MaximumPromptBytes)
+	size, err := client.ReviewRequestBytes(prompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("lower delivery limit", func(t *testing.T) {
+		ctx := modelrequest.WithMaximumBytes(t.Context(), size-1)
+		_, err := client.Review(ctx, prompt)
+		var refusal *diff.PromptSizeError
+		if !errors.As(err, &refusal) || refusal.Actual != size || refusal.Limit != size-1 {
+			t.Fatalf("The delivery limit must reject the complete request before a provider call: %v.", err)
+		}
+	})
+	t.Run("higher delivery limit", func(t *testing.T) {
+		client := requestBudgetClient(policy, size-1)
+		ctx, cancel := context.WithCancel(modelrequest.WithMaximumBytes(t.Context(), size))
+		cancel()
+		_, err := client.Review(ctx, prompt)
+		var refusal *diff.PromptSizeError
+		if errors.As(err, &refusal) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("The delivery limit must permit the complete request before observing cancellation: %v.", err)
+		}
+	})
 }
 
 func TestCompleteProviderBudgetPreservesIndivisibleGitGap(t *testing.T) {

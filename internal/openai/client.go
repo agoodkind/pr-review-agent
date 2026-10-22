@@ -367,7 +367,7 @@ func (client *Client) complete(
 	if err != nil {
 		return "", err
 	}
-	if err := client.checkRequestSizes(prompt, instructions, schemaName, schema); err != nil {
+	if err := client.checkRequestSizes(ctx, prompt, instructions, schemaName, schema); err != nil {
 		return "", err
 	}
 	var failures []error

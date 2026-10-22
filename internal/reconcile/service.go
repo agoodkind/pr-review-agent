@@ -13,6 +13,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
@@ -123,9 +124,8 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 
 	prepared := make([]preparedThread, 0, len(owned))
 	maximumBytes := service.maximumPromptBytes
-	if job.Settings.MaxPromptBytes > 0 {
-		maximumBytes = job.Settings.MaxPromptBytes
-	}
+	maximumBytes = deliveryMaximumBytes(job, maximumBytes)
+	ctx = modelrequest.WithMaximumBytes(ctx, maximumBytes)
 	removed := make([]domain.OwnedThread, 0)
 	for _, thread := range owned {
 		contextText, state := service.loadThreadContext(ctx, job, thread, currentHead, changedFiles, maximumBytes)
@@ -143,14 +143,14 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		})
 	}
 
-	batches := batchPreparedThreads(prepared, maximumBytes)
+	batches, budgetErr := boundPreparedThreads(service.model, prepared, pullRequest, service.policy, maximumBytes)
 	logger.InfoContext(
 		ctx,
 		"review reconciliation analysis started",
 		slog.Int("batches", len(batches)),
 		slog.Any("thread_node_ids", preparedThreadIDs(prepared)),
 	)
-	return service.reconcilePrepared(
+	currentThreads, reconcileErr := service.reconcilePrepared(
 		ctx,
 		job,
 		pullRequest,
@@ -159,6 +159,14 @@ func (service *Service) Reconcile(ctx context.Context, job domain.ReviewJob) ([]
 		batches,
 		logger,
 	)
+	return currentThreads, errors.Join(budgetErr, reconcileErr)
+}
+
+func deliveryMaximumBytes(job domain.ReviewJob, configured int) int {
+	if job.Settings.MaxPromptBytes > 0 {
+		return job.Settings.MaxPromptBytes
+	}
+	return configured
 }
 
 func (service *Service) reconcilePrepared(
@@ -167,7 +175,7 @@ func (service *Service) reconcilePrepared(
 	pullRequest githubapp.PullRequest,
 	threads []githubapp.ReviewThread,
 	removed []domain.OwnedThread,
-	batches [][]preparedThread,
+	batches []preparedBatch,
 	logger *slog.Logger,
 ) ([]githubapp.ReviewThread, error) {
 	currentHead := pullRequest.Head
@@ -195,15 +203,9 @@ func (service *Service) reconcilePrepared(
 	}
 
 	for batchIndex, batch := range batches {
-		prompt, promptErr := buildBatchPrompt(batch, batchIndex+1, len(batches), pullRequest, service.policy)
-		if promptErr != nil {
-			logger.ErrorContext(ctx, "Reconciliation prompt rendering failed", "err", promptErr)
-			reconcileErrors = append(reconcileErrors, promptErr)
-			continue
-		}
 		resolutions, err := service.model.Reconcile(
 			ctx,
-			prompt,
+			batch.prompt,
 		)
 		if err != nil {
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("reconcile batch %d/%d: %w", batchIndex+1, len(batches), err))
@@ -212,7 +214,7 @@ func (service *Service) reconcilePrepared(
 
 		resolutionIndex := indexResolutions(resolutions)
 		allResolutions = append(allResolutions, resolutions...)
-		for _, item := range batch {
+		for _, item := range batch.threads {
 			resolution, ok := resolutionIndex[item.thread.NodeID]
 			if !ok {
 				continue

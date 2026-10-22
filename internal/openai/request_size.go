@@ -15,7 +15,9 @@ import (
 
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
+	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 // ReviewRequestPayload exposes serialized model content without authentication headers.
@@ -28,6 +30,10 @@ type ReviewRequestPayload struct {
 // ReviewRequestBytes measures the largest request among enabled providers.
 func (client *Client) ReviewRequestBytes(prompt string) (int, error) {
 	payloads, err := client.ReviewRequestPayloads(prompt)
+	return maximumPayloadBytes(payloads, err)
+}
+
+func maximumPayloadBytes(payloads []ReviewRequestPayload, err error) (int, error) {
 	if err != nil {
 		return 0, err
 	}
@@ -36,6 +42,42 @@ func (client *Client) ReviewRequestBytes(prompt string) (int, error) {
 		maximum = max(maximum, len(payload.Body))
 	}
 	return maximum, nil
+}
+
+// ReconcileRequestBytes measures complete reconciliation requests for enabled providers.
+func (client *Client) ReconcileRequestBytes(prompt string) (int, error) {
+	payloads, err := client.ReconcileRequestPayloads(prompt)
+	return maximumPayloadBytes(payloads, err)
+}
+
+// ReconcileRequestPayloads serializes the configured reconciliation policy and schema.
+func (client *Client) ReconcileRequestPayloads(prompt string) ([]ReviewRequestPayload, error) {
+	return client.stageRequestPayloads(prompt, review.ReconciliationPolicy, reconcileSchemaName, reconcileSchemaJSON)
+}
+
+// ConsolidateRequestBytes measures complete finding consolidation requests.
+func (client *Client) ConsolidateRequestBytes(prompt string) (int, error) {
+	payloads, err := client.stageRequestPayloads(prompt, review.ConsolidationPolicy, consolidateSchemaName, consolidateSchemaJSON)
+	return maximumPayloadBytes(payloads, err)
+}
+
+// ReportRequestBytes measures complete final report requests.
+func (client *Client) ReportRequestBytes(prompt string) (int, error) {
+	payloads, err := client.stageRequestPayloads(prompt, review.ReportPolicy, reportSchemaName, MarshalReportSchema(client.reviewPolicy))
+	return maximumPayloadBytes(payloads, err)
+}
+
+func (client *Client) stageRequestPayloads(prompt string, renderPolicy func(reviewrules.Policy) (string, error), schemaName string, schema json.RawMessage) ([]ReviewRequestPayload, error) {
+	policy, err := renderPolicy(client.reviewPolicy)
+	if err != nil {
+		slog.Warn("Request policy rendering failed", "schema", schemaName, "err", err)
+		return nil, fmt.Errorf("render %s request policy: %w", schemaName, err)
+	}
+	instructions, err := structuredOutputPrompt(context.Background(), client.reviewPolicy, policy, schemaName, schema)
+	if err != nil {
+		return nil, err
+	}
+	return client.requestPayloads(prompt, instructions, schemaName, schema)
 }
 
 // ReviewRequestPayloads uses the configured instructions and native request builders.
@@ -72,14 +114,15 @@ func (client *Client) requestPayloads(prompt, instructions, schemaName string, s
 	return payloads, nil
 }
 
-func (client *Client) checkRequestSizes(prompt, instructions, schemaName string, schema json.RawMessage) error {
+func (client *Client) checkRequestSizes(ctx context.Context, prompt, instructions, schemaName string, schema json.RawMessage) error {
 	payloads, err := client.requestPayloads(prompt, instructions, schemaName, schema)
 	if err != nil {
 		return err
 	}
+	maximum := modelrequest.MaximumBytes(ctx, client.maximumRequestBytes)
 	for _, payload := range payloads {
-		if len(payload.Body) > client.maximumRequestBytes {
-			return &diff.PromptSizeError{Actual: len(payload.Body), Limit: client.maximumRequestBytes}
+		if len(payload.Body) > maximum {
+			return &diff.PromptSizeError{Actual: len(payload.Body), Limit: maximum}
 		}
 	}
 	return nil
@@ -210,15 +253,16 @@ func requestBoundHTTPClient(client *http.Client, maximum int) *http.Client {
 
 // RoundTrip checks the actual SDK body before the transport sends model content.
 func (transport requestSizeTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	maximum := modelrequest.MaximumBytes(request.Context(), transport.maximum)
 	if request.Body == nil {
 		response, err := transport.transport.RoundTrip(request)
 		return response, requestTransportError(err)
 	}
-	if request.ContentLength > int64(transport.maximum) {
+	if request.ContentLength > int64(maximum) {
 		_ = request.Body.Close()
-		return nil, &diff.PromptSizeError{Actual: int(request.ContentLength), Limit: transport.maximum}
+		return nil, &diff.PromptSizeError{Actual: int(request.ContentLength), Limit: maximum}
 	}
-	body, err := io.ReadAll(io.LimitReader(request.Body, int64(transport.maximum)+1))
+	body, err := io.ReadAll(io.LimitReader(request.Body, int64(maximum)+1))
 	if err != nil {
 		_ = request.Body.Close()
 		return nil, requestTransportError(err)
@@ -226,8 +270,8 @@ func (transport requestSizeTransport) RoundTrip(request *http.Request) (*http.Re
 	if err := request.Body.Close(); err != nil {
 		return nil, requestTransportError(err)
 	}
-	if len(body) > transport.maximum {
-		return nil, &diff.PromptSizeError{Actual: len(body), Limit: transport.maximum}
+	if len(body) > maximum {
+		return nil, &diff.PromptSizeError{Actual: len(body), Limit: maximum}
 	}
 	bounded := request.Clone(request.Context())
 	bounded.Body = io.NopCloser(bytes.NewReader(body))

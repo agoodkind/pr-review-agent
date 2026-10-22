@@ -15,6 +15,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 	"goodkind.io/pr-review-agent/internal/runlog"
@@ -187,6 +188,7 @@ func (service *Service) run(parent context.Context, job domain.ReviewJob) error 
 	// be reading what the process booted with rather than what this delivery
 	// asked for, which is the whole failure this carrying exists to end.
 	settings := service.settingsFor(job)
+	ctx = modelrequest.WithMaximumBytes(ctx, settings.maximumPromptBytes)
 	logger.InfoContext(
 		ctx,
 		"review job started",
