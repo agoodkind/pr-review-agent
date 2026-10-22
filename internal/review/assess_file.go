@@ -15,6 +15,12 @@ import (
 // ErrAssessmentIncomplete requires further review when a response cannot justify a file decision.
 var ErrAssessmentIncomplete = errors.New("the file assessment requires current file decisions and supplied evidence")
 
+// FileContentClassifier separates scope decisions from ordinary finding requests.
+type FileContentClassifier interface {
+	ClassifyFileContent(context.Context, string) (Completion, error)
+	ClassificationRequestBytes(string) (int, error)
+}
+
 // BuildFileAssessmentPrompt preserves supplied scope evidence within the actual provider budget.
 func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int) (string, error) {
 	file, found := BuildFileIndex(files)[path]
@@ -37,6 +43,9 @@ func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, f
 	if err != nil {
 		return "", err
 	}
+	if classifier, ok := model.(FileContentClassifier); ok {
+		return boundReviewPrompt(classifier.ClassificationRequestBytes, instruction+omissions, parent, maximumBytes)
+	}
 	return BoundReviewPrompt(model, instruction+omissions, parent, maximumBytes)
 }
 
@@ -47,7 +56,12 @@ func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.P
 	if err != nil {
 		return empty, err
 	}
-	completion, err := model.Review(ctx, prompt)
+	var completion Completion
+	if classifier, ok := model.(FileContentClassifier); ok {
+		completion, err = classifier.ClassifyFileContent(ctx, prompt)
+	} else {
+		completion, err = model.Review(ctx, prompt)
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			err = normalizeFileAssessmentError(err)

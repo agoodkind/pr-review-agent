@@ -33,6 +33,21 @@ func (client *Client) ReviewRequestBytes(prompt string) (int, error) {
 	return maximumPayloadBytes(payloads, err)
 }
 
+// ClassificationRequestBytes measures complete scope requests for enabled providers.
+func (client *Client) ClassificationRequestBytes(prompt string) (int, error) {
+	payloads, err := client.ClassificationRequestPayloads(prompt)
+	return maximumPayloadBytes(payloads, err)
+}
+
+// ClassificationRequestPayloads uses the classification task and native request builders.
+func (client *Client) ClassificationRequestPayloads(prompt string) ([]ReviewRequestPayload, error) {
+	schema, err := MarshalClassificationSchema(client.reviewPolicy)
+	if err != nil {
+		return nil, err
+	}
+	return client.stageRequestPayloads(prompt, review.ClassificationPolicy, classificationSchemaName, schema)
+}
+
 func maximumPayloadBytes(payloads []ReviewRequestPayload, err error) (int, error) {
 	if err != nil {
 		return 0, err
