@@ -16,8 +16,8 @@ func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAsse
 	var shortfall structuralShortfall
 	for index := range decisions {
 		assessment := &decisions[index]
-		if assessment.Validate() != nil {
-			return input, nil, ErrAssessmentIncomplete
+		if err := assessment.Validate(); err != nil {
+			return input, nil, normalizeFileAssessmentError(err)
 		}
 		assessment.Reviewed = false
 		if assessment.Action == domain.FileActionExclude && !assessment.PermitsContentExclusion() {
@@ -32,9 +32,9 @@ func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAsse
 		shortfall.Hunks = append(shortfall.Hunks, unreadHunk{Path: assessment.Path, Header: "", Reason: assessment.Reason, Target: nil})
 	}
 	result := domain.ReviewResult{Overview: "", OmissionsAcceptable: false, DecisionReason: "", Findings: nil, FileAssessments: decisions}
-	validated, _ := validateFileAssessments(result, shortfall, input.Files, policy)
-	if len(validated) != len(decisions) {
-		return input, nil, ErrAssessmentIncomplete
+	validated, _, err := validateFileAssessmentsDetailed(result, shortfall, input.Files, policy)
+	if err != nil {
+		return input, nil, err
 	}
 	planned := input
 	planned.Files = make([]diff.FileContext, 0, len(input.Files))

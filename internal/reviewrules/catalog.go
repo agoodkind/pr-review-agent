@@ -157,8 +157,10 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 		compiled[name] = parsed
 	}
-	if _, exists := compiled["native.summary_link"]; !exists {
-		return Policy{}, fmt.Errorf("required prompt template %q is missing", "native.summary_link")
+	for _, name := range []string{"native.summary_link", "schema.file_assessment.reason", "coverage.classification_incomplete"} {
+		if _, exists := compiled[name]; !exists {
+			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
+		}
 	}
 	if err := validateRelationshipTemplates(prompts.RelationshipReview, compiled); err != nil {
 		return Policy{}, err

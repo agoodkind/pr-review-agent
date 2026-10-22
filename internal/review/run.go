@@ -353,7 +353,7 @@ func (service *Service) reviewDelta(
 	if pass.structuralShortfall().present() {
 		if err := service.decideUnreadableHunks(ctx, pass); err == nil {
 			tracker.completeUnreadChunks()
-		} else if !errors.Is(err, ErrAssessmentIncomplete) {
+		} else {
 			logger.ErrorContext(ctx, "File scope assessment failed", slog.String("err", err.Error()))
 			pass.recordAssessmentFailure(err)
 		}
