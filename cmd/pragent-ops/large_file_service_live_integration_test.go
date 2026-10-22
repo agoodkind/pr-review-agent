@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -145,8 +146,10 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 		baseline := largeFileBaselineSpec{Files: map[string]string{vaultPath: previousCiphertext, authorizationPath: reader}, Modified: []string{vaultPath, authorizationPath}, Oversized: vaultPath}
 		live.stageWithBaseline(t, ctx, "hidden_authorization", "Change encrypted authorization fixture", "Change role and allowed_delete_resources inside the existing credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The ciphertext uses the same harmless test payload as the credential-rotation case. The fixture does not supply decrypted values or permission validation results.", baseline, map[string]string{vaultPath: ciphertext, authorizationPath: permissions}, "")
 		live.await(t, ctx, "hidden_authorization", func(_ reviewBodySnapshot, body string) bool {
-			_, action, found := largeFileAssessment(body, vaultPath)
-			return found && action != "exclude" && largeFileDetail(body, "Review scope assessed") == "no"
+			assessment, found := largeFilePersistedAssessment(body, vaultPath)
+			return found && assessment.ContentKind == "encrypted" && assessment.ContentReviewRequirement == domain.ContentReviewRequired &&
+				(assessment.Action == domain.FileActionGap || assessment.Action == domain.FileActionInspectRelated) &&
+				largeFileDetail(body, "All file content inspected") == "yes" && largeFileDetail(body, "Review scope assessed") == "no"
 		})
 	}
 
@@ -543,7 +546,7 @@ func (live *largeFileServiceFixture) await(t *testing.T, parent context.Context,
 		for _, comment := range snapshot.Comments {
 			state, valid := marker.DecodeState(comment.Body)
 			head, marked := marker.FindReview(comment.Body)
-			if comment.Author != live.fixture.bot || !valid || !marked || string(head) != live.fixture.head || state.RunID == "" || largeFileDetail(comment.Body, "Forced run") != "yes" || !review.MetadataMatches(comment.Body, head, diff.PullRequestRevision(snapshot.PullRequest)) {
+			if comment.Author != live.fixture.bot || !valid || !marked || string(head) != live.fixture.head || state.RunID == "" || state.Status != marker.StateDone || state.LastReviewed != head || len(state.Pending) != 0 || len(state.Unread) != 0 || !review.MetadataMatches(comment.Body, head, diff.PullRequestRevision(snapshot.PullRequest)) {
 				continue
 			}
 			check, found, err := live.fixture.client.FindCheckRunByExternalID(ctx, live.fixture.opts.installationID, live.fixture.repo, head, config.ReviewCheckName, state.RunID)
@@ -595,6 +598,39 @@ func largeFileAssessment(body, path string) (kind, action string, found bool) {
 		}
 	}
 	return "", "", false
+}
+
+func largeFilePersistedAssessment(body, path string) (domain.FileAssessment, bool) {
+	const prefix = "<!-- pr-review-agent:file-assessments:v1 "
+	var empty domain.FileAssessment
+	_, payload, found := strings.Cut(body, prefix)
+	if !found {
+		return empty, false
+	}
+	payload, _, found = strings.Cut(payload, " -->")
+	if !found {
+		return empty, false
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return empty, false
+	}
+	var assessments []domain.FileAssessment
+	if err := json.Unmarshal(decoded, &assessments); err != nil {
+		return empty, false
+	}
+	seen := make(map[string]bool, len(assessments))
+	selected := empty
+	for _, assessment := range assessments {
+		if assessment.Validate() != nil || seen[assessment.Path] {
+			return empty, false
+		}
+		seen[assessment.Path] = true
+		if assessment.Path == path {
+			selected = assessment
+		}
+	}
+	return selected, seen[path]
 }
 
 func largeFileDetail(body, name string) string {
