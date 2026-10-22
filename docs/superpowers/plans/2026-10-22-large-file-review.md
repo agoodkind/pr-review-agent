@@ -82,8 +82,8 @@ Extend existing chunk identities, assessment snapshots, and omission records. Re
 - [x] Include provider system instructions and response schemas in complete request accounting before partitioning input. Verify the actual provider request boundary rather than only `review.input`.
 - [x] Assess shared behavior across fragments with bounded source context and a configured relationship review. Keep necessary unseen dependencies as gaps.
 - [x] Render classification reasons and evidence references in the existing configurable details section.
-- [ ] Verify a moved head, changed policy, accepted exclusions, essential missing content, and resumed publication through real-dependency integration boundaries.
-- [ ] Run complete required checks and review the branch against the specification. Prepare a pull request with the actual implemented scope and evidence.
+- [x] Verify a moved head, changed policy, accepted exclusions, essential missing content, and resumed publication through real-dependency integration boundaries.
+- [x] Run complete required checks and review the branch against the specification. Prepare a pull request with the actual implemented scope and evidence.
 
 ## Delivery Scope
 
