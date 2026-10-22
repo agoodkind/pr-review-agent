@@ -88,7 +88,8 @@ func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewRes
 	if len(policies) > 0 {
 		policy = policies[0]
 	}
-	assessments, accepted := validateFileAssessments(result, pass.structuralShortfall(), pass.work.Files, policy)
+	shortfall := pass.structuralShortfall()
+	assessments, accepted := validateFileAssessments(result, shortfall, pass.work.Files, policy)
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	pass.votes++
@@ -99,7 +100,7 @@ func (pass *chunkPass) recordOmissionDecision(chunk int, result domain.ReviewRes
 		assessments: assessments,
 		chunk:       chunk,
 		acceptable:  accepted,
-		reason:      sanitizeDecisionReason(result.DecisionReason),
+		reason:      scopeDecisionReason(result.DecisionReason, shortfall.Hunks, assessments),
 		recorded:    true,
 		complete:    false,
 	}
@@ -121,7 +122,8 @@ func (pass *chunkPass) replaceOmissionDecision(result domain.ReviewResult, polic
 	if len(policies) > 0 {
 		policy = policies[0]
 	}
-	assessments, accepted := validateFileAssessments(result, pass.structuralShortfall(), pass.work.Files, policy)
+	shortfall := pass.structuralShortfall()
+	assessments, accepted := validateFileAssessments(result, shortfall, pass.work.Files, policy)
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	pass.votes = 1
@@ -130,16 +132,38 @@ func (pass *chunkPass) replaceOmissionDecision(result domain.ReviewResult, polic
 		assessments: assessments,
 		chunk:       0,
 		acceptable:  accepted,
-		reason:      sanitizeDecisionReason(result.DecisionReason),
+		reason:      scopeDecisionReason(result.DecisionReason, shortfall.Hunks, assessments),
 		recorded:    true,
 		complete:    true,
 	}
 }
 
 func (pass *chunkPass) decisionReason() string {
+	shortfall := pass.structuralShortfall()
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
-	return pass.decision.reason
+	return scopeDecisionReason(pass.decision.reason, shortfall.Hunks, pass.decision.assessments)
+}
+
+func scopeDecisionReason(reason string, omissions []unreadHunk, assessments []domain.FileAssessment) string {
+	if len(omissions) > 0 {
+		return sanitizeDecisionReason(reason)
+	}
+	for _, assessment := range assessments {
+		if assessment.Validate() != nil {
+			continue
+		}
+		switch assessment.Action {
+		case domain.FileActionGap, domain.FileActionInspectRelated:
+			return sanitizeDecisionReason(reason)
+		case domain.FileActionExclude:
+			if assessment.PermitsContentExclusion() {
+				return sanitizeDecisionReason(reason)
+			}
+		case domain.FileActionReview:
+		}
+	}
+	return ""
 }
 
 func sanitizeDecisionReason(reason string) string {

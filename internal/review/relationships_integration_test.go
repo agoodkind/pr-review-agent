@@ -23,7 +23,7 @@ func TestRelationshipReviewJoinsRealGitSourceWithSharedState(t *testing.T) {
 	policy := policytest.Load(t)
 	model := openai.NewClient(config.Config{ReviewPolicy: policy, MinimumImportance: 7, ReviewModel: "configured-model"}, nil)
 	maximumBytes := config.MaximumPromptBytes
-	combined, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", policy, maximumBytes)
+	combined, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", "", policy, maximumBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestRelationshipReviewJoinsRealGitSourceWithSharedState(t *testing.T) {
 	if !sharedStateReviewed {
 		t.Fatal("The separated writer and deletion changes did not appear together in a request.")
 	}
-	limited, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", policy, 1)
+	limited, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", "", policy, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestRelationshipReviewHonorsConfiguredWorkLimit(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		policy := relationshipPolicy(t, enabled, 1)
 		model := openai.NewClient(config.Config{ReviewPolicy: policy, MinimumImportance: 7, ReviewModel: "configured-model"}, nil)
-		combined, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", policy, config.MaximumPromptBytes)
+		combined, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", "", policy, config.MaximumPromptBytes)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -97,6 +97,83 @@ func TestRelationshipReviewHonorsConfiguredWorkLimit(t *testing.T) {
 		if len(combined) != len(chunks)+2 || !combined[len(chunks)].CoverageComplete || combined[len(chunks)+1].CoverageComplete {
 			t.Fatal("The configured pair limit must retain one joint assessment and an explicit gap for remaining work.")
 		}
+	}
+}
+
+func TestRelationshipAdmissionReservesRequiredScopeInActualSDKRequests(t *testing.T) {
+	file, chunks := relationshipGitInput(t)
+	policy := policytest.Load(t)
+	model := openai.NewClient(config.Config{ReviewPolicy: policy, MinimumImportance: 7, ReviewModel: "configured-model"}, nil)
+	provisional, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", "", policy, config.MaximumPromptBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maximumBytes := 0
+	for _, chunk := range provisional {
+		if !chunk.RelationshipReview {
+			continue
+		}
+		prompt, err := review.BuildModelReviewPrompt(model, chunk, 7, "", "", policy, config.MaximumPromptBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		size, err := model.ReviewRequestBytes(prompt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		maximumBytes = max(maximumBytes, size)
+	}
+	if maximumBytes == 0 {
+		t.Fatal("The real Git source did not produce a joint assessment.")
+	}
+	var data reviewrules.PromptData
+	required, err := policy.Render("omissions.none", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, required, "", policy, maximumBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("The joint request budget is %d bytes; execution requires %d additional scope bytes.", maximumBytes, len(required))
+	joint := 0
+	ordinaryRows := make(map[int]bool)
+	for _, chunk := range prepared {
+		if !chunk.CoverageComplete {
+			t.Fatal("The required scope policy caused a false gap for source that supports compact joint review.")
+		}
+		prompt, err := review.BuildModelReviewPrompt(model, chunk, 7, required, "", policy, maximumBytes)
+		if err != nil {
+			t.Fatalf("Admission accepted source that execution cannot render with its required scope: %v", err)
+		}
+		size, err := model.ReviewRequestBytes(prompt)
+		if err != nil || size > maximumBytes {
+			t.Fatalf("The complete SDK request exceeds its admission budget: size=%d limit=%d error=%v", size, maximumBytes, err)
+		}
+		if chunk.RelationshipReview {
+			joint++
+			if _, _, split := chunk.Split(); split {
+				t.Fatal("The size correction separated required joint source endpoints.")
+			}
+		}
+		rows, err := diff.ChangedSourceRows(chunk)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.RelationshipReview && len(rows) < 2 {
+			t.Fatal("The joint assessment lost a required source endpoint.")
+		}
+		for _, row := range rows {
+			if row.Path != file.Path || !diff.ValidRange(file.ChangedRightLines, file.ChangedRightHunks, row.RightLine, row.RightLine) {
+				t.Fatal("The joint sizing correction invented a changed source coordinate.")
+			}
+			if !chunk.RelationshipReview {
+				ordinaryRows[row.RightLine] = true
+			}
+		}
+	}
+	if joint == 0 || len(ordinaryRows) != len(file.ChangedRightLines) {
+		t.Fatal("The size correction omitted necessary source or joint review.")
 	}
 }
 
@@ -131,7 +208,7 @@ func TestRelationshipReviewSubdividesLargeGitSourceForJointRequests(t *testing.T
 		t.Fatal(err)
 	}
 	t.Logf("The provider requires %d bytes before source; the ordinary review uses %d chunks.", baseline, len(chunks))
-	combined, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", policy, maximumBytes)
+	combined, err := review.PrepareRelationshipChunks(model, chunks, []diff.FileContext{file}, 7, "", "", policy, maximumBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +258,7 @@ func TestRelationshipReviewSubdividesLargeGitSourceForJointRequests(t *testing.T
 		}
 		t.Fatal(err)
 	}
-	limited, err := review.PrepareRelationshipChunks(model, restricted, []diff.FileContext{file}, 7, "", policy, restrictedBytes)
+	limited, err := review.PrepareRelationshipChunks(model, restricted, []diff.FileContext{file}, 7, "", "", policy, restrictedBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

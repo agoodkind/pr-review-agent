@@ -125,7 +125,7 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 	if acceptedFileScope(summary) && summary.FileAssessmentNote != "" {
 		builder.WriteString(summary.FileAssessmentNote + "\n\n")
 	}
-	if reason := sanitizeDecisionReason(summary.DecisionReason); reason != "" {
+	if reason := scopeDecisionReason(summary.DecisionReason, summary.Omissions, summary.FileAssessments); reason != "" {
 		builder.WriteString("#### Review scope\n\n" + reason + "\n\n")
 	}
 	if summary.FileAssessmentsDisplay == reviewrules.FindingsCollapsed {
@@ -290,7 +290,7 @@ func RenderVerdictBody(summary Summary) string {
 		parts = append(parts, omissions)
 		parts = append(parts, encodeOmissionDecisionMarker(summary.OmissionsAccepted))
 	}
-	if reason := encodeDecisionReasonMarker(summary.DecisionReason); reason != "" {
+	if reason := encodeDecisionReasonMarker(scopeDecisionReason(summary.DecisionReason, summary.Omissions, summary.FileAssessments)); reason != "" {
 		parts = append(parts, reason)
 	}
 	if summary.MetadataRevision != "" {
