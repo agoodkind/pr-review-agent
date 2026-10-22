@@ -61,6 +61,10 @@ type largeFileServiceFixture struct {
 	minimumCheck  int64
 	localHead     string
 	caseTimeout   time.Duration
+	currentBase   clippedLiveBase
+	currentDraft  bool
+	baselines     []largeFileBaselineRecord
+	ownedCommits  []string
 }
 
 type largeFileServiceEvidence struct {
@@ -76,7 +80,7 @@ type largeFileOriginalEvidence struct {
 }
 
 type largeFileEvidence interface {
-	largeFileOriginalEvidence | largeFileServiceEvidence | clippedLivePR
+	largeFileOriginalEvidence | largeFileServiceEvidence | largeFileBaselineRecovery | clippedLivePR
 }
 
 func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
@@ -123,10 +127,13 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 
 	vaultPath := largeFileFixturePrefix + "credentials.vault"
 	authorizationPath := largeFileFixturePrefix + "authorization.go"
-	ciphertext := largeFileCiphertext(live.limit)
+	ciphertext := largeFileCiphertext(live.limit/2, "b")
+	previousCiphertext := largeFileCiphertext(live.limit/2, "a")
+	reader := "package fixture\n\n// The compiled role remains independent of the encrypted authentication token.\nconst CredentialSource = \"credentials.vault\"\nconst CredentialReference = \"service_token\"\n\nfunc AllowedRole(_ map[string]string) string { return \"reader\" }\n"
 	if selected["credential_rotation"] {
-		rotation := "package fixture\n\n// The compiled role remains independent of the encrypted authentication token.\nconst CredentialSource = \"credentials.vault\"\nconst CredentialReference = \"service_token\"\n\nfunc AllowedRole(_ map[string]string) string { return \"reader\" }\n"
-		live.stage(t, ctx, "Add encrypted credential rotation fixture", "Rotate the service_token authentication credential in credentials.vault. AllowedRole in authorization.go returns reader independently of the token. The test ciphertext does not contain real credentials. The fixture does not supply external validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: rotation}, "")
+		rotation := strings.Replace(reader, "The compiled role remains independent of the encrypted authentication token.", "The credential rotation preserves the reader role independently of the token.", 1)
+		baseline := largeFileBaselineSpec{Files: map[string]string{vaultPath: previousCiphertext, authorizationPath: reader}, Modified: []string{vaultPath, authorizationPath}, Oversized: vaultPath}
+		live.stageWithBaseline(t, ctx, "credential_rotation", "Rotate encrypted credential fixture", "Rotate the existing service_token authentication credential in credentials.vault. AllowedRole in authorization.go returns reader independently of the token. The test ciphertext does not contain real credentials. The fixture does not supply external validation results.", baseline, map[string]string{vaultPath: ciphertext, authorizationPath: rotation}, "")
 		live.await(t, ctx, "credential_rotation", func(_ reviewBodySnapshot, body string) bool {
 			_, action, found := largeFileAssessment(body, vaultPath)
 			return found && action == "exclude" && largeFileDetail(body, "Review scope assessed") == "yes"
@@ -135,7 +142,8 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 
 	if selected["hidden_authorization"] {
 		permissions := "package fixture\n\n// The encrypted document determines the role and allowed deletion resources.\nconst AuthorizationSource = \"credentials.vault\"\n\nfunc AllowedRole(vaultValues map[string]string) string { return vaultValues[\"role\"] }\n\nfunc DeletionResources(vaultValues map[string][]string) []string { return vaultValues[\"allowed_delete_resources\"] }\n"
-		live.stage(t, ctx, "Add encrypted authorization review fixture", "Change role and allowed_delete_resources inside credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The ciphertext uses the same harmless test payload as the credential-rotation case. The fixture does not supply decrypted values or permission validation results.", map[string]string{vaultPath: ciphertext, authorizationPath: permissions}, "")
+		baseline := largeFileBaselineSpec{Files: map[string]string{vaultPath: previousCiphertext, authorizationPath: reader}, Modified: []string{vaultPath, authorizationPath}, Oversized: vaultPath}
+		live.stageWithBaseline(t, ctx, "hidden_authorization", "Change encrypted authorization fixture", "Change role and allowed_delete_resources inside the existing credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The ciphertext uses the same harmless test payload as the credential-rotation case. The fixture does not supply decrypted values or permission validation results.", baseline, map[string]string{vaultPath: ciphertext, authorizationPath: permissions}, "")
 		live.await(t, ctx, "hidden_authorization", func(_ reviewBodySnapshot, body string) bool {
 			_, action, found := largeFileAssessment(body, vaultPath)
 			return found && action != "exclude" && largeFileDetail(body, "Review scope assessed") == "no"
@@ -152,7 +160,8 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 			})
 		}
 		if selected["gitlink_updated"] {
-			live.stage(t, ctx, "Update pinned parent integration fixture", "Update the fixture gitlink to another existing commit in this repository. Review the changed parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, second)
+			baseline := largeFileBaselineSpec{Gitlink: first, Modified: []string{largeFileFixturePrefix + "sdk"}}
+			live.stageWithBaseline(t, ctx, "gitlink_updated", "Update pinned parent integration fixture", "Update the fixture gitlink to another existing commit in this repository. Review the changed parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", baseline, nil, second)
 			live.await(t, ctx, "gitlink_updated", func(snapshot reviewBodySnapshot, body string) bool {
 				if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
 					return false
@@ -309,14 +318,28 @@ func largeFileServiceSetup(t *testing.T) *largeFileServiceFixture {
 	}
 	t.Logf("Private classification acceptance evidence: %s", evidence)
 	live := &largeFileServiceFixture{fixture: fixture, worktree: worktree, evidence: evidence, originalTree: clippedLiveGit(t, t.Context(), worktree, "rev-parse", "HEAD^{tree}"), currentBody: fixture.original.Body, origin: endpoint.Scheme + "://" + endpoint.Host, revision: revision, limit: limit, localHead: fixture.head}
+	live.currentBase, live.currentDraft = fixture.original.Base, fixture.original.Draft
+	if current := live.pullRequest(t, t.Context()); current != fixture.original {
+		t.Fatal("The fixture metadata changed while its original head and comparison base were captured.")
+	}
 	live.originalForce = live.forceLabelPresent(t, t.Context())
+	live.saveBaselineRecovery(t)
 	return live
 }
 
 func (live *largeFileServiceFixture) stage(t *testing.T, ctx context.Context, subject, body string, files map[string]string, gitlink string) {
 	t.Helper()
-	live.guard(t, ctx)
+	live.beginScenario(t, ctx)
 	live.restorePaths(t, ctx)
+	live.writeFiles(t, ctx, files, gitlink)
+	live.setBody(t, ctx, body)
+	live.commit(t, ctx, subject)
+	live.setDraft(t, ctx, false)
+	live.force(t, ctx)
+}
+
+func (live *largeFileServiceFixture) writeFiles(t *testing.T, ctx context.Context, files map[string]string, gitlink string) {
+	t.Helper()
 	for path, content := range files {
 		if !strings.HasPrefix(path, largeFileFixturePrefix) {
 			t.Fatal("The scenario attempted to modify a path outside its declared fixture prefix.")
@@ -345,15 +368,15 @@ func (live *largeFileServiceFixture) stage(t *testing.T, ctx context.Context, su
 		}
 		clippedLiveGit(t, ctx, live.worktree, "update-index", "--add", "--cacheinfo", "160000", gitlink, largeFileFixturePrefix+"sdk")
 	}
-	live.setBody(t, ctx, body)
-	live.commit(t, ctx, subject)
-	live.force(t, ctx)
 }
 
 func (live *largeFileServiceFixture) guard(t *testing.T, ctx context.Context) {
 	t.Helper()
-	current := live.fixture.pullRequest(t, ctx)
-	if (current.Head.SHA != live.fixture.head && current.Head.SHA != live.localHead) || current.Head.Ref != live.fixture.original.Head.Ref || current.Title != live.fixture.original.Title || current.Body != live.currentBody || clippedLiveGit(t, ctx, live.worktree, "rev-parse", "HEAD") != live.localHead {
+	current := live.pullRequest(t, ctx)
+	if current.Base != live.currentBase {
+		t.Fatal("The fixture comparison base changed externally; the harness will not reset a base branch. Private baseline recovery evidence preserves the expected state.")
+	}
+	if (current.Head.SHA != live.fixture.head && current.Head.SHA != live.localHead) || current.Head.Ref != live.fixture.original.Head.Ref || current.Title != live.fixture.original.Title || current.Body != live.currentBody || current.Draft != live.currentDraft || clippedLiveGit(t, ctx, live.worktree, "rev-parse", "HEAD") != live.localHead {
 		t.Fatal("The fixture changed concurrently; the test will not overwrite that change.")
 	}
 	live.fixture.head = current.Head.SHA
@@ -387,43 +410,15 @@ func (live *largeFileServiceFixture) setBody(t *testing.T, ctx context.Context, 
 
 func (live *largeFileServiceFixture) commit(t *testing.T, ctx context.Context, subject string) {
 	t.Helper()
-	var present []string
-	for _, path := range largeFileFixturePaths {
-		info, err := os.Lstat(filepath.Join(live.worktree, filepath.FromSlash(path)))
-		if err == nil && info.Mode().IsRegular() {
-			present = append(present, path)
-		} else if err != nil && !os.IsNotExist(err) {
-			t.Fatal("A declared fixture path could not be inspected for staging.")
-		}
-	}
-	if len(present) > 0 {
-		arguments := append([]string{"add", "--all", "--"}, present...)
-		clippedLiveGit(t, ctx, live.worktree, arguments...)
-	}
-	if clippedLiveGit(t, ctx, live.worktree, "diff", "--cached", "--name-only") == "" {
+	previous, parent := live.fixture.head, live.localHead
+	if !live.commitLocal(t, ctx, subject, false) {
 		return
 	}
-	previous := live.fixture.head
-	parent := live.localHead
-	clippedLiveGit(t, ctx, live.worktree, "commit", "-S", "-m", subject+"\n\nCo-authored-by: Codex <noreply@openai.com>")
-	live.localHead = clippedLiveGit(t, ctx, live.worktree, "rev-parse", "HEAD")
 	clippedLiveGit(t, ctx, live.worktree, "push", "--force-with-lease=refs/heads/"+live.fixture.original.Head.Ref+":"+previous, "origin", "HEAD:refs/heads/"+live.fixture.original.Head.Ref)
 	live.fixture.head = live.localHead
-	live.fixture.awaitHead(t, ctx, previous)
-	var committed struct {
-		Parents []struct {
-			SHA string `json:"sha"`
-		} `json:"parents"`
-		Commit struct {
-			Verification struct {
-				Verified bool `json:"verified"`
-			} `json:"verification"`
-		} `json:"commit"`
-	}
-	clippedLiveAPI(t, ctx, http.MethodGet, "repos/"+live.fixture.opts.repository+"/commits/"+live.fixture.head, nil, &committed)
-	if len(committed.Parents) != 1 || committed.Parents[0].SHA != parent || !committed.Commit.Verification.Verified {
-		t.Fatal("The fixture commit must preserve its expected parent and a verified signature.")
-	}
+	live.awaitHead(t, ctx, previous)
+	live.verifyCommit(t, ctx, live.localHead, parent)
+	live.saveBaselineRecovery(t)
 }
 
 func (live *largeFileServiceFixture) restorePaths(t *testing.T, ctx context.Context) {
@@ -453,7 +448,8 @@ func (live *largeFileServiceFixture) restorePaths(t *testing.T, ctx context.Cont
 
 func (live *largeFileServiceFixture) restore(t *testing.T, ctx context.Context) {
 	t.Helper()
-	live.guard(t, ctx)
+	live.setDraft(t, ctx, true)
+	live.setBase(t, ctx, live.fixture.original.Base)
 	live.restorePaths(t, ctx)
 	live.setBody(t, ctx, live.fixture.original.Body)
 	live.commit(t, ctx, "Restore classification fixture content")
@@ -463,11 +459,14 @@ func (live *largeFileServiceFixture) restore(t *testing.T, ctx context.Context) 
 	if clippedLiveGit(t, ctx, live.worktree, "rev-parse", "HEAD^{tree}") != live.originalTree || clippedLiveGit(t, ctx, live.worktree, "status", "--porcelain") != "" {
 		t.Error("The fixture did not restore its exact original tree and clean worktree.")
 	}
-	current := live.fixture.pullRequest(t, ctx)
-	if current.Title != live.fixture.original.Title || current.Body != live.fixture.original.Body || current.State != live.fixture.original.State || current.Draft != live.fixture.original.Draft {
+	live.setDraft(t, ctx, live.fixture.original.Draft)
+	current := live.pullRequest(t, ctx)
+	if current.Title != live.fixture.original.Title || current.Body != live.fixture.original.Body || current.State != live.fixture.original.State || current.Draft != live.fixture.original.Draft || current.Base != live.fixture.original.Base {
 		t.Error("The fixture did not restore its original pull request metadata.")
 	}
 	largeFileSave(t, live.evidence, "restored.json", current)
+	live.saveBaselineRecovery(t)
+	live.removeBaselineRefs(t, ctx)
 }
 
 func (live *largeFileServiceFixture) forceLabelPresent(t *testing.T, ctx context.Context) bool {
@@ -617,7 +616,7 @@ func largeFileSQL(minimum int) string {
 	return source.String()
 }
 
-func largeFileCiphertext(minimum int) string {
-	const row = "6439656266616532393062646262633330323265323061336534306662636663\n"
+func largeFileCiphertext(minimum int, digit string) string {
+	row := strings.Repeat(digit, 64) + "\n"
 	return "$ANSIBLE_VAULT;1.1;AES256\n" + strings.Repeat(row, minimum/len(row)+2)
 }
