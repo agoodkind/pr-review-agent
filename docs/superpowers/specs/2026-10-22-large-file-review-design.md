@@ -47,6 +47,10 @@ Unknown content defaults to review or a visible gap. An incomplete model respons
 
 Use the current omission assessment and provider interfaces. Replace the aggregate omission acceptance decision with validated decisions for individual omitted files or regions. Retain a derived aggregate result for existing verdict code and old stored review state. Older state cannot grant a new exclusion without the evidence required by the current policy.
 
+Use a distinct model task to decide whether file content needs review. Configure its system instructions through `classification.system` and supply the contextual file policy without the ordinary finding catalog. Reuse the file assessment contract and require an empty findings array. Use the existing provider selection, fallback, runtime settings, usage recording, and assessment validation.
+
+Measure classification requests with the same provider SDK payload builder that submits them, including their configured system instructions and assessment schema. Use that complete request size when fitting classification evidence within the configured budget.
+
 Keep classification evidence compact. Use actual byte counts, encoding observations, bounded source excerpts, generation declarations, relevant related changes, and available checks. Reference evidence by identifiers rather than allowing a model to invent validation results. Do not publish secret values or source excerpts in diagnostic reasons.
 
 ## Divide necessary content

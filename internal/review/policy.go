@@ -35,6 +35,11 @@ func PolicyHeader(policy reviewrules.Policy, minimumImportance int, importance r
 	return header + "\n" + policy.FileReviewInstructions(), nil
 }
 
+// ClassificationPolicy renders scope instructions without the finding catalog.
+func ClassificationPolicy(policy reviewrules.Policy) (string, error) {
+	return outputPolicyWithInput(policy, "classification.system", policy.FileReviewInstructions())
+}
+
 // ReconciliationPolicy applies the configured prose rules to thread decisions.
 func ReconciliationPolicy(policy reviewrules.Policy) (string, error) {
 	return outputPolicy(policy, "reconcile.system")
@@ -46,6 +51,10 @@ func ReportPolicy(policy reviewrules.Policy) (string, error) {
 }
 
 func outputPolicy(policy reviewrules.Policy, name string) (string, error) {
+	return outputPolicyWithInput(policy, name, "")
+}
+
+func outputPolicyWithInput(policy reviewrules.Policy, name, input string) (string, error) {
 	writing, err := policy.Catalog().OutputPolicy()
 	if err != nil {
 		slog.Warn("Output catalog rendering failed", "err", err)
@@ -58,6 +67,7 @@ func outputPolicy(policy reviewrules.Policy, name string) (string, error) {
 	}
 	data.WritingPolicy = writing
 	data.UntrustedPolicy = untrusted
+	data.Input = input
 	return renderPrompt(policy, name, data)
 }
 

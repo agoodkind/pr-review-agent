@@ -21,6 +21,10 @@ func BoundReviewPrompt(model Model, required, optional string, maximumBytes int)
 		}
 		return len(prompt), nil
 	}
+	return boundReviewPrompt(measure, required, optional, maximumBytes)
+}
+
+func boundReviewPrompt(measure func(string) (int, error), required, optional string, maximumBytes int) (string, error) {
 	size, err := measure(required)
 	if err != nil {
 		return "", err
