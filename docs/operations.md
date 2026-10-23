@@ -277,6 +277,28 @@ python3 scripts/resume-github-app.py \
 
 The script requires Python 3 and OpenSSL. Add `--status` to inspect the installation without changing it. Without that flag, the script resumes a suspended installation and confirms that GitHub reports it active. Existing failed checks do not rerun automatically. Add a temporary `test-review-agent-` label to a suitable pull request when a same-head review is required, then remove the label after checking the completed `PR-Agent Review` result.
 
+## Test the service locally
+
+Start Docker with Compose support and install Node.js 24. Run the following commands from the repository root.
+
+1. Build the Linux service with the existing release command:
+
+   ```bash
+   make release RELEASE_PLATFORMS=linux/amd64 RELEASE_STAGE=compile
+   ```
+
+2. Set the full source commit for that binary and run the local harness:
+
+   ```bash
+   PRAGENT_SERVICE_TEST_BINARY=dist/pr-review-agent_linux_amd64/pr-review-agent \
+   PRAGENT_SERVICE_TEST_REVISION=FULL_SOURCE_COMMIT \
+   node deploy/cloudflare/scripts/test-service.mjs
+   ```
+
+   Replace `FULL_SOURCE_COMMIT` with the binary's full source commit. To test an image already available in local Docker, set `PRAGENT_SERVICE_TEST_IMAGE` instead of `PRAGENT_SERVICE_TEST_BINARY`.
+
+The harness uses [compose.yaml](../deploy/cloudflare/test/compose.yaml) to start an isolated Docker daemon and test runner. Wrangler creates its containers and temporary images inside that daemon. Each invocation uses a separate Compose project. The wrapper removes the project's containers, networks, and volumes after success, failure, or interruption with `SIGINT` or `SIGTERM`. It prints the project name and private evidence directory. A cleanup failure reports the project that still requires removal.
+
 ## Verify a release
 
 The Worker stores each signed GitHub delivery before forwarding the delivery to the container. The Durable Object retains the delivery until the service confirms that the review has finished or the event requires no review. The replay alarm retries pending deliveries after a container interruption.

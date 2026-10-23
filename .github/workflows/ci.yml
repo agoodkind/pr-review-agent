@@ -117,5 +117,8 @@ jobs:
         env:
           PRAGENT_SERVICE_TEST_BINARY: ${{ github.workspace }}/dist/pr-review-agent_linux_amd64/pr-review-agent
           PRAGENT_SERVICE_TEST_REVISION: ${{ github.sha }}
-        run: node --test test/service-routing.test.js
+        run: npm run test:service
+        working-directory: deploy/cloudflare
+      - name: Verify local harness cleanup
+        run: npm run test:service-cleanup
         working-directory: deploy/cloudflare

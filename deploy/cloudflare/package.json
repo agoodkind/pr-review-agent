@@ -5,7 +5,9 @@
   "scripts": {
     "check": "node --test test/*.test.js && wrangler deploy --dry-run --containers-rollout none",
     "deploy": "node scripts/deploy-with-image.mjs",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:service": "node scripts/test-service.mjs",
+    "test:service-cleanup": "PRAGENT_COMPOSE_LIFECYCLE_TEST=1 node --test test/service-compose.test.js"
   },
   "dependencies": {
     "@cloudflare/containers": "0.3.7"
