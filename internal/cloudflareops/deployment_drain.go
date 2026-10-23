@@ -55,7 +55,8 @@ func (operation *deployment) registerDeploymentToken(ctx context.Context, slot D
 	if err := operation.writeDeploymentToken(ctx, slot.Name); err != nil {
 		return err
 	}
-	return operation.waitDeploymentCredential(ctx, slot)
+	_, err := operation.waitDrainControl(ctx, slot.Origin, "status")
+	return err
 }
 
 func (operation *deployment) writeDeploymentToken(ctx context.Context, script string) error {
@@ -80,11 +81,6 @@ func (operation *deployment) writeDeploymentToken(ctx context.Context, script st
 		return errors.New("cloudflare did not acknowledge the deployment digest binding")
 	}
 	return nil
-}
-
-func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot DeploymentSlot) error {
-	_, err := operation.waitDrainControl(ctx, slot.Origin, "status")
-	return err
 }
 
 func (operation *deployment) waitDrainControl(ctx context.Context, origin, action string) (drainState, error) {

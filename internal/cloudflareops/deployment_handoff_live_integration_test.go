@@ -83,7 +83,7 @@ func TestCandidateDeploymentControlRetriesNative(t *testing.T) {
 	}
 	waitContext, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 	defer cancel()
-	err = operation.waitDeploymentCredential(waitContext, slot)
+	_, err = operation.waitDrainControl(waitContext, slot.Origin, "status")
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("unavailable candidate control must wait until its deadline after HTTP 503: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCandidateDeploymentControlRetriesNative(t *testing.T) {
 		t.Fatalf("candidate control timeout must preserve the actual HTTP status: %v", err)
 	}
 	t.Log("Persistent candidate control HTTP 503 continued until the deadline.")
-	if err := operation.waitDeploymentCredential(recoveryContext, slot); err != nil {
+	if _, err := operation.waitDrainControl(recoveryContext, slot.Origin, "status"); err != nil {
 		t.Fatalf("the same candidate control waiter must recover after the actual configuration is restored: %v", errors.Join(err, context.Cause(recoveryContext)))
 	}
 	state, err := operation.drainRequest(ctx, slot.Origin, "status")

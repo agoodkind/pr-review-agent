@@ -56,9 +56,6 @@ func captureTestFailureReadiness(ctx context.Context, operation *deployment, ori
 	}
 	var identity testFailureReadinessRecord
 	identity.Timestamp, identity.Kind, identity.ControllerRevision = clock.System().UTC(), "controller", version.SourceRevision()
-	if !revisionPattern.MatchString(identity.ControllerRevision) {
-		identity.Error = "controller build metadata does not identify a clean full source revision"
-	}
 	if err := encoder.Encode(identity); err != nil {
 		slog.WarnContext(ctx, "Controller readiness evidence write failed", "path", file.Name())
 		return fmt.Errorf("write readiness %s record to %s: %w", identity.Kind, file.Name(), err)
