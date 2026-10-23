@@ -217,7 +217,7 @@ async function assertHandoffConflictRetries(origin, revision, deploymentToken, e
   }
 }
 
-async function assertHandoffReadinessRetries(origin, revision, deploymentToken, evidence, logName, restore) {
+async function assertNativeRecoveryRetries(testName, environment, deploymentToken, evidence, logName, restore) {
   const tokenFile = path.join(evidence, logName + "-token");
   const signalFile = path.join(evidence, logName + "-recovery-signal");
   const lifetime = new AbortController();
@@ -229,8 +229,8 @@ async function assertHandoffReadinessRetries(origin, revision, deploymentToken, 
   try {
     tokenHandle = await open(tokenFile, "wx", 0o600);
     await tokenHandle.writeFile(deploymentToken);
-    completion = runNativeDeploymentTest("TestGatewayHandoffReadinessRetriesNative", path.join(evidence, logName + ".log"), {
-      PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+    completion = runNativeDeploymentTest(testName, path.join(evidence, logName + ".log"), {
+      ...environment,
       PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile, PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
     }, deploymentToken, lifetime.signal);
     signalFiles.push(signalFile, signalFile + ".tmp");
@@ -246,34 +246,17 @@ async function assertHandoffReadinessRetries(origin, revision, deploymentToken, 
   }
 }
 
+async function assertHandoffReadinessRetries(origin, revision, deploymentToken, evidence, logName, restore) {
+  await assertNativeRecoveryRetries("TestGatewayHandoffReadinessRetriesNative", {
+    PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+  }, deploymentToken, evidence, logName, restore);
+}
+
 async function assertCandidateControlRetries(testName, origin, revision, name, deploymentToken, evidence, restore) {
-  const tokenFile = path.join(evidence, testName + "-token");
-  const signalFile = path.join(evidence, testName + "-recovery-signal");
-  const lifetime = new AbortController();
-  let tokenHandle;
-  let completion;
-  let restoration;
-  let originalError;
-  const signalFiles = [];
-  try {
-    tokenHandle = await open(tokenFile, "wx", 0o600);
-    await tokenHandle.writeFile(deploymentToken);
-    completion = runNativeDeploymentTest(testName, path.join(evidence, testName + ".log"), {
-      PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
-      PRAGENT_CANDIDATE_TEST_NAME: name, PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
-      PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
-    }, deploymentToken, lifetime.signal);
-    signalFiles.push(signalFile, signalFile + ".tmp");
-    restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
-    await Promise.all([completion, restoration]);
-  } catch (error) {
-    originalError = error;
-    throw error;
-  } finally {
-    lifetime.abort();
-    await Promise.allSettled([completion, restoration]);
-    await cleanupNativeDeploymentFiles(tokenHandle, tokenFile, signalFiles, originalError);
-  }
+  await assertNativeRecoveryRetries(testName, {
+    PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+    PRAGENT_CANDIDATE_TEST_NAME: name,
+  }, deploymentToken, evidence, testName, restore);
 }
 
 async function assertHealthy(origin, expectedRevision, failureEvidence) {
