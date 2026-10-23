@@ -51,7 +51,8 @@ func captureTestFailureReadiness(ctx context.Context, operation *deployment, ori
 	var failure testFailureReadinessRecord
 	failure.Timestamp, failure.Kind, failure.Error = clock.System().UTC(), "failure", originalError.Error()
 	if err := encoder.Encode(failure); err != nil {
-		return errors.New("original failure readiness evidence could not be written")
+		slog.WarnContext(ctx, "Original failure readiness evidence write failed", "path", file.Name())
+		return fmt.Errorf("write readiness %s record to %s: %w", failure.Kind, file.Name(), err)
 	}
 	var identity testFailureReadinessRecord
 	identity.Timestamp, identity.Kind, identity.ControllerRevision = clock.System().UTC(), "controller", version.SourceRevision()
@@ -59,7 +60,8 @@ func captureTestFailureReadiness(ctx context.Context, operation *deployment, ori
 		identity.Error = "controller build metadata does not identify a clean full source revision"
 	}
 	if err := encoder.Encode(identity); err != nil {
-		return errors.New("controller readiness evidence could not be written")
+		slog.WarnContext(ctx, "Controller readiness evidence write failed", "path", file.Name())
+		return fmt.Errorf("write readiness %s record to %s: %w", identity.Kind, file.Name(), err)
 	}
 	targets := append([]DeploymentSlot{{Name: operation.name, Origin: operation.configuration.GatewayOrigin}}, operation.configuration.Slots...)
 	records := make(chan testFailureReadinessRecord, len(targets))
@@ -67,13 +69,17 @@ func captureTestFailureReadiness(ctx context.Context, operation *deployment, ori
 	for _, target := range targets {
 		workers.Go(func() { observeTestFailureWorker(ctx, operation, target, records) })
 	}
+	observerResult := make(chan error, 1)
 	go func() {
-		defer close(records)
 		defer func() {
+			var observerError error
 			if recovered := recover(); recovered != nil {
-				slog.ErrorContext(ctx, "Failure readiness observer panicked", "err", errors.New("failure readiness observer panicked"))
+				observerError = errors.New("failure readiness observer panicked")
+				slog.ErrorContext(ctx, "Failure readiness observer panicked", "err", observerError)
 				cancel()
 			}
+			close(records)
+			observerResult <- observerError
 		}()
 		workers.Wait()
 	}()
@@ -82,11 +88,12 @@ func captureTestFailureReadiness(ctx context.Context, operation *deployment, ori
 			continue
 		}
 		if err := encoder.Encode(record); err != nil {
-			returnErr = errors.New("failure readiness evidence could not be written")
+			slog.WarnContext(ctx, "Failure readiness evidence write failed", "path", file.Name(), "kind", record.Kind)
+			returnErr = fmt.Errorf("write readiness %s record to %s: %w", record.Kind, file.Name(), err)
 			cancel()
 		}
 	}
-	return returnErr
+	return errors.Join(returnErr, <-observerResult)
 }
 
 func observeTestFailureWorker(ctx context.Context, operation *deployment, target DeploymentSlot, records chan<- testFailureReadinessRecord) {
