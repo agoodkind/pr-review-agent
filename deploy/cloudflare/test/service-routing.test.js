@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -172,18 +172,48 @@ function runNativeDeploymentTest(testName, logPath, environment, deploymentToken
   });
 }
 
+async function cleanupNativeDeploymentFiles(tokenHandle, tokenFile, signalFiles, originalError) {
+  const errors = [];
+  if (tokenHandle) {
+    try {
+      await tokenHandle.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await unlink(tokenFile);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  const results = await Promise.allSettled(signalFiles.map(function (file) { return rm(file, { force: true }); }));
+  for (const result of results) {
+    if (result.status === "rejected") errors.push(result.reason);
+  }
+  if (errors.length > 0) {
+    if (originalError) errors.unshift(originalError);
+    throw new AggregateError(errors, "Native deployment test file cleanup failed");
+  }
+}
+
 async function assertHandoffConflictRetries(origin, revision, deploymentToken, evidence) {
   const tokenFile = path.join(evidence, "handoff-control-test-token");
   const lifetime = new AbortController();
-  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
+  let tokenHandle;
+  let originalError;
   try {
+    tokenHandle = await open(tokenFile, "wx", 0o600);
+    await tokenHandle.writeFile(deploymentToken);
     await runNativeDeploymentTest("TestGatewayHandoffConflictRetriesNative", path.join(evidence, "handoff-control-test.log"), {
       PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
       PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
     }, deploymentToken, lifetime.signal);
+  } catch (error) {
+    originalError = error;
+    throw error;
   } finally {
     lifetime.abort();
-    await unlink(tokenFile);
+    await cleanupNativeDeploymentFiles(tokenHandle, tokenFile, [], originalError);
   }
 }
 
@@ -191,20 +221,28 @@ async function assertHandoffReadinessRetries(origin, revision, deploymentToken, 
   const tokenFile = path.join(evidence, logName + "-token");
   const signalFile = path.join(evidence, logName + "-recovery-signal");
   const lifetime = new AbortController();
-  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
-  const completion = runNativeDeploymentTest("TestGatewayHandoffReadinessRetriesNative", path.join(evidence, logName + ".log"), {
-    PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
-    PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile, PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
-  }, deploymentToken, lifetime.signal);
-  const restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
+  let tokenHandle;
+  let completion;
+  let restoration;
+  let originalError;
+  const signalFiles = [];
   try {
+    tokenHandle = await open(tokenFile, "wx", 0o600);
+    await tokenHandle.writeFile(deploymentToken);
+    completion = runNativeDeploymentTest("TestGatewayHandoffReadinessRetriesNative", path.join(evidence, logName + ".log"), {
+      PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+      PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile, PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
+    }, deploymentToken, lifetime.signal);
+    signalFiles.push(signalFile, signalFile + ".tmp");
+    restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
     await Promise.all([completion, restoration]);
+  } catch (error) {
+    originalError = error;
+    throw error;
   } finally {
     lifetime.abort();
     await Promise.allSettled([completion, restoration]);
-    await unlink(tokenFile);
-    await rm(signalFile, { force: true });
-    await rm(signalFile + ".tmp", { force: true });
+    await cleanupNativeDeploymentFiles(tokenHandle, tokenFile, signalFiles, originalError);
   }
 }
 
@@ -212,21 +250,29 @@ async function assertCandidateControlRetries(testName, origin, revision, name, d
   const tokenFile = path.join(evidence, testName + "-token");
   const signalFile = path.join(evidence, testName + "-recovery-signal");
   const lifetime = new AbortController();
-  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
-  const completion = runNativeDeploymentTest(testName, path.join(evidence, testName + ".log"), {
-    PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
-    PRAGENT_CANDIDATE_TEST_NAME: name, PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
-    PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
-  }, deploymentToken, lifetime.signal);
-  const restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
+  let tokenHandle;
+  let completion;
+  let restoration;
+  let originalError;
+  const signalFiles = [];
   try {
+    tokenHandle = await open(tokenFile, "wx", 0o600);
+    await tokenHandle.writeFile(deploymentToken);
+    completion = runNativeDeploymentTest(testName, path.join(evidence, testName + ".log"), {
+      PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+      PRAGENT_CANDIDATE_TEST_NAME: name, PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
+      PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
+    }, deploymentToken, lifetime.signal);
+    signalFiles.push(signalFile, signalFile + ".tmp");
+    restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
     await Promise.all([completion, restoration]);
+  } catch (error) {
+    originalError = error;
+    throw error;
   } finally {
     lifetime.abort();
     await Promise.allSettled([completion, restoration]);
-    await unlink(tokenFile);
-    await rm(signalFile, { force: true });
-    await rm(signalFile + ".tmp", { force: true });
+    await cleanupNativeDeploymentFiles(tokenHandle, tokenFile, signalFiles, originalError);
   }
 }
 
