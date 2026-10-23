@@ -121,12 +121,16 @@ func TestDeployment(ctx context.Context, options DeploymentTestOptions) (result 
 	operation.client = credentials.Client
 	cleanupAllowed := false
 	defer func() {
+		var diagnosticErr error
+		if returnErr != nil && cleanupAllowed {
+			diagnosticErr = captureTestFailureReadiness(ctx, operation)
+		}
 		var cleanupErr error
 		if cleanupAllowed {
 			cleanupErr = operation.cleanupTestbed(context.WithoutCancel(ctx))
 		}
 		result.CleanupComplete = cleanupErr == nil
-		returnErr = errors.Join(returnErr, cleanupErr, credentials.Close(ctx))
+		returnErr = errors.Join(returnErr, diagnosticErr, cleanupErr, credentials.Close(ctx))
 		result.CredentialRevoked = credentials.Revoked
 		returnErr = errors.Join(returnErr, WriteJSON(filepath.Join(operation.directory, "result.json"), result))
 	}()
