@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHmac, randomUUID } from "node:crypto";
-import { mkdtemp, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { prepareServiceTestbed } from "../scripts/service-testbed.mjs";
 
 const directory = fileURLToPath(new URL("..", import.meta.url));
@@ -137,35 +138,53 @@ async function containerDiagnostics(gatewayName, serviceName) {
   }));
 }
 
+async function waitForHandoffRecoveryReceipt(signalFile, lifetime) {
+  const signal = AbortSignal.any([lifetime, AbortSignal.timeout(120000)]);
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      try {
+        const receipt = await readFile(signalFile, "utf8");
+        assert.equal(receipt, "response_received\n", "native handoff recovery receipt is invalid");
+        return;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      await delay(50, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`Native handoff recovery receipt did not become available: ${signalFile}`, { cause: error });
+  }
+}
+
 async function assertNativeHandoffRetries(origin, revision, deploymentToken, evidence,
   testName = "TestGatewayHandoffConflictRetriesNative", logName = "handoff-control-test", restore) {
   const tokenFile = path.join(evidence, logName + "-token");
+  const signalFile = path.join(evidence, logName + "-recovery-signal");
+  const lifetime = new AbortController();
   await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
-  try {
-    await new Promise(function (resolve, reject) {
-      let output = "";
-      let restoring;
-      const child = execFile("go", ["test", "-tags=integration", "./internal/cloudflareops", "-run", "^" + testName + "$", "-count=1", "-v", "-timeout=150s"], {
-        cwd: path.resolve(directory, "../.."), timeout: 180000, maxBuffer: 32768, encoding: "utf8",
-        env: { ...process.env, PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
-          PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile },
-      }, function (error, stdout, stderr) {
-        const output = (stdout + stderr).replaceAll(deploymentToken, "[redacted]");
-        void Promise.all([writeFile(path.join(evidence, logName + ".log"), output, { mode: 0o600 }), restoring]).then(function () {
-          if (error) reject(new Error(`native handoff control regression failed: ${output}`));
-          else resolve();
-        }, reject);
-      });
-      child.stdout.on("data", function (chunk) {
-        output += chunk;
-        if (restore && !restoring && output.includes("Native handoff recovery waiter received its first response.")) {
-          restoring = restore();
-          void restoring.catch(reject);
-        }
-      });
+  const completion = new Promise(function (resolve, reject) {
+    execFile("go", ["test", "-tags=integration", "./internal/cloudflareops", "-run", "^" + testName + "$", "-count=1", "-v", "-timeout=150s"], {
+      cwd: path.resolve(directory, "../.."), timeout: 180000, maxBuffer: 32768, encoding: "utf8", signal: lifetime.signal,
+      env: { ...process.env, PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+        PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile, PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile },
+    }, function (error, stdout, stderr) {
+      const diagnosticOutput = (stdout + stderr).replaceAll(deploymentToken, "[redacted]");
+      void writeFile(path.join(evidence, logName + ".log"), diagnosticOutput, { mode: 0o600 }).then(function () {
+        if (error) reject(new Error(`native handoff control regression failed: ${diagnosticOutput}`));
+        else resolve();
+      }, reject);
     });
+  });
+  const restoration = restore ? waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore) : Promise.resolve();
+  try {
+    await Promise.all([completion, restoration]);
   } finally {
+    lifetime.abort();
+    await Promise.allSettled([completion, restoration]);
     await unlink(tokenFile);
+    await rm(signalFile, { force: true });
+    await rm(signalFile + ".tmp", { force: true });
   }
 }
 

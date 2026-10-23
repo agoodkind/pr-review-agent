@@ -5,6 +5,7 @@ package cloudflareops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptrace"
 	"os"
@@ -36,6 +37,10 @@ func TestGatewayHandoffConflictRetriesNative(t *testing.T) {
 
 func TestGatewayHandoffReadinessRetriesNative(t *testing.T) {
 	operation, revision := nativeHandoffDeployment(t)
+	signalPath := os.Getenv("PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE")
+	if signalPath == "" {
+		t.Fatal("native handoff recovery requires a private synchronization file path")
+	}
 	ctx := t.Context()
 	assertNativeUnreadyHandoff(t, operation, ctx)
 	waitContext, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
@@ -50,13 +55,23 @@ func TestGatewayHandoffReadinessRetriesNative(t *testing.T) {
 	}
 	assertNativeUnreadyHandoff(t, operation, ctx)
 	t.Log("Persistent readiness HTTP 503 preserved the running source until the deadline.")
+	recoveryContext, cancelRecovery := context.WithCancelCause(ctx)
+	defer cancelRecovery(nil)
 	var observed sync.Once
 	trace := &httptrace.ClientTrace{GotFirstResponseByte: func() {
-		observed.Do(func() { t.Log("Native handoff recovery waiter received its first response.") })
+		observed.Do(func() {
+			if err := os.WriteFile(signalPath+".tmp", []byte("response_received\n"), 0o600); err != nil {
+				cancelRecovery(fmt.Errorf("write native handoff recovery receipt: %w", err))
+				return
+			}
+			if err := os.Rename(signalPath+".tmp", signalPath); err != nil {
+				cancelRecovery(fmt.Errorf("publish native handoff recovery receipt: %w", err))
+			}
+		})
 	}}
-	recoveryContext := httptrace.WithClientTrace(ctx, trace)
+	recoveryContext = httptrace.WithClientTrace(recoveryContext, trace)
 	if err := operation.waitHandoffControl(recoveryContext, "status", revision, true); err != nil {
-		t.Fatalf("the same waiter must recover after the actual candidate revision becomes available: %v", err)
+		t.Fatalf("the same waiter must recover after the actual candidate revision becomes available: %v", errors.Join(err, context.Cause(recoveryContext)))
 	}
 	status, err := operation.gatewayHandoffControl(ctx, "status", revision)
 	if err != nil {
