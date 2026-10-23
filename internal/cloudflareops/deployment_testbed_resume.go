@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,15 +19,17 @@ type testHandoffObservation struct {
 }
 
 type testHandoffResumeReceipt struct {
-	Candidate                    string `json:"candidate"`
-	Revision                     string `json:"revision"`
-	VersionBefore                string `json:"version_before"`
-	VersionAfter                 string `json:"version_after"`
-	Interrupted                  bool   `json:"interrupted"`
-	ResumedPromoted              bool   `json:"resumed_promoted"`
-	CandidatePublicRouteDisabled bool   `json:"candidate_public_route_disabled"`
-	CandidatePublicStatus        int    `json:"candidate_public_status"`
-	GatewayRevisionBeforeResume  string `json:"gateway_revision_before_resume"`
+	Candidate                   string `json:"candidate"`
+	Revision                    string `json:"revision"`
+	VersionBefore               string `json:"version_before"`
+	VersionAfter                string `json:"version_after"`
+	Interrupted                 bool   `json:"interrupted"`
+	ResumedPromoted             bool   `json:"resumed_promoted"`
+	ConfiguredUnavailableOrigin string `json:"configured_unavailable_origin"`
+	ConfiguredPublicStatus      int    `json:"configured_public_status"`
+	UnavailableWorker           string `json:"unavailable_worker"`
+	UnavailableWorkerExists     bool   `json:"unavailable_worker_exists"`
+	GatewayRevisionBeforeResume string `json:"gateway_revision_before_resume"`
 }
 
 func (receipt testHandoffResumeReceipt) MarshalJSON() ([]byte, error) {
@@ -70,15 +74,28 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	if err != nil {
 		return result, err
 	}
-	publicStatus, gatewayRevision, err := disableTestCandidatePublicRoute(ctx, operation, operation.configuration.Slots[1], observation.handoff.Revision)
+	configurationPath, readiness, err := prepareUnavailableTestResumeOrigin(ctx, operation, observation.handoff.Revision)
 	if err != nil {
 		return result, err
 	}
-	receipt := testHandoffResumeReceipt{Candidate: observation.handoff.Service, Revision: observation.handoff.Revision, VersionBefore: before, VersionAfter: "", Interrupted: true, ResumedPromoted: false, CandidatePublicRouteDisabled: true, CandidatePublicStatus: publicStatus, GatewayRevisionBeforeResume: gatewayRevision}
+	settings, _, err := operation.client.workerSettings(ctx, operation.account, operation.name, false)
+	if err != nil {
+		return result, err
+	}
+	retained, err := settings.handoff(operation.configuration)
+	if err != nil {
+		return result, err
+	}
+	if retained != observation.handoff {
+		return result, errors.New("saved candidate service binding or revision changed before handoff resume")
+	}
+	receipt := readiness
+	receipt.Candidate, receipt.Revision, receipt.VersionBefore, receipt.Interrupted = observation.handoff.Service, observation.handoff.Revision, before, true
 	if err := WriteJSON(filepath.Join(operation.directory, "handoff-resume-readiness.json"), receipt); err != nil {
 		return result, err
 	}
 	options.Directory += "-resumed"
+	options.Configuration = configurationPath
 	result, err = Deploy(ctx, options)
 	if err != nil {
 		return result, err
@@ -94,57 +111,51 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	return result, WriteJSON(filepath.Join(operation.directory, "handoff-resume.json"), receipt)
 }
 
-func disableTestCandidatePublicRoute(ctx context.Context, operation *deployment, slot DeploymentSlot, revision string) (int, string, error) {
-	body, err := json.Marshal(struct {
-		Enabled         bool `json:"enabled"`
-		PreviewsEnabled bool `json:"previews_enabled"`
-	}{Enabled: false, PreviewsEnabled: false})
+func prepareUnavailableTestResumeOrigin(ctx context.Context, operation *deployment, revision string) (string, testHandoffResumeReceipt, error) {
+	var readiness testHandoffResumeReceipt
+	gateway, err := url.Parse(operation.configuration.GatewayOrigin)
 	if err != nil {
-		slog.WarnContext(ctx, "Test candidate public route encoding failed", "candidate", slot.Name)
-		return 0, "", fmt.Errorf("encode disabled test candidate public route: %w", err)
+		slog.WarnContext(ctx, "Isolated gateway origin parsing failed")
+		return "", readiness, fmt.Errorf("parse isolated gateway origin: %w", err)
 	}
-	response, _, err := operation.client.request(ctx, http.MethodPost, "/accounts/"+operation.account+"/workers/scripts/"+slot.Name+"/subdomain", body)
+	domain := strings.TrimPrefix(gateway.Hostname(), operation.name+".")
+	readiness.UnavailableWorker = strings.TrimSuffix(operation.name, "-gateway") + "-unavailable"
+	readiness.ConfiguredUnavailableOrigin = "https://" + readiness.UnavailableWorker + "." + domain
+	_, exists, err := operation.client.workerSettings(ctx, operation.account, readiness.UnavailableWorker, true)
 	if err != nil {
-		return 0, "", err
+		return "", readiness, err
 	}
-	var state struct {
-		Enabled         *bool `json:"enabled"`
-		PreviewsEnabled *bool `json:"previews_enabled"`
+	readiness.UnavailableWorkerExists = exists
+	if exists {
+		return "", readiness, errors.New("unavailable test origin already has a Worker; refusing to use it")
 	}
-	if json.Unmarshal(response.Result, &state) != nil || state.Enabled == nil || state.PreviewsEnabled == nil || *state.Enabled || *state.PreviewsEnabled {
-		return 0, "", errors.New("test candidate public and preview routes did not match the disabled configuration")
+	readiness.GatewayRevisionBeforeResume, err = operation.probe(ctx, operation.configuration.GatewayOrigin, revision)
+	if err != nil {
+		return "", readiness, err
 	}
-	return waitTestCandidatePublicRouteDisabled(ctx, operation, slot, revision)
-}
-
-func waitTestCandidatePublicRouteDisabled(ctx context.Context, operation *deployment, slot DeploymentSlot, revision string) (int, string, error) {
-	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	for {
-		gatewayRevision, err := operation.probe(ctx, operation.configuration.GatewayOrigin, revision)
-		if err != nil {
-			slog.WarnContext(ctx, "Gateway readiness failed during test candidate public route removal", "candidate", slot.Name)
-			return 0, "", fmt.Errorf("gateway readiness failed while disabling the test candidate public route: %w", err)
-		}
-		_, err = operation.probe(ctx, slot.Origin, "")
-		var readinessError *readinessHTTPError
-		if errors.As(err, &readinessError) && readinessError.StatusCode == http.StatusNotFound {
-			return readinessError.StatusCode, gatewayRevision, nil
-		}
-		if err != nil {
-			slog.WarnContext(ctx, "Disabled test candidate public route returned an unexpected response", "candidate", slot.Name)
-			return 0, "", fmt.Errorf("disabled test candidate public route returned an unexpected response: %w", err)
-		}
-		timer := time.NewTimer(interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			slog.WarnContext(ctx, "Test candidate public route removal exceeded its elapsed limit", "candidate", slot.Name)
-			return 0, "", fmt.Errorf("disabled test candidate public route did not return HTTP 404 before its timeout: %w", ctx.Err())
-		case <-timer.C:
-		}
+	_, err = operation.probe(ctx, readiness.ConfiguredUnavailableOrigin, "")
+	var readinessError *readinessHTTPError
+	if err == nil {
+		return "", readiness, errors.New("unavailable test origin returned HTTP 200 instead of HTTP 404")
 	}
+	if !errors.As(err, &readinessError) || readinessError.StatusCode != http.StatusNotFound {
+		slog.WarnContext(ctx, "Unavailable test origin did not return HTTP 404")
+		return "", readiness, fmt.Errorf("unavailable test origin must return HTTP 404: %w", err)
+	}
+	readiness.ConfiguredPublicStatus = readinessError.StatusCode
+	configuration := operation.configuration
+	configuration.Slots = append([]DeploymentSlot(nil), operation.configuration.Slots...)
+	configuration.Slots[1].Origin = readiness.ConfiguredUnavailableOrigin
+	data, err := json.Marshal(configuration)
+	if err != nil {
+		slog.WarnContext(ctx, "Isolated resume configuration encoding failed")
+		return "", readiness, fmt.Errorf("encode isolated resume configuration: %w", err)
+	}
+	configurationPath := filepath.Join(operation.directory, "unavailable-origin-deployment.json")
+	if err := WriteJSON(configurationPath, json.RawMessage(data)); err != nil {
+		return "", readiness, err
+	}
+	return configurationPath, readiness, nil
 }
 
 func (operation *deployment) observePersistedTestHandoff(ctx context.Context) (deploymentHandoff, error) {

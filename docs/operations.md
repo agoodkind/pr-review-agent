@@ -308,7 +308,7 @@ The Worker stores each signed GitHub delivery before forwarding the delivery to 
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
 
-Use the [isolated deployment harness](../deploy/cloudflare/scripts/test-deployment.mjs) to test candidate rejection and promotion without production traffic. The harness publishes separate test images with isolated runtime configuration, creates generated test Workers, records continuous availability samples and application images, and cleans up the registered Cloudflare resources. Each source archive requires a valid packaging attestation for its exact commit.
+Use the [isolated deployment harness](../deploy/cloudflare/scripts/test-deployment.mjs) to test candidate rejection and promotion without production traffic. Run the harness from a clean checkout. The harness publishes separate test images with isolated runtime configuration, creates generated test Workers, records continuous availability samples and application images, and cleans up the registered Cloudflare resources. Each source archive requires a valid packaging attestation for its exact commit. The result records the controller's full source revision from its build metadata.
 
 ```bash
 node deploy/cloudflare/scripts/test-deployment.mjs \

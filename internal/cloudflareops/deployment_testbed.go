@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/clock"
+	"goodkind.io/pr-review-agent/internal/version"
 )
 
 var deploymentTestNamePattern = regexp.MustCompile(`^pragent-deploy-test-[a-f0-9]{8}-gateway$`)
@@ -60,6 +61,7 @@ type testBindingMetadata struct {
 
 // DeploymentTestResult records actual Cloudflare resources and readiness evidence.
 type DeploymentTestResult struct {
+	ControllerRevision        string                 `json:"controller_revision"`
 	Gateway                   string                 `json:"gateway"`
 	Slots                     []DeploymentSlot       `json:"slots"`
 	Directory                 string                 `json:"directory"`
@@ -102,6 +104,10 @@ func (result DeploymentTestResult) MarshalJSON() ([]byte, error) {
 // TestDeployment runs the real bootstrap, rejected-candidate, and promotion operations.
 func TestDeployment(ctx context.Context, options DeploymentTestOptions) (result DeploymentTestResult, returnErr error) {
 	slog.InfoContext(ctx, "Isolated deployment test started")
+	result.ControllerRevision = version.SourceRevision()
+	if !revisionPattern.MatchString(result.ControllerRevision) {
+		return result, errors.New("deployment-test requires a clean full source revision; run go run -buildvcs=true from a clean checkout")
+	}
 	operation, err := prepareDeployment(options.Deployment)
 	if err != nil {
 		return result, err
