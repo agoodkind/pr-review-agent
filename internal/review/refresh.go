@@ -337,7 +337,6 @@ func (service *Service) loadVerdictRefreshInputs(
 	}, nil
 }
 
-// refreshedVerdict is what one refresh computed from current thread state.
 type refreshedVerdict struct {
 	standingReview    githubapp.Review
 	fileAssessments   []domain.FileAssessment
