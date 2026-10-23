@@ -104,6 +104,49 @@ func TestCandidateDeploymentControlRetriesNative(t *testing.T) {
 	t.Log("The candidate control waiter recovered and read the running container state over HTTP 200.")
 }
 
+func TestCandidateBeginRetriesNative(t *testing.T) {
+	state := nativeDrainControlRecovery(t, "begin")
+	if !state.containerRunning() || !state.drained() {
+		t.Fatal("recovered begin must report a running container with closed admission and zero outstanding work")
+	}
+	t.Log("The begin waiter recovered and closed admission with zero outstanding work over HTTP 200.")
+}
+
+func TestCandidateRestartRetriesNative(t *testing.T) {
+	state := nativeDrainControlRecovery(t, "restart")
+	if state.containerRunning() {
+		t.Fatal("recovered restart must report the stopped container")
+	}
+	t.Log("The restart waiter recovered and stopped the drained container over HTTP 200.")
+}
+
+func nativeDrainControlRecovery(t *testing.T, action string) drainState {
+	t.Helper()
+	operation, _ := nativeHandoffDeployment(t)
+	origin := operation.configuration.GatewayOrigin
+	ctx := t.Context()
+	recoveryContext := nativeRecoveryContext(t, ctx)
+	_, err := operation.drainRequest(ctx, origin, action)
+	if !errors.Is(err, errDeploymentControlUnavailable) {
+		t.Fatalf("the actual unavailable configuration dependency must produce %s HTTP 503: %v", action, err)
+	}
+	waitContext, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+	defer cancel()
+	_, err = operation.waitDrainControl(waitContext, origin, action)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unavailable %s must wait until its deadline after HTTP 503: %v", action, err)
+	}
+	if !errors.Is(err, errDeploymentControlUnavailable) {
+		t.Fatalf("%s timeout must preserve the actual HTTP status: %v", action, err)
+	}
+	t.Logf("Persistent %s HTTP 503 continued until the deadline.", action)
+	state, err := operation.waitDrainControl(recoveryContext, origin, action)
+	if err != nil {
+		t.Fatalf("the same %s waiter must recover after the actual configuration is restored: %v", action, errors.Join(err, context.Cause(recoveryContext)))
+	}
+	return state
+}
+
 func nativeRecoveryContext(t *testing.T, ctx context.Context) context.Context {
 	t.Helper()
 	signalPath := os.Getenv("PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE")

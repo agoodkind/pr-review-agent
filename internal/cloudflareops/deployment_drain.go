@@ -83,29 +83,34 @@ func (operation *deployment) writeDeploymentToken(ctx context.Context, script st
 }
 
 func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot DeploymentSlot) error {
+	_, err := operation.waitDrainControl(ctx, slot.Origin, "status")
+	return err
+}
+
+func (operation *deployment) waitDrainControl(ctx context.Context, origin, action string) (drainState, error) {
 	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var lastError error
 	for {
-		_, err := operation.drainRequest(ctx, slot.Origin, "status")
+		state, err := operation.drainRequest(ctx, origin, action)
 		if err == nil {
-			return nil
+			return state, nil
 		}
 		if ctx.Err() != nil {
-			slog.WarnContext(ctx, "Candidate deployment control availability exceeded its elapsed limit")
-			return fmt.Errorf("candidate deployment control did not become available before its timeout: %w", errors.Join(lastError, err, ctx.Err()))
+			slog.WarnContext(ctx, "Candidate drain control exceeded its elapsed limit", "action", action)
+			return nil, fmt.Errorf("candidate drain %s did not become available before its timeout: %w", action, errors.Join(lastError, err, context.Cause(ctx)))
 		}
 		if !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errDeploymentControlUnpublished) && !errors.Is(err, errDeploymentControlUnavailable) {
-			return err
+			return nil, fmt.Errorf("candidate drain %s failed: %w", action, err)
 		}
 		lastError = err
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			slog.WarnContext(ctx, "Candidate deployment control availability exceeded its elapsed limit")
-			return fmt.Errorf("candidate deployment control did not become available before its timeout: %w", errors.Join(lastError, ctx.Err()))
+			slog.WarnContext(ctx, "Candidate drain control exceeded its elapsed limit", "action", action)
+			return nil, fmt.Errorf("candidate drain %s did not become available before its timeout: %w", action, errors.Join(lastError, context.Cause(ctx)))
 		case <-timer.C:
 		}
 	}
@@ -168,7 +173,7 @@ func (operation *deployment) beginDrain(ctx context.Context, slot DeploymentSlot
 	if err := operation.registerDeploymentToken(ctx, slot); err != nil {
 		return nil, err
 	}
-	return operation.drainRequest(ctx, slot.Origin, "begin")
+	return operation.waitDrainControl(ctx, slot.Origin, "begin")
 }
 
 func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlot) error {
@@ -193,7 +198,7 @@ func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlo
 		if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, operation.activeRevision); err != nil {
 			return err
 		}
-		status, err = operation.drainRequest(ctx, slot.Origin, "status")
+		status, err = operation.waitDrainControl(ctx, slot.Origin, "status")
 		if err != nil {
 			return err
 		}

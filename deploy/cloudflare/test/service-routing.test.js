@@ -208,12 +208,12 @@ async function assertHandoffReadinessRetries(origin, revision, deploymentToken, 
   }
 }
 
-async function assertCandidateControlRetries(origin, revision, name, deploymentToken, evidence, restore) {
-  const tokenFile = path.join(evidence, "candidate-control-test-token");
-  const signalFile = path.join(evidence, "candidate-control-recovery-signal");
+async function assertCandidateControlRetries(testName, origin, revision, name, deploymentToken, evidence, restore) {
+  const tokenFile = path.join(evidence, testName + "-token");
+  const signalFile = path.join(evidence, testName + "-recovery-signal");
   const lifetime = new AbortController();
   await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
-  const completion = runNativeDeploymentTest("TestCandidateDeploymentControlRetriesNative", path.join(evidence, "candidate-control-test.log"), {
+  const completion = runNativeDeploymentTest(testName, path.join(evidence, testName + ".log"), {
     PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
     PRAGENT_CANDIDATE_TEST_NAME: name, PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
     PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
@@ -345,33 +345,48 @@ test("native service bindings use the production review container and restrict c
         await assertHealthy(origin, expectedRevision);
         assert.deepEqual(await control("status"), open);
         const runtimePath = path.join(fixture, "runtime.json");
-        let runtimeRestored = false;
-        async function restoreRuntime() {
-          await writeGatewayConfiguration(runtimePath, runtime);
-          runtimeRestored = true;
-        }
-        try {
-          await writeGatewayConfiguration(runtimePath, { ...runtime, PORT: "0" });
-          const deadline = Date.now() + 120000;
-          let unavailable = false;
-          while (Date.now() < deadline) {
-            const response = await drainResponse("status");
-            await response.body?.cancel();
-            if (response.status === 503) {
-              unavailable = true;
-              break;
-            }
-            assert.equal(response.status, 200);
-            await delay(100);
+        async function assertUnavailableControl(testName) {
+          let runtimeRestored = false;
+          async function restoreRuntime() {
+            await writeGatewayConfiguration(runtimePath, runtime);
+            runtimeRestored = true;
           }
-          assert.equal(unavailable, true, "invalid configuration did not produce actual candidate control HTTP 503");
-          await assertCandidateControlRetries(origin, expectedRevision, service.name, deploymentToken, evidence, restoreRuntime);
-          await assertHealthy(origin, expectedRevision);
-          assert.deepEqual(await control("status"), open);
-          proof.candidateControlRetried = true;
-        } finally {
-          if (!runtimeRestored) await restoreRuntime();
+          try {
+            await writeGatewayConfiguration(runtimePath, { ...runtime, PORT: "0" });
+            const deadline = Date.now() + 120000;
+            let unavailable = false;
+            while (Date.now() < deadline) {
+              const response = await drainResponse("status");
+              await response.body?.cancel();
+              if (response.status === 503) {
+                unavailable = true;
+                break;
+              }
+              assert.equal(response.status, 200);
+              await delay(100);
+            }
+            assert.equal(unavailable, true, "invalid configuration did not produce actual candidate control HTTP 503");
+            await assertCandidateControlRetries(testName, origin, expectedRevision, service.name, deploymentToken, evidence, restoreRuntime);
+          } finally {
+            if (!runtimeRestored) await restoreRuntime();
+          }
         }
+        await assertUnavailableControl("TestCandidateDeploymentControlRetriesNative");
+        await assertHealthy(origin, expectedRevision);
+        assert.deepEqual(await control("status"), open);
+        proof.candidateControlRetried = true;
+        assert.deepEqual(await control("begin"), closed);
+        await assertUnavailableControl("TestCandidateRestartRetriesNative");
+        assert.deepEqual(await control("status"), { container_running: false });
+        await assertHealthy(origin, expectedRevision);
+        assert.deepEqual(await control("status"), open);
+        proof.candidateRestartRetried = true;
+        await assertUnavailableControl("TestCandidateBeginRetriesNative");
+        assert.deepEqual(await control("status"), closed);
+        assert.deepEqual(await control("restart"), { container_running: false });
+        await assertHealthy(origin, expectedRevision);
+        assert.deepEqual(await control("status"), open);
+        proof.candidateBeginRetried = true;
       }
       const body = "{}";
       const signature = "sha256=" + createHmac("sha256", signingMaterial).update(body).digest("hex");

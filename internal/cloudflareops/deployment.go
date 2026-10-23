@@ -237,7 +237,7 @@ func (operation *deployment) execute(ctx context.Context) error {
 	if err := operation.registerDeploymentToken(ctx, operation.slot); err != nil {
 		return err
 	}
-	if _, err := operation.drainRequest(ctx, operation.slot.Origin, "restart"); err != nil {
+	if _, err := operation.waitDrainControl(ctx, operation.slot.Origin, "restart"); err != nil {
 		return err
 	}
 	if err := operation.waitCandidate(ctx); err != nil {
