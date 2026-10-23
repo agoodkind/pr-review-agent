@@ -157,26 +157,46 @@ async function waitForHandoffRecoveryReceipt(signalFile, lifetime) {
   }
 }
 
-async function assertNativeHandoffRetries(origin, revision, deploymentToken, evidence,
-  testName = "TestGatewayHandoffConflictRetriesNative", logName = "handoff-control-test", restore) {
-  const tokenFile = path.join(evidence, logName + "-token");
-  const signalFile = path.join(evidence, logName + "-recovery-signal");
-  const lifetime = new AbortController();
-  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
-  const completion = new Promise(function (resolve, reject) {
+function runNativeHandoffTest(testName, logPath, environment, deploymentToken, signal) {
+  return new Promise(function (resolve, reject) {
     execFile("go", ["test", "-tags=integration", "./internal/cloudflareops", "-run", "^" + testName + "$", "-count=1", "-v", "-timeout=150s"], {
-      cwd: path.resolve(directory, "../.."), timeout: 180000, maxBuffer: 32768, encoding: "utf8", signal: lifetime.signal,
-      env: { ...process.env, PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
-        PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile, PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile },
+      cwd: path.resolve(directory, "../.."), timeout: 180000, maxBuffer: 32768, encoding: "utf8", signal,
+      env: { ...process.env, ...environment },
     }, function (error, stdout, stderr) {
       const diagnosticOutput = (stdout + stderr).replaceAll(deploymentToken, "[redacted]");
-      void writeFile(path.join(evidence, logName + ".log"), diagnosticOutput, { mode: 0o600 }).then(function () {
+      void writeFile(logPath, diagnosticOutput, { mode: 0o600 }).then(function () {
         if (error) reject(new Error(`native handoff control regression failed: ${diagnosticOutput}`));
         else resolve();
       }, reject);
     });
   });
-  const restoration = restore ? waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore) : Promise.resolve();
+}
+
+async function assertHandoffConflictRetries(origin, revision, deploymentToken, evidence) {
+  const tokenFile = path.join(evidence, "handoff-control-test-token");
+  const lifetime = new AbortController();
+  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
+  try {
+    await runNativeHandoffTest("TestGatewayHandoffConflictRetriesNative", path.join(evidence, "handoff-control-test.log"), {
+      PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+      PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
+    }, deploymentToken, lifetime.signal);
+  } finally {
+    lifetime.abort();
+    await unlink(tokenFile);
+  }
+}
+
+async function assertHandoffReadinessRetries(origin, revision, deploymentToken, evidence, logName, restore) {
+  const tokenFile = path.join(evidence, logName + "-token");
+  const signalFile = path.join(evidence, logName + "-recovery-signal");
+  const lifetime = new AbortController();
+  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
+  const completion = runNativeHandoffTest("TestGatewayHandoffReadinessRetriesNative", path.join(evidence, logName + ".log"), {
+    PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+    PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile, PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
+  }, deploymentToken, lifetime.signal);
+  const restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
   try {
     await Promise.all([completion, restoration]);
   } finally {
@@ -396,7 +416,7 @@ test("native service bindings use the production review container and restrict c
       assert.equal(before.previous_container_running, true);
       assert.equal(before.complete, false);
       if (source === "service") {
-        await assertNativeHandoffRetries(origin, expectedRevision, deploymentToken, evidence);
+        await assertHandoffConflictRetries(origin, expectedRevision, deploymentToken, evidence);
       }
       gateway.vars.REVIEW_HANDOFF = "true";
       await writeGatewayConfiguration(gatewayPath, gateway);
@@ -422,8 +442,8 @@ test("native service bindings use the production review container and restrict c
           "X-Github-Event": "pull_request", "X-Github-Delivery": randomUUID() } });
       assert.equal(interrupted.status, 503);
       await interrupted.body?.cancel();
-      await assertNativeHandoffRetries(origin, expectedRevision, deploymentToken, evidence,
-        "TestGatewayHandoffReadinessRetriesNative", source + "-readiness-control-test", async function () {
+      await assertHandoffReadinessRetries(origin, expectedRevision, deploymentToken, evidence,
+        source + "-readiness-control-test", async function () {
           gateway.vars.REVIEW_HANDOFF_REVISION = expectedRevision;
           await writeGatewayConfiguration(gatewayPath, gateway);
         });
