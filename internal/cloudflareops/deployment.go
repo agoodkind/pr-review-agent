@@ -17,6 +17,14 @@ import (
 
 var errCandidateReadiness = errors.New("candidate did not become healthy before promotion")
 
+type readinessHTTPError struct {
+	StatusCode int
+}
+
+func (err *readinessHTTPError) Error() string {
+	return fmt.Sprintf("health returned HTTP %d", err.StatusCode)
+}
+
 // DeploymentOptions selects public templates and file-backed deployment credentials.
 type DeploymentOptions struct {
 	Wrangler         string
@@ -327,7 +335,7 @@ func (operation *deployment) probe(ctx context.Context, origin, revision string)
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
 	actual := response.Header.Get("X-Pr-Agent-Revision")
 	if response.StatusCode != http.StatusOK {
-		return actual, fmt.Errorf("health returned HTTP %d", response.StatusCode)
+		return actual, &readinessHTTPError{StatusCode: response.StatusCode}
 	}
 	if revision != "" && actual != revision {
 		return actual, fmt.Errorf("health revision %q does not match expected revision %s", actual, revision)

@@ -137,21 +137,31 @@ async function containerDiagnostics(gatewayName, serviceName) {
   }));
 }
 
-async function assertHandoffConflictRetries(origin, revision, deploymentToken, evidence) {
-  const tokenFile = path.join(evidence, "handoff-control-test-token");
+async function assertNativeHandoffRetries(origin, revision, deploymentToken, evidence,
+  testName = "TestGatewayHandoffConflictRetriesNative", logName = "handoff-control-test", restore) {
+  const tokenFile = path.join(evidence, logName + "-token");
   await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
   try {
     await new Promise(function (resolve, reject) {
-      execFile("go", ["test", "-tags=integration", "./internal/cloudflareops", "-run", "^TestGatewayHandoffConflictRetriesNative$", "-count=1", "-v", "-timeout=30s"], {
-        cwd: path.resolve(directory, "../.."), timeout: 120000, maxBuffer: 32768, encoding: "utf8",
+      let output = "";
+      let restoring;
+      const child = execFile("go", ["test", "-tags=integration", "./internal/cloudflareops", "-run", "^" + testName + "$", "-count=1", "-v", "-timeout=150s"], {
+        cwd: path.resolve(directory, "../.."), timeout: 180000, maxBuffer: 32768, encoding: "utf8",
         env: { ...process.env, PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
           PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile },
       }, function (error, stdout, stderr) {
         const output = (stdout + stderr).replaceAll(deploymentToken, "[redacted]");
-        void writeFile(path.join(evidence, "handoff-control-test.log"), output, { mode: 0o600 }).then(function () {
+        void Promise.all([writeFile(path.join(evidence, logName + ".log"), output, { mode: 0o600 }), restoring]).then(function () {
           if (error) reject(new Error(`native handoff control regression failed: ${output}`));
           else resolve();
         }, reject);
+      });
+      child.stdout.on("data", function (chunk) {
+        output += chunk;
+        if (restore && !restoring && output.includes("Native handoff recovery waiter received its first response.")) {
+          restoring = restore();
+          void restoring.catch(reject);
+        }
       });
     });
   } finally {
@@ -367,7 +377,7 @@ test("native service bindings use the production review container and restrict c
       assert.equal(before.previous_container_running, true);
       assert.equal(before.complete, false);
       if (source === "service") {
-        await assertHandoffConflictRetries(origin, expectedRevision, deploymentToken, evidence);
+        await assertNativeHandoffRetries(origin, expectedRevision, deploymentToken, evidence);
       }
       gateway.vars.REVIEW_HANDOFF = "true";
       await writeGatewayConfiguration(gatewayPath, gateway);
@@ -393,8 +403,11 @@ test("native service bindings use the production review container and restrict c
           "X-Github-Event": "pull_request", "X-Github-Delivery": randomUUID() } });
       assert.equal(interrupted.status, 503);
       await interrupted.body?.cancel();
-      gateway.vars.REVIEW_HANDOFF_REVISION = expectedRevision;
-      await writeGatewayConfiguration(gatewayPath, gateway);
+      await assertNativeHandoffRetries(origin, expectedRevision, deploymentToken, evidence,
+        "TestGatewayHandoffReadinessRetriesNative", source + "-readiness-control-test", async function () {
+          gateway.vars.REVIEW_HANDOFF_REVISION = expectedRevision;
+          await writeGatewayConfiguration(gatewayPath, gateway);
+        });
       await assertHealthy(origin, expectedRevision, failureEvidence);
       const settledDeadline = Date.now() + 120000;
       while (!stop.readOutput().split("\n").some(function (line) {
@@ -420,7 +433,8 @@ test("native service bindings use the production review container and restrict c
       await writeGatewayConfiguration(gatewayPath, gateway);
       await assertHealthy(origin, expectedRevision, failureEvidence);
       await stateWhen(expectedRevision, function (state) { return state.complete; });
-      proof.phases.push({ mode: source + "-handoff", revision: expectedRevision, replaySettled: true, sourceFenced: true });
+      proof.phases.push({ mode: source + "-handoff", revision: expectedRevision, readinessRetried: true,
+        replaySettled: true, sourceFenced: true });
     } finally {
       await stop();
     }
