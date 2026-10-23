@@ -123,7 +123,7 @@ func TestDeployment(ctx context.Context, options DeploymentTestOptions) (result 
 	defer func() {
 		var diagnosticErr error
 		if returnErr != nil && cleanupAllowed {
-			diagnosticErr = captureTestFailureReadiness(ctx, operation)
+			diagnosticErr = captureTestFailureReadiness(ctx, operation, returnErr)
 		}
 		var cleanupErr error
 		if cleanupAllowed {

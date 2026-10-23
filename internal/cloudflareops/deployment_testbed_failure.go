@@ -38,7 +38,7 @@ type testFailureReadinessRecord struct {
 	Error              string    `json:"error,omitempty"`
 }
 
-func captureTestFailureReadiness(ctx context.Context, operation *deployment) (returnErr error) {
+func captureTestFailureReadiness(ctx context.Context, operation *deployment, originalError error) (returnErr error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), testFailureCaptureTimeout)
 	defer cancel()
 	file, err := os.OpenFile(filepath.Join(operation.directory, "failure-readiness.ndjson"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -48,6 +48,11 @@ func captureTestFailureReadiness(ctx context.Context, operation *deployment) (re
 	}
 	defer func() { returnErr = errors.Join(returnErr, file.Close()) }()
 	encoder := json.NewEncoder(file)
+	var failure testFailureReadinessRecord
+	failure.Timestamp, failure.Kind, failure.Error = clock.System().UTC(), "failure", originalError.Error()
+	if err := encoder.Encode(failure); err != nil {
+		return errors.New("original failure readiness evidence could not be written")
+	}
 	var identity testFailureReadinessRecord
 	identity.Timestamp, identity.Kind, identity.ControllerRevision = clock.System().UTC(), "controller", version.SourceRevision()
 	if !revisionPattern.MatchString(identity.ControllerRevision) {
