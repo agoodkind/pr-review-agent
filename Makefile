@@ -37,3 +37,16 @@ RELEASE_PLATFORMS ?= linux/amd64
 include bootstrap.mk
 
 .DEFAULT_GOAL := check
+
+export PRAGENT_SERVICE_TEST_BINARY PRAGENT_SERVICE_TEST_IMAGE PRAGENT_SERVICE_TEST_REVISION
+ifneq ($(origin PRAGENT_SERVICE_TEST_PHASES),undefined)
+export PRAGENT_SERVICE_TEST_PHASES
+endif
+
+.PHONY: test-service help-service
+help: help-service
+help-service:
+	@printf '%s\n' 'Service integration tests:' '  test-service                             run the native service tests in Docker Compose'
+
+test-service:
+	node deploy/cloudflare/scripts/test-service.mjs

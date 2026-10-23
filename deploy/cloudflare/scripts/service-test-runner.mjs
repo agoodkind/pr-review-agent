@@ -20,5 +20,4 @@ if (process.env.PRAGENT_SERVICE_TEST_IMAGE) {
   if (tagCode !== 0) process.exit(tagCode);
   process.env.PRAGENT_SERVICE_TEST_IMAGE = localImage;
 }
-const command = process.argv.slice(2);
-process.exitCode = await run(command[0] ?? "node", command.length ? command.slice(1) : ["--test", "test/service-routing.test.js"]);
+process.exitCode = await run("node", ["--test", "test/service-routing.test.js"]);

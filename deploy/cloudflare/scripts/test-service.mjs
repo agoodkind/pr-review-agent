@@ -11,7 +11,7 @@ const evidence = await mkdtemp(path.join(os.tmpdir(), project + "-"));
 const input = path.join(evidence, "input");
 await mkdir(input, { mode: 0o700 });
 const environment = { ...process.env, PRAGENT_COMPOSE_INPUT: input, PRAGENT_COMPOSE_EVIDENCE: evidence,
-  PRAGENT_SERVICE_TEST_REVISION: process.env.PRAGENT_SERVICE_TEST_REVISION ?? process.env.GITHUB_SHA ?? "" };
+  PRAGENT_SERVICE_TEST_REVISION: process.env.PRAGENT_SERVICE_TEST_REVISION || process.env.GITHUB_SHA || "" };
 const module = await readFile(path.resolve(directory, "../../go.mod"), "utf8");
 const goVersion = module.match(/^go ([0-9.]+)$/m)?.[1];
 if (!goVersion) throw new Error("go.mod must declare a Go version");
@@ -31,7 +31,7 @@ const onTerminate = function () { interrupt("SIGTERM"); };
 process.on("SIGINT", onInterrupt);
 process.on("SIGTERM", onTerminate);
 
-async function run(arguments_, cleanup = false, receiveOutput) {
+async function run(arguments_, { cleanup = false, receiveOutput } = {}) {
   if (interrupted && !cleanup) throw new Error(`harness interrupted by ${interrupted}`);
   const running = spawn("docker", arguments_, { cwd: directory, env: environment,
     stdio: receiveOutput ? ["ignore", "pipe", "inherit"] : "inherit" });
@@ -47,7 +47,7 @@ async function run(arguments_, cleanup = false, receiveOutput) {
   });
 }
 async function checked(arguments_, receiveOutput) {
-  const code = await run(arguments_, false, receiveOutput);
+  const code = await run(arguments_, { receiveOutput });
   if (code !== 0) {
     process.exitCode = code;
     throw new Error(`docker command failed with exit code ${code}`);
@@ -56,10 +56,9 @@ async function checked(arguments_, receiveOutput) {
 
 process.stdout.write(`Compose project: ${project}\nPrivate integration evidence: ${evidence}\n`);
 try {
-  const custom = process.argv.slice(2).filter(function (argument, index) { return index !== 0 || argument !== "--"; });
   const binary = process.env.PRAGENT_SERVICE_TEST_BINARY;
   const image = process.env.PRAGENT_SERVICE_TEST_IMAGE;
-  if (!custom.length && Boolean(binary) === Boolean(image)) {
+  if (Boolean(binary) === Boolean(image)) {
     throw new Error("set exactly one of PRAGENT_SERVICE_TEST_BINARY or PRAGENT_SERVICE_TEST_IMAGE");
   }
   if (binary) {
@@ -76,13 +75,13 @@ try {
   }
   await checked([...compose, "build", "runner"]);
   await checked([...compose, "up", "--detach", "--wait", "engine"]);
-  process.exitCode = await run([...compose, "run", "--rm", "runner", ...custom]);
+  process.exitCode = await run([...compose, "run", "--rm", "runner"]);
 } catch (error) {
   process.stderr.write(`${error.message}\n`);
   process.exitCode ||= 1;
 } finally {
   try {
-    const code = await run([...compose, "down", "--volumes", "--remove-orphans", "--rmi", "local", "--timeout", "10"], true);
+    const code = await run([...compose, "down", "--volumes", "--remove-orphans", "--rmi", "local", "--timeout", "10"], { cleanup: true });
     if (code !== 0) {
       process.stderr.write(`Compose cleanup failed for ${project} with exit code ${code}\n`);
       process.exitCode ||= code;

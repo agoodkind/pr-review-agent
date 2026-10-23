@@ -292,7 +292,7 @@ Start Docker with Compose support and install Node.js 24. Run the following comm
    ```bash
    PRAGENT_SERVICE_TEST_BINARY=dist/pr-review-agent_linux_amd64/pr-review-agent \
    PRAGENT_SERVICE_TEST_REVISION=FULL_SOURCE_COMMIT \
-   node deploy/cloudflare/scripts/test-service.mjs
+   make test-service
    ```
 
    Replace `FULL_SOURCE_COMMIT` with the binary's full source commit. To test an image already available in local Docker, set `PRAGENT_SERVICE_TEST_IMAGE` instead of `PRAGENT_SERVICE_TEST_BINARY`.
