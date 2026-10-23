@@ -66,6 +66,7 @@
     "relationship.fragment": "File: {{.Path}}\nDiff fragment:\n{{.Input}}",
     "relationship.gap": "File: {{.Path}}\n[coverage incomplete: {{.Relationship}}; at least {{.Total}} required joint assessments remain]",
     "native.summary_link": "[Review summary]({{.SummaryURL}})",
+    "native.request_changes": "{{.Input}}",
     "inline.footer": "<sub><i>Already addressed this review? Please respond and resolve!</i></sub>",
     "failure.class.other": "an unexpected error",
     "failure.class.deadline": "a request timeout",

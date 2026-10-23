@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2902,6 +2903,7 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"POST /graphql",
 		"GET /repos/owner/repo/issues/7/comments",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/issues/comments/2000",
@@ -3660,6 +3662,9 @@ func TestReplyReconcilesOpenThreadsAtAReviewedHead(t *testing.T) {
 		reconcileThreads: []githubapp.ReviewThread{openThread},
 	})
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
+	priorReview := fixture.state.reviewPages[0][0]
+	priorReviewID := priorReview["id"]
+	priorReviewCount := len(fixture.state.reviewPages[0]) + len(fixture.state.submittedReviews)
 
 	job := fixture.job()
 	job.ThreadRootCommentID = 700
@@ -3672,8 +3677,19 @@ func TestReplyReconcilesOpenThreadsAtAReviewedHead(t *testing.T) {
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatalf("submitted review = %v, want none while a bot thread is open", fixture.state.lastSubmitReview)
 	}
-	if fixture.state.lastUpdateReview != nil {
-		t.Fatalf("updated review = %v, want none", fixture.state.lastUpdateReview)
+	body, readable := fixture.state.lastUpdateReview["body"].(string)
+	if !readable || !strings.HasPrefix(body, openThread.RootComment.Body+".\n\n") {
+		t.Fatalf("updated review body = %q, want the remaining finding explanation", body)
+	}
+	if priorReview["id"] != priorReviewID || priorReview["state"] != "CHANGES_REQUESTED" || priorReview["body"] != body {
+		t.Fatal("The refresh must update the existing requested-changes review without changing its identity or state.")
+	}
+	if got := len(fixture.state.reviewPages[0]) + len(fixture.state.submittedReviews); got != priorReviewCount {
+		t.Fatalf("native review count = %d, want %d after updating the existing review", got, priorReviewCount)
+	}
+	wantUpdate := fmt.Sprintf("PUT /repos/owner/repo/pulls/7/reviews/%.0f", priorReviewID)
+	if !slices.Contains(fixture.state.requestOrder, wantUpdate) {
+		t.Fatalf("requests = %v, want an update to the original native review", fixture.state.requestOrder)
 	}
 }
 
@@ -4289,6 +4305,7 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"POST /graphql",
 		"GET /repos/owner/repo/issues/7/comments",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/issues/7/comments",
 		"PATCH /repos/owner/repo/issues/comments/2000",
@@ -4380,6 +4397,7 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"POST /graphql",
 		"GET /repos/owner/repo/issues/7/comments",
+		"POST /graphql",
 		"POST /repos/owner/repo/pulls/7/reviews",
 		"GET /repos/owner/repo/pulls/7/reviews",
 		"PATCH /repos/owner/repo/check-runs/77",

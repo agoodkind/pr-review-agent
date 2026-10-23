@@ -50,7 +50,14 @@ func (service *Service) nativeVerdictBody(ctx context.Context, job domain.Review
 	if !found || comment.ID <= 0 {
 		return "", errors.New("native review requires the bot summary comment after recovery")
 	}
+	if summary.Decision == domain.ReviewDecisionRequestChanges {
+		return service.nativeRequestedChangesBody(ctx, job, summary, comment.ID)
+	}
 	return NativeReviewSummaryLink(service.reviewPolicy, job.Repository, job.Number, comment.ID, RenderVerdictBody(summary))
+}
+
+func nativeSummaryURL(repo domain.Repository, number int, commentID int64) string {
+	return repositoryURL(repo) + "/pull/" + strconv.Itoa(number) + "#issuecomment-" + strconv.FormatInt(commentID, 10)
 }
 
 // NativeReviewSummaryLink appends checkpoint data after the visible summary permalink.
@@ -59,7 +66,7 @@ func NativeReviewSummaryLink(policy reviewrules.Policy, repo domain.Repository, 
 		return "", errors.New("native review summary link requires repository, pull request, and comment identifiers")
 	}
 	var data reviewrules.PromptData
-	data.SummaryURL = repositoryURL(repo) + "/pull/" + strconv.Itoa(number) + "#issuecomment-" + strconv.FormatInt(commentID, 10)
+	data.SummaryURL = nativeSummaryURL(repo, number, commentID)
 	link, err := renderPrompt(policy, "native.summary_link", data)
 	if err != nil {
 		return "", err

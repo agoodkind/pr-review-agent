@@ -154,6 +154,8 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		decision = domain.ReviewDecisionRequestChanges
 	}
 	err = service.applyRefreshedVerdict(ctx, job, refreshedVerdict{
+		standingReview:    inputs.standingReview,
+		fileAssessments:   inputs.assessment.fileAssessments,
 		decision:          decision,
 		decisionReason:    decisionReason,
 		approvalWithheld:  !approvalAllowed,
@@ -256,7 +258,8 @@ func (service *Service) headReadWhole(
 type verdictRefreshInputs struct {
 	assessment assessmentSnapshot
 	// Legacy native bodies provide assessments when the completed summary is absent.
-	verdict githubapp.Review
+	verdict        githubapp.Review
+	standingReview githubapp.Review
 	// standingState is what GitHub shows for this service now, across all heads.
 	standingState string
 	threads       []githubapp.ReviewThread
@@ -277,7 +280,7 @@ func (service *Service) loadVerdictRefreshInputs(
 	logger := gklog.L(ctx)
 	var emptyAssessment assessmentSnapshot
 	missing := verdictRefreshInputs{
-		assessment: emptyAssessment, verdict: emptyReview(), standingState: "", threads: nil, found: false, blockWithdrawn: false,
+		assessment: emptyAssessment, verdict: emptyReview(), standingReview: emptyReview(), standingState: "", threads: nil, found: false, blockWithdrawn: false,
 	}
 	if reviews == nil {
 		listed, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
@@ -326,6 +329,7 @@ func (service *Service) loadVerdictRefreshInputs(
 	return verdictRefreshInputs{
 		assessment:     assessment,
 		verdict:        verdict.review,
+		standingReview: githubapp.LatestDecisionReviewAtHead(reviews, service.botLogin, job.Head),
 		standingState:  latestBotVerdictState(reviews, service.botLogin),
 		threads:        threads,
 		found:          true,
@@ -333,8 +337,9 @@ func (service *Service) loadVerdictRefreshInputs(
 	}, nil
 }
 
-// refreshedVerdict is what one refresh computed from current thread state.
 type refreshedVerdict struct {
+	standingReview    githubapp.Review
+	fileAssessments   []domain.FileAssessment
 	currentApproval   bool
 	approvalWithheld  bool
 	decision          domain.ReviewDecision
@@ -436,7 +441,7 @@ func (service *Service) applyRefreshedVerdict(
 	summary := Summary{
 		FileAssessmentNote: "", Head: job.Head,
 		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
-		FileAssessments:            nil,
+		FileAssessments:            refreshed.fileAssessments,
 		FileAssessmentsDisplay:     service.reviewPolicy.FileAssessmentsDisplay(),
 		Decision:                   refreshed.decision,
 		DecisionReason:             refreshed.decisionReason,
@@ -471,7 +476,7 @@ func (service *Service) applyRefreshedVerdict(
 		Forced: false,
 	}
 	if !refreshed.mayPublish() && !refreshed.blockWithdrawn {
-		if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
+		if err := service.refreshUnchangedVerdict(ctx, job, refreshed, summary); err != nil {
 			return err
 		}
 	}
@@ -514,6 +519,13 @@ func (service *Service) applyRefreshedVerdict(
 	}
 	recordAssessment(ctx, disposition, &summary, nil, 0)
 	return nil
+}
+
+func (service *Service) refreshUnchangedVerdict(ctx context.Context, job domain.ReviewJob, refreshed refreshedVerdict, summary Summary) error {
+	if refreshed.decision == domain.ReviewDecisionRequestChanges && refreshed.standingReview.ID > 0 && refreshed.standingReview.CommitID == job.Head && refreshed.standingReview.State == reviewStateChangesRequested {
+		return service.updateStandingVerdict(ctx, job, refreshed.standingReview, summary)
+	}
+	return service.validateInlineVerdict(ctx, job, summary)
 }
 
 // submitRefreshedVerdict publishes a fresh verdict review at the reviewed head.
