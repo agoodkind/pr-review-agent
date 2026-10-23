@@ -82,8 +82,7 @@ func (operation *deployment) writeDeploymentToken(ctx context.Context, script st
 }
 
 func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot DeploymentSlot) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {
@@ -163,8 +162,7 @@ func (operation *deployment) beginDrain(ctx context.Context, slot DeploymentSlot
 }
 
 func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlot) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	status, err := operation.beginDrain(ctx, slot)

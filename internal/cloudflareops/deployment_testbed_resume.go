@@ -70,7 +70,7 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	if err != nil {
 		return result, err
 	}
-	publicStatus, gatewayRevision, err := operation.disableTestCandidatePublicRoute(ctx, operation.configuration.Slots[1], observation.handoff.Revision)
+	publicStatus, gatewayRevision, err := disableTestCandidatePublicRoute(ctx, operation, operation.configuration.Slots[1], observation.handoff.Revision)
 	if err != nil {
 		return result, err
 	}
@@ -94,7 +94,7 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	return result, WriteJSON(filepath.Join(operation.directory, "handoff-resume.json"), receipt)
 }
 
-func (operation *deployment) disableTestCandidatePublicRoute(ctx context.Context, slot DeploymentSlot, revision string) (int, string, error) {
+func disableTestCandidatePublicRoute(ctx context.Context, operation *deployment, slot DeploymentSlot, revision string) (int, string, error) {
 	body, err := json.Marshal(struct {
 		Enabled         bool `json:"enabled"`
 		PreviewsEnabled bool `json:"previews_enabled"`
@@ -114,12 +114,11 @@ func (operation *deployment) disableTestCandidatePublicRoute(ctx context.Context
 	if json.Unmarshal(response.Result, &state) != nil || state.Enabled == nil || state.PreviewsEnabled == nil || *state.Enabled || *state.PreviewsEnabled {
 		return 0, "", errors.New("test candidate public and preview routes did not match the disabled configuration")
 	}
-	return operation.waitTestCandidatePublicRouteDisabled(ctx, slot, revision)
+	return waitTestCandidatePublicRouteDisabled(ctx, operation, slot, revision)
 }
 
-func (operation *deployment) waitTestCandidatePublicRouteDisabled(ctx context.Context, slot DeploymentSlot, revision string) (int, string, error) {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+func waitTestCandidatePublicRouteDisabled(ctx context.Context, operation *deployment, slot DeploymentSlot, revision string) (int, string, error) {
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {

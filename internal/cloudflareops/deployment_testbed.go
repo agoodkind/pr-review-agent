@@ -378,8 +378,7 @@ func validateTestBaselineBindings(configuration wranglerConfiguration) error {
 }
 
 func (operation *deployment) waitTestGateway(ctx context.Context, revision string) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {

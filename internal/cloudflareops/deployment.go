@@ -344,8 +344,7 @@ func (operation *deployment) probe(ctx context.Context, origin, revision string)
 }
 
 func (operation *deployment) waitCandidate(ctx context.Context) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var lastError error

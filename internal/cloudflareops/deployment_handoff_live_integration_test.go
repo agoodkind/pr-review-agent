@@ -108,6 +108,7 @@ func nativeHandoffDeployment(t *testing.T) (*deployment, string) {
 		client: client,
 		configuration: DeploymentConfiguration{
 			GatewayOrigin: origin, CandidateTimeout: "2m", ProbeInterval: "100ms",
+			candidateTimeout: 2 * time.Minute, probeInterval: 100 * time.Millisecond,
 		},
 		healthClient: &http.Client{Timeout: time.Second},
 		directory:    t.TempDir(),

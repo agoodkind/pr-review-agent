@@ -190,8 +190,7 @@ func (operation *deployment) gatewayHandoffControl(ctx context.Context, action, 
 }
 
 func (operation *deployment) waitHandoffControl(ctx context.Context, action, revision string, complete bool) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var confirmed handoffControlStatus
