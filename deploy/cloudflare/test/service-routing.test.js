@@ -157,7 +157,7 @@ async function waitForHandoffRecoveryReceipt(signalFile, lifetime) {
   }
 }
 
-function runNativeHandoffTest(testName, logPath, environment, deploymentToken, signal) {
+function runNativeDeploymentTest(testName, logPath, environment, deploymentToken, signal) {
   return new Promise(function (resolve, reject) {
     execFile("go", ["test", "-tags=integration", "./internal/cloudflareops", "-run", "^" + testName + "$", "-count=1", "-v", "-timeout=150s"], {
       cwd: path.resolve(directory, "../.."), timeout: 180000, maxBuffer: 32768, encoding: "utf8", signal,
@@ -165,7 +165,7 @@ function runNativeHandoffTest(testName, logPath, environment, deploymentToken, s
     }, function (error, stdout, stderr) {
       const diagnosticOutput = (stdout + stderr).replaceAll(deploymentToken, "[redacted]");
       void writeFile(logPath, diagnosticOutput, { mode: 0o600 }).then(function () {
-        if (error) reject(new Error(`native handoff control regression failed: ${diagnosticOutput}`));
+        if (error) reject(new Error(`native deployment control regression failed: ${diagnosticOutput}`));
         else resolve();
       }, reject);
     });
@@ -177,7 +177,7 @@ async function assertHandoffConflictRetries(origin, revision, deploymentToken, e
   const lifetime = new AbortController();
   await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
   try {
-    await runNativeHandoffTest("TestGatewayHandoffConflictRetriesNative", path.join(evidence, "handoff-control-test.log"), {
+    await runNativeDeploymentTest("TestGatewayHandoffConflictRetriesNative", path.join(evidence, "handoff-control-test.log"), {
       PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
       PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
     }, deploymentToken, lifetime.signal);
@@ -192,9 +192,31 @@ async function assertHandoffReadinessRetries(origin, revision, deploymentToken, 
   const signalFile = path.join(evidence, logName + "-recovery-signal");
   const lifetime = new AbortController();
   await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
-  const completion = runNativeHandoffTest("TestGatewayHandoffReadinessRetriesNative", path.join(evidence, logName + ".log"), {
+  const completion = runNativeDeploymentTest("TestGatewayHandoffReadinessRetriesNative", path.join(evidence, logName + ".log"), {
     PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
     PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile, PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
+  }, deploymentToken, lifetime.signal);
+  const restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
+  try {
+    await Promise.all([completion, restoration]);
+  } finally {
+    lifetime.abort();
+    await Promise.allSettled([completion, restoration]);
+    await unlink(tokenFile);
+    await rm(signalFile, { force: true });
+    await rm(signalFile + ".tmp", { force: true });
+  }
+}
+
+async function assertCandidateControlRetries(origin, revision, name, deploymentToken, evidence, restore) {
+  const tokenFile = path.join(evidence, "candidate-control-test-token");
+  const signalFile = path.join(evidence, "candidate-control-recovery-signal");
+  const lifetime = new AbortController();
+  await writeFile(tokenFile, deploymentToken, { mode: 0o600, flag: "wx" });
+  const completion = runNativeDeploymentTest("TestCandidateDeploymentControlRetriesNative", path.join(evidence, "candidate-control-test.log"), {
+    PRAGENT_HANDOFF_TEST_ORIGIN: origin, PRAGENT_HANDOFF_TEST_REVISION: revision,
+    PRAGENT_CANDIDATE_TEST_NAME: name, PRAGENT_HANDOFF_TEST_TOKEN_FILE: tokenFile,
+    PRAGENT_HANDOFF_TEST_RECOVERY_SIGNAL_FILE: signalFile,
   }, deploymentToken, lifetime.signal);
   const restoration = waitForHandoffRecoveryReceipt(signalFile, lifetime.signal).then(restore);
   try {
@@ -322,6 +344,34 @@ test("native service bindings use the production review container and restrict c
         assert.deepEqual(await control("restart"), { container_running: false });
         await assertHealthy(origin, expectedRevision);
         assert.deepEqual(await control("status"), open);
+        const runtimePath = path.join(fixture, "runtime.json");
+        let runtimeRestored = false;
+        async function restoreRuntime() {
+          await writeGatewayConfiguration(runtimePath, runtime);
+          runtimeRestored = true;
+        }
+        try {
+          await writeGatewayConfiguration(runtimePath, { ...runtime, PORT: "0" });
+          const deadline = Date.now() + 120000;
+          let unavailable = false;
+          while (Date.now() < deadline) {
+            const response = await drainResponse("status");
+            await response.body?.cancel();
+            if (response.status === 503) {
+              unavailable = true;
+              break;
+            }
+            assert.equal(response.status, 200);
+            await delay(100);
+          }
+          assert.equal(unavailable, true, "invalid configuration did not produce actual candidate control HTTP 503");
+          await assertCandidateControlRetries(origin, expectedRevision, service.name, deploymentToken, evidence, restoreRuntime);
+          await assertHealthy(origin, expectedRevision);
+          assert.deepEqual(await control("status"), open);
+          proof.candidateControlRetried = true;
+        } finally {
+          if (!runtimeRestored) await restoreRuntime();
+        }
       }
       const body = "{}";
       const signature = "sha256=" + createHmac("sha256", signingMaterial).update(body).digest("hex");

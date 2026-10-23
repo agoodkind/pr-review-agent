@@ -18,6 +18,7 @@ import (
 var (
 	errDeploymentCredentialInactive = errors.New("candidate deployment credential is not active (HTTP 401)")
 	errDeploymentControlUnpublished = errors.New("candidate deployment control is not published (HTTP 404)")
+	errDeploymentControlUnavailable = errors.New("candidate deployment control is unavailable (HTTP 503)")
 )
 
 type drainStatusWire struct {
@@ -85,20 +86,26 @@ func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot 
 	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	var lastError error
 	for {
 		_, err := operation.drainRequest(ctx, slot.Origin, "status")
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errDeploymentControlUnpublished) {
+		if ctx.Err() != nil {
+			slog.WarnContext(ctx, "Candidate deployment control availability exceeded its elapsed limit")
+			return fmt.Errorf("candidate deployment control did not become available before its timeout: %w", errors.Join(lastError, err, ctx.Err()))
+		}
+		if !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errDeploymentControlUnpublished) && !errors.Is(err, errDeploymentControlUnavailable) {
 			return err
 		}
+		lastError = err
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			slog.WarnContext(ctx, "Candidate deployment control availability exceeded its elapsed limit")
-			return fmt.Errorf("candidate deployment control did not become available before its timeout: %w", err)
+			return fmt.Errorf("candidate deployment control did not become available before its timeout: %w", errors.Join(lastError, ctx.Err()))
 		case <-timer.C:
 		}
 	}
@@ -129,6 +136,9 @@ func (operation *deployment) drainRequest(ctx context.Context, origin, action st
 	}
 	if response.StatusCode == http.StatusNotFound {
 		return nil, errDeploymentControlUnpublished
+	}
+	if response.StatusCode == http.StatusServiceUnavailable {
+		return nil, errDeploymentControlUnavailable
 	}
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("candidate drain returned HTTP %d", response.StatusCode)
