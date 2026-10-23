@@ -188,7 +188,6 @@ async function assertHealthy(origin, expectedRevision, failureEvidence) {
 test("native service bindings use the production review container and restrict candidate HTTP", {
   skip: process.env.PRAGENT_SERVICE_TEST_IMAGE || process.env.PRAGENT_SERVICE_TEST_BINARY ? false : "requires Docker and PRAGENT_SERVICE_TEST_IMAGE or PRAGENT_SERVICE_TEST_BINARY containing the production Linux service",
 }, async function (context) {
-  assert.equal(process.env.PRAGENT_SERVICE_TEST_COMPOSE, "1", "run make test-service to isolate Docker resources and clean up the Compose project");
   const expectedRevision = process.env.PRAGENT_SERVICE_TEST_REVISION ?? process.env.GITHUB_SHA;
   assert.match(expectedRevision ?? "", /^[0-9a-f]{40}$/, "set PRAGENT_SERVICE_TEST_REVISION to the actual binary source revision");
   const phases = ["candidate", "service", "legacy", "idle", "legacy-handoff", "service-handoff"];

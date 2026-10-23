@@ -26,7 +26,6 @@ services:
         condition: service_healthy
     environment:
       DOCKER_HOST: unix:///var/run/docker.sock
-      PRAGENT_SERVICE_TEST_COMPOSE: "1"
       PRAGENT_SERVICE_TEST_BINARY: ${PRAGENT_COMPOSE_BINARY:-}
       PRAGENT_SERVICE_TEST_IMAGE: ${PRAGENT_SERVICE_TEST_IMAGE:-}
       PRAGENT_COMPOSE_IMAGE_ID: ${PRAGENT_COMPOSE_IMAGE_ID:-}
