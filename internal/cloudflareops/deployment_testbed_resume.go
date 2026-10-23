@@ -62,7 +62,7 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	cancel()
 	observation := <-observations
 	if observation.err != nil {
-		return result, observation.err
+		return result, errors.Join(deploymentErr, observation.err)
 	}
 	if deploymentErr == nil || !errors.Is(interrupted.Err(), context.Canceled) || result.Promoted {
 		return result, errors.New("test deployment did not stop after its persisted handoff")
