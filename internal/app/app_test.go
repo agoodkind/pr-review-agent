@@ -1048,13 +1048,14 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
+	const explanation = "Validate the webhook payload before enqueue."
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{defectiveReviewContent(domain.Finding{
 			Path:       testFindingPath,
 			StartLine:  3,
 			EndLine:    3,
 			Title:      "Missing validation",
-			Body:       "Validate the webhook payload before enqueue.",
+			Body:       explanation,
 			Importance: testMinimumImportance,
 		})},
 	})
@@ -1087,7 +1088,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	if strings.Contains(visible, testFindingPath) {
 		t.Fatalf("the visible verdict duplicates the inline finding location: %q", comment)
 	}
-	assertVerdictBody(t, fixture, review["body"], testDefectiveHead, true)
+	assertVerdictBody(t, fixture, review["body"], testDefectiveHead, true, explanation)
 }
 
 func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
@@ -1514,6 +1515,7 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 // because nothing in this pipeline threads a reply onto another comment.
 func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T) {
 	withIntegrationLock(t)
+	const explanation = "The new fallback still breaks core behavior."
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{
 			defectiveReviewContent(domain.Finding{
@@ -1529,7 +1531,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 				StartLine:  4,
 				EndLine:    4,
 				Title:      "Unsafe fallback",
-				Body:       "The new fallback still breaks core behavior.",
+				Body:       explanation,
 				Importance: testMinimumImportance,
 			}),
 		},
@@ -1570,7 +1572,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	if fixture.githubState.listedFilePages() == 0 {
 		t.Fatal("full file list page fetches = 0, want the current pull request")
 	}
-	assertVerdictBody(t, fixture, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true)
+	assertVerdictBody(t, fixture, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true, explanation)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -3390,8 +3392,8 @@ var summaryProse = []string{
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks the summary permalink and hidden recovery data.
-func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string, blocking bool) {
+// assertVerdictBody checks the actual blocking explanation and hidden recovery data.
+func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string, blocking bool, explanation string) {
 	t.Helper()
 	if !blocking {
 		if value != nil && value != "" {
@@ -3416,15 +3418,32 @@ func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string
 	if commentCount != 1 || commentID == nil {
 		t.Fatalf("The native review requires one canonical summary, but the fixture contains %d comments.", commentCount)
 	}
-	expectedURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%v", testRepoOwner, testRepoName, testPRNumber, commentID)
-	link, checkpoint, found := strings.Cut(body, "\n\n")
-	if !found || !strings.Contains(link, "]("+expectedURL+")") {
-		t.Fatalf("The native review does not link directly to summary %s: %q", expectedURL, body)
+	visible, checkpoint, found := strings.Cut(body, "\n\n")
+	if !found || visible != explanation {
+		t.Fatalf("The native review contains %q instead of the expected blocking sentence %q.", visible, explanation)
+	}
+	currentInlineCount := 0
+	for _, comment := range fixture.githubState.streamedCommentBodies() {
+		inlineBody, _ := comment["body"].(string)
+		finding, marked := marker.FindFinding(inlineBody)
+		if !marked || finding.Head != domain.HeadSHA(head) {
+			continue
+		}
+		currentInlineCount++
+		if !strings.Contains(inlineBody, explanation) {
+			t.Fatalf("The inline finding does not preserve its blocking explanation: %q.", inlineBody)
+		}
+	}
+	if currentInlineCount != 1 {
+		t.Fatalf("The current head must retain exactly one inline finding, but it has %d.", currentInlineCount)
+	}
+	if !strings.Contains(checkpoint, "<!-- pr-review-agent:metadata:v1 ") {
+		t.Fatal("The native rejection omitted its hidden metadata recovery record.")
 	}
 	for _, line := range strings.Split(checkpoint, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && (!strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->")) {
-			t.Fatalf("The native review repeats visible prose after its summary link: %q", line)
+			t.Fatalf("The native review repeats visible prose after its blocking explanation: %q", line)
 		}
 	}
 	// The marker records the decision because a dismissal erases GitHub's own
