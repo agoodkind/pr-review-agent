@@ -65,7 +65,7 @@
     "relationship.input": "Assess the relationship between these actual source fragments from {{.Path}}. Check shared transactions, ownership, error handling, and cleanup using only the supplied source. Each fragment also receives its own ordinary review. Do not infer inspection of other file regions from this joint request. Report only concrete defects anchored to the supplied changed rows.\n",
     "relationship.fragment": "File: {{.Path}}\nDiff fragment:\n{{.Input}}",
     "relationship.gap": "File: {{.Path}}\n[coverage incomplete: {{.Relationship}}; at least {{.Total}} required joint assessments remain]",
-    "native.summary_link": "[Review summary]({{.SummaryURL}})",
+    "native.summary_link": "The [review summary]({{.SummaryURL}}) explains this decision.",
     "inline.footer": "<sub><i>Already addressed this review? Please respond and resolve!</i></sub>",
     "failure.class.other": "an unexpected error",
     "failure.class.deadline": "a request timeout",
