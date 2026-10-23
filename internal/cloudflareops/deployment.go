@@ -17,6 +17,14 @@ import (
 
 var errCandidateReadiness = errors.New("candidate did not become healthy before promotion")
 
+type readinessHTTPError struct {
+	StatusCode int
+}
+
+func (err *readinessHTTPError) Error() string {
+	return fmt.Sprintf("health returned HTTP %d", err.StatusCode)
+}
+
 // DeploymentOptions selects public templates and file-backed deployment credentials.
 type DeploymentOptions struct {
 	Wrangler         string
@@ -229,7 +237,7 @@ func (operation *deployment) execute(ctx context.Context) error {
 	if err := operation.registerDeploymentToken(ctx, operation.slot); err != nil {
 		return err
 	}
-	if _, err := operation.drainRequest(ctx, operation.slot.Origin, "restart"); err != nil {
+	if _, err := operation.waitDrainControl(ctx, operation.slot.Origin, "restart"); err != nil {
 		return err
 	}
 	if err := operation.waitCandidate(ctx); err != nil {
@@ -327,7 +335,7 @@ func (operation *deployment) probe(ctx context.Context, origin, revision string)
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
 	actual := response.Header.Get("X-Pr-Agent-Revision")
 	if response.StatusCode != http.StatusOK {
-		return actual, fmt.Errorf("health returned HTTP %d", response.StatusCode)
+		return actual, &readinessHTTPError{StatusCode: response.StatusCode}
 	}
 	if revision != "" && actual != revision {
 		return actual, fmt.Errorf("health revision %q does not match expected revision %s", actual, revision)
@@ -336,8 +344,7 @@ func (operation *deployment) probe(ctx context.Context, origin, revision string)
 }
 
 func (operation *deployment) waitCandidate(ctx context.Context) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var lastError error

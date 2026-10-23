@@ -89,9 +89,6 @@ func (operation *deployment) startHandoff(ctx context.Context) error {
 
 func (operation *deployment) resumeHandoff(ctx context.Context) error {
 	slog.InfoContext(ctx, "Persisted handoff resume started", "candidate", operation.handoff.Service, "revision", operation.handoff.Revision)
-	if _, err := operation.probe(ctx, operation.slot.Origin, operation.handoff.Revision); err != nil {
-		return err
-	}
 	if err := operation.writeDeploymentToken(ctx, operation.name); err != nil {
 		return err
 	}
@@ -193,21 +190,17 @@ func (operation *deployment) gatewayHandoffControl(ctx context.Context, action, 
 }
 
 func (operation *deployment) waitHandoffControl(ctx context.Context, action, revision string, complete bool) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var confirmed handoffControlStatus
 	var lastError error
 	for {
-		if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, ""); err != nil {
-			if ctx.Err() != nil {
-				slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
-				return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w", action, errors.Join(lastError, ctx.Err(), err))
-			}
-			return err
+		_, err := operation.probe(ctx, operation.configuration.GatewayOrigin, "")
+		var status handoffControlStatus
+		if err == nil {
+			status, err = operation.gatewayHandoffControl(ctx, action, revision)
 		}
-		status, err := operation.gatewayHandoffControl(ctx, action, revision)
 		if err == nil && (!complete || *status.Complete) {
 			confirmed = status
 			break
@@ -216,7 +209,9 @@ func (operation *deployment) waitHandoffControl(ctx context.Context, action, rev
 			slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
 			return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w", action, errors.Join(lastError, err, ctx.Err()))
 		}
-		if err != nil && !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errHandoffControlUnavailable) {
+		var readinessError *readinessHTTPError
+		retryableReadiness := errors.As(err, &readinessError) && readinessError.StatusCode == http.StatusServiceUnavailable
+		if err != nil && !retryableReadiness && !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errHandoffControlUnavailable) {
 			return err
 		}
 		lastError = err

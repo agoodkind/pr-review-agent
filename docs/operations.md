@@ -189,7 +189,7 @@ The deployment command starts an independent candidate application while the gat
    The wrapper writes the credential to a temporary file with mode `0600` and invokes `pragent-ops deploy`. The command verifies gateway control support before starting the handoff. The gateway retains the selected service binding during quiescence and enables candidate review work only after the old process stops. Final promotion selects the candidate and clears the handoff in one gateway upload. Every gateway upload uses `--containers-rollout=none` to preserve the existing container application.
 4. Require a successful result with `promoted:true`. Retain the private evidence directory from the command output. The directory contains stage logs and the selected Worker identifiers. Release jobs use the same command and serialize Cloudflare deployments.
 
-Run the same deployment command to resume an interrupted handoff. The command reuses the recorded candidate and revision without replacing its image. Durable queue retries can also finish quiescence and resume candidate review work. When a command requests a different revision, it first finishes the existing handoff and reports that the requested release remains pending. Run the command again to deploy that requested release.
+Run the same deployment command to resume an interrupted handoff. The command reuses the recorded candidate and revision without replacing its image. Initial candidate warmup and inactive-slot draining use each slot's public origin. Resuming a recorded handoff checks readiness through the gateway's saved candidate service binding. Durable queue retries can also finish quiescence and resume candidate review work. When a command requests a different revision, it first finishes the existing handoff and reports that the requested release remains pending. Run the command again to deploy that requested release.
 
 ## Change review rules
 
@@ -308,7 +308,7 @@ The Worker stores each signed GitHub delivery before forwarding the delivery to 
 3. Confirm that a newly admitted delivery produces a completed `PR-Agent Review` check.
 4. Inspect Worker logs for `webhook review overdue` if a check remains in progress after the container has recovered. Match the delivery identifier with the GitHub webhook.
 
-Use the [isolated deployment harness](../deploy/cloudflare/scripts/test-deployment.mjs) to test candidate rejection and promotion without production traffic. The harness publishes separate test images with isolated runtime configuration, creates generated test Workers, records continuous availability samples and application images, and cleans up the registered Cloudflare resources. Each source archive requires a valid packaging attestation for its exact commit.
+Use the [isolated deployment harness](../deploy/cloudflare/scripts/test-deployment.mjs) to test candidate rejection and promotion without production traffic. Run the harness from a clean checkout. The harness publishes separate test images with isolated runtime configuration, creates generated test Workers, records continuous availability samples and application images, and cleans up the registered Cloudflare resources. Each source archive requires a valid packaging attestation for its exact commit. The result records the controller's full source revision from its build metadata.
 
 ```bash
 node deploy/cloudflare/scripts/test-deployment.mjs \

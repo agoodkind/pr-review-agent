@@ -18,6 +18,7 @@ import (
 var (
 	errDeploymentCredentialInactive = errors.New("candidate deployment credential is not active (HTTP 401)")
 	errDeploymentControlUnpublished = errors.New("candidate deployment control is not published (HTTP 404)")
+	errDeploymentControlUnavailable = errors.New("candidate deployment control is unavailable (HTTP 503)")
 )
 
 type drainStatusWire struct {
@@ -54,7 +55,8 @@ func (operation *deployment) registerDeploymentToken(ctx context.Context, slot D
 	if err := operation.writeDeploymentToken(ctx, slot.Name); err != nil {
 		return err
 	}
-	return operation.waitDeploymentCredential(ctx, slot)
+	_, err := operation.waitDrainControl(ctx, slot.Origin, "status")
+	return err
 }
 
 func (operation *deployment) writeDeploymentToken(ctx context.Context, script string) error {
@@ -81,25 +83,30 @@ func (operation *deployment) writeDeploymentToken(ctx context.Context, script st
 	return nil
 }
 
-func (operation *deployment) waitDeploymentCredential(ctx context.Context, slot DeploymentSlot) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+func (operation *deployment) waitDrainControl(ctx context.Context, origin, action string) (drainState, error) {
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	var lastError error
 	for {
-		_, err := operation.drainRequest(ctx, slot.Origin, "status")
+		state, err := operation.drainRequest(ctx, origin, action)
 		if err == nil {
-			return nil
+			return state, nil
 		}
-		if !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errDeploymentControlUnpublished) {
-			return err
+		if ctx.Err() != nil {
+			slog.WarnContext(ctx, "Candidate drain control exceeded its elapsed limit", "action", action)
+			return nil, fmt.Errorf("candidate drain %s did not become available before its timeout: %w", action, errors.Join(lastError, err, context.Cause(ctx)))
 		}
+		if !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errDeploymentControlUnpublished) && !errors.Is(err, errDeploymentControlUnavailable) {
+			return nil, fmt.Errorf("candidate drain %s failed: %w", action, err)
+		}
+		lastError = err
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			slog.WarnContext(ctx, "Candidate deployment control availability exceeded its elapsed limit")
-			return fmt.Errorf("candidate deployment control did not become available before its timeout: %w", err)
+			slog.WarnContext(ctx, "Candidate drain control exceeded its elapsed limit", "action", action)
+			return nil, fmt.Errorf("candidate drain %s did not become available before its timeout: %w", action, errors.Join(lastError, context.Cause(ctx)))
 		case <-timer.C:
 		}
 	}
@@ -131,6 +138,9 @@ func (operation *deployment) drainRequest(ctx context.Context, origin, action st
 	if response.StatusCode == http.StatusNotFound {
 		return nil, errDeploymentControlUnpublished
 	}
+	if response.StatusCode == http.StatusServiceUnavailable {
+		return nil, errDeploymentControlUnavailable
+	}
 	if response.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("candidate drain returned HTTP %d", response.StatusCode)
 	}
@@ -159,12 +169,11 @@ func (operation *deployment) beginDrain(ctx context.Context, slot DeploymentSlot
 	if err := operation.registerDeploymentToken(ctx, slot); err != nil {
 		return nil, err
 	}
-	return operation.drainRequest(ctx, slot.Origin, "begin")
+	return operation.waitDrainControl(ctx, slot.Origin, "begin")
 }
 
 func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlot) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	status, err := operation.beginDrain(ctx, slot)
@@ -185,7 +194,7 @@ func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlo
 		if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, operation.activeRevision); err != nil {
 			return err
 		}
-		status, err = operation.drainRequest(ctx, slot.Origin, "status")
+		status, err = operation.waitDrainControl(ctx, slot.Origin, "status")
 		if err != nil {
 			return err
 		}

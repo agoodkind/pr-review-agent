@@ -32,6 +32,8 @@ type DeploymentConfiguration struct {
 	Slots            []DeploymentSlot `json:"slots"`
 	CandidateTimeout string           `json:"candidate_timeout"`
 	ProbeInterval    string           `json:"probe_interval"`
+	candidateTimeout time.Duration
+	probeInterval    time.Duration
 }
 
 type wranglerConfiguration map[string]json.RawMessage
@@ -76,6 +78,7 @@ func readDeploymentConfiguration(path string) (DeploymentConfiguration, error) {
 	if err != nil || interval <= 0 || interval >= timeout {
 		return configuration, errors.New("probe_interval must be positive and shorter than candidate_timeout")
 	}
+	configuration.candidateTimeout, configuration.probeInterval = timeout, interval
 	return configuration, nil
 }
 

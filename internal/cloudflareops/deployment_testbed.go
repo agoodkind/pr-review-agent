@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/clock"
+	"goodkind.io/pr-review-agent/internal/version"
 )
 
 var deploymentTestNamePattern = regexp.MustCompile(`^pragent-deploy-test-[a-f0-9]{8}-gateway$`)
@@ -60,6 +61,7 @@ type testBindingMetadata struct {
 
 // DeploymentTestResult records actual Cloudflare resources and readiness evidence.
 type DeploymentTestResult struct {
+	ControllerRevision        string                 `json:"controller_revision"`
 	Gateway                   string                 `json:"gateway"`
 	Slots                     []DeploymentSlot       `json:"slots"`
 	Directory                 string                 `json:"directory"`
@@ -102,6 +104,10 @@ func (result DeploymentTestResult) MarshalJSON() ([]byte, error) {
 // TestDeployment runs the real bootstrap, rejected-candidate, and promotion operations.
 func TestDeployment(ctx context.Context, options DeploymentTestOptions) (result DeploymentTestResult, returnErr error) {
 	slog.InfoContext(ctx, "Isolated deployment test started")
+	result.ControllerRevision = version.SourceRevision()
+	if !revisionPattern.MatchString(result.ControllerRevision) {
+		return result, errors.New("deployment-test requires a clean full source revision; run go run -buildvcs=true from a clean checkout")
+	}
 	operation, err := prepareDeployment(options.Deployment)
 	if err != nil {
 		return result, err
@@ -121,12 +127,16 @@ func TestDeployment(ctx context.Context, options DeploymentTestOptions) (result 
 	operation.client = credentials.Client
 	cleanupAllowed := false
 	defer func() {
+		var diagnosticErr error
+		if returnErr != nil && cleanupAllowed {
+			diagnosticErr = captureTestFailureReadiness(ctx, operation, returnErr)
+		}
 		var cleanupErr error
 		if cleanupAllowed {
 			cleanupErr = operation.cleanupTestbed(context.WithoutCancel(ctx))
 		}
 		result.CleanupComplete = cleanupErr == nil
-		returnErr = errors.Join(returnErr, cleanupErr, credentials.Close(ctx))
+		returnErr = errors.Join(returnErr, diagnosticErr, cleanupErr, credentials.Close(ctx))
 		result.CredentialRevoked = credentials.Revoked
 		returnErr = errors.Join(returnErr, WriteJSON(filepath.Join(operation.directory, "result.json"), result))
 	}()
@@ -210,7 +220,7 @@ func (operation *deployment) runTestDeploymentCases(ctx context.Context, options
 
 func (operation *deployment) testSecondSlot(ctx context.Context, options DeploymentOptions, result *DeploymentTestResult) error {
 	options.Directory = filepath.Join(operation.directory, "second-candidate")
-	observed, err := operation.observeTestDeployment(ctx, options, []string{options.Revision}, "second-promotion-availability.ndjson", operation.deployWithInterruptedHandoff)
+	observed, err := operation.observeTestDeployment(ctx, options, []string{options.Revision}, "second-promotion-availability.ndjson", Deploy)
 	result.SecondPromotionSamples = observed.samples
 	if err != nil {
 		return err
@@ -220,7 +230,7 @@ func (operation *deployment) testSecondSlot(ctx context.Context, options Deploym
 	}
 	promotion := observed.deployment
 	if !promotion.Promoted {
-		return errors.New("resumed second candidate did not promote")
+		return errors.New("second candidate did not promote")
 	}
 	if promotion.Candidate != operation.configuration.Slots[1].Name {
 		return errors.New("second deployment did not choose the independent second slot")
@@ -374,8 +384,7 @@ func validateTestBaselineBindings(configuration wranglerConfiguration) error {
 }
 
 func (operation *deployment) waitTestGateway(ctx context.Context, revision string) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {
@@ -582,7 +591,7 @@ func (operation *deployment) testRejectedCandidate(ctx context.Context, options 
 }
 
 func (operation *deployment) testSuccessfulCandidate(ctx context.Context, options DeploymentOptions, revisions []string, filename string) (DeploymentResult, testAvailabilityCounts, error) {
-	observed, err := operation.observeTestDeployment(ctx, options, revisions, filename, Deploy)
+	observed, err := operation.observeTestDeployment(ctx, options, revisions, filename, operation.deployWithInterruptedHandoff)
 	if err != nil {
 		return observed.deployment, observed.samples, err
 	}

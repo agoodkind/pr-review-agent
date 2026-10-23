@@ -12,8 +12,8 @@ import { prepareServiceTestbed } from "./service-testbed.mjs";
 const execute = promisify(execFile);
 const sourceDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = path.resolve(sourceDirectory, "../..");
-const workerChanges = await execute("git", ["status", "--porcelain", "--", "deploy/cloudflare/worker", "deploy/cloudflare/service"], { cwd: repository });
-if (workerChanges.stdout.trim() !== "") throw new Error("Commit Worker source changes before running the isolated deployment proof");
+const sourceChanges = await execute("git", ["status", "--porcelain"], { cwd: repository });
+if (sourceChanges.stdout.trim() !== "") throw new Error("Commit source changes before running the isolated deployment proof");
 const { values } = parseArgs({ options: {
   "account-token-file": { type: "string" },
   "baseline-run": { type: "string" }, "baseline-revision": { type: "string" },
@@ -51,7 +51,7 @@ const gatewayOrigin = `https://${gatewayName}.${workersDomain}`;
 const sourceCommit = (await execute("git", ["rev-parse", "HEAD"], { cwd: repository })).stdout.trim();
 await writeJSON(path.join(directory, "resources.json"), { prefix, account: sourceGateway.account_id,
   gateway: gatewayName, slots: slotNames, gateway_origin: gatewayOrigin,
-  baseline_worker_revision: values["baseline-worker-revision"], candidate_worker_revision: sourceCommit,
+  baseline_worker_revision: values["baseline-worker-revision"], candidate_worker_revision: sourceCommit, controller_revision: sourceCommit,
   container_sdk: sourcePackage.dependencies["@cloudflare/containers"] });
 
 async function writeJSON(filename, value) {
@@ -157,7 +157,12 @@ await writeJSON(servicePath, fixture.service);
 await writeJSON(deploymentPath, { gateway_origin: gatewayOrigin,
   slots: slotNames.map(function (name) { return { name, origin: `https://${name}.${workersDomain}` }; }),
   candidate_timeout: values["candidate-timeout"], probe_interval: "2s" });
-await run("cloudflare-test", "go", ["run", "./cmd/pragent-ops", "deployment-test", "--wrangler", gatewayPath,
+const controllerChanges = await execute("git", ["status", "--porcelain"], { cwd: repository });
+const controllerCommit = (await execute("git", ["rev-parse", "HEAD"], { cwd: repository })).stdout.trim();
+if (controllerChanges.stdout.trim() !== "" || controllerCommit !== sourceCommit) {
+  throw new Error("Source changed while preparing the isolated deployment proof");
+}
+await run("cloudflare-test", "go", ["run", "-buildvcs=true", "./cmd/pragent-ops", "deployment-test", "--wrangler", gatewayPath,
   "--baseline-wrangler", baselineGatewayPath,
   "--service-wrangler", servicePath, "--deployment", deploymentPath, "--baseline-image", baselineImage,
   "--baseline-revision", baseline.revision, "--image", candidateImage, "--revision", candidate.revision,
