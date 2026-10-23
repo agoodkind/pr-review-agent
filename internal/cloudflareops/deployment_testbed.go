@@ -220,7 +220,7 @@ func (operation *deployment) runTestDeploymentCases(ctx context.Context, options
 
 func (operation *deployment) testSecondSlot(ctx context.Context, options DeploymentOptions, result *DeploymentTestResult) error {
 	options.Directory = filepath.Join(operation.directory, "second-candidate")
-	observed, err := operation.observeTestDeployment(ctx, options, []string{options.Revision}, "second-promotion-availability.ndjson", operation.deployWithInterruptedHandoff)
+	observed, err := operation.observeTestDeployment(ctx, options, []string{options.Revision}, "second-promotion-availability.ndjson", Deploy)
 	result.SecondPromotionSamples = observed.samples
 	if err != nil {
 		return err
@@ -230,7 +230,7 @@ func (operation *deployment) testSecondSlot(ctx context.Context, options Deploym
 	}
 	promotion := observed.deployment
 	if !promotion.Promoted {
-		return errors.New("resumed second candidate did not promote")
+		return errors.New("second candidate did not promote")
 	}
 	if promotion.Candidate != operation.configuration.Slots[1].Name {
 		return errors.New("second deployment did not choose the independent second slot")
@@ -591,7 +591,7 @@ func (operation *deployment) testRejectedCandidate(ctx context.Context, options 
 }
 
 func (operation *deployment) testSuccessfulCandidate(ctx context.Context, options DeploymentOptions, revisions []string, filename string) (DeploymentResult, testAvailabilityCounts, error) {
-	observed, err := operation.observeTestDeployment(ctx, options, revisions, filename, Deploy)
+	observed, err := operation.observeTestDeployment(ctx, options, revisions, filename, operation.deployWithInterruptedHandoff)
 	if err != nil {
 		return observed.deployment, observed.samples, err
 	}

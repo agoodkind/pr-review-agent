@@ -42,6 +42,15 @@ func (receipt testHandoffResumeReceipt) MarshalJSON() ([]byte, error) {
 }
 
 func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, options DeploymentOptions) (DeploymentResult, error) {
+	settings, _, err := operation.client.workerSettings(ctx, operation.account, operation.name, false)
+	if err != nil {
+		return DeploymentResult{}, err
+	}
+	selection, err := settings.selection(operation.configuration)
+	if err != nil {
+		return DeploymentResult{}, err
+	}
+	candidate := inactiveSlot(operation.configuration, selection)
 	interrupted, cancel := context.WithCancel(ctx)
 	defer cancel()
 	observations := make(chan testHandoffObservation, 1)
@@ -67,18 +76,18 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	if deploymentErr == nil || !errors.Is(interrupted.Err(), context.Canceled) || result.Promoted {
 		return result, errors.New("test deployment did not stop after its persisted handoff")
 	}
-	if observation.handoff.Revision != options.Revision || observation.handoff.Service != operation.configuration.Slots[1].Name {
+	if observation.handoff.Revision != options.Revision || observation.handoff.Service != candidate.Name {
 		return result, errors.New("interrupted test handoff did not retain the expected candidate and revision")
 	}
 	_, before, err := operation.testWorkerVersionNamed(ctx, observation.handoff.Service)
 	if err != nil {
 		return result, err
 	}
-	configurationPath, readiness, err := prepareUnavailableTestResumeOrigin(ctx, operation, observation.handoff.Revision)
+	configurationPath, readiness, err := prepareUnavailableTestResumeOrigin(ctx, operation, observation.handoff.Service, observation.handoff.Revision)
 	if err != nil {
 		return result, err
 	}
-	settings, _, err := operation.client.workerSettings(ctx, operation.account, operation.name, false)
+	settings, _, err = operation.client.workerSettings(ctx, operation.account, operation.name, false)
 	if err != nil {
 		return result, err
 	}
@@ -111,7 +120,7 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	return result, WriteJSON(filepath.Join(operation.directory, "handoff-resume.json"), receipt)
 }
 
-func prepareUnavailableTestResumeOrigin(ctx context.Context, operation *deployment, revision string) (string, testHandoffResumeReceipt, error) {
+func prepareUnavailableTestResumeOrigin(ctx context.Context, operation *deployment, candidate, revision string) (string, testHandoffResumeReceipt, error) {
 	var readiness testHandoffResumeReceipt
 	gateway, err := url.Parse(operation.configuration.GatewayOrigin)
 	if err != nil {
@@ -129,6 +138,9 @@ func prepareUnavailableTestResumeOrigin(ctx context.Context, operation *deployme
 	if exists {
 		return "", readiness, errors.New("unavailable test origin already has a Worker; refusing to use it")
 	}
+	if err := operation.waitTestGateway(ctx, revision); err != nil {
+		return "", readiness, err
+	}
 	readiness.GatewayRevisionBeforeResume, err = operation.probe(ctx, operation.configuration.GatewayOrigin, revision)
 	if err != nil {
 		return "", readiness, err
@@ -145,7 +157,16 @@ func prepareUnavailableTestResumeOrigin(ctx context.Context, operation *deployme
 	readiness.ConfiguredPublicStatus = readinessError.StatusCode
 	configuration := operation.configuration
 	configuration.Slots = append([]DeploymentSlot(nil), operation.configuration.Slots...)
-	configuration.Slots[1].Origin = readiness.ConfiguredUnavailableOrigin
+	found := false
+	for index, slot := range configuration.Slots {
+		if slot.Name == candidate {
+			configuration.Slots[index].Origin = readiness.ConfiguredUnavailableOrigin
+			found = true
+		}
+	}
+	if !found {
+		return "", readiness, errors.New("recorded handoff candidate does not match a configured test slot")
+	}
 	data, err := json.Marshal(configuration)
 	if err != nil {
 		slog.WarnContext(ctx, "Isolated resume configuration encoding failed")
