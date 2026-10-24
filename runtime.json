@@ -56,9 +56,7 @@
       "model": "openrouter/free",
       "reasoning_effort": "low",
       "api_key_binding": "OPENROUTER_API_KEY",
-      "max_output_tokens": 4096,
-      "daily_token_limit": 100000,
-      "daily_token_types": ["input", "output"]
+      "max_output_tokens": 4096
     },
     {
       "id": "clyde",
