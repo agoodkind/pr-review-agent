@@ -95,6 +95,7 @@ const (
 
 // ProviderConfig contains one validated model endpoint and its credentials.
 type ProviderConfig struct {
+	UsagePeriod          *quota.Window
 	ID                   string
 	BaseURL              *url.URL
 	Model                string
@@ -119,6 +120,7 @@ type ProviderConfig struct {
 }
 
 type providerDefinition struct {
+	UsagePeriod                 *quota.Window      `json:"usage_period,omitempty"`
 	ID                          string             `json:"id"`
 	BaseURL                     string             `json:"base_url"`
 	Model                       string             `json:"model"`
@@ -190,6 +192,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			return nil, fmt.Errorf("%s requires both Cloudflare Access credentials", prefix)
 		}
 		configured[definition.ID] = ProviderConfig{
+			UsagePeriod:          definition.UsagePeriod,
 			ID:                   definition.ID,
 			BaseURL:              baseURL,
 			Model:                definition.Model,
@@ -255,6 +258,12 @@ func (definition providerDefinition) tokenWindow() quota.Window {
 }
 
 func validateProviderQuota(definition providerDefinition) error {
+	if definition.UsagePeriod != nil {
+		if err := definition.UsagePeriod.Validate(); err != nil {
+			slog.Warn("Invalid provider usage period", "provider_id", definition.ID, "err", err)
+			return fmt.Errorf("provider %q usage_period: %w", definition.ID, err)
+		}
+	}
 	for index, limit := range definition.TokenLimits {
 		if err := limit.Validate(); err != nil {
 			return fmt.Errorf("provider %q token_limits[%d]: %w", definition.ID, index, err)

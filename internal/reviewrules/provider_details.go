@@ -18,6 +18,8 @@ const (
 	ProviderTokensColumn ProviderDetailColumn = "tokens"
 	// ProviderCostColumn displays the estimate and its priced request count.
 	ProviderCostColumn ProviderDetailColumn = "cost"
+	// ProviderPeriodUsageColumn displays stored period usage and estimated cost.
+	ProviderPeriodUsageColumn ProviderDetailColumn = "period_usage"
 	// ProviderQuotaColumn displays the app quota before the last request.
 	ProviderQuotaColumn ProviderDetailColumn = "quota"
 	// ProviderResultColumn displays typed outcomes and fallback counts.
@@ -32,7 +34,7 @@ func validateProviderColumns(columns []ProviderDetailColumn) error {
 	for _, column := range columns {
 		switch column {
 		case ProviderIdentityColumn, ProviderModelsColumn, ProviderSettingsColumn, ProviderRequestsColumn,
-			ProviderTokensColumn, ProviderCostColumn, ProviderQuotaColumn, ProviderResultColumn:
+			ProviderTokensColumn, ProviderCostColumn, ProviderPeriodUsageColumn, ProviderQuotaColumn, ProviderResultColumn:
 		default:
 			return fmt.Errorf("unknown provider_details column %q", column)
 		}
