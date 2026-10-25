@@ -19,21 +19,21 @@ func completedHeadState(state marker.State, head domain.HeadSHA) bool {
 	return state.LastReviewed == head && len(state.Pending) == 0 && len(state.Unread) == 0
 }
 
-func preserveCompletedSummary(state marker.State, body string, progress Summary) bool {
-	if progress.FilesReviewed > 0 || progress.Chunks > 0 || len(progress.Models) > 0 ||
-		len(progress.Observed) > 0 || len(progress.Published) > 0 {
-		return false
-	}
-	head, found := marker.FindReview(body)
-	return found && head == progress.Head && completedHeadState(state, progress.Head)
+func preserveCheckpointSummary(state marker.State, body string) bool {
+	_, reviewed := marker.FindReview(body)
+	return reviewed || len(state.Completed) > 0 || strings.Contains(body, reviewDetailsStart) ||
+		strings.Contains(body, metadataRecordPrefix) || strings.Contains(body, fileAssessmentMarkerPrefix)
 }
 
 func renderMaintenanceFailure(body, title, detail string) string {
+	return renderCheckpointNotice(body, "### "+title+"\n\n"+detail)
+}
+
+func renderCheckpointNotice(body, notice string) string {
 	body = stripMaintenanceFailure(stripReassessmentNotice(stripDurableStateMarker(body)))
 	return body + "\n\n" + strings.Join([]string{
 		maintenanceFailureStart,
-		"### " + title,
-		detail,
+		notice,
 		maintenanceFailureEnd,
 	}, "\n\n")
 }

@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -199,9 +200,13 @@ func (service *Service) declineReview(
 	// The state is read and written in one call, so nothing this run keeps has
 	// to be carried in from an earlier read that a concurrent edit could have
 	// overtaken. It is the same reason the failure notice is written this way.
-	if err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, _ string) summaryCommentContent {
+	if err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, existingBody string) summaryCommentContent {
+		prose := RenderSkipBody(verdict.Reason)
+		if preserveCheckpointSummary(existing, existingBody) {
+			prose = renderCheckpointNotice(existingBody, strings.TrimPrefix(prose, "## Review\n\n"))
+		}
 		return summaryCommentContent{
-			Prose: RenderSkipBody(verdict.Reason),
+			Prose: prose,
 			State: marker.State{
 				PolicyRevision: existing.PolicyRevision,
 				// The baseline stays where it was. Advancing it to a head nobody
