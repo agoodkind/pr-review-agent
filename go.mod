@@ -2,6 +2,8 @@ module goodkind.io/pr-review-agent
 
 go 1.27.1
 
+toolchain go1.27.3
+
 require (
 	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/go-enry/go-enry/v2 v2.9.6
