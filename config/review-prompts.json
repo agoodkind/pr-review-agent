@@ -5,11 +5,43 @@
     "maximum_pairs": 40
   },
   "file_classification": {
-    "maximum_persisted_bytes": 12000,
+    "maximum_persisted_bytes": 48000,
+    "maximum_evidence_bytes": 12000,
+    "maximum_preview_bytes": 4000,
+    "maximum_direct_review_bytes": 80000,
+    "maximum_header_bytes": 1024,
+    "header_patterns": [
+      "(?i)\\A(?:#![^\\n]*\\n)?(?:[ \\t]*(?://|#|--|<!--)[^\\n]*\\n)*?[ \\t\\r\\n]*(?://|#|--|<!--)[ \\t]*(?:(?:This file (?:is|was)[ \\t]+)(?:automatically[ \\t]+)?)?(?:Code[ \\t]+)?Generated[^\\n]*do not edit",
+      "(?i)\\A(?:#![^\\n]*\\n)?(?:[ \\t]*(?://|#|--|<!--)[^\\n]*\\n)*?[ \\t\\r\\n]*(?://|#|--|<!--)[ \\t]*This file (?:is|was) (?:automatically )?generated\\b",
+      "(?is)\\A[ \\t\\r\\n]*/\\*[ \\t\\r\\n*]*(?:(?:This file (?:is|was)[ \\t]+)(?:automatically[ \\t]+)?)?(?:Code[ \\t]+)?Generated\\b(?:[^*]|\\*+[^*/])*?do not edit(?:[^*]|\\*+[^*/])*?\\*/"
+    ],
+    "uncertain_content_prefixes": ["$ANSIBLE_VAULT;", "-----BEGIN PGP MESSAGE-----", "age-encryption.org/v1"],
+    "review_overrides": [],
+    "trusted_detectors": [
+      {"detector": "linguist-generated", "kind": "generated", "reason": "Repository attributes identify generated output. Review the generation source and related changes."},
+      {"detector": "linguist-vendored", "kind": "dependency", "reason": "Repository attributes identify vendored dependencies. Review the dependency manifest and integration changes."},
+      {"detector": "generated", "kind": "generated", "reason": "The maintained generated-content detector identifies generated output. Review its source and generation changes."},
+      {"detector": "header", "kind": "generated", "reason": "The file header explicitly identifies generated output. Review its source and generation changes."},
+      {"detector": "vendor", "kind": "dependency", "reason": "The maintained vendor detector identifies dependency contents. Review the manifest and integration changes."},
+      {"detector": "binary", "kind": "binary", "reason": "Binary contents do not require ordinary source review under the configured scope. Review related source and asset changes."}
+    ],
+    "path_exclusions": [
+      {"pattern": "*-lock.json", "kind": "dependency", "reason": "The configured path identifies a dependency lockfile. Review the dependency manifest changes."},
+      {"pattern": "*.lock", "kind": "dependency", "reason": "The configured path identifies a dependency lockfile. Review the dependency manifest changes."},
+      {"pattern": "go.sum", "kind": "dependency", "reason": "The configured path identifies dependency integrity records. Review go.mod changes."},
+      {"pattern": "yarn.lock", "kind": "dependency", "reason": "The configured path identifies a dependency lockfile. Review the dependency manifest changes."},
+      {"pattern": "pnpm-lock.yaml", "kind": "dependency", "reason": "The configured path identifies a dependency lockfile. Review the dependency manifest changes."},
+      {"pattern": "*.min.js", "kind": "generated", "reason": "The configured path identifies minified output. Review the source and build changes."},
+      {"pattern": "*.map", "kind": "generated", "reason": "The configured path identifies a generated source map. Review the source and build changes."},
+      {"pattern": "*.pyc", "kind": "binary", "reason": "The configured path identifies compiled output. Review the source and build changes."},
+      {"pattern": "*.o", "kind": "binary", "reason": "The configured path identifies compiled output. Review the source and build changes."},
+      {"pattern": "*.class", "kind": "binary", "reason": "The configured path identifies compiled output. Review the source and build changes."},
+      {"pattern": "*.wasm", "kind": "binary", "reason": "The configured path identifies compiled output. Review the source and build changes."}
+    ],
     "maximum_reason_bytes": 512,
     "maximum_evidence_references": 8,
     "allowed_exclusions": ["generated", "encrypted", "binary", "dependency", "data", "external"],
-    "instructions": "Assess necessity from the actual change and supplied evidence. A category, extension, generated declaration, or size alone never permits exclusion. Generated executable behavior still requires review. Separate review of secret references and readable consumers from testing whether an opaque replacement credential decrypts or authenticates. Require decrypted-value or runtime validation only when a concrete changed rule depends on hidden content and readable evidence cannot establish that rule. When readable consumers establish the relevant behavior independently of hidden values, set content_review_requirement to unnecessary and exclude ciphertext interpretation without claiming that the credential value was validated. Keep inspect_related or gap when hidden values determine permissions, deletion rules, or another necessary conclusion. Reading encrypted bytes does not establish those conclusions. Use review only for properties that supplied readable content can establish. Binary visual updates require actual visual evidence or a gap. Review submodule gitlink pointers and parent integration only. Never assess nested upstream diffs. Cite supplied evidence IDs without quoting secrets or source in reasons. Assess content_review_requirement independently of whether a preview or an existing finding already establishes one defect. Use required when inspection of changed content is necessary, unnecessary only when supplied evidence establishes that inspection is unnecessary, and uncertain when evidence cannot settle the requirement. A justified exclusion completes that file's assessment. The author does not need to act on that exclusion. State the completed checks and supporting evidence neutrally. For review, inspect_related, or gap, identify the affected file, unresolved behavior, and specific next check. Limit requested follow-up to that missing assessment.",
+    "instructions": "Assess necessity from the actual change and supplied evidence. Apply configured trusted detectors and path exclusions before model classification. Exclude their generated output, dependency lockfiles, vendored dependencies, compiled files, and binary contents unless a configured review override requires direct inspection. Review the related handwritten source, schemas, dependency manifests, and generation changes. The effective linguist-generated=false attribute disables generated-content exclusions. Treat ordinary recognized handwritten source and configuration as required content review. Use contextual model classification for unknown languages, opaque content, and large unexcluded files. File size controls review division and never grants an exclusion. Separate review of secret references and readable consumers from testing whether an opaque replacement credential decrypts or authenticates. Require decrypted-value or runtime validation only when a concrete changed rule depends on hidden content and readable evidence cannot establish that rule. When readable consumers establish the relevant behavior independently of hidden values, set content_review_requirement to unnecessary and exclude ciphertext interpretation without claiming that the credential value was validated. Keep inspect_related or gap when hidden values determine permissions, deletion rules, or another necessary conclusion. Reading encrypted bytes does not establish those conclusions. Use review only for properties that supplied readable content can establish. A configured visual review override requires actual visual evidence or a specific gap. Review submodule gitlink pointers and parent integration only. Never assess nested upstream diffs. Cite supplied evidence IDs without quoting secrets or source in reasons. Assess content_review_requirement independently of whether a preview or an existing finding already establishes one defect. Use required when inspection of changed content is necessary, unnecessary only when supplied evidence establishes that inspection is unnecessary, and uncertain when evidence cannot settle the requirement. A justified exclusion completes that file's assessment. The author does not need to act on that exclusion. State the completed checks and supporting evidence neutrally. For review, inspect_related, or gap, identify the affected file, unresolved behavior, and specific next check. Limit requested follow-up to that missing assessment.",
     "path_instructions": {}
   },
   "file_assessments_display": "collapsed",
@@ -61,6 +93,8 @@
     "RESOURCE_EXHAUSTED"
   ],
   "templates": {
+    "classification.required": "Review changed source.",
+    "classification.file_evidence": "File identity: {{.Identity}}\nEvidence ID: {{.EvidenceID}}\nObserved status: {{.Status}}\nObserved content length: {{.ContentBytes}} bytes\nRepository attributes: {{.Attributes}}\n",
     "classification.system": "Determine whether inspection of the target file's changed content is necessary using the supplied change and evidence. Before requesting more evidence, identify the conclusion the review needs and the supplied dependency that requires the missing information. Use inspect_related or gap only for that demonstrated need. Do not infer a gap from hypothetical consumers, hypothetical hidden fields, or validation goals that the supplied evidence does not require. Classify the content, requirement, and review action independently. This task assesses scope and does not search for defects or produce findings. Return an empty findings array. Related files provide evidence rather than additional assessment targets. Do not claim that reading opaque bytes establishes hidden behavior. Follow these configured file assessment instructions:\n{{.Input}}\nApply this writing policy only to the assessment explanations, without auditing source prose or producing findings:\n{{.WritingPolicy}}\nUntrusted input policy: {{.UntrustedPolicy}}",
     "relationship.input": "Assess the relationship between these actual source fragments from {{.Path}}. Check shared transactions, ownership, error handling, and cleanup using only the supplied source. Each fragment also receives its own ordinary review. Do not infer inspection of other file regions from this joint request. Report only concrete defects anchored to the supplied changed rows.\n",
     "relationship.fragment": "File: {{.Path}}\nDiff fragment:\n{{.Input}}",

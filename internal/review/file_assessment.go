@@ -37,7 +37,7 @@ func assessmentDecisionReason(assessments []domain.FileAssessment) string {
 }
 
 func assessmentIdentity(file diff.FileContext, policy reviewrules.Policy) string {
-	digest := sha256.Sum256([]byte(policy.Fingerprint() + "\x00" + file.Path + "\x00" + file.Status + "\x00" + file.Patch + "\x00" + file.CurrentContent + "\x00" + string(file.Gap)))
+	digest := sha256.Sum256([]byte(policy.Fingerprint() + "\x00" + file.Path + "\x00" + file.Status + "\x00" + file.Patch + "\x00" + file.CurrentContent + "\x00" + string(file.Gap) + "\x00" + classificationAttributes(file)))
 	return hex.EncodeToString(digest[:])
 }
 
@@ -95,8 +95,14 @@ func validateFileAssessmentsDetailed(result domain.ReviewResult, shortfall struc
 	if len(validated) != len(paths) {
 		return validated, false, assessmentValidationFailure(AssessmentMissing, len(validated), len(paths))
 	}
-	if len(validated) > 0 && encodeFileAssessments(validated, policy.FileAssessmentMaximumBytes()) == "" {
-		payload, err := json.Marshal(validated)
+	completed := slices.Clone(validated)
+	for index := range completed {
+		if completed[index].Action == domain.FileActionReview {
+			completed[index].Reviewed = true
+		}
+	}
+	if len(completed) > 0 && encodeFileAssessments(completed, policy.FileAssessmentMaximumBytes()) == "" {
+		payload, err := json.Marshal(completed)
 		if err != nil {
 			return nil, false, assessmentValidationFailure(AssessmentContract, 0, 1)
 		}
@@ -167,11 +173,16 @@ func relatedEvidenceExists(reference string, files []diff.FileContext, policy re
 
 func (pass *chunkPass) fileAssessments() []domain.FileAssessment {
 	pass.mu.Lock()
-	defer pass.mu.Unlock()
 	assessments := slices.Clone(pass.decision.assessments)
 	for _, initial := range pass.work.FileAssessments {
 		if !slices.ContainsFunc(assessments, func(existing domain.FileAssessment) bool { return existing.Path == initial.Path }) {
 			assessments = append(assessments, initial)
+		}
+	}
+	pass.mu.Unlock()
+	for index := range assessments {
+		if assessments[index].Action == domain.FileActionReview && assessments[index].ContentReviewRequirement == domain.ContentReviewRequired {
+			assessments[index].Reviewed = pass.fileWasReviewed(assessments[index].Path)
 		}
 	}
 	return assessments
@@ -192,7 +203,7 @@ func (pass *chunkPass) seedFileAssessments(policy reviewrules.Policy) {
 	for _, model := range pass.work.AssessmentModels {
 		pass.models.add(model)
 	}
-	pass.requests += len(pass.work.FileAssessments)
+	pass.requests += pass.work.AssessmentRequests
 	pass.mu.Unlock()
 	var excluded []domain.FileAssessment
 	for _, assessment := range pass.work.FileAssessments {
@@ -256,7 +267,25 @@ func decodeFileAssessments(body string) []domain.FileAssessment {
 	return assessments
 }
 
-func assessmentPromptRow(file diff.FileContext, policy reviewrules.Policy) string {
-	return fmt.Sprintf("File identity: %s\nEvidence ID: %s\nObserved status: %s\nObserved content length: %d bytes\n",
-		assessmentIdentity(file, policy), assessmentEvidenceID(file, policy), escapeOmissionPromptText(file.Status, policy), len(file.CurrentContent))
+func assessmentPromptRow(file diff.FileContext, policy reviewrules.Policy) (string, error) {
+	var data reviewrules.PromptData
+	data.Identity = assessmentIdentity(file, policy)
+	data.EvidenceID = assessmentEvidenceID(file, policy)
+	data.Status = escapeOmissionPromptText(file.Status, policy)
+	data.ContentBytes = len(file.CurrentContent)
+	data.Attributes = escapeOmissionPromptText(truncateUTF8(classificationAttributes(file), policy.FileClassification().MaximumPreviewBytes), policy)
+	return renderPrompt(policy, "classification.file_evidence", data)
+}
+
+func classificationAttributes(file diff.FileContext) string {
+	keys := make([]string, 0, len(file.Attributes))
+	for key := range file.Attributes {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	var attributes strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&attributes, "%s=%s\n", key, file.Attributes[key])
+	}
+	return attributes.String()
 }

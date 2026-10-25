@@ -77,6 +77,11 @@ type FormattingLimits struct {
 
 // PromptData is the concrete interpolation contract for configured templates.
 type PromptData struct {
+	Identity          string
+	EvidenceID        string
+	Status            string
+	ContentBytes      int
+	Attributes        string
 	Path              string
 	Relationship      string
 	SummaryURL        string
@@ -157,7 +162,7 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 		compiled[name] = parsed
 	}
-	for _, name := range []string{"native.summary_link", "native.request_changes", "schema.file_assessment.reason", "coverage.classification_incomplete", "classification.system"} {
+	for _, name := range []string{"native.summary_link", "native.request_changes", "schema.file_assessment.reason", "coverage.classification_incomplete", "classification.system", "classification.required", "classification.file_evidence"} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
 		}

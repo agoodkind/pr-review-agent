@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/diff"
+	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
@@ -22,7 +23,7 @@ type FileContentClassifier interface {
 }
 
 // BuildFileAssessmentPrompt preserves supplied scope evidence within the actual provider budget.
-func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int) (string, error) {
+func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int, assessments ...[]domain.FileAssessment) (string, error) {
 	file, found := BuildFileIndex(files)[path]
 	if !found {
 		return "", errors.New("file assessment requires a supplied changed file")
@@ -35,7 +36,7 @@ func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, f
 		return "", err
 	}
 	instruction += "\n" + policy.FileClassificationPathInstructions(path) + "\n"
-	omissions, err := omissionPrompt(shortfall, files, maximumBytes, policy)
+	omissions, err := omissionPrompt(shortfall, files, maximumBytes, policy, assessments...)
 	if err != nil {
 		return "", err
 	}
@@ -50,9 +51,9 @@ func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, f
 }
 
 // AssessFileContent assesses one unread file against the supplied parent pull request.
-func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int) (Completion, error) {
+func AssessFileContent(ctx context.Context, model Model, pullRequest githubapp.PullRequest, files []diff.FileContext, path string, policy reviewrules.Policy, maximumBytes int, assessments ...[]domain.FileAssessment) (Completion, error) {
 	var empty Completion
-	prompt, err := BuildFileAssessmentPrompt(model, pullRequest, files, path, policy, maximumBytes)
+	prompt, err := BuildFileAssessmentPrompt(model, pullRequest, files, path, policy, maximumBytes, assessments...)
 	if err != nil {
 		return empty, err
 	}

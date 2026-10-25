@@ -20,6 +20,18 @@ func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAsse
 			return input, nil, normalizeFileAssessmentError(err)
 		}
 		assessment.Reviewed = false
+		file := BuildFileIndex(input.Files)[assessment.Path]
+		if assessment.Action == domain.FileActionExclude && (policy.RequiresFileContentReview(assessment.Path) ||
+			(file.Attributes["linguist-generated"] == "false" && assessment.ContentKind == reviewrules.ContentGenerated)) {
+			var data reviewrules.PromptData
+			reason, err := renderPrompt(policy, "classification.required", data)
+			if err != nil {
+				return input, nil, err
+			}
+			assessment.Action = domain.FileActionReview
+			assessment.ContentReviewRequirement = domain.ContentReviewRequired
+			assessment.Reason = reason
+		}
 		if assessment.Action == domain.FileActionExclude && !assessment.PermitsContentExclusion() {
 			var data reviewrules.PromptData
 			reason, err := renderPrompt(policy, "coverage.requirement_conflict", data)

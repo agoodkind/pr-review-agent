@@ -61,12 +61,13 @@ func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admi
 // and the chunks the model will be asked about. Admission measures exactly
 // these chunks, so nothing later re-derives a different set from the same diff.
 type deltaWork struct {
-	FileAssessments  []domain.FileAssessment
-	AssessmentModels []string
-	PullRequest      githubapp.PullRequest
-	Files            []diff.FileContext
-	Metadata         []diff.MetadataSource
-	Chunks           []diff.Chunk
+	AssessmentRequests int
+	FileAssessments    []domain.FileAssessment
+	AssessmentModels   []string
+	PullRequest        githubapp.PullRequest
+	Files              []diff.FileContext
+	Metadata           []diff.MetadataSource
+	Chunks             []diff.Chunk
 }
 
 // collectAndAdmit gathers the current pull request and applies the admission
@@ -96,24 +97,28 @@ func (service *Service) collectAndAdmit(
 	}
 	progress.reached("the diff")
 
-	fileAdmission := admitDelta(len(input.Files), 0, settings.maxFiles, settings.maxChunks)
+	fileAdmission, err := service.admitFileInput(input, settings)
+	if err != nil {
+		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
 	if fileAdmission.Skip {
 		if err := service.declineReview(ctx, job, checkRun.ID, fileAdmission); err != nil {
 			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSkip, err)
 		}
 		return empty, true, nil
 	}
-	contentInput, assessments, assessmentModels, err := service.classifyLargeInput(ctx, input, settings)
+	contentInput, assessments, assessmentModels, assessmentRequests, err := service.classifyInput(ctx, input, settings)
 	if err != nil {
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
 	shortfall := classifyStructuralShortfall(deltaWork{
-		FileAssessments:  assessments,
-		AssessmentModels: assessmentModels,
-		PullRequest:      input.PullRequest,
-		Files:            input.Files,
-		Metadata:         input.Metadata,
-		Chunks:           nil,
+		AssessmentRequests: assessmentRequests,
+		FileAssessments:    assessments,
+		AssessmentModels:   assessmentModels,
+		PullRequest:        input.PullRequest,
+		Files:              input.Files,
+		Metadata:           input.Metadata,
+		Chunks:             nil,
 	})
 	promptContext, err := pullRequestPrompt(input.PullRequest, input.Files, service.reviewPolicy)
 	if err != nil {
@@ -131,7 +136,7 @@ func (service *Service) collectAndAdmit(
 			checkFailureDiff, fmt.Errorf("chunk input: %w", err),
 		)
 	}
-	work := deltaWork{FileAssessments: assessments, AssessmentModels: assessmentModels, PullRequest: input.PullRequest, Files: input.Files, Metadata: input.Metadata, Chunks: chunks}
+	work := deltaWork{AssessmentRequests: assessmentRequests, FileAssessments: assessments, AssessmentModels: assessmentModels, PullRequest: input.PullRequest, Files: input.Files, Metadata: input.Metadata, Chunks: chunks}
 	work.Chunks, err = BoundModelReviewChunksWithContext(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
 	if err != nil {
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
@@ -153,7 +158,7 @@ func (service *Service) collectAndAdmit(
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
 	chunks = work.Chunks
-	verdict := admitDelta(len(input.Files), len(chunks), settings.maxFiles, settings.maxChunks)
+	verdict := admitDelta(len(contentInput.Files), len(chunks), settings.maxFiles, settings.maxChunks)
 	if !verdict.Skip {
 		return work, false, nil
 	}
@@ -175,6 +180,22 @@ func (service *Service) collectAndAdmit(
 	// The caller stops on a skip and never reads the work, so what was measured
 	// travels back unchanged rather than as a second zero value.
 	return work, true, nil
+}
+
+func (service *Service) admitFileInput(input diff.ReviewInput, settings reviewSettings) (admissionVerdict, error) {
+	if len(input.Files) > compareFileCap {
+		return admitDelta(len(input.Files), 0, compareFileCap, settings.maxChunks), nil
+	}
+	var empty admissionVerdict
+	deterministic, _, err := PlanFileAssessments(input, service.reviewPolicy)
+	if err != nil {
+		return empty, err
+	}
+	preflight, _, err := PlanFileContentReview(input, deterministic, service.reviewPolicy)
+	if err != nil {
+		return empty, err
+	}
+	return admitDelta(len(preflight.Files), 0, settings.maxFiles, settings.maxChunks), nil
 }
 
 // declineReview leaves a delta the admission gate refused exactly as it found
