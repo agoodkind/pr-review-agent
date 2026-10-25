@@ -294,30 +294,31 @@ func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, max
 	seen := make(map[string]bool)
 	for _, hunk := range hunks[:listed] {
 		file, found := fileIndex[hunk.Path]
-		if !found || file.CurrentContent == "" || seen[hunk.Path] || excludedPromptContent(file, policy, assessments) {
+		if !found || file.ClassificationContent() == "" || seen[hunk.Path] || excludedPromptContent(file, policy, assessments) {
 			continue
 		}
 		seen[hunk.Path] = true
-		header := fmt.Sprintf("Current content excerpt for %s (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n", escapeOmissionPromptText(hunk.Path, policy), len(file.CurrentContent))
+		content := file.ClassificationContent()
+		header := fmt.Sprintf("Available file content excerpt for %s (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n", escapeOmissionPromptText(hunk.Path, policy), len(content))
 		previewBudget := metadataBudget - metadata.Len() - len(header) - len("\n\n")
 		if previewBudget <= 0 {
 			break
 		}
-		preview := omissionContentPreview(file.CurrentContent, min(settings.MaximumPreviewBytes, previewBudget), policy)
+		preview := omissionContentPreview(content, min(settings.MaximumPreviewBytes, previewBudget), policy)
 		metadata.WriteString(header)
 		metadata.WriteString(preview)
 		metadata.WriteString("\n\n")
 	}
 	for _, file := range files {
-		if seen[file.Path] || file.CurrentContent == "" || excludedPromptContent(file, policy, assessments) {
+		if seen[file.Path] || file.ClassificationContent() == "" || excludedPromptContent(file, policy, assessments) {
 			continue
 		}
-		header := fmt.Sprintf("Related evidence ID: related:%s\nChanged parent file: %s\nCurrent content excerpt:\n", assessmentIdentity(file, policy), escapeOmissionPromptText(file.Path, policy))
+		header := fmt.Sprintf("Related evidence ID: related:%s\nChanged parent file: %s\nAvailable file content excerpt:\n", assessmentIdentity(file, policy), escapeOmissionPromptText(file.Path, policy))
 		remaining := metadataBudget - metadata.Len() - len(header) - 2
 		if remaining <= 0 {
 			break
 		}
-		preview := omissionContentPreview(file.CurrentContent, min(settings.MaximumPreviewBytes, remaining), policy)
+		preview := omissionContentPreview(file.ClassificationContent(), min(settings.MaximumPreviewBytes, remaining), policy)
 		metadata.WriteString(header)
 		metadata.WriteString(preview)
 		metadata.WriteString("\n\n")

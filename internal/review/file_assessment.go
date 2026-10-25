@@ -164,7 +164,7 @@ func (pass *chunkPass) fileWasReviewed(path string) bool {
 
 func relatedEvidenceExists(reference string, files []diff.FileContext, policy reviewrules.Policy) bool {
 	for _, file := range files {
-		if file.CurrentContent != "" && reference == "related:"+assessmentIdentity(file, policy) {
+		if file.ClassificationContent() != "" && reference == "related:"+assessmentIdentity(file, policy) {
 			return true
 		}
 	}
@@ -272,7 +272,7 @@ func assessmentPromptRow(file diff.FileContext, policy reviewrules.Policy) (stri
 	data.Identity = assessmentIdentity(file, policy)
 	data.EvidenceID = assessmentEvidenceID(file, policy)
 	data.Status = escapeOmissionPromptText(file.Status, policy)
-	data.ContentBytes = len(file.CurrentContent)
+	data.ContentBytes = len(file.ClassificationContent())
 	data.Attributes = escapeOmissionPromptText(truncateUTF8(classificationAttributes(file), policy.FileClassification().MaximumPreviewBytes), policy)
 	return renderPrompt(policy, "classification.file_evidence", data)
 }
