@@ -606,7 +606,7 @@ func (source *fakeSource) GetFile(
 	_ domain.HeadSHA,
 ) ([]byte, error) {
 	if path == ".gitattributes" || strings.HasSuffix(path, "/.gitattributes") {
-		return nil, githubapp.APIError{StatusCode: http.StatusNotFound, Message: "attribute file does not exist"}
+		return nil, githubapp.APIError{StatusCode: http.StatusNotFound, Message: "The attribute file does not exist."}
 	}
 	source.getCalls++
 	if source.getErr != nil {

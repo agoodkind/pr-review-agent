@@ -68,7 +68,7 @@ func clearReviewableContent(file diff.FileContext, policy reviewrules.Policy) bo
 
 func deterministicExclusion(file diff.FileContext, policy reviewrules.Policy) (reviewrules.ContentKind, string, bool) {
 	settings := policy.FileClassification()
-	if policy.RequiresFileContentReview(file.Path) {
+	if file.IsSubmodule() || policy.RequiresFileContentReview(file.Path) {
 		return "", "", false
 	}
 	// Retrieval failures require their own assessment even when a path matches an exclusion.

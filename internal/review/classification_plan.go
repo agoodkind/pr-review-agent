@@ -21,6 +21,7 @@ func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAsse
 
 func normalizeFileAssessments(input diff.ReviewInput, assessments []domain.FileAssessment, policy reviewrules.Policy) ([]domain.FileAssessment, error) {
 	decisions := slices.Clone(assessments)
+	files := BuildFileIndex(input.Files)
 	var shortfall structuralShortfall
 	for index := range decisions {
 		assessment := &decisions[index]
@@ -28,7 +29,7 @@ func normalizeFileAssessments(input diff.ReviewInput, assessments []domain.FileA
 			return nil, normalizeFileAssessmentError(err)
 		}
 		assessment.Reviewed = false
-		file := BuildFileIndex(input.Files)[assessment.Path]
+		file := files[assessment.Path]
 		if assessment.Action == domain.FileActionExclude && (policy.RequiresFileContentReview(assessment.Path) ||
 			(file.Attributes["linguist-generated"] == "false" && assessment.ContentKind == reviewrules.ContentGenerated)) {
 			var data reviewrules.PromptData
