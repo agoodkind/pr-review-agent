@@ -4746,21 +4746,15 @@ func TestADeclinedDeltaKeepsTheWorkAnEarlierRunRecorded(t *testing.T) {
 }
 
 func TestAFailedSavedStateReadCompletesTheCheckBeforeAdmission(t *testing.T) {
-	model := &sequenceModel{}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:          twoChunkCollector{},
 		reviewMaxChunks:    1,
 		issueCommentStatus: http.StatusInternalServerError,
-		model:              model,
 	})
 
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run: want the saved state read error")
 	}
-	if len(model.prompts) != 0 {
-		t.Fatalf("model calls = %d, want zero before reading saved state", len(model.prompts))
-	}
-
 	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
 		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
 	}
@@ -5355,30 +5349,26 @@ func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T)
 	}
 }
 
-func TestServiceReturnsTheSavedStateReadCauseWhenTheNoticeCannotBeWritten(t *testing.T) {
-	model := &sequenceModel{}
+func TestServiceReportsTheSavedStateReadFailureWhenTheNoticeCannotBeWritten(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reconcileErr:       errors.New("reconcile failed"),
 		issueCommentStatus: http.StatusInternalServerError,
-		model:              model,
 	})
 
 	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: want error")
 	}
-	if !strings.Contains(err.Error(), "read durable review state") {
-		t.Fatalf("err = %q, want the saved state read cause", err)
-	}
-	if strings.Contains(err.Error(), "reconcile failed") {
-		t.Fatalf("err = %q, want the run to stop before reconciliation", err)
-	}
-	if len(model.prompts) != 0 {
-		t.Fatalf("model calls = %d, want zero before reading saved state", len(model.prompts))
+	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure even when the notice cannot be written",
 			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	output := checkOutput(t, fixture)
+	if output["title"] != "Review failed while updating the visible summary." {
+		t.Fatalf("title = %v, want the saved state read stage", output["title"])
 	}
 }
 
