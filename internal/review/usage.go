@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
@@ -36,8 +37,32 @@ type ModelUsage struct {
 	EstimatedCostUSD            float64
 }
 
+// ProviderModelKey identifies one provider and its requested model.
+type ProviderModelKey struct {
+	ProviderID     string
+	RequestedModel string
+}
+
+// ProviderPeriodUsage summarizes stored usage within one configured quota window.
+type ProviderPeriodUsage struct {
+	ProviderID       string
+	RequestedModel   string
+	Window           quota.Window
+	Bounds           quota.Bounds
+	AsOfMS           int64
+	HistoryStartMS   int64
+	TotalTokens      int64
+	Available        bool
+	HistoryComplete  bool
+	CostComplete     bool
+	ReportedRequests int
+	PricedRequests   int
+	EstimatedCostUSD float64
+}
+
 // UsageSummary aggregates every attempted model request in one review run.
 type UsageSummary struct {
+	PeriodUsage                 []ProviderPeriodUsage
 	Requests                    int
 	ReportedRequests            int
 	PricedRequests              int
