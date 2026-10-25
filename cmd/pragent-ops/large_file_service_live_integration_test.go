@@ -106,23 +106,13 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	if selected["generated_sql"] {
 		sqlPath := largeFileFixturePrefix + "generated.sql"
 		sql := largeFileSQL(live.limit)
-		live.stage(t, ctx, "Add generated migration review fixture", "The generated migration adds audit records. Existing classification_active_users records must remain intact. The fixture contains an unintended DROP TABLE statement that requires an inline finding. The test reviews the SQL without executing it.", map[string]string{sqlPath: sql}, "")
-		sqlSources := map[domain.HeadSHA][]string{domain.HeadSHA(live.fixture.head): strings.Split(sql, "\n")}
-		live.await(t, ctx, "generated_sql", func(snapshot reviewBodySnapshot, body string) bool {
+		live.stage(t, ctx, "Add generated migration review fixture", "The fixture contains marked generated SQL. The configured generated-content policy excludes its body from ordinary review. The test does not execute the SQL.", map[string]string{sqlPath: sql}, "")
+		live.await(t, ctx, "generated_sql", func(_ reviewBodySnapshot, body string) bool {
 			kind, action, found := largeFileAssessment(body, sqlPath)
-			if !found || (kind != "generated" && kind != "source") || action != "review" {
+			if !found || kind != "generated" || action != "exclude" {
 				return false
 			}
-			if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
-				return false
-			}
-			for _, label := range []string{"Files reviewed", "Diff chunks"} {
-				count, err := strconv.Atoi(strings.Trim(largeFileDetail(body, label), "`"))
-				if err != nil || count <= 0 {
-					return false
-				}
-			}
-			return live.openSQLFinding(t, ctx, snapshot, sqlPath, sql, sqlSources)
+			return largeFileDetail(body, "All file content inspected") == "no" && largeFileDetail(body, "Review scope assessed") == "yes"
 		})
 	}
 
@@ -231,46 +221,6 @@ func largeFileLiveTimeouts(t *testing.T, scenarioCount int) (time.Duration, time
 		t.Fatalf("The live classification suite and cleanup require %s. Run go test with -timeout %s or longer; the current test deadline has %s remaining.", required, required+time.Minute, time.Until(deadline).Round(time.Second))
 	}
 	return caseTimeout, suiteTimeout
-}
-
-func (live *largeFileServiceFixture) openSQLFinding(t *testing.T, ctx context.Context, snapshot reviewBodySnapshot, path, sql string, sources map[domain.HeadSHA][]string) bool {
-	t.Helper()
-	const statement = "DROP TABLE classification_active_users;"
-	offset := strings.Index(sql, statement)
-	if offset < 0 {
-		t.Fatal("The SQL fixture must include its required DROP statement.")
-	}
-	line := strings.Count(sql[:offset], "\n") + 1
-	currentStatement := strings.Split(sql, "\n")[line-1]
-	for _, thread := range snapshot.Threads {
-		comment := thread.RootComment
-		finding, valid := marker.FindFinding(comment.Body)
-		if !valid || thread.Resolved || comment.Author != live.fixture.bot || comment.Path != path || comment.StartLine > line || comment.EndLine < line {
-			continue
-		}
-		source, cached := sources[finding.Head]
-		if !cached {
-			content, err := live.fixture.client.GetFile(ctx, live.fixture.opts.installationID, live.fixture.repo, path, finding.Head)
-			if err != nil {
-				t.Fatalf("The immutable source for the existing SQL finding could not be verified: %s", liveReviewBodyReadFailure(ctx, err))
-			}
-			source = strings.Split(string(content), "\n")
-			sources[finding.Head] = source
-		}
-		start, end := comment.StartLine, comment.EndLine
-		if finding.OriginalStartLine > 0 {
-			start, end = finding.OriginalStartLine, finding.OriginalEndLine
-		}
-		if start < 1 || end < start || end > len(source) {
-			continue
-		}
-		for _, anchored := range source[start-1 : end] {
-			if anchored == currentStatement {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func largeFileServiceSetup(t *testing.T) *largeFileServiceFixture {

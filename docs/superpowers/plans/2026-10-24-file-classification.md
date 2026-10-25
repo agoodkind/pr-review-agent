@@ -29,9 +29,9 @@ An exclusion must not resolve an unrelated missing-content or metadata gap.
 
 Modify the diff collector and add a focused attributes helper. Extend `diff.FileContext` with structured repository attributes. Use the existing source and immutable comparison revisions to read root and ancestor `.gitattributes` files once per revision. Parse patterns and inheritance with the go-git parser. Missing attribute files are normal; other retrieval failures must remain visible. Include attributes in file assessment identities and bounded prompts.
 
-- [ ] Implement attribute collection and structured evidence.
-- [ ] Verify nested patterns, overrides, removals, and retrieval failures through real Git-backed inputs.
-- [ ] Commit the evidence changes.
+- [x] Implement attribute collection and structured evidence.
+- [x] Verify nested patterns, overrides, removals, and retrieval failures through real Git-backed inputs.
+- [x] Commit the evidence changes.
 
 ## Task 2: Assess every file before chunk creation
 
@@ -39,16 +39,16 @@ Extend `reviewrules.FileClassificationPolicy` with configurable trusted detector
 
 Replace the size-only gate in `classifyLargeInput` with this preflight. Use existing `AssessFileContent` for uncertain decisions. Retain parent context and relevant handwritten changes without including excluded artifact bodies. Preserve existing assessment persistence and display. Count actual classification completions separately from deterministic decisions.
 
-- [ ] Implement configuration, deterministic detection, bounded model decisions, and accurate accounting.
-- [ ] Update conflicting configured prompts and existing behavior tests.
-- [ ] Verify lockfile exclusions, generated headers, handwritten chunking, review overrides, and changed policies through public production boundaries.
-- [ ] Commit the classification changes.
+- [x] Implement configuration, deterministic detection, bounded model decisions, and accurate accounting.
+- [x] Update conflicting configured prompts and existing behavior tests.
+- [x] Verify lockfile exclusions, generated headers, handwritten chunking, review overrides, and changed policies through public production boundaries.
+- [x] Commit the classification changes.
 
 ## Task 3: Verify and publish the complete change
 
 Use the real PR #198 file list and an existing dedicated live fixture when available. Verify that classification records explain exclusions, ordinary review requests omit generated artifact bodies, and manifest changes still receive review. Keep actual content inspection distinct from assessed scope.
 
-- [ ] Run relevant Go tests, format, vet, and scoped lint through existing Make targets.
-- [ ] Run the available real integration path and record exact evidence.
-- [ ] Review the complete diff for lost source context, stale identities, budget errors, and incorrect coverage.
+- [x] Run relevant Go tests, format, vet, and scoped lint through existing Make targets.
+- [x] Run the available real integration path and record exact evidence.
+- [x] Review the complete diff for lost source context, stale identities, budget errors, and incorrect coverage.
 - [ ] Create a ready pull request with verified results.

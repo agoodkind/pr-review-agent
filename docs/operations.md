@@ -117,6 +117,8 @@ File review settings:
 | --- | --- |
 | `file_classification.allowed_exclusions` | Permits content exclusions for selected categories after evidence validation. |
 | `file_classification.trusted_detectors` | Selects generated, vendor, binary, and repository attribute detectors with an allowed content kind and explanation. |
+| `file_classification.header_patterns` | Selects explicit generated declarations in the initial comment header using Go regular expressions. |
+| `file_classification.maximum_header_bytes` | Bounds the initial source bytes inspected by configured header patterns. |
 | `file_classification.path_exclusions` | Selects artifact paths or basenames to exclude with an allowed content kind and explanation. |
 | `file_classification.review_overrides` | Requires content review for matching paths before applying exclusions. |
 | `file_classification.maximum_evidence_bytes` | Bounds contextual classification evidence. |
