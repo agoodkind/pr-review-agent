@@ -846,6 +846,7 @@ func (service *Service) publishVerdict(
 	summary Summary,
 	state marker.State,
 ) error {
+	service.enrichProviderPeriodUsage(ctx, &summary)
 	logger := gklog.L(ctx)
 	if acceptedFileScope(summary) {
 		var data reviewrules.PromptData
