@@ -62,7 +62,6 @@
     "requests",
     "tokens",
     "cost",
-    "period_usage",
     "quota",
     "result"
   ],

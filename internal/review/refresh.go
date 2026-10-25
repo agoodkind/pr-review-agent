@@ -191,13 +191,11 @@ func (service *Service) refreshReviewedCheck(
 		recordAssessment(ctx, domain.AssessmentFailed, nil, failureNames(err), quotaRecovery(statuses))
 		dismissErr := service.dismissFailureVerdict(ctx, job, err)
 		detail := service.terminalFailureDetail(ctx, job, err)
+		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
+			"failure", "Review refresh failed", detail)
 		var progress Summary
 		progress.Head = job.Head
 		progress.Failed = true
-		progress.Usage = UsageFromContext(ctx)
-		service.enrichProviderPeriodUsage(ctx, &progress)
-		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
-			"failure", "Review refresh failed", detail+"\n\n"+RenderDetails(progress))
 		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
 		if completionErr == nil {
 			return &reportedFailureError{cause: errors.Join(err, dismissErr)}
@@ -477,7 +475,6 @@ func (service *Service) applyRefreshedVerdict(
 		// is a gate a forced run never reaches.
 		Forced: false,
 	}
-	service.enrichProviderPeriodUsage(ctx, &summary)
 	if !refreshed.mayPublish() && !refreshed.blockWithdrawn {
 		if err := service.refreshUnchangedVerdict(ctx, job, refreshed, summary); err != nil {
 			return err
@@ -495,8 +492,23 @@ func (service *Service) applyRefreshedVerdict(
 			slog.String("decision", string(refreshed.decision)),
 		)
 	}
-	if err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State, existingBody string) summaryCommentContent {
-		return refreshedSummaryContent(state, existingBody, summary, refreshed.blockWithdrawn)
+	if err := service.upsertSummaryCommentFrom(ctx, job, func(
+		state marker.State,
+		existingBody string,
+	) summaryCommentContent {
+		if state.Status == marker.StateReviewing {
+			return summaryCommentContent{
+				Prose: stripDurableStateMarker(existingBody),
+				State: state,
+			}
+		}
+		if state.Status == marker.StateFailed && completedHeadState(state, job.Head) {
+			state.Status = marker.StateDone
+		}
+		return summaryCommentContent{
+			Prose: refreshVerdictProse(stripReassessmentNotice(existingBody), summary, refreshed.blockWithdrawn),
+			State: state,
+		}
 	}); err != nil {
 		logger.ErrorContext(ctx, "update summary after verdict refresh", slog.String("err", err.Error()))
 		return fmt.Errorf("update summary after verdict refresh: %w", err)
@@ -507,23 +519,6 @@ func (service *Service) applyRefreshedVerdict(
 	}
 	recordAssessment(ctx, disposition, &summary, nil, 0)
 	return nil
-}
-
-func refreshedSummaryContent(state marker.State, existingBody string, summary Summary, blockWithdrawn bool) summaryCommentContent {
-	existingBody = refreshProviderPeriodDetails(existingBody, summary.Usage)
-	if state.Status == marker.StateReviewing {
-		return summaryCommentContent{
-			Prose: stripDurableStateMarker(existingBody),
-			State: state,
-		}
-	}
-	if state.Status == marker.StateFailed && completedHeadState(state, summary.Head) {
-		state.Status = marker.StateDone
-	}
-	return summaryCommentContent{
-		Prose: refreshVerdictProse(stripReassessmentNotice(existingBody), summary, blockWithdrawn),
-		State: state,
-	}
 }
 
 func (service *Service) refreshUnchangedVerdict(ctx context.Context, job domain.ReviewJob, refreshed refreshedVerdict, summary Summary) error {

@@ -5,7 +5,6 @@ import usageHistory from "./budget-history.sql";
 import usageReport from "./budget-report.sql";
 import usageSnapshot from "./budget-snapshot.sql";
 import usageQuery from "./budget-query.sql";
-import usageSummary from "./budget-summary.sql";
 import usageDetails from "./budget-details.sql";
 import usageSDK from "./budget-sdk.sql";
 import storageStats from "./budget-storage-stats.sql";
@@ -195,37 +194,6 @@ export class ProviderBudget extends DurableObject {
     return Response.json(page);
   }
 
-  async summarizeUsage(payload) {
-    const { provider_id: providerId, start_ms: start, end_ms: end,
-      include_start: includeStart, include_end: includeEnd } = payload;
-    if (!isNonnegativeInteger(start) || !isNonnegativeInteger(end) || start > end ||
-        typeof includeStart !== "boolean" || typeof includeEnd !== "boolean") {
-      return new Response("invalid usage summary", { status: 400 });
-    }
-    const snapshot = this.ctx.storage.sql.exec(usageSnapshot).one().sequence;
-    const initialHistoryStart = this.ctx.storage.sql.exec(usageHistory, providerId, Date.now()).one().history_start_ms;
-    const historyStart = Math.max(initialHistoryStart, (await this.ctx.storage.get("usage_retention_cutoff_ms")) ?? 0);
-    const groups = this.ctx.storage.sql.exec(usageSummary, providerId, snapshot,
-      start + Number(!includeStart), end - Number(!includeEnd), MAXIMUM_PAGE_SIZE + 1).toArray();
-    if (groups.length > MAXIMUM_PAGE_SIZE) {
-      return new Response("usage summary exceeds the group limit", { status: 413 });
-    }
-    for (const group of groups) {
-      for (const name of ["requests", "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens", "cache_write_tokens"]) {
-        if (!isNonnegativeInteger(group[name])) {
-          return new Response("usage summary exceeds the safe integer range", { status: 413 });
-        }
-      }
-      group.cache_details_known = Boolean(group.cache_details_known);
-    }
-    const result = { groups, snapshot_sequence: snapshot, history_start_ms: historyStart };
-    const body = JSON.stringify(result);
-    if (new TextEncoder().encode(body).byteLength > MAXIMUM_USAGE_PAGE_BYTES) {
-      return new Response("usage summary exceeds the response byte limit", { status: 413 });
-    }
-    return new Response(body, { headers: { "Content-Type": "application/json" } });
-  }
-
   async reportUsage(payload) {
     const { provider_id: providerId, model, admitted_at_ms: admittedAt,
       input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: totalTokens,
@@ -344,7 +312,7 @@ export class ProviderBudget extends DurableObject {
       return this.storageStats();
     }
     if (pathname !== "/check" && pathname !== "/report" && pathname !== "/reserve" &&
-        pathname !== "/query_usage" && pathname !== "/report_usage" && pathname !== "/summarize_usage") {
+        pathname !== "/query_usage" && pathname !== "/report_usage") {
       return new Response("not found", { status: 404 });
     }
     const payload = await request.json();
@@ -355,12 +323,9 @@ export class ProviderBudget extends DurableObject {
     if (model !== undefined && (typeof model !== "string" || model.length === 0 || model.length > 200)) {
       return new Response("invalid model", { status: 400 });
     }
-    if (pathname === "/query_usage" || pathname === "/report_usage" || pathname === "/summarize_usage") {
-      if (model === undefined && pathname !== "/summarize_usage") {
+    if (pathname === "/query_usage" || pathname === "/report_usage") {
+      if (model === undefined) {
         return new Response("invalid model", { status: 400 });
-      }
-      if (pathname === "/summarize_usage") {
-        return this.summarizeUsage(payload);
       }
       return pathname === "/query_usage" ? this.queryUsage(payload) : this.reportUsage(payload);
     }

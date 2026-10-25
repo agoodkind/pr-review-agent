@@ -16,7 +16,6 @@ import (
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/quota"
-	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/telemetry"
 )
 
@@ -208,7 +207,6 @@ func (client *Client) reportBudget(ctx context.Context, target provider, snapsho
 		err = storage.Report(context.WithoutCancel(ctx), report)
 	}
 	if err != nil {
-		review.RecordProviderUsageDeliveryFailure(ctx, review.ProviderModelKey{ProviderID: target.id, RequestedModel: target.model})
 		gklog.L(ctx).WarnContext(ctx, "send model budget report failed", slog.String("err", err.Error()),
 			slog.String("report_id", report.ReportID), slog.String("provider_id", target.id), slog.String("configured_model", target.model),
 			slog.Int64("admitted_at_ms", report.AdmittedAtMS), slog.Int64("input_tokens", usage.InputTokens),

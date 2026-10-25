@@ -38,7 +38,6 @@ type ModelUsage struct {
 
 // UsageSummary aggregates every attempted model request in one review run.
 type UsageSummary struct {
-	PeriodUsage                 []ProviderPeriodUsage
 	Requests                    int
 	ReportedRequests            int
 	PricedRequests              int
@@ -119,28 +118,22 @@ func sameProviderAttempt(left, right ProviderAttempt) bool {
 
 // UsageRecorder safely aggregates concurrent model requests in one review run.
 type UsageRecorder struct {
-	periodLoaded     bool
-	periodVersion    int
-	deliveryFailures map[ProviderModelKey]bool
-	mu               sync.Mutex
-	totals           UsageSummary
-	models           map[usageModelKey]ModelUsage
-	ordered          []usageModelKey
-	sequence         int
+	mu       sync.Mutex
+	totals   UsageSummary
+	models   map[usageModelKey]ModelUsage
+	ordered  []usageModelKey
+	sequence int
 }
 
 // WithUsageRecorder attaches a new usage recorder to a context.
 func WithUsageRecorder(ctx context.Context) (context.Context, *UsageRecorder) {
 	var totals UsageSummary
 	recorder := &UsageRecorder{
-		periodLoaded:     false,
-		periodVersion:    0,
-		deliveryFailures: make(map[ProviderModelKey]bool),
-		mu:               sync.Mutex{},
-		totals:           totals,
-		models:           make(map[usageModelKey]ModelUsage),
-		ordered:          nil,
-		sequence:         0,
+		mu:       sync.Mutex{},
+		totals:   totals,
+		models:   make(map[usageModelKey]ModelUsage),
+		ordered:  nil,
+		sequence: 0,
 	}
 	return context.WithValue(ctx, usageRecorderContextKey{}, recorder), recorder
 }
@@ -206,7 +199,6 @@ func (recorder *UsageRecorder) Summary() UsageSummary {
 	summary.ServiceTiers = append([]string(nil), recorder.totals.ServiceTiers...)
 	summary.ProviderAttempts = append([]ProviderAttempt(nil), recorder.totals.ProviderAttempts...)
 	summary.ProviderColumns = append([]reviewrules.ProviderDetailColumn(nil), recorder.totals.ProviderColumns...)
-	summary.PeriodUsage = append([]ProviderPeriodUsage(nil), recorder.totals.PeriodUsage...)
 	summary.Models = make([]ModelUsage, 0, len(recorder.ordered))
 	for _, key := range recorder.ordered {
 		summary.Models = append(summary.Models, recorder.models[key])
