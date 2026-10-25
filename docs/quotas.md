@@ -12,7 +12,6 @@ Provider quota fields are configured in [runtime.json](../runtime.json).
 | `token_types` | Count `input`, `output`, or both. Omission selects the API's reported total. |
 | `token_window` | Defines the window mode and its applicable fields. |
 | `token_limits` | Additional limits with independent `limit`, `token_types`, and `window` fields. Every configured limit applies to the same reported usage. |
-| `usage_period` | Optional reporting window for period usage, independent of quota admission limits. |
 | `daily_token_limit`, `daily_token_types` | Existing midnight UTC counters. They cannot be combined with `token_limit`, `token_types`, or `token_window`, but allow additional `token_limits`. |
 
 Input includes cached input. Output includes reasoning tokens. A request without reported usage adds no estimate. Usage reported by an incomplete response is still counted.
@@ -37,11 +36,19 @@ A rolling window has no single daily reset. Its availability time is the first e
 
 ## Period usage reports
 
-The `provider_details` list in [review-prompts.json](../config/review-prompts.json) accepts `period_usage` for the period column. The reporting window uses the window modes above.
+The `provider_details` list in [review-prompts.json](../config/review-prompts.json) accepts `period_usage` for the period column. Period reports reuse the existing quota windows.
+
+The column includes each distinct period from these provider settings:
+
+- `token_window` supplies the primary window.
+- Each `token_limits[].window` supplies another window.
+- `daily_token_limit` supplies the legacy UTC day.
+
+A zero cap tracks usage for its configured period without adding an admission limit. Other positive limits still apply. Period reporting does not require a separate period setting.
 
 Period totals count stored pr-review-agent reports across all requested models under one provider ID. Changing the configured model does not reset the provider total. Each model row for that provider displays the same period total. These totals do not include activity outside this application.
 
-The cell shows reported total tokens, estimated dollars, period bounds, and capture time. Pricing uses the reported model and service tier. Missing prices limit the estimate to the priced reports. Partial retained history limits both token and cost totals. The cell identifies those limits and displays unavailable data without substituting zero. Configured price estimates do not establish the provider's invoice amount.
+The cell labels each window and shows its reported total tokens, estimated dollars, bounds, and capture time. Pricing uses the reported model and service tier. Missing prices limit the estimate to the priced reports. Partial retained history limits both token and cost totals. The cell identifies those limits and displays unavailable data without substituting zero. Configured price estimates do not establish the provider's invoice amount.
 
 ## Attribution and history
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
@@ -17,24 +18,33 @@ const providerPeriodScope = "Period usage covers stored pr-review-agent reports 
 
 var providerPeriodKeyPattern = regexp.MustCompile(`<!-- pr-review-agent:period-usage:v1 provider=([A-Za-z0-9_-]*) model=([A-Za-z0-9_-]*) -->`)
 
-func providerPeriodCell(key ProviderModelKey, period *ProviderPeriodUsage) string {
+func providerPeriodCell(key ProviderModelKey, periods []ProviderPeriodUsage) string {
 	identity := fmt.Sprintf("<!-- pr-review-agent:period-usage:v1 provider=%s model=%s -->",
 		base64.RawURLEncoding.EncodeToString([]byte(key.ProviderID)),
 		base64.RawURLEncoding.EncodeToString([]byte(key.RequestedModel)))
-	if period == nil {
+	if len(periods) == 0 {
 		return identity + "unavailable"
 	}
+	blocks := make([]string, 0, len(periods))
+	for _, period := range periods {
+		blocks = append(blocks, providerPeriodSnapshotCell(period))
+	}
+	return identity + strings.Join(blocks, "<br><br>")
+}
+
+func providerPeriodSnapshotCell(period ProviderPeriodUsage) string {
+	label := providerPeriodWindowLabel(period.Window)
 	if !period.Available {
 		if period.Window.Mode == "" {
-			return identity + "period not configured"
+			return "token quota periods not configured"
 		}
-		return identity + "unavailable"
+		return label + "<br>unavailable"
 	}
 	cost := "cost unavailable"
 	if period.CostComplete || period.PricedRequests > 0 {
 		cost = "~$" + compactPeriodCost(period.EstimatedCostUSD)
 	}
-	parts := []string{compactPeriodTokens(period.TotalTokens) + " tokens / " + cost}
+	parts := []string{label, compactPeriodTokens(period.TotalTokens) + " tokens / " + cost}
 	parts = append(parts, periodTimestamp(period.Bounds.StartMS)+" to "+periodTimestamp(period.Bounds.EndMS))
 	parts = append(parts, "Captured "+periodTimestamp(period.AsOfMS))
 	if !period.HistoryComplete {
@@ -43,7 +53,19 @@ func providerPeriodCell(key ProviderModelKey, period *ProviderPeriodUsage) strin
 	if !period.CostComplete && period.PricedRequests > 0 {
 		parts = append(parts, fmt.Sprintf("Cost is incomplete: prices cover %d of %d requests.", period.PricedRequests, period.ReportedRequests))
 	}
-	return identity + strings.Join(parts, "<br>")
+	return strings.Join(parts, "<br>")
+}
+
+func providerPeriodWindowLabel(window quota.Window) string {
+	switch window.Mode {
+	case quota.Rolling:
+		return "Rolling " + usageModelCell(window.Duration)
+	case quota.Fixed:
+		return "Fixed " + usageModelCell(window.Duration)
+	case quota.Cron:
+		return "Cron " + usageModelCell(window.Schedule) + " " + usageModelCell(window.Timezone)
+	}
+	return "Quota period"
 }
 
 func compactPeriodTokens(tokens int64) string {
@@ -105,12 +127,12 @@ func refreshProviderPeriodDetails(body string, usage UsageSummary) string {
 	}
 	for index := 5; index < len(lines) && strings.HasPrefix(lines[index], "|"); index++ {
 		cells := splitProviderDetailRow(lines[index])
-		key, period := preservedProviderPeriod(cells, header, usage.PeriodUsage)
+		key, periods := preservedProviderPeriods(cells, header, usage.PeriodUsage)
 		if periodIndex == len(cells) {
 			cells = append(cells, "")
 		}
 		if periodIndex < len(cells) {
-			cells[periodIndex] = providerPeriodCell(key, period)
+			cells[periodIndex] = providerPeriodCell(key, periods)
 			lines[index] = joinProviderDetailRow(cells)
 		}
 	}
@@ -121,7 +143,7 @@ func refreshProviderPeriodDetails(body string, usage UsageSummary) string {
 	return updated
 }
 
-func preservedProviderPeriod(cells, header []string, periods []ProviderPeriodUsage) (ProviderModelKey, *ProviderPeriodUsage) {
+func preservedProviderPeriods(cells, header []string, periods []ProviderPeriodUsage) (ProviderModelKey, []ProviderPeriodUsage) {
 	var key ProviderModelKey
 	periodIndex := slices.Index(header, "Period usage")
 	if periodIndex >= 0 && periodIndex < len(cells) {
@@ -135,6 +157,7 @@ func preservedProviderPeriod(cells, header []string, periods []ProviderPeriodUsa
 		}
 	}
 	providerIndex := slices.Index(header, "Provider")
+	var matched []ProviderPeriodUsage
 	for _, period := range periods {
 		matches := key.ProviderID == period.ProviderID
 		if key.ProviderID == "" && providerIndex >= 0 && providerIndex < len(cells) {
@@ -142,11 +165,12 @@ func preservedProviderPeriod(cells, header []string, periods []ProviderPeriodUsa
 		}
 		if matches {
 			key.ProviderID = period.ProviderID
-			snapshot := period
-			return key, &snapshot
+			if !slices.ContainsFunc(matched, func(snapshot ProviderPeriodUsage) bool { return snapshot.Window == period.Window }) {
+				matched = append(matched, period)
+			}
 		}
 	}
-	return key, nil
+	return key, matched
 }
 
 func splitProviderDetailRow(line string) []string {

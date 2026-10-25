@@ -15,7 +15,7 @@ type providerDetailRow struct {
 	models   []string
 	priced   int
 	tiers    []string
-	period   *ProviderPeriodUsage
+	periods  []ProviderPeriodUsage
 }
 
 func renderProviderDetails(summary UsageSummary) string {
@@ -54,7 +54,7 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 		})
 		if index < 0 {
 			var usage ModelUsage
-			rows = append(rows, providerDetailRow{attempt: attempt, attempts: nil, usage: usage, models: nil, priced: 0, tiers: nil, period: nil})
+			rows = append(rows, providerDetailRow{attempt: attempt, attempts: nil, usage: usage, models: nil, priced: 0, tiers: nil, periods: nil})
 			index = len(rows) - 1
 		}
 		if attempt.Sequence > rows[index].attempt.Sequence {
@@ -77,8 +77,7 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 			rows = append(rows, row)
 			index = len(rows) - 1
 		}
-		snapshot := period
-		rows[index].period = &snapshot
+		rows[index].periods = append(rows[index].periods, period)
 	}
 	for index := range rows {
 		row := &rows[index]
@@ -181,7 +180,7 @@ func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDe
 		return providerQuotaCell(attempt.Status)
 	case reviewrules.ProviderPeriodUsageColumn:
 		key := ProviderModelKey{ProviderID: attempt.Status.ProviderID, RequestedModel: attempt.Status.Model}
-		return providerPeriodCell(key, row.period)
+		return providerPeriodCell(key, row.periods)
 	case reviewrules.ProviderResultColumn:
 		return providerResultCell(row.attempts)
 	}
