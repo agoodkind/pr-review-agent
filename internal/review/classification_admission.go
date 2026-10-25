@@ -13,11 +13,10 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-func (service *Service) classifyInput(ctx context.Context, input diff.ReviewInput, settings reviewSettings) (diff.ReviewInput, []domain.FileAssessment, []string, int, error) {
+func (service *Service) classifyInput(ctx context.Context, input diff.ReviewInput, assessments []domain.FileAssessment, unresolvedFiles []diff.FileContext, settings reviewSettings) (diff.ReviewInput, []domain.FileAssessment, []string, int, error) {
 	logger := gklog.L(ctx)
-	assessments, unresolvedFiles, err := PlanFileAssessments(input, service.reviewPolicy)
-	if err != nil {
-		return input, nil, nil, 0, err
+	if len(unresolvedFiles) == 0 {
+		return selectFileContentReview(input, assessments, service.reviewPolicy), assessments, nil, 0, nil
 	}
 	var models []string
 	requests := 0

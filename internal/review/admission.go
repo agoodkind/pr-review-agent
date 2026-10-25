@@ -97,7 +97,7 @@ func (service *Service) collectAndAdmit(
 	}
 	progress.reached("the diff")
 
-	fileAdmission, err := service.admitFileInput(input, settings)
+	fileAdmission, deterministic, unresolvedFiles, err := service.admitFileInput(input, settings)
 	if err != nil {
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
@@ -107,7 +107,7 @@ func (service *Service) collectAndAdmit(
 		}
 		return empty, true, nil
 	}
-	contentInput, assessments, assessmentModels, assessmentRequests, err := service.classifyInput(ctx, input, settings)
+	contentInput, assessments, assessmentModels, assessmentRequests, err := service.classifyInput(ctx, input, deterministic, unresolvedFiles, settings)
 	if err != nil {
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
@@ -182,20 +182,22 @@ func (service *Service) collectAndAdmit(
 	return work, true, nil
 }
 
-func (service *Service) admitFileInput(input diff.ReviewInput, settings reviewSettings) (admissionVerdict, error) {
+func (service *Service) admitFileInput(input diff.ReviewInput, settings reviewSettings) (admissionVerdict, []domain.FileAssessment, []diff.FileContext, error) {
 	if len(input.Files) > compareFileCap {
-		return admitDelta(len(input.Files), 0, compareFileCap, settings.maxChunks), nil
+		return admitDelta(len(input.Files), 0, compareFileCap, settings.maxChunks), nil, nil, nil
 	}
 	var empty admissionVerdict
-	deterministic, _, err := PlanFileAssessments(input, service.reviewPolicy)
+	deterministic, unresolved, err := PlanFileAssessments(input, service.reviewPolicy)
 	if err != nil {
-		return empty, err
+		return empty, nil, nil, err
 	}
-	preflight, _, err := PlanFileContentReview(input, deterministic, service.reviewPolicy)
-	if err != nil {
-		return empty, err
+	reviewableFiles := len(input.Files)
+	for _, assessment := range deterministic {
+		if assessment.PermitsContentExclusion() && service.reviewPolicy.AllowsContentExclusion(assessment.ContentKind) {
+			reviewableFiles--
+		}
 	}
-	return admitDelta(len(preflight.Files), 0, settings.maxFiles, settings.maxChunks), nil
+	return admitDelta(reviewableFiles, 0, settings.maxFiles, settings.maxChunks), deterministic, unresolved, nil
 }
 
 // declineReview leaves a delta the admission gate refused exactly as it found

@@ -6,6 +6,7 @@ import (
 	"maps"
 	"path"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 )
@@ -149,12 +150,35 @@ func (policy FileClassificationPolicy) validateEvidence() error {
 		if strings.TrimSpace(pattern) == "" {
 			return fmt.Errorf("file classification header patterns must not be empty")
 		}
-		if _, err := regexp.Compile(pattern); err != nil {
+		if _, err := syntax.Parse(pattern, syntax.Perl); err != nil {
 			slog.Warn("File classification header pattern is invalid", "err", err)
 			return fmt.Errorf("file classification header pattern is invalid: %w", err)
 		}
 	}
 	return nil
+}
+
+func compileClassificationHeaders(patterns []string) ([]*regexp.Regexp, error) {
+	compiled := make([]*regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		matcher, err := regexp.Compile(pattern)
+		if err != nil {
+			slog.Warn("File classification header pattern is invalid", "err", err)
+			return nil, fmt.Errorf("file classification header pattern is invalid: %w", err)
+		}
+		compiled = append(compiled, matcher)
+	}
+	return compiled, nil
+}
+
+// MatchesFileClassificationHeader evaluates the header patterns compiled during policy loading.
+func (policy Policy) MatchesFileClassificationHeader(content string) bool {
+	for _, pattern := range policy.fileClassificationHeaders {
+		if pattern.MatchString(content) {
+			return true
+		}
+	}
+	return false
 }
 
 // FileClassification returns a separate copy of the configured preflight rules.

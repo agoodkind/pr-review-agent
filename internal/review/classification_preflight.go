@@ -2,7 +2,6 @@ package review
 
 import (
 	"path"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -43,7 +42,7 @@ func PlanFileAssessments(input diff.ReviewInput, policy reviewrules.Policy) ([]d
 		}
 		decisions = append(decisions, assessment)
 	}
-	_, validated, err := PlanFileContentReview(input, decisions, policy)
+	validated, err := normalizeFileAssessments(input, decisions, policy)
 	return validated, unresolved, err
 }
 
@@ -87,12 +86,7 @@ func deterministicExclusion(file diff.FileContext, policy reviewrules.Policy) (r
 		case reviewrules.DetectorGenerated:
 			matched = enry.IsGenerated(file.Path, []byte(content))
 		case reviewrules.DetectorHeader:
-			for _, pattern := range settings.HeaderPatterns {
-				if matches, _ := regexp.MatchString(pattern, truncateUTF8(content, settings.MaximumHeaderBytes)); matches {
-					matched = true
-					break
-				}
-			}
+			matched = policy.MatchesFileClassificationHeader(truncateUTF8(content, settings.MaximumHeaderBytes))
 		case reviewrules.DetectorVendor:
 			matched = file.Attributes["linguist-vendored"] != "false" && enry.IsVendor(file.Path)
 		case reviewrules.DetectorBinary:
