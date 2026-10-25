@@ -374,7 +374,10 @@ func (service *Service) reviewOwedWork(
 	settings reviewSettings,
 ) error {
 	head := job.Head
-	state, hasState := service.loadDurableState(ctx, job)
+	state, hasState, err := service.loadDurableState(ctx, job)
+	if err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
+	}
 	state = bindCheckpointPolicy(state, pullRequest, service.reviewPolicy, settings)
 	// Forcing is something a delivery does once, not on every attempt of itself.
 	// A delivery is admitted again whenever its check run is short of completed,

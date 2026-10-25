@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -40,10 +41,14 @@ func (service *Service) upsertSummaryComment(
 
 // announceStart records the current run without moving its checkpoint.
 func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob, head domain.HeadSHA) {
-	err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State, _ string) summaryCommentContent {
+	err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State, existingBody string) summaryCommentContent {
 		state.RunID = job.DeliveryID
 		state.Status = marker.StateReviewing
-		return summaryCommentContent{Prose: RenderStartedBody(head), State: state}
+		prose := RenderStartedBody(head)
+		if preserveCheckpointSummary(state, existingBody) {
+			prose = renderCheckpointNotice(existingBody, strings.TrimPrefix(prose, "## Review\n\n"))
+		}
+		return summaryCommentContent{Prose: prose, State: state}
 	})
 	if err != nil {
 		gklog.L(ctx).WarnContext(ctx, "announce review start", slog.String("err", err.Error()))
@@ -75,7 +80,14 @@ func (service *Service) upsertSummaryCommentFrom(
 		return fmt.Errorf("list issue comments: %w", err)
 	}
 	if existing, found := findSummaryComment(comments, service.botLogin); found {
-		existingState, _ := marker.DecodeState(existing.Body)
+		existingState, decoded := marker.DecodeState(existing.Body)
+		if marker.HasState(existing.Body) && !decoded {
+			return fmt.Errorf("the saved review state cannot be decoded")
+		}
+		if !decoded {
+			existingState.RunID = job.DeliveryID
+			existingState.Status = marker.StateDone
+		}
 		if _, err := service.github.UpdateIssueComment(
 			ctx,
 			job.InstallationID,
@@ -92,7 +104,7 @@ func (service *Service) upsertSummaryCommentFrom(
 	firstContent := build(
 		marker.State{
 			PolicyRevision: "",
-			LastReviewed:   "", RunID: "", Status: "", Pending: nil,
+			LastReviewed:   "", RunID: job.DeliveryID, Status: marker.StateDone, Pending: nil,
 			Completed: nil, ForcedBy: "", Unread: nil,
 		},
 		"",
@@ -148,20 +160,20 @@ func (service *Service) readState(
 		if state, ok := marker.DecodeState(comment.Body); ok {
 			return state, true, nil
 		}
+		if marker.HasState(comment.Body) {
+			return marker.State{}, false, fmt.Errorf("the saved review state cannot be decoded")
+		}
 	}
 	return marker.State{PolicyRevision: "", LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil}, false, nil
 }
 
-// loadDurableState reads the run's durable state for the dedup log line and
-// for computing the delta base, logging rather than failing the run when the
-// read itself errors: a lost read costs a redundant full review, not a wrong
-// one, so the run still proceeds.
-func (service *Service) loadDurableState(ctx context.Context, job domain.ReviewJob) (marker.State, bool) {
+// loadDurableState requires a successful read before the run selects unfinished work.
+func (service *Service) loadDurableState(ctx context.Context, job domain.ReviewJob) (marker.State, bool, error) {
 	logger := gklog.L(ctx)
 	state, hasState, err := service.readState(ctx, job)
 	if err != nil {
 		logger.WarnContext(ctx, "read durable review state", slog.String("err", err.Error()))
-		return marker.State{PolicyRevision: "", LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil}, false
+		return state, hasState, fmt.Errorf("read durable review state: %w", err)
 	}
 	if hasState {
 		logger.InfoContext(
@@ -171,5 +183,5 @@ func (service *Service) loadDurableState(ctx context.Context, job domain.ReviewJ
 			slog.String("run_id", state.RunID),
 		)
 	}
-	return state, hasState
+	return state, hasState, nil
 }

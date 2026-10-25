@@ -4745,11 +4745,7 @@ func TestADeclinedDeltaKeepsTheWorkAnEarlierRunRecorded(t *testing.T) {
 	}
 }
 
-// A skip that cannot be written is still a run that has to end. Before this
-// the error travelled back to the dispatcher, which only logs, so a GitHub
-// outage during a skip left the check in progress forever with nothing on the
-// pull request saying why.
-func TestAFailedSkipWriteStillCompletesTheCheck(t *testing.T) {
+func TestAFailedSavedStateReadCompletesTheCheckBeforeAdmission(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:          twoChunkCollector{},
 		reviewMaxChunks:    1,
@@ -4757,9 +4753,8 @@ func TestAFailedSkipWriteStillCompletesTheCheck(t *testing.T) {
 	})
 
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
-		t.Fatal("Run: want the failed skip write surfaced")
+		t.Fatal("Run: want the saved state read error")
 	}
-
 	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
 		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
 	}
@@ -4770,8 +4765,8 @@ func TestAFailedSkipWriteStillCompletesTheCheck(t *testing.T) {
 	if !ok {
 		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
 	}
-	if output["title"] != "Review failed while recording the skipped review." {
-		t.Fatalf("title = %v, want the skip write stage", output["title"])
+	if output["title"] != "Review failed while updating the visible summary." {
+		t.Fatalf("title = %v, want the saved state read stage", output["title"])
 	}
 }
 
@@ -5354,7 +5349,7 @@ func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T)
 	}
 }
 
-func TestServiceReturnsTheReviewCauseWhenTheNoticeCannotBeWritten(t *testing.T) {
+func TestServiceReportsTheSavedStateReadFailureWhenTheNoticeCannotBeWritten(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		reconcileErr:       errors.New("reconcile failed"),
 		issueCommentStatus: http.StatusInternalServerError,
@@ -5364,15 +5359,16 @@ func TestServiceReturnsTheReviewCauseWhenTheNoticeCannotBeWritten(t *testing.T) 
 	if err == nil {
 		t.Fatal("Run: want error")
 	}
-	if !strings.Contains(err.Error(), "reconcile failed") {
-		t.Fatalf("err = %q, want the review cause", err)
-	}
-	if strings.Contains(err.Error(), "issue comment") {
-		t.Fatalf("err = %q, want the notice failure kept out of the returned cause", err)
+	if fixture.state.lastUpdateCheckRun["status"] != "completed" {
+		t.Fatalf("status = %v, want completed", fixture.state.lastUpdateCheckRun["status"])
 	}
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure even when the notice cannot be written",
 			fixture.state.lastUpdateCheckRun["conclusion"])
+	}
+	output := checkOutput(t, fixture)
+	if output["title"] != "Review failed while updating the visible summary." {
+		t.Fatalf("title = %v, want the saved state read stage", output["title"])
 	}
 }
 
