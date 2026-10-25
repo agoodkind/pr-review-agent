@@ -92,6 +92,11 @@ type FileContext struct {
 	sourceMetadata string
 }
 
+// IsSubmodule reports whether repository metadata identifies a pinned submodule.
+func (file FileContext) IsSubmodule() bool {
+	return strings.HasPrefix(file.sourceMetadata, "Submodule repository: ")
+}
+
 // markGap records why this file could not be collected whole. It is the only
 // place the two coverage fields are written, so they cannot drift apart.
 //

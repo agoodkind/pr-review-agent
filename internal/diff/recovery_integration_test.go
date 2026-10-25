@@ -131,6 +131,9 @@ func TestCollectorPreservesGitlinkCoordinatesAndRepositoryContext(t *testing.T) 
 			if len(input.Files) != 1 || input.Files[0].Path != "lib" || !input.Files[0].CoverageComplete {
 				t.Fatal("The actual gitlink change must remain reviewable.")
 			}
+			if !input.Files[0].IsSubmodule() {
+				t.Fatal("Collection must identify the pinned submodule from its repository metadata.")
+			}
 			raw := "Subproject commit " + second + "\n"
 			if input.Files[0].CurrentContent != raw {
 				t.Fatal("Repository metadata changed the raw gitlink's line coordinates.")
