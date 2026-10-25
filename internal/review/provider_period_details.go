@@ -29,9 +29,11 @@ func providerPeriodUsageCell(periods []ProviderPeriodUsage) string {
 			}
 			cost = "~$" + strconv.FormatFloat(period.EstimatedCostUSD, 'f', precision, 64)
 		}
-		parts := []string{label, compactPeriodTokens(period.TotalTokens) + " tokens / " + cost,
+		parts := []string{
+			label, compactPeriodTokens(period.TotalTokens) + " tokens / " + cost,
 			periodTimestamp(period.Bounds.StartMS) + " to " + periodTimestamp(period.Bounds.EndMS),
-			"Captured " + periodTimestamp(period.AsOfMS)}
+			"Captured " + periodTimestamp(period.AsOfMS),
+		}
 		if !period.HistoryComplete {
 			parts = append(parts, "Partial history from "+periodTimestamp(period.HistoryStartMS))
 		}
