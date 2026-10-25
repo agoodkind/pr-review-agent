@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -49,6 +50,7 @@ func (attributes *repositoryAttributes) forChange(ctx context.Context, changed g
 	filePath := changed.Path
 	if changed.Status == "removed" {
 		if err := recovery.resolveBase(ctx); err != nil {
+			slog.WarnContext(ctx, "Resolve repository attributes base failed", "path", changed.Path, "err", err)
 			return nil, fmt.Errorf("resolve attributes base for %s: %w", changed.Path, err)
 		}
 		revision = recovery.base
@@ -92,11 +94,13 @@ func (attributes *repositoryAttributes) stack(ctx context.Context, directory str
 				attributes.stacks[location] = stack
 				return stack, nil
 			}
+			slog.WarnContext(ctx, "Load repository attributes failed", "path", attributePath, "revision", revision, "err", err)
 			return nil, fmt.Errorf("load attributes %s at %s: %w", attributePath, revision, err)
 		}
 	}
 	patterns, err := gitattributes.ReadAttributes(bytes.NewReader(content), domainPath, directory == ".")
 	if err != nil {
+		slog.WarnContext(ctx, "Parse repository attributes failed", "path", attributePath, "revision", revision, "err", err)
 		return nil, fmt.Errorf("parse attributes %s at %s: %w", attributePath, revision, err)
 	}
 	stack = append(stack, patterns...)

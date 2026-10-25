@@ -3,7 +3,7 @@ package diff
 import "strings"
 
 // ClassificationContent returns available source text for file classification.
-func (file FileContext) ClassificationContent() string {
+func (file *FileContext) ClassificationContent() string {
 	if file.Status != "removed" {
 		return file.CurrentContent
 	}

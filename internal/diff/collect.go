@@ -93,7 +93,7 @@ type FileContext struct {
 }
 
 // IsSubmodule reports whether repository metadata identifies a pinned submodule.
-func (file FileContext) IsSubmodule() bool {
+func (file *FileContext) IsSubmodule() bool {
 	return strings.HasPrefix(file.sourceMetadata, "Submodule repository: ")
 }
 
@@ -410,6 +410,7 @@ func collectFile(
 		Status:            changedFile.Status,
 		Patch:             changedFile.Patch,
 		CurrentContent:    "",
+		Attributes:        nil,
 		ChangedRightLines: map[int]struct{}{},
 		ChangedRightHunks: map[int]int{},
 		CoverageComplete:  true,
