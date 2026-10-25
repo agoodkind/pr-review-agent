@@ -21,6 +21,7 @@ import (
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/clock"
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/quota"
 	"goodkind.io/pr-review-agent/internal/review"
@@ -84,6 +85,7 @@ type Client struct {
 	budgetReportPolicy      quota.ReportPolicy
 	httpClient              *http.Client
 	now                     clock.Clock
+	maximumRequestBytes     int
 }
 
 // NewClient constructs an SDK client for each configured provider.
@@ -156,24 +158,24 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		budgetReportPolicy:      cfg.BudgetReportPolicy(),
 		httpClient:              httpClient,
 		now:                     clock.System,
+		maximumRequestBytes:     cfg.PromptBytes(),
 	}
 	if cfg.ProviderBudgetURL != nil {
 		client.budgetURL = cfg.ProviderBudgetURL.String()
 	}
+	modelHTTPClient := requestBoundHTTPClient(httpClient, client.maximumRequestBytes)
 	for _, configured := range configuredProviders {
 		if configured.Disabled {
 			continue
 		}
-		reasoningEffort := config.ResolveReasoningEffort(configured.ReasoningEffort)
-		apiKind := config.ResolveProviderAPI(configured.API)
 		client.providers = append(client.providers, provider{
 			id:                  configured.ID,
-			sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
+			sdk:                 newProviderSDK(modelHTTPClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
 			model:               configured.Model,
-			reasoningEffort:     reasoningEffort,
+			reasoningEffort:     config.ResolveReasoningEffort(configured.ReasoningEffort),
 			apiKey:              configured.APIKey,
 			baseURL:             configured.BaseURL,
-			httpClient:          httpClient,
+			httpClient:          modelHTTPClient,
 			dailyTokenLimit:     configured.DailyTokenLimit,
 			dailyTokenTypes:     configured.DailyTokenTypes,
 			tokenLimit:          configured.TokenLimit,
@@ -184,7 +186,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
 			omitTextFormat:      configured.OmitTextFormat,
 			autoRouterCostTier:  configured.AutoRouterCostTier,
-			api:                 apiKind,
+			api:                 config.ResolveProviderAPI(configured.API),
 			pricingByModel:      cfg.ReviewModelPricing,
 			requestTimeout:      configured.RequestTimeout,
 		})
@@ -363,6 +365,9 @@ func (client *Client) complete(
 	logger := gklog.L(ctx)
 	instructions, err := structuredOutputPrompt(ctx, client.reviewPolicy, policy, schemaName, schema)
 	if err != nil {
+		return "", err
+	}
+	if err := client.checkRequestSizes(ctx, prompt, instructions, schemaName, schema); err != nil {
 		return "", err
 	}
 	var failures []error
@@ -544,15 +549,11 @@ func completeWith(
 }
 
 func responseOptions(target provider) []option.RequestOption {
-	if target.autoRouterCostTier == "" {
+	fields, enabled := responseRouting(target)
+	if !enabled {
 		return nil
 	}
-	return []option.RequestOption{
-		option.WithJSONSet("plugins", []map[string]string{{
-			"id": "auto-router", "cost_tier": string(target.autoRouterCostTier),
-		}}),
-		option.WithJSONSet("provider.require_parameters", true),
-	}
+	return []option.RequestOption{option.WithJSONSet("plugins", fields.Plugins), option.WithJSONSet("provider", fields.Provider)}
 }
 
 func newResponseParams(
@@ -651,6 +652,10 @@ func modelUsage(model string, usage responses.ResponseUsage, usageReported bool,
 }
 
 func modelProviderError(model string, err error) error {
+	var sizeFailure *diff.PromptSizeError
+	if errors.As(err, &sizeFailure) {
+		return sizeFailure
+	}
 	var apiError *openaigo.Error
 	if errors.As(err, &apiError) {
 		return &ProviderError{

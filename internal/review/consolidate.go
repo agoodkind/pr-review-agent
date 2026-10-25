@@ -178,10 +178,11 @@ func (service *Service) consolidateAcrossChunks(
 	if len(candidates) == 0 || len(selected) == 0 {
 		return candidates
 	}
-	prompt, ok := buildAcrossChunkConsolidationPrompt(
-		candidates, selected, pass.work, chunkText, pass.disputePrompt, pass.settings.maximumPromptBytes, service.reviewPolicy,
+	prompt, err := BuildConsolidationPrompt(
+		service.model, candidates, selected, formatAcrossChunkContext(pass.work, chunkText, pass.disputePrompt, selected), pass.settings.maximumPromptBytes, service.reviewPolicy,
 	)
-	if !ok {
+	if err != nil {
+		gklog.L(ctx).WarnContext(ctx, "Cross-chunk consolidation prompt preparation failed; preserving deterministic findings", "candidates", len(candidates), "err", err)
 		return candidates
 	}
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
@@ -276,10 +277,10 @@ func (service *Service) consolidateChunk(
 	// to the service would be timed by whatever the process booted with, which
 	// is the staleness the carrying exists to end.
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
-	prompt, err := buildConsolidationPrompt(candidates, pass.disputePrompt, service.reviewPolicy)
+	prompt, err := BuildConsolidationPrompt(service.model, candidates, nil, pass.disputePrompt, pass.settings.maximumPromptBytes, service.reviewPolicy)
 	if err != nil {
 		cancel()
-		gklog.L(ctx).ErrorContext(ctx, "Consolidation prompt rendering failed", "err", err)
+		gklog.L(ctx).WarnContext(ctx, "Consolidation prompt preparation failed; preserving deterministic findings", "candidates", len(candidates), "err", err)
 		return candidates
 	}
 	answer, err := service.model.Consolidate(
@@ -384,52 +385,31 @@ func strongestCandidate(numbers []int, candidates []domain.Finding) int {
 	return strongest
 }
 
-// buildConsolidationPrompt asks for the grouping of one chunk's candidates.
-//
-// The reviewer context comes first, for the same reason it comes first in a
-// chunk prompt: what has already been raised has to be in view before the model
-// decides what these findings add to it. The instruction is outside the
-// untrusted delimiters because this service wrote it; the findings and the
-// threads sit inside them, because both are model output and stranger prose.
-func buildConsolidationPrompt(candidates []domain.Finding, disputes string, policy reviewrules.Policy) (string, error) {
-	var data reviewrules.PromptData
-	data.Disputes = disputes
-	data.Input = policy.WrapUntrusted(formatConsolidationCandidates(candidates))
-	return renderPrompt(policy, "consolidate.input", data)
-}
-
-// buildAcrossChunkConsolidationPrompt asks whether new candidates restate a
-// finding this run already selected. Candidate numbers refer only to the new
-// findings, so the model can drop a restatement without changing an earlier
-// comment.
-func buildAcrossChunkConsolidationPrompt(
-	candidates []domain.Finding,
-	carried []domain.Finding,
-	work deltaWork,
-	chunkText string,
-	disputes string,
-	maximumBytes int,
-	policy reviewrules.Policy,
-) (string, bool) {
-	var data reviewrules.PromptData
-	data.Input = policy.WrapUntrusted("")
-	prefix, err := renderPrompt(policy, "consolidate.across.input", data)
-	if err != nil {
-		return "", false
+// BuildConsolidationPrompt preserves complete findings while fitting optional context.
+func BuildConsolidationPrompt(model Model, candidates, carried []domain.Finding, context string, maximumBytes int, policy reviewrules.Policy) (string, error) {
+	name := "consolidate.input"
+	findings := formatConsolidationCandidates(candidates)
+	if len(carried) > 0 {
+		name = "consolidate.across.input"
+		findings = "Findings already selected:\n" + formatConsolidationCandidates(carried) + "\n\nNew candidates:\n" + findings
 	}
-	findings := "Findings already selected:\n" + formatConsolidationCandidates(carried) +
-		"\n\nNew candidates:\n" + formatConsolidationCandidates(candidates)
-	minimumLength := len(prefix) + len(findings) + 2
-	if minimumLength >= maximumBytes {
-		return "", false
-	}
-	contextBudget := maximumBytes - minimumLength
-	contextText := formatAcrossChunkContext(work, chunkText, disputes, carried)
-	contextText = truncateUTF8(contextText, contextBudget)
-	input := contextText + "\n\n" + findings
-	data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(input))
-	prompt, err := renderPrompt(policy, "consolidate.across.input", data)
-	return prompt, err == nil
+	required := policy.WrapUntrusted(policy.EscapeUntrusted(findings))
+	return boundStagePrompt(context, maximumBytes, func(optional string, omitted bool) (string, error) {
+		var data reviewrules.PromptData
+		data.Input = required
+		if optional != "" {
+			data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(optional)) + "\n\n" + data.Input
+		}
+		prompt, err := renderPrompt(policy, name, data)
+		if err != nil || !omitted {
+			return prompt, err
+		}
+		var noteData reviewrules.PromptData
+		note, err := renderPrompt(policy, "consolidate.context_omitted", noteData)
+		return prompt + "\n\n" + note, err
+	}, func(prompt string) (int, error) {
+		return consolidationPromptBytes(model, prompt)
+	})
 }
 
 func formatAcrossChunkContext(
@@ -483,8 +463,10 @@ func formatConsolidationCandidates(candidates []domain.Finding) string {
 	sections := make([]string, 0, len(candidates))
 	for index, candidate := range candidates {
 		sections = append(sections, fmt.Sprintf(
-			"Finding %d\nSurface: %s\nCommit SHA: %s\nPath: %s\nLines: %d-%d\nTitle: %s\nClaim: %s\nBody: %s\nEvidence: %s",
+			"Finding %d\nRule ID: %s\nDeduplication: %s\nSurface: %s\nCommit SHA: %s\nPath: %s\nLines: %d-%d\nTitle: %s\nClaim: %s\nBody: %s\nEvidence: %s",
 			index+1,
+			candidate.RuleID,
+			candidate.Deduplication,
 			candidate.EffectiveSurface(),
 			candidate.CommitSHA,
 			candidate.Path,

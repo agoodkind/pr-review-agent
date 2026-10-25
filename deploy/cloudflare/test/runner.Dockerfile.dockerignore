@@ -1,0 +1,17 @@
+*
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!config/
+!config/**
+!runtime.json
+!deploy/
+!deploy/cloudflare/
+!deploy/cloudflare/**
+**/node_modules
+**/.wrangler
+**/.dev.vars
+**/.env*

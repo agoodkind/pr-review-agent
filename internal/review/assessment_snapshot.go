@@ -12,6 +12,7 @@ import (
 )
 
 type assessmentSnapshot struct {
+	fileAssessments  []domain.FileAssessment
 	metadata         metadataReviewRecord
 	metadataRecorded bool
 	// Refresh reports malformed metadata after the reviewing-state and head guards.
@@ -26,6 +27,7 @@ type assessmentSnapshot struct {
 func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	metadata, recorded, err := decodeMetadataRecord(body)
 	snapshot := assessmentSnapshot{
+		fileAssessments:   decodeFileAssessments(body),
 		metadata:          metadata,
 		metadataRecorded:  recorded,
 		metadataError:     err,
@@ -37,6 +39,17 @@ func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	}
 	if accepted, found := decodeOmissionDecisionMarker(body); found {
 		snapshot.omissionsAccepted = accepted
+	}
+	for _, path := range assessmentPaths(structuralShortfall{Hunks: snapshot.omissions}) {
+		covered := false
+		for _, assessment := range snapshot.fileAssessments {
+			if assessment.Path == path && (assessment.PermitsContentExclusion() || assessment.Action == domain.FileActionReview && assessment.Reviewed) {
+				covered = true
+			}
+		}
+		if !covered {
+			snapshot.omissionsAccepted = false
+		}
 	}
 	return snapshot
 }

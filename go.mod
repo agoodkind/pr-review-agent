@@ -3,6 +3,7 @@ module goodkind.io/pr-review-agent
 go 1.27.1
 
 require (
+	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/openai/openai-go/v3 v3.66.0
 	github.com/robfig/cron/v3 v3.0.1
 	goodkind.io/gklog v0.4.5-0.20260805222409-15e95d9fb619

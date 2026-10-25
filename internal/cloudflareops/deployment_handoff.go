@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var errHandoffControlUnavailable = errors.New("gateway handoff control is not ready (HTTP 503)")
+var errHandoffControlUnavailable = errors.New("gateway handoff control is not ready")
 
 type handoffControlStatus struct {
 	Handoff                  *bool  `json:"handoff"`
@@ -89,9 +89,6 @@ func (operation *deployment) startHandoff(ctx context.Context) error {
 
 func (operation *deployment) resumeHandoff(ctx context.Context) error {
 	slog.InfoContext(ctx, "Persisted handoff resume started", "candidate", operation.handoff.Service, "revision", operation.handoff.Revision)
-	if _, err := operation.probe(ctx, operation.slot.Origin, operation.handoff.Revision); err != nil {
-		return err
-	}
 	if err := operation.writeDeploymentToken(ctx, operation.name); err != nil {
 		return err
 	}
@@ -174,8 +171,8 @@ func (operation *deployment) gatewayHandoffControl(ctx context.Context, action, 
 	if response.StatusCode == http.StatusUnauthorized {
 		return status, errDeploymentCredentialInactive
 	}
-	if response.StatusCode == http.StatusServiceUnavailable {
-		return status, errHandoffControlUnavailable
+	if response.StatusCode == http.StatusConflict || response.StatusCode == http.StatusServiceUnavailable {
+		return status, fmt.Errorf("%w (HTTP %d)", errHandoffControlUnavailable, response.StatusCode)
 	}
 	if response.StatusCode != http.StatusOK {
 		return status, fmt.Errorf("gateway handoff control returned HTTP %d", response.StatusCode)
@@ -193,28 +190,37 @@ func (operation *deployment) gatewayHandoffControl(ctx context.Context, action, 
 }
 
 func (operation *deployment) waitHandoffControl(ctx context.Context, action, revision string, complete bool) error {
-	timeout, _ := time.ParseDuration(operation.configuration.CandidateTimeout)
-	interval, _ := time.ParseDuration(operation.configuration.ProbeInterval)
+	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var confirmed handoffControlStatus
+	var lastError error
 	for {
-		if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, ""); err != nil {
-			return err
+		_, err := operation.probe(ctx, operation.configuration.GatewayOrigin, "")
+		var status handoffControlStatus
+		if err == nil {
+			status, err = operation.gatewayHandoffControl(ctx, action, revision)
 		}
-		status, err := operation.gatewayHandoffControl(ctx, action, revision)
 		if err == nil && (!complete || *status.Complete) {
 			confirmed = status
 			break
 		}
-		if err != nil && !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errHandoffControlUnavailable) {
+		if ctx.Err() != nil {
+			slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
+			return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w", action, errors.Join(lastError, err, ctx.Err()))
+		}
+		var readinessError *readinessHTTPError
+		retryableReadiness := errors.As(err, &readinessError) && readinessError.StatusCode == http.StatusServiceUnavailable
+		if err != nil && !retryableReadiness && !errors.Is(err, errDeploymentCredentialInactive) && !errors.Is(err, errHandoffControlUnavailable) {
 			return err
 		}
+		lastError = err
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely", action)
+			slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
+			return fmt.Errorf("gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w", action, errors.Join(lastError, ctx.Err()))
 		case <-timer.C:
 		}
 	}

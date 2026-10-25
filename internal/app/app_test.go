@@ -450,6 +450,7 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckCompletions(t, 1)
 	before := fixture.githubState.summaryCommentBody()
+	beforeCalls := fixture.clydeState.requestCount()
 
 	labeled := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
@@ -462,8 +463,8 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	_ = labeled.Body.Close()
 
 	time.Sleep(300 * time.Millisecond)
-	if calls := fixture.clydeState.requestCount(); calls != 2 {
-		t.Fatalf("clyde requests = %d, want 2 from the completed review: an unrelated label adds none", calls)
+	if calls := fixture.clydeState.requestCount(); calls != beforeCalls {
+		t.Fatalf("The unrelated label changed provider requests from %d to %d.", beforeCalls, calls)
 	}
 	if count := fixture.githubState.submitReviewCount(); count != 1 {
 		t.Fatalf("submit review count = %d, want 1", count)
@@ -898,7 +899,8 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	if first.StatusCode != http.StatusAccepted {
 		t.Fatalf("first status = %d, want 202", first.StatusCode)
 	}
-	fixture.waitForClydeCalls(t, 2)
+	fixture.waitForCheckCompletions(t, 1)
+	beforeCalls := fixture.clydeState.requestCount()
 
 	second := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
@@ -909,8 +911,8 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 		t.Fatalf("second status = %d, want 202", second.StatusCode)
 	}
 	time.Sleep(100 * time.Millisecond)
-	if fixture.clydeState.requestCount() != 2 {
-		t.Fatalf("clyde requests = %d, want 2", fixture.clydeState.requestCount())
+	if calls := fixture.clydeState.requestCount(); calls != beforeCalls {
+		t.Fatalf("The duplicate delivery changed provider requests from %d to %d.", beforeCalls, calls)
 	}
 }
 
@@ -1046,13 +1048,14 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
+	const explanation = "Validate the webhook payload before enqueue."
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{defectiveReviewContent(domain.Finding{
 			Path:       testFindingPath,
 			StartLine:  3,
 			EndLine:    3,
 			Title:      "Missing validation",
-			Body:       "Validate the webhook payload before enqueue.",
+			Body:       explanation,
 			Importance: testMinimumImportance,
 		})},
 	})
@@ -1085,7 +1088,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	if strings.Contains(visible, testFindingPath) {
 		t.Fatalf("the visible verdict duplicates the inline finding location: %q", comment)
 	}
-	assertVerdictBody(t, fixture, review["body"], testDefectiveHead, true)
+	assertVerdictBody(t, fixture, review["body"], testDefectiveHead, true, explanation)
 }
 
 func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
@@ -1467,14 +1470,15 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	}
 
 	runWebhook(t, "delivery-first-app")
+	beforeCalls := clydeState.requestCount()
 	if githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count after first app = %d, want 1", githubState.submitReviewCount())
 	}
 
 	runWebhook(t, "delivery-second-app")
 	time.Sleep(200 * time.Millisecond)
-	if clydeState.requestCount() != 2 {
-		t.Fatalf("clyde requests after fresh app = %d, want 2", clydeState.requestCount())
+	if calls := clydeState.requestCount(); calls != beforeCalls {
+		t.Fatalf("The new app instance changed provider requests from %d to %d for the reviewed head.", beforeCalls, calls)
 	}
 	if githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count after fresh app = %d, want 1", githubState.submitReviewCount())
@@ -1511,6 +1515,7 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 // because nothing in this pipeline threads a reply onto another comment.
 func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T) {
 	withIntegrationLock(t)
+	const explanation = "The new fallback still breaks core behavior."
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{
 			defectiveReviewContent(domain.Finding{
@@ -1526,7 +1531,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 				StartLine:  4,
 				EndLine:    4,
 				Title:      "Unsafe fallback",
-				Body:       "The new fallback still breaks core behavior.",
+				Body:       explanation,
 				Importance: testMinimumImportance,
 			}),
 		},
@@ -1567,7 +1572,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	if fixture.githubState.listedFilePages() == 0 {
 		t.Fatal("full file list page fetches = 0, want the current pull request")
 	}
-	assertVerdictBody(t, fixture, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true)
+	assertVerdictBody(t, fixture, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true, explanation)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -3387,8 +3392,8 @@ var summaryProse = []string{
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks the summary permalink and hidden recovery data.
-func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string, blocking bool) {
+// assertVerdictBody checks the actual blocking explanation and hidden recovery data.
+func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string, blocking bool, explanation string) {
 	t.Helper()
 	if !blocking {
 		if value != nil && value != "" {
@@ -3413,15 +3418,32 @@ func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string
 	if commentCount != 1 || commentID == nil {
 		t.Fatalf("The native review requires one canonical summary, but the fixture contains %d comments.", commentCount)
 	}
-	expectedURL := fmt.Sprintf("https://github.com/%s/%s/pull/%d#issuecomment-%v", testRepoOwner, testRepoName, testPRNumber, commentID)
-	link, checkpoint, found := strings.Cut(body, "\n\n")
-	if !found || !strings.Contains(link, "]("+expectedURL+")") {
-		t.Fatalf("The native review does not link directly to summary %s: %q", expectedURL, body)
+	visible, checkpoint, found := strings.Cut(body, "\n\n")
+	if !found || visible != explanation {
+		t.Fatalf("The native review contains %q instead of the expected blocking sentence %q.", visible, explanation)
+	}
+	currentInlineCount := 0
+	for _, comment := range fixture.githubState.streamedCommentBodies() {
+		inlineBody, _ := comment["body"].(string)
+		finding, marked := marker.FindFinding(inlineBody)
+		if !marked || finding.Head != domain.HeadSHA(head) {
+			continue
+		}
+		currentInlineCount++
+		if !strings.Contains(inlineBody, explanation) {
+			t.Fatalf("The inline finding does not preserve its blocking explanation: %q.", inlineBody)
+		}
+	}
+	if currentInlineCount != 1 {
+		t.Fatalf("The current head must retain exactly one inline finding, but it has %d.", currentInlineCount)
+	}
+	if !strings.Contains(checkpoint, "<!-- pr-review-agent:metadata:v1 ") {
+		t.Fatal("The native rejection omitted its hidden metadata recovery record.")
 	}
 	for _, line := range strings.Split(checkpoint, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && (!strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->")) {
-			t.Fatalf("The native review repeats visible prose after its summary link: %q", line)
+			t.Fatalf("The native review repeats visible prose after its blocking explanation: %q", line)
 		}
 	}
 	// The marker records the decision because a dismissal erases GitHub's own

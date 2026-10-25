@@ -9,17 +9,30 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/policytest"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-const noticeTestHead = "a3c4f1cac7f595bc824704b9d2a1f1191630dc32"
+func configuredScopeNotice(t *testing.T, shortfall structuralShortfall, pending int) string {
+	t.Helper()
+	policy := policytest.Load(t)
+	var data reviewrules.PromptData
+	data.Input = renderUnreadHunks(shortfall.Hunks)
+	data.Index = len(shortfall.Hunks)
+	data.Total = pending
+	notice, err := policy.Render("coverage.pending", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return notice
+}
 
 // A repository path cannot close the code fence or inject Markdown.
 func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
 	hostile := "```\nBODY: [click](https://evil.example)/main.go"
 
-	notice := structuralShortfallNotice(
-		domain.HeadSHA(noticeTestHead),
+	notice := configuredScopeNotice(
+		t,
 		structuralShortfall{Hunks: []unreadHunk{{
 			Path:   hostile,
 			Header: "@@ -1,1 +1,2 @@ `evil`",
@@ -73,15 +86,12 @@ func TestALongUnreadListIsBoundedAndSaysHowManyItOmitted(t *testing.T) {
 		})
 	}
 
-	notice := structuralShortfallNotice(
-		domain.HeadSHA(noticeTestHead),
+	notice := configuredScopeNotice(
+		t,
 		structuralShortfall{Hunks: hunks},
 		0,
 	)
 
-	if !strings.Contains(notice, "The review did not read "+hunkCount(maximumListedUnreadHunks+extra)) {
-		t.Fatalf("the sentence lost the exact count:\n%s", notice)
-	}
 	if !strings.Contains(notice, fmt.Sprintf("This list omits %d more unread changes.", extra)) {
 		t.Fatalf("the notice does not say what it omitted:\n%s", notice)
 	}
@@ -106,16 +116,16 @@ func TestANoticeWithPendingChunksDoesNotClaimTheRestWasReviewed(t *testing.T) {
 		Target: nil,
 	}}}
 
-	withPending := structuralShortfallNotice(domain.HeadSHA(noticeTestHead), shortfall, 3)
+	withPending := configuredScopeNotice(t, shortfall, 3)
 	if strings.Contains(withPending, "Everything else on this head was reviewed") {
 		t.Fatalf("the notice claims coverage it does not have:\n%s", withPending)
 	}
-	if !strings.Contains(withPending, "3 chunks went unread as well") {
+	if !strings.Contains(withPending, "3 review chunks remain unfinished") {
 		t.Fatalf("the notice does not say what is still owed:\n%s", withPending)
 	}
 
-	clean := structuralShortfallNotice(domain.HeadSHA(noticeTestHead), shortfall, 0)
-	if !strings.Contains(clean, "Everything else on this head was reviewed") {
-		t.Fatalf("a run owing nothing else should say so:\n%s", clean)
+	clean := configuredScopeNotice(t, shortfall, 0)
+	if strings.Contains(clean, "remain unfinished") {
+		t.Fatalf("the notice claims unfinished chunks when only file assessment remains:\n%s", clean)
 	}
 }

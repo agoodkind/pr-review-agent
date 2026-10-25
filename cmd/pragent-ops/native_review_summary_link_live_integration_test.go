@@ -82,7 +82,7 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	summary.MetadataRevision = diff.PullRequestRevision(original.PullRequest)
 	summary.Metadata = []domain.Finding{{
 		Surface: domain.FindingPullRequestTitle, RuleID: "pr_title", StartLine: 1, EndLine: 1,
-		Title: "Verify the fixture title", Body: "The fixture title exercises native review publication.",
+		Title: "Verify the fixture title", Body: "The fixture title does not identify the changed behavior. The detailed finding retains this second sentence.",
 		Importance: 10,
 	}}
 	var state marker.State
@@ -120,9 +120,9 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 		t.Fatal("The refresh did not create exactly one native rejection.")
 	}
 	rejection := after[len(after)-1]
-	expected, err := review.NativeReviewSummaryLink(cfg.ReviewPolicy, repo, opts.pullRequest, comment.ID, review.RenderVerdictBody(summary))
-	if err != nil || rejection.State != "CHANGES_REQUESTED" || rejection.Body != expected {
-		t.Fatal("The native rejection did not retain the configured direct summary link and recovery metadata.")
+	visible, err := cfg.ReviewPolicy.Render("native.request_changes", reviewrules.PromptData{Input: "The fixture title does not identify the changed behavior."})
+	if err != nil || rejection.State != "CHANGES_REQUESTED" || rejection.Body != visible+"\n\n"+review.RenderVerdictBody(summary) || !strings.Contains(visible, "The fixture title does not identify the changed behavior.") {
+		t.Fatal("The native rejection must explain the actual metadata finding in one sentence and retain its recovery metadata.")
 	}
 	if _, _, err := liveApprovalRun(t, ctx, service, reference, nil); err != nil {
 		t.Fatal(err)
@@ -153,7 +153,10 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	}
 	repaired := liveReviewBodyCapture(t, ctx, client, opts, repo)
 	expectedReview := legacy
-	expectedReview.Body = expected
+	expectedReview.Body, err = review.NativeReviewSummaryLink(cfg.ReviewPolicy, repo, opts.pullRequest, comment.ID, review.RenderVerdictBody(summary))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := verifyReviewBodySnapshot(ctx, client, beforeRepair, []githubapp.Review{expectedReview}); err != nil {
 		t.Fatal(err)
 	}
@@ -256,6 +259,7 @@ func liveNativeMissingSummaryFailure(t *testing.T, ctx context.Context, policy r
 	}
 	// The configured body exceeds GitHub's accepted review size.
 	templates["native.summary_link"] += "\n\n" + strings.Repeat("The fixture exercises publication rejection. ", 50000)
+	templates["native.request_changes"] += "\n\n" + strings.Repeat("The fixture exercises publication rejection. ", 50000)
 	prompts["templates"], err = json.Marshal(templates)
 	if err != nil {
 		t.Fatal(err)

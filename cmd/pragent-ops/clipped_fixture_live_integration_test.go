@@ -26,10 +26,11 @@ import (
 )
 
 type clippedLivePR struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
-	State string `json:"state"`
-	Draft bool   `json:"draft"`
+	Title string          `json:"title"`
+	Body  string          `json:"body"`
+	State string          `json:"state"`
+	Draft bool            `json:"draft"`
+	Base  clippedLiveBase `json:"base"`
 	Head  struct {
 		SHA  string `json:"sha"`
 		Ref  string `json:"ref"`
@@ -37,6 +38,14 @@ type clippedLivePR struct {
 			FullName string `json:"full_name"`
 		} `json:"repo"`
 	} `json:"head"`
+}
+
+type clippedLiveBase struct {
+	SHA  string `json:"sha"`
+	Ref  string `json:"ref"`
+	Repo struct {
+		FullName string `json:"full_name"`
+	} `json:"repo"`
 }
 
 type clippedLiveFile struct {

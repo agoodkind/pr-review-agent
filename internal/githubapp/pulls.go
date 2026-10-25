@@ -35,6 +35,8 @@ type changedFileResponse struct {
 	PreviousFilename string  `json:"previous_filename"`
 	Status           string  `json:"status"`
 	Patch            *string `json:"patch"`
+	Additions        *int    `json:"additions"`
+	Deletions        *int    `json:"deletions"`
 }
 
 type compareResponse struct {
@@ -65,6 +67,7 @@ type fileContentResponse struct {
 	Type            string `json:"type"`
 	SHA             string `json:"sha"`
 	SubmoduleGitURL string `json:"submodule_git_url"`
+	Size            *int   `json:"size"`
 }
 
 // GetPullRequest loads one pull request by number.
@@ -160,7 +163,11 @@ func (client *Client) ListChangedFiles(
 			return 0, errors.New("decode changed files page")
 		}
 		for _, item := range pageFiles {
-			files = append(files, decodeChangedFile(item))
+			file, err := decodeChangedFile(item)
+			if err != nil {
+				return 0, err
+			}
+			files = append(files, file)
 		}
 		return len(pageFiles), nil
 	})
@@ -168,6 +175,12 @@ func (client *Client) ListChangedFiles(
 		return nil, err
 	}
 	return files, nil
+}
+
+// FileContent separates file bytes from repository metadata outside the file.
+type FileContent struct {
+	Data     []byte
+	Metadata string
 }
 
 // GetFile loads repository file bytes or a submodule's repository and pinned commit at one ref.
@@ -178,6 +191,24 @@ func (client *Client) GetFile(
 	path string,
 	ref domain.HeadSHA,
 ) ([]byte, error) {
+	content, err := client.GetFileContent(ctx, installationID, repo, path, ref)
+	if err != nil {
+		return nil, err
+	}
+	if content.Metadata == "" {
+		return content.Data, nil
+	}
+	return append([]byte(content.Metadata+"\n"), content.Data...), nil
+}
+
+// GetFileContent loads pinned file bytes and keeps submodule repository metadata separate.
+func (client *Client) GetFileContent(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	path string,
+	ref domain.HeadSHA,
+) (FileContent, error) {
 	escapedPath := strings.Split(path, "/")
 	for index, segment := range escapedPath {
 		escapedPath[index] = url.PathEscape(segment)
@@ -188,33 +219,43 @@ func (client *Client) GetFile(
 
 	body, err := client.doREST(ctx, installationID, "GET", apiPath, query, nil)
 	if err != nil {
-		return nil, err
+		return FileContent{}, err
 	}
 
 	var response fileContentResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		client.logger.ErrorContext(ctx, "decode file content", slog.String("err", err.Error()))
-		return nil, errors.New("decode file content")
+		return FileContent{}, errors.New("decode file content")
 	}
 	if response.Type == "submodule" {
 		commit, err := domain.ParseHeadSHA(response.SHA)
 		if err != nil || strings.TrimSpace(response.SubmoduleGitURL) == "" ||
 			strings.ContainsAny(response.SubmoduleGitURL, "\r\n\x00") {
-			return nil, errors.New("invalid submodule metadata")
+			return FileContent{}, errors.New("invalid submodule metadata")
 		}
-		return []byte(fmt.Sprintf("Submodule repository: %s\nSubproject commit %s\n", response.SubmoduleGitURL, commit)), nil
+		return FileContent{
+			Data:     []byte(fmt.Sprintf("Subproject commit %s\n", commit)),
+			Metadata: "Submodule repository: " + response.SubmoduleGitURL,
+		}, nil
+	}
+	if response.Encoding == "none" && response.Type == "file" {
+		content, err := client.getFileBlob(ctx, installationID, repo, response)
+		if err != nil {
+			return FileContent{}, err
+		}
+		return FileContent{Data: content, Metadata: ""}, nil
 	}
 	if response.Encoding != "base64" {
-		return nil, errors.New("unsupported file encoding")
+		return FileContent{}, errors.New("unsupported file encoding")
 	}
 
 	normalized := strings.ReplaceAll(response.Content, "\n", "")
 	decoded, err := base64.StdEncoding.DecodeString(normalized)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "decode file content", slog.String("err", err.Error()))
-		return nil, errors.New("decode file content")
+		return FileContent{}, errors.New("decode file content")
 	}
-	return decoded, nil
+	return FileContent{Data: decoded, Metadata: ""}, nil
 }
 
 // Compare returns the files changed between two commits and the commit their
@@ -243,7 +284,11 @@ func (client *Client) Compare(
 			}
 		}
 		for _, item := range response.Files {
-			comparison.Files = append(comparison.Files, decodeChangedFile(item))
+			file, err := decodeChangedFile(item)
+			if err != nil {
+				return 0, err
+			}
+			comparison.Files = append(comparison.Files, file)
 		}
 		return len(response.Files), nil
 	})
@@ -253,17 +298,31 @@ func (client *Client) Compare(
 	return comparison, nil
 }
 
-func decodeChangedFile(item changedFileResponse) ChangedFile {
+func decodeChangedFile(item changedFileResponse) (ChangedFile, error) {
+	if item.Additions != nil && *item.Additions < 0 {
+		return ChangedFile{}, errors.New("changed file additions cannot be negative")
+	}
+	if item.Deletions != nil && *item.Deletions < 0 {
+		return ChangedFile{}, errors.New("changed file deletions cannot be negative")
+	}
 	changed := ChangedFile{
-		Path:         item.Filename,
-		PreviousPath: item.PreviousFilename,
-		Status:       item.Status,
-		Patch:        "",
-		PatchPresent: false,
+		Path:              item.Filename,
+		PreviousPath:      item.PreviousFilename,
+		Status:            item.Status,
+		Patch:             "",
+		PatchPresent:      false,
+		Additions:         0,
+		Deletions:         0,
+		ChangeCountsKnown: false,
+	}
+	if item.Additions != nil && item.Deletions != nil {
+		changed.Additions = *item.Additions
+		changed.Deletions = *item.Deletions
+		changed.ChangeCountsKnown = true
 	}
 	if item.Patch != nil {
 		changed.Patch = *item.Patch
 		changed.PatchPresent = true
 	}
-	return changed
+	return changed, nil
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	openaigo "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 
@@ -24,6 +25,14 @@ func completeChat(
 	schema json.RawMessage,
 	report usageReporter,
 ) (string, string, error) {
+	params := newChatParams(target, prompt, policy, schemaName, schema)
+	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
+	defer func() { _ = stream.Close() }()
+
+	return readChatCompletion(ctx, target, stream, report)
+}
+
+func newChatParams(target provider, prompt, policy, schemaName string, schema json.RawMessage) openaigo.ChatCompletionNewParams {
 	params := openaigo.ChatCompletionNewParams{
 		Model:           target.model,
 		ReasoningEffort: shared.ReasoningEffort(target.reasoningEffort),
@@ -45,9 +54,10 @@ func completeChat(
 	if !target.omitMaxOutputTokens {
 		params.MaxTokens = openaigo.Int(target.outputTokenLimit())
 	}
-	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
-	defer func() { _ = stream.Close() }()
+	return params
+}
 
+func readChatCompletion(ctx context.Context, target provider, stream *ssestream.Stream[openaigo.ChatCompletionChunk], report usageReporter) (string, string, error) {
 	var content strings.Builder
 	model := ""
 	serviceTier := ""

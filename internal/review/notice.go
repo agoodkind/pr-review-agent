@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/config"
@@ -320,16 +321,24 @@ func (service *Service) writeFailureSummary(
 	prose += reassessmentNotice(ctx)
 	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, existingBody string) summaryCommentContent {
 		failureProse := prose
-		if preserveCompletedSummary(existing, existingBody, progress) {
-			failureProse = renderMaintenanceFailure(existingBody, title, detail) + reassessmentNotice(ctx)
+		if preserveCheckpointSummary(existing, existingBody) &&
+			progress.FilesReviewed == 0 && progress.Chunks == 0 && len(progress.Models) == 0 &&
+			len(progress.Observed) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
+			len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0 {
+			failureProse = renderMaintenanceFailure(existingBody, title, detail)
+			if !strings.Contains(existingBody, reviewDetailsStart) {
+				failureProse += "\n\n" + RenderDetails(progress)
+			}
+			failureProse += reassessmentNotice(ctx)
 		}
 		return summaryCommentContent{
 			Prose: failureProse,
 			State: marker.State{
-				LastReviewed: existing.LastReviewed,
-				RunID:        job.DeliveryID,
-				Status:       marker.StateFailed,
-				Pending:      existing.Pending,
+				PolicyRevision: existing.PolicyRevision,
+				LastReviewed:   existing.LastReviewed,
+				RunID:          job.DeliveryID,
+				Status:         marker.StateFailed,
+				Pending:        existing.Pending,
 				// The chunks already read carry forward for the same reason the
 				// pending ones do. Dropping them here would send the next run
 				// over work this pull request has already paid for.

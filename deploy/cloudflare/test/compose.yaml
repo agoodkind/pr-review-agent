@@ -1,0 +1,42 @@
+services:
+  engine:
+    image: docker:28-dind
+    privileged: true
+    command: [dockerd, --host=unix:///var/run/docker.sock]
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      - engine-data:/var/lib/docker
+      - engine-socket:/var/run
+    healthcheck:
+      test: [CMD, docker, info]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+  runner:
+    init: true
+    build:
+      context: ../../..
+      dockerfile: deploy/cloudflare/test/runner.Dockerfile
+      args:
+        GO_VERSION: ${PRAGENT_COMPOSE_GO_VERSION:?Go version required}
+    network_mode: service:engine
+    depends_on:
+      engine:
+        condition: service_healthy
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      PRAGENT_SERVICE_TEST_BINARY: ${PRAGENT_COMPOSE_BINARY:-}
+      PRAGENT_SERVICE_TEST_IMAGE: ${PRAGENT_SERVICE_TEST_IMAGE:-}
+      PRAGENT_COMPOSE_IMAGE_ID: ${PRAGENT_COMPOSE_IMAGE_ID:-}
+      PRAGENT_SERVICE_TEST_REVISION: ${PRAGENT_SERVICE_TEST_REVISION:-}
+      PRAGENT_SERVICE_TEST_PHASES: ${PRAGENT_SERVICE_TEST_PHASES:-candidate,service,legacy,idle,legacy-handoff,service-handoff}
+      TMPDIR: /evidence
+    volumes:
+      - engine-socket:/var/run
+      - ${PRAGENT_COMPOSE_INPUT:?harness input directory required}:/input:ro
+      - ${PRAGENT_COMPOSE_EVIDENCE:?harness evidence directory required}:/evidence
+    entrypoint: [node, scripts/service-test-runner.mjs]
+volumes:
+  engine-data:
+  engine-socket:

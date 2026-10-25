@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -60,10 +61,12 @@ func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admi
 // and the chunks the model will be asked about. Admission measures exactly
 // these chunks, so nothing later re-derives a different set from the same diff.
 type deltaWork struct {
-	PullRequest githubapp.PullRequest
-	Files       []diff.FileContext
-	Metadata    []diff.MetadataSource
-	Chunks      []diff.Chunk
+	FileAssessments  []domain.FileAssessment
+	AssessmentModels []string
+	PullRequest      githubapp.PullRequest
+	Files            []diff.FileContext
+	Metadata         []diff.MetadataSource
+	Chunks           []diff.Chunk
 }
 
 // collectAndAdmit gathers the current pull request and applies the admission
@@ -93,18 +96,34 @@ func (service *Service) collectAndAdmit(
 	}
 	progress.reached("the diff")
 
-	shortfall := classifyStructuralShortfall(deltaWork{
-		PullRequest: input.PullRequest,
-		Files:       input.Files,
-		Metadata:    input.Metadata,
-		Chunks:      nil,
-	})
-	promptContext, err := reviewContext(input.PullRequest, input.Files, shortfall, settings.maximumPromptBytes, service.reviewPolicy)
+	fileAdmission := admitDelta(len(input.Files), 0, settings.maxFiles, settings.maxChunks)
+	if fileAdmission.Skip {
+		if err := service.declineReview(ctx, job, checkRun.ID, fileAdmission); err != nil {
+			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSkip, err)
+		}
+		return empty, true, nil
+	}
+	contentInput, assessments, assessmentModels, err := service.classifyLargeInput(ctx, input, settings)
 	if err != nil {
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
-	contextBytes := len(promptContext)
-	chunks, err := diff.ChunkInput(input, settings.maximumPromptBytes-contextBytes)
+	shortfall := classifyStructuralShortfall(deltaWork{
+		FileAssessments:  assessments,
+		AssessmentModels: assessmentModels,
+		PullRequest:      input.PullRequest,
+		Files:            input.Files,
+		Metadata:         input.Metadata,
+		Chunks:           nil,
+	})
+	promptContext, err := pullRequestPrompt(input.PullRequest, input.Files, service.reviewPolicy)
+	if err != nil {
+		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
+	required, err := sourceScopePrompt(shortfall, service.reviewPolicy)
+	if err != nil {
+		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
+	chunks, err := diff.ChunkInput(contentInput, settings.maximumPromptBytes)
 	if err != nil {
 		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
 		return empty, true, service.failCheck(
@@ -112,34 +131,28 @@ func (service *Service) collectAndAdmit(
 			checkFailureDiff, fmt.Errorf("chunk input: %w", err),
 		)
 	}
-	work := deltaWork{PullRequest: input.PullRequest, Files: input.Files, Metadata: input.Metadata, Chunks: chunks}
-	work.Chunks, err = BoundReviewChunks(work.Chunks, work.Files, settings.minimumImportance, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
+	work := deltaWork{FileAssessments: assessments, AssessmentModels: assessmentModels, PullRequest: input.PullRequest, Files: input.Files, Metadata: input.Metadata, Chunks: chunks}
+	work.Chunks, err = BoundModelReviewChunksWithContext(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
+	if err != nil {
+		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	}
+	shortfall = classifyStructuralShortfall(work)
+	if shortfall.present() {
+		required, err = sourceScopePrompt(shortfall, service.reviewPolicy)
+		if err != nil {
+			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		}
+		work.Chunks, err = BoundModelReviewChunksWithContext(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
+		if err != nil {
+			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		}
+	}
+
+	work.Chunks, err = PrepareRelationshipChunks(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
 	if err != nil {
 		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
 	chunks = work.Chunks
-	shortfall = classifyStructuralShortfall(work)
-	if shortfall.present() {
-		promptContext, err = reviewContext(work.PullRequest, work.Files, shortfall, settings.maximumPromptBytes, service.reviewPolicy)
-		if err != nil {
-			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-		}
-		contextBytes = len(promptContext)
-		chunks, err = diff.ChunkInput(input, settings.maximumPromptBytes-contextBytes)
-		if err != nil {
-			return empty, true, service.failCheck(
-				ctx, job, checkRun.ID, progress.summary(service.now()),
-				checkFailureDiff, fmt.Errorf("chunk input with pull request context: %w", err),
-			)
-		}
-		work.Chunks = chunks
-		work.Chunks, err = BoundReviewChunks(work.Chunks, work.Files, settings.minimumImportance, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
-		if err != nil {
-			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-		}
-		chunks = work.Chunks
-	}
-
 	verdict := admitDelta(len(input.Files), len(chunks), settings.maxFiles, settings.maxChunks)
 	if !verdict.Skip {
 		return work, false, nil
@@ -187,10 +200,15 @@ func (service *Service) declineReview(
 	// The state is read and written in one call, so nothing this run keeps has
 	// to be carried in from an earlier read that a concurrent edit could have
 	// overtaken. It is the same reason the failure notice is written this way.
-	if err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, _ string) summaryCommentContent {
+	if err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, existingBody string) summaryCommentContent {
+		prose := RenderSkipBody(verdict.Reason)
+		if preserveCheckpointSummary(existing, existingBody) {
+			prose = renderCheckpointNotice(existingBody, strings.TrimPrefix(prose, "## Review\n\n"))
+		}
 		return summaryCommentContent{
-			Prose: RenderSkipBody(verdict.Reason),
+			Prose: prose,
 			State: marker.State{
+				PolicyRevision: existing.PolicyRevision,
 				// The baseline stays where it was. Advancing it to a head nobody
 				// read would let the next small push measure only its own
 				// commits, approve, and merge the declined range as though it
