@@ -254,7 +254,7 @@ func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 
 // omissionPrompt gives the existing review call enough metadata to decide
 // whether a structural omission prevents a reliable verdict.
-func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, maximumBytes int, policy reviewrules.Policy) (string, error) {
+func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, maximumBytes int, policy reviewrules.Policy, assessments ...[]domain.FileAssessment) (string, error) {
 	var data reviewrules.PromptData
 	if !shortfall.present() {
 		return renderPrompt(policy, "omissions.none", data)
@@ -265,7 +265,8 @@ func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, max
 		return "", err
 	}
 	const omittedFormat = "Unread changes not listed: %d (the request size limit prevented listing their details).\n\n"
-	metadataBudget := maximumBytes/4 - len(prefix) - 1
+	settings := policy.FileClassification()
+	metadataBudget := min(maximumBytes/4, settings.MaximumEvidenceBytes) - len(prefix) - 1
 	hunks := sortedUnreadHunks(shortfall.Hunks)
 	omittedNoticeBudget := len(fmt.Sprintf(omittedFormat, len(hunks)))
 	var metadata strings.Builder
@@ -274,7 +275,11 @@ func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, max
 		row := fmt.Sprintf("Source: %s\nRange: %s\nReason: %s\n\n",
 			escapeOmissionPromptText(hunk.sourceLabel(), policy), escapeOmissionPromptText(hunk.Header, policy), escapeOmissionPromptText(hunk.Reason, policy))
 		if file, found := BuildFileIndex(files)[hunk.Path]; found {
-			row += assessmentPromptRow(file, policy)
+			evidence, err := assessmentPromptRow(file, policy)
+			if err != nil {
+				return "", err
+			}
+			row += evidence
 		}
 		if metadata.Len()+len(row)+omittedNoticeBudget > metadataBudget {
 			break
@@ -289,36 +294,49 @@ func omissionPrompt(shortfall structuralShortfall, files []diff.FileContext, max
 	seen := make(map[string]bool)
 	for _, hunk := range hunks[:listed] {
 		file, found := fileIndex[hunk.Path]
-		if !found || file.CurrentContent == "" || seen[hunk.Path] {
+		if !found || file.ClassificationContent() == "" || seen[hunk.Path] || excludedPromptContent(file, policy, assessments) {
 			continue
 		}
 		seen[hunk.Path] = true
-		header := fmt.Sprintf("Current content excerpt for %s (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n", escapeOmissionPromptText(hunk.Path, policy), len(file.CurrentContent))
+		content := file.ClassificationContent()
+		header := fmt.Sprintf("Available file content excerpt for %s (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n", escapeOmissionPromptText(hunk.Path, policy), len(content))
 		previewBudget := metadataBudget - metadata.Len() - len(header) - len("\n\n")
 		if previewBudget <= 0 {
 			break
 		}
-		preview := omissionContentPreview(file.CurrentContent, min(maximumPullRequestDescriptionBytes, previewBudget), policy)
+		preview := omissionContentPreview(content, min(settings.MaximumPreviewBytes, previewBudget), policy)
 		metadata.WriteString(header)
 		metadata.WriteString(preview)
 		metadata.WriteString("\n\n")
 	}
 	for _, file := range files {
-		if seen[file.Path] || file.CurrentContent == "" {
+		if seen[file.Path] || file.ClassificationContent() == "" || excludedPromptContent(file, policy, assessments) {
 			continue
 		}
-		header := fmt.Sprintf("Related evidence ID: related:%s\nChanged parent file: %s\nCurrent content excerpt:\n", assessmentIdentity(file, policy), escapeOmissionPromptText(file.Path, policy))
+		header := fmt.Sprintf("Related evidence ID: related:%s\nChanged parent file: %s\nAvailable file content excerpt:\n", assessmentIdentity(file, policy), escapeOmissionPromptText(file.Path, policy))
 		remaining := metadataBudget - metadata.Len() - len(header) - 2
 		if remaining <= 0 {
 			break
 		}
-		preview := omissionContentPreview(file.CurrentContent, min(maximumPullRequestDescriptionBytes, remaining), policy)
+		preview := omissionContentPreview(file.ClassificationContent(), min(settings.MaximumPreviewBytes, remaining), policy)
 		metadata.WriteString(header)
 		metadata.WriteString(preview)
 		metadata.WriteString("\n\n")
 	}
 	data.Input = policy.WrapUntrusted(strings.TrimSpace(metadata.String()))
 	return renderPrompt(policy, "omissions.input", data)
+}
+
+func excludedPromptContent(file diff.FileContext, policy reviewrules.Policy, decisions [][]domain.FileAssessment) bool {
+	if _, _, excluded := deterministicExclusion(file, policy); excluded {
+		return true
+	}
+	for _, assessments := range decisions {
+		if _, excluded := preflightExclusion(assessments, file.Path); excluded {
+			return true
+		}
+	}
+	return false
 }
 
 func omissionContentPreview(content string, maximumBytes int, policy reviewrules.Policy) string {
@@ -352,7 +370,7 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 			continue
 		}
 		callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
-		completion, err := AssessFileContent(callCtx, service.model, pass.work.PullRequest, pass.work.Files, path, service.reviewPolicy, pass.settings.maximumPromptBytes)
+		completion, err := AssessFileContent(callCtx, service.model, pass.work.PullRequest, pass.work.Files, path, service.reviewPolicy, pass.settings.maximumPromptBytes, pass.work.FileAssessments)
 		cancel()
 		models := modelSet{names: nil, seen: nil}
 		models.add(completion.Model)
@@ -399,7 +417,7 @@ func (service *Service) decideUnreadableMetadata(ctx context.Context, pass *chun
 		logger.ErrorContext(ctx, "Unread content policy rendering failed", "err", err)
 		return err
 	}
-	omissions, err := omissionPrompt(shortfall, pass.work.Files, pass.settings.maximumPromptBytes, service.reviewPolicy)
+	omissions, err := omissionPrompt(shortfall, pass.work.Files, pass.settings.maximumPromptBytes, service.reviewPolicy, pass.work.FileAssessments)
 	if err != nil {
 		logger.ErrorContext(ctx, "Unread content prompt rendering failed", "err", err)
 		return err

@@ -81,6 +81,7 @@ type FileContext struct {
 	Status            string
 	Patch             string
 	CurrentContent    string
+	Attributes        map[string]string
 	ChangedRightLines map[int]struct{}
 	ChangedRightHunks map[int]int
 	CoverageComplete  bool
@@ -89,6 +90,11 @@ type FileContext struct {
 	// never disagrees with the other.
 	Gap            CoverageGap
 	sourceMetadata string
+}
+
+// IsSubmodule reports whether repository metadata identifies a pinned submodule.
+func (file *FileContext) IsSubmodule() bool {
+	return strings.HasPrefix(file.sourceMetadata, "Submodule repository: ")
 }
 
 // markGap records why this file could not be collected whole. It is the only
@@ -378,8 +384,14 @@ func (collector *Collector) collectFiles(
 
 	files := make([]FileContext, 0, len(changedFiles))
 	recovery := newPatchRecovery(collector.source, ref, pullRequest, base)
+	attributes := newRepositoryAttributes(collector.source, ref)
 	for _, changedFile := range changedFiles {
 		file, err := collectFile(ctx, changedFile, recovery)
+		if err != nil {
+			return nil, "", err
+		}
+		attributes.remember(file, pullRequest.Head)
+		file.Attributes, err = attributes.forChange(ctx, changedFile, recovery)
 		if err != nil {
 			return nil, "", err
 		}
@@ -398,6 +410,7 @@ func collectFile(
 		Status:            changedFile.Status,
 		Patch:             changedFile.Patch,
 		CurrentContent:    "",
+		Attributes:        nil,
 		ChangedRightLines: map[int]struct{}{},
 		ChangedRightHunks: map[int]int{},
 		CoverageComplete:  true,

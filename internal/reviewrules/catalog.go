@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"text/template"
@@ -77,6 +78,11 @@ type FormattingLimits struct {
 
 // PromptData is the concrete interpolation contract for configured templates.
 type PromptData struct {
+	Identity          string
+	EvidenceID        string
+	Status            string
+	ContentBytes      int
+	Attributes        string
 	Path              string
 	Relationship      string
 	SummaryURL        string
@@ -109,17 +115,18 @@ type Catalog struct {
 
 // Policy stores one loaded catalog and its configured prompt templates.
 type Policy struct {
-	relationshipReview      RelationshipReviewPolicy
-	fingerprint             string
-	fileAssessmentsDisplay  FindingDisplay
-	fileClassification      FileClassificationPolicy
-	metadataFindingsDisplay FindingDisplay
-	catalog                 Catalog
-	templates               map[string]*template.Template
-	untrustedMarkers        untrustedMarkers
-	limits                  FormattingLimits
-	providerDetails         []ProviderDetailColumn
-	failureCodes            []FailureCode
+	fileClassificationHeaders []*regexp.Regexp
+	relationshipReview        RelationshipReviewPolicy
+	fingerprint               string
+	fileAssessmentsDisplay    FindingDisplay
+	fileClassification        FileClassificationPolicy
+	metadataFindingsDisplay   FindingDisplay
+	catalog                   Catalog
+	templates                 map[string]*template.Template
+	untrustedMarkers          untrustedMarkers
+	limits                    FormattingLimits
+	providerDetails           []ProviderDetailColumn
+	failureCodes              []FailureCode
 }
 
 // LoadPolicy requires both configuration files and rejects malformed templates.
@@ -136,6 +143,10 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		return Policy{}, err
 	}
 	if err := validatePromptSettings(prompts); err != nil {
+		return Policy{}, err
+	}
+	headerPatterns, err := compileClassificationHeaders(prompts.FileClassification.HeaderPatterns)
+	if err != nil {
 		return Policy{}, err
 	}
 	compiled := make(map[string]*template.Template, len(prompts.Templates))
@@ -157,7 +168,7 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 		compiled[name] = parsed
 	}
-	for _, name := range []string{"native.summary_link", "native.request_changes", "schema.file_assessment.reason", "coverage.classification_incomplete", "classification.system"} {
+	for _, name := range []string{"native.summary_link", "native.request_changes", "schema.file_assessment.reason", "coverage.classification_incomplete", "classification.system", "classification.required", "classification.file_evidence"} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
 		}
@@ -179,12 +190,13 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		return Policy{}, fmt.Errorf("encode review policy identity: %w", err)
 	}
 	return Policy{
-		relationshipReview:      prompts.RelationshipReview,
-		fingerprint:             fmt.Sprintf("%x", sha256.Sum256(encoded)),
-		fileAssessmentsDisplay:  prompts.FileAssessmentsDisplay,
-		fileClassification:      prompts.FileClassification,
-		metadataFindingsDisplay: prompts.MetadataFindingsDisplay,
-		catalog:                 Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
+		fileClassificationHeaders: headerPatterns,
+		relationshipReview:        prompts.RelationshipReview,
+		fingerprint:               fmt.Sprintf("%x", sha256.Sum256(encoded)),
+		fileAssessmentsDisplay:    prompts.FileAssessmentsDisplay,
+		fileClassification:        prompts.FileClassification,
+		metadataFindingsDisplay:   prompts.MetadataFindingsDisplay,
+		catalog:                   Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
 		untrustedMarkers: prompts.UntrustedMarkers, limits: prompts.Limits,
 		providerDetails: prompts.ProviderDetails,
 		failureCodes:    prompts.FailureCodes,

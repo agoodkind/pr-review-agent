@@ -15,7 +15,7 @@ The hidden state marker records the last reviewed commit, pending and completed 
 
 A title or description edit requires reassessment when it changes the saved review context. When edit coalescing is enabled, distinct deliveries postpone the queued review until the configured interval has elapsed since the latest edit. Superseded queued checks conclude `skipped` without model requests. A base-branch change, an edit to another field, or an edit without field details starts an immediate full review. Explicit full-review triggers also supersede pending metadata edits. Missing file coverage requires ordinary source review.
 
-The service checks the configured file limit before sending model requests. It assesses large files before calculating the chunk limit. A justified content exclusion can avoid unnecessary payload review. A remaining delta that exceeds its configured limit receives a specific size notice and an `action_required` check. The last reviewed commit does not advance until assessment completes.
+The service checks the configured file limit before sending model requests. It assesses every changed file before calculating review chunks. Configured exclusions omit generated artifact contents while retaining related source and manifest review. A remaining delta that exceeds its configured limit receives a specific size notice and an `action_required` check. The last reviewed commit does not advance until assessment completes.
 
 Each model request has a separate timeout. The service publishes a chunk's findings before checkpointing that chunk. Interrupted reviews resume pending chunks. A temporary model or publication failure preserves pending work. GitHub's permanent refusal of an inline comment is recorded in the summary without repeatedly posting the refused comment.
 
@@ -33,7 +33,7 @@ The queue waits for measured app quota availability. Other operational failures 
 
 The service measures complete serialized provider requests, including system instructions, response schemas, source rows, and supporting context. It reduces optional context and divides large hunks into complete fragments while preserving source coordinates. A provider response that stops at its output limit also triggers division. An indivisible source row or required relationship assessment that exceeds the configured limit remains an explicit gap.
 
-The reviewer assesses generated, encrypted, binary, dependency, and external content according to the purpose of the parent change. A category alone does not justify an exclusion. Submodule review examines the parent repository's old and new commit pointers and related parent configuration. It does not retrieve nested upstream file differences. Accepted content exclusions represent completed scope decisions rather than failed reviews. Necessary missing content prevents approval and identifies the file and unresolved assessment.
+The reviewer applies configured generated, dependency, vendor, and binary exclusions before requesting content review. Uncertain classifications use bounded evidence and the purpose of the parent change. Submodule review examines the parent repository's old and new commit pointers and related parent configuration. It does not retrieve nested upstream file differences. Accepted content exclusions represent completed scope decisions rather than failed reviews. Necessary missing content prevents approval and identifies the file and unresolved assessment.
 
 Each finding requires source evidence and a valid target. The loaded rule policy determines importance before the publication threshold applies. Duplicate identities suppress repeated findings. The service reconciles its existing threads against current source before publication.
 
@@ -109,13 +109,22 @@ The renderer excludes findings with IDs that already appear in published inline 
 
 ## Configure file review scope
 
-Use the [rule-change procedure](#change-review-rules) to configure contextual file assessments and their display. Exclusion permissions allow the reviewer to decide whether supplied evidence justifies skipping content inspection. They do not skip matching files automatically.
+Use the [rule-change procedure](#change-review-rules) to configure file assessments and their display. Trusted detectors and path exclusions select artifact contents to omit before chunk creation. Review overrides require direct content review. Other uncertain cases use the configured model classification task.
 
 File review settings:
 
 | Setting | Behavior |
 | --- | --- |
 | `file_classification.allowed_exclusions` | Permits content exclusions for selected categories after evidence validation. |
+| `file_classification.trusted_detectors` | Selects generated, vendor, binary, and repository attribute detectors with an allowed content kind and explanation. |
+| `file_classification.header_patterns` | Selects explicit generated declarations in the initial comment header using Go regular expressions. |
+| `file_classification.maximum_header_bytes` | Bounds the initial source bytes inspected by configured header patterns. |
+| `file_classification.path_exclusions` | Selects artifact paths or basenames to exclude with an allowed content kind and explanation. |
+| `file_classification.review_overrides` | Requires content review for matching paths before applying exclusions. |
+| `file_classification.maximum_evidence_bytes` | Bounds contextual classification evidence. |
+| `file_classification.maximum_preview_bytes` | Bounds individual source previews for uncertain classifications. |
+| `file_classification.maximum_direct_review_bytes` | Requires contextual classification when an unexcluded patch exceeds this size. |
+| `file_classification.uncertain_content_prefixes` | Identifies opaque content that requires contextual classification. |
 | `file_classification.instructions` | Defines shared scope guidance, including parent-only submodule review. |
 | `file_classification.path_instructions` | Adds trusted guidance for paths matching Go `path.Match` patterns. A star matches within one path component. |
 | `file_classification.maximum_reason_bytes` | Bounds each persisted assessment reason. |
@@ -125,7 +134,7 @@ File review settings:
 | `relationship_review.enabled` | Adds joint source review for related fragments from separate requests. |
 | `relationship_review.maximum_pairs` | Bounds joint assessments. Necessary relationships beyond the limit remain explicit gaps. |
 
-The reviewer can exclude ciphertext during a credential rotation when parent source establishes the relevant behavior. Hidden permission changes still require evidence about those permissions. Generated executable SQL still requires review of its behavior. Classification reasons and evidence references appear in Review details by default.
+The reviewer can exclude ciphertext during a credential rotation when parent source establishes the relevant behavior. Hidden permission changes still require evidence about those permissions. Marked generated SQL uses the configured exclusion policy; a review override can require direct SQL inspection. Classification reasons and evidence references appear in Review details by default.
 
 ## Configure provider order
 

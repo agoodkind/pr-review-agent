@@ -178,18 +178,29 @@ func classificationGitFile(t *testing.T, name, before, after string) diff.FileCo
 	}
 	command("init", "--quiet")
 	path := filepath.Join(directory, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	command("add", name)
 	command("-c", "user.name=Integration Test", "-c", "user.email=integration@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "Create classification source\n\nCo-authored-by: Codex <noreply@openai.com>")
-	if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
-		t.Fatal(err)
+	status := "modified"
+	if after == "" {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		status = "removed"
+	} else {
+		if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	patch := command("diff", "--unified=0", "--", name)
 	lines, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return diff.FileContext{Path: name, Status: "modified", Patch: patch, CurrentContent: after, ChangedRightLines: lines, ChangedRightHunks: hunks, CoverageComplete: true}
+	return diff.FileContext{Path: name, Status: status, Patch: patch, CurrentContent: after, ChangedRightLines: lines, ChangedRightHunks: hunks, CoverageComplete: true}
 }

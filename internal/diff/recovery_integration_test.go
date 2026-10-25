@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,8 @@ import (
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/policytest"
+	"goodkind.io/pr-review-agent/internal/review"
 )
 
 // repositorySource reads immutable Git objects and exposes incomplete patch representations.
@@ -114,12 +117,13 @@ func TestCollectorPreservesGitlinkCoordinatesAndRepositoryContext(t *testing.T) 
 			directory := t.TempDir()
 			largeGitCommand(t, directory, "init", "--quiet")
 			const repositoryURL = "https://example.invalid/library.git"
-			writeRecoveryFile(t, directory, ".gitmodules", "[submodule \"lib\"]\n\tpath = lib\n\turl = "+repositoryURL+"\n")
+			const submodulePath = "vendor/sdk"
+			writeRecoveryFile(t, directory, ".gitmodules", "[submodule \"vendor/sdk\"]\n\tpath = vendor/sdk\n\turl = "+repositoryURL+"\n")
 			largeGitCommand(t, directory, "add", "--", ".gitmodules")
-			largeGitCommand(t, directory, "update-index", "--add", "--cacheinfo", "160000", first, "lib")
+			largeGitCommand(t, directory, "update-index", "--add", "--cacheinfo", "160000", first, submodulePath)
 			largeGitCommit(t, directory, "Pin library source")
 			base := domain.HeadSHA(strings.TrimSpace(largeGitCommand(t, directory, "rev-parse", "HEAD")))
-			largeGitCommand(t, directory, "update-index", "--cacheinfo", "160000", second, "lib")
+			largeGitCommand(t, directory, "update-index", "--cacheinfo", "160000", second, submodulePath)
 			largeGitCommit(t, directory, "Update pinned library source")
 			head := domain.HeadSHA(strings.TrimSpace(largeGitCommand(t, directory, "rev-parse", "HEAD")))
 			source := &repositorySource{directory: directory, base: base, head: head, patchMode: mode, comparisons: 0, contentReads: nil}
@@ -127,14 +131,26 @@ func TestCollectorPreservesGitlinkCoordinatesAndRepositoryContext(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(input.Files) != 1 || input.Files[0].Path != "lib" || !input.Files[0].CoverageComplete {
+			if len(input.Files) != 1 || input.Files[0].Path != submodulePath || !input.Files[0].CoverageComplete {
 				t.Fatal("The actual gitlink change must remain reviewable.")
+			}
+			if !input.Files[0].IsSubmodule() {
+				t.Fatal("Collection must identify the pinned submodule from its repository metadata.")
+			}
+			policy := policytest.Load(t)
+			assessments, unresolved, err := review.PlanFileAssessments(input, policy)
+			if err != nil || len(unresolved) != 0 || len(assessments) != 1 || assessments[0].Action != domain.FileActionReview || assessments[0].ContentReviewRequirement != domain.ContentReviewRequired {
+				t.Fatalf("A vendor path must retain parent gitlink review: assessments=%+v unresolved=%d error=%v", assessments, len(unresolved), err)
+			}
+			planned, _, err := review.PlanFileContentReview(input, assessments, policy)
+			if err != nil || len(planned.Files) != 1 {
+				t.Fatalf("Content selection must retain the parent pointer change: %v", err)
 			}
 			raw := "Subproject commit " + second + "\n"
 			if input.Files[0].CurrentContent != raw {
 				t.Fatal("Repository metadata changed the raw gitlink's line coordinates.")
 			}
-			chunks, err := diff.ChunkInput(diff.ReviewInput{Files: input.Files}, 80000)
+			chunks, err := diff.ChunkInput(diff.ReviewInput{Files: planned.Files}, 80000)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,7 +166,7 @@ func TestCollectorPreservesGitlinkCoordinatesAndRepositoryContext(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(rows) != 1 || rows[0].Path != "lib" || rows[0].RightLine != 1 || rows[0].Text != strings.TrimSuffix(raw, "\n") {
+			if len(rows) != 1 || rows[0].Path != submodulePath || rows[0].RightLine != 1 || rows[0].Text != strings.TrimSuffix(raw, "\n") {
 				t.Fatal("The gitlink finding must anchor to the actual changed source at line 1.")
 			}
 			if err := diff.ValidatePatchContent(input.Files[0].Patch, raw); err != nil {
@@ -369,6 +385,9 @@ func (source *repositorySource) GetFileContent(ctx context.Context, _ int64, _ d
 	}
 	fields := strings.Fields(string(entry))
 	if len(fields) < 3 {
+		if len(fields) == 0 {
+			return githubapp.FileContent{}, githubapp.APIError{StatusCode: http.StatusNotFound, Message: "pinned file does not exist"}
+		}
 		return githubapp.FileContent{}, errors.New("Git did not return the pinned file entry")
 	}
 	if fields[0] == "160000" {

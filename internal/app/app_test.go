@@ -2839,6 +2839,10 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	}
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/contents/") {
+		if strings.HasSuffix(request.URL.Path, "/.gitattributes") {
+			writeJSON(writer, http.StatusNotFound, map[string]any{"message": "attribute file does not exist"})
+			return
+		}
 		state.mu.Lock()
 		content := state.fileContent
 		state.mu.Unlock()

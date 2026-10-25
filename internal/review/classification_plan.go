@@ -12,19 +12,40 @@ import (
 // Conflicting exclusions become explicit gaps in the returned assessments.
 // The plan retains their source for content review and reports the unresolved requirement.
 func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAssessment, policy reviewrules.Policy) (diff.ReviewInput, []domain.FileAssessment, error) {
+	validated, err := normalizeFileAssessments(input, assessments, policy)
+	if err != nil {
+		return input, nil, err
+	}
+	return selectFileContentReview(input, validated, policy), validated, nil
+}
+
+func normalizeFileAssessments(input diff.ReviewInput, assessments []domain.FileAssessment, policy reviewrules.Policy) ([]domain.FileAssessment, error) {
 	decisions := slices.Clone(assessments)
+	files := BuildFileIndex(input.Files)
 	var shortfall structuralShortfall
 	for index := range decisions {
 		assessment := &decisions[index]
 		if err := assessment.Validate(); err != nil {
-			return input, nil, normalizeFileAssessmentError(err)
+			return nil, normalizeFileAssessmentError(err)
 		}
 		assessment.Reviewed = false
+		file := files[assessment.Path]
+		if assessment.Action == domain.FileActionExclude && (policy.RequiresFileContentReview(assessment.Path) ||
+			(file.Attributes["linguist-generated"] == "false" && assessment.ContentKind == reviewrules.ContentGenerated)) {
+			var data reviewrules.PromptData
+			reason, err := renderPrompt(policy, "classification.required", data)
+			if err != nil {
+				return nil, err
+			}
+			assessment.Action = domain.FileActionReview
+			assessment.ContentReviewRequirement = domain.ContentReviewRequired
+			assessment.Reason = reason
+		}
 		if assessment.Action == domain.FileActionExclude && !assessment.PermitsContentExclusion() {
 			var data reviewrules.PromptData
 			reason, err := renderPrompt(policy, "coverage.requirement_conflict", data)
 			if err != nil {
-				return input, nil, err
+				return nil, err
 			}
 			assessment.Action = domain.FileActionGap
 			assessment.Reason = reason
@@ -33,9 +54,10 @@ func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAsse
 	}
 	result := domain.ReviewResult{Overview: "", OmissionsAcceptable: false, DecisionReason: "", Findings: nil, FileAssessments: decisions}
 	validated, _, err := validateFileAssessmentsDetailed(result, shortfall, input.Files, policy)
-	if err != nil {
-		return input, nil, err
-	}
+	return validated, err
+}
+
+func selectFileContentReview(input diff.ReviewInput, validated []domain.FileAssessment, policy reviewrules.Policy) diff.ReviewInput {
 	planned := input
 	planned.Files = make([]diff.FileContext, 0, len(input.Files))
 	for _, file := range input.Files {
@@ -45,5 +67,5 @@ func PlanFileContentReview(input diff.ReviewInput, assessments []domain.FileAsse
 		}
 		planned.Files = append(planned.Files, file)
 	}
-	return planned, validated, nil
+	return planned
 }

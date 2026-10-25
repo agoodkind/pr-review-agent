@@ -218,7 +218,9 @@ func TestCollectorDeletedFileSkipsContent(t *testing.T) {
 			PatchPresent: true,
 		}},
 	}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	pullRequest := testPullRequest()
+	pullRequest.Base = domain.HeadSHA(testStaleHeadSHA)
+	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), pullRequest)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
@@ -603,6 +605,9 @@ func (source *fakeSource) GetFile(
 	path string,
 	_ domain.HeadSHA,
 ) ([]byte, error) {
+	if path == ".gitattributes" || strings.HasSuffix(path, "/.gitattributes") {
+		return nil, githubapp.APIError{StatusCode: http.StatusNotFound, Message: "The attribute file does not exist."}
+	}
 	source.getCalls++
 	if source.getErr != nil {
 		return nil, source.getErr

@@ -8,7 +8,7 @@ func (service *Service) boundMetadataChunks(input diff.ReviewInput, chunks []dif
 		if err != nil {
 			return nil, "", err
 		}
-		work := deltaWork{FileAssessments: nil, AssessmentModels: nil, PullRequest: input.PullRequest, Files: nil, Metadata: input.Metadata, Chunks: bounded}
+		work := deltaWork{AssessmentRequests: 0, FileAssessments: nil, AssessmentModels: nil, PullRequest: input.PullRequest, Files: nil, Metadata: input.Metadata, Chunks: bounded}
 		context, err := reviewContext(input.PullRequest, nil, classifyStructuralShortfall(work), settings.maximumPromptBytes, service.reviewPolicy)
 		if err != nil {
 			return nil, "", err
