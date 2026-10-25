@@ -11,12 +11,12 @@ Provider quota fields are configured in [runtime.json](../runtime.json).
 | `token_limit` | Maximum counted tokens within the configured window. |
 | `token_types` | Count `input`, `output`, or both. Omission selects the API's reported total. |
 | `token_window` | Defines the window mode and its applicable fields. |
-| `token_limits` | Additional limits with independent `limit`, `token_types`, and `window` fields. Every configured limit applies to the same reported usage. |
+| `token_limits` | Additional limits with independent `limit`, `token_types`, and `window` fields. Every positive limit applies to the same reported usage. |
 | `daily_token_limit`, `daily_token_types` | Existing midnight UTC counters. They cannot be combined with `token_limit`, `token_types`, or `token_window`, but allow additional `token_limits`. |
 
 Input includes cached input. Output includes reasoning tokens. A request without reported usage adds no estimate. Usage reported by an incomplete response is still counted.
 
-A rolling window with duration `1m` limits measured tokens per minute. Additional windows can use different durations, modes, and token categories. Each response records usage once, regardless of the number of limits.
+A rolling window with duration `1m` counts measured tokens from the preceding minute. Additional windows can use different durations, modes, and token categories. Each response records usage once, regardless of the number of limits.
 
 The configured model determines the counter identity. An automatic router can report a different selected model for pricing and diagnostics without changing the quota identity.
 
@@ -78,7 +78,7 @@ The [OpenAI rate-limit calculation](https://developers.openai.com/api/docs/guide
 | `cleanup_interval` | Positive elapsed duration between background cleanup batches. |
 | `batch_size` | Maximum records processed per SQL or key prefix scan in each batch, from 1 through 10000. |
 
-Cleanup retains at least the longest configured rolling or fixed quota duration and the current legacy daily accounting window. A configured cron quota requires disabled retention cleanup because the Worker does not calculate calendar reset boundaries.
+Cleanup retains at least the longest rolling or fixed window with a positive limit. A positive legacy daily limit also retains the current UTC day. A positive cron limit requires disabled retention cleanup because the Worker does not calculate calendar reset boundaries. Zero caps do not extend retention or restrict cleanup.
 
 Each batch removes expired event rows, cache and service-tier details, native SDK records, duplicate-detection records, and old legacy counters. A persistent admission-time boundary rejects later reports for removed history with HTTP 410. Disabling cleanup afterward does not remove that boundary or restore deleted records. History queries report the retained-history boundary, and the Go client rejects a history boundary change during pagination.
 
