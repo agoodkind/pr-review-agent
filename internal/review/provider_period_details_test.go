@@ -27,7 +27,7 @@ func TestRenderDetailsReportsProviderPeriodCoverage(t *testing.T) {
 		{name: "billions", tokens: 2_000_000_000, cost: 25.12, available: true, history: true, priced: 2, complete: true, expected: "2b tokens / ~$25.12"},
 		{name: "unit boundary", tokens: 999_999, cost: 1, available: true, history: true, priced: 2, complete: true, expected: "999.999k tokens / ~$1.00"},
 		{name: "partial history", tokens: 1_200_000, cost: 0.24, available: true, priced: 2, complete: true, expected: "1.2m tokens / ~$0.24", coverage: "Partial history from 2026-10-24 12:00:00 UTC"},
-		{name: "partial prices", tokens: 1_200_000, cost: 0.12, available: true, history: true, priced: 1, expected: "1.2m tokens / ~$0.12", coverage: "Priced reports 1 / 2"},
+		{name: "partial prices", tokens: 1_200_000, cost: 0.12, available: true, history: true, priced: 1, expected: "1.2m tokens / ~$0.12", coverage: "Cost is incomplete: prices cover 1 of 2 requests."},
 		{name: "unpriced", tokens: 1_000, available: true, history: true, expected: "1k tokens / cost unavailable"},
 		{name: "known zero", available: true, history: true, complete: true, expected: "0 tokens / ~$0.00"},
 		{name: "unavailable", expected: "-->unavailable"},

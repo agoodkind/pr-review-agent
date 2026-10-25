@@ -41,7 +41,7 @@ func providerPeriodCell(key ProviderModelKey, period *ProviderPeriodUsage) strin
 		parts = append(parts, "Partial history from "+periodTimestamp(period.HistoryStartMS))
 	}
 	if !period.CostComplete && period.PricedRequests > 0 {
-		parts = append(parts, fmt.Sprintf("Priced reports %d / %d", period.PricedRequests, period.ReportedRequests))
+		parts = append(parts, fmt.Sprintf("Cost is incomplete: prices cover %d of %d requests.", period.PricedRequests, period.ReportedRequests))
 	}
 	return identity + strings.Join(parts, "<br>")
 }
