@@ -98,7 +98,9 @@ function usageRetentionSettings(override) {
       if (provider.daily_token_limit > 0) {
         effectiveAge = Math.max(effectiveAge, dayMilliseconds);
       }
-      const windows = (provider.token_limits ?? []).map(function (limit) { return limit.window; });
+      const windows = (provider.token_limits ?? [])
+        .filter(function (limit) { return limit.limit > 0; })
+        .map(function (limit) { return limit.window; });
       if (provider.token_limit > 0) {
         windows.push(provider.token_window);
       }
