@@ -30,7 +30,6 @@ import (
 
 // provider is one model endpoint the client can send a completion to.
 type provider struct {
-	usagePeriod         *quota.Window
 	id                  string
 	sdk                 openaigo.Client
 	model               string
@@ -99,7 +98,6 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	fallbackOnUsageExceeded := true
 	if len(configuredProviders) == 0 {
 		configuredProviders = []config.ProviderConfig{{
-			UsagePeriod:          nil,
 			ID:                   "primary",
 			BaseURL:              cfg.ClydeBaseURL,
 			APIKey:               cfg.ClydeAPIKey,
@@ -123,7 +121,6 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		}}
 		if cfg.HasFallback() {
 			configuredProviders = append(configuredProviders, config.ProviderConfig{
-				UsagePeriod:          nil,
 				ID:                   "fallback",
 				BaseURL:              cfg.FallbackBaseURL,
 				APIKey:               cfg.FallbackAPIKey,
@@ -171,35 +168,30 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		if configured.Disabled {
 			continue
 		}
-		client.providers = append(client.providers, newConfiguredProvider(configured, modelHTTPClient, cfg.ReviewModelPricing))
+		client.providers = append(client.providers, provider{
+			id:                  configured.ID,
+			sdk:                 newProviderSDK(modelHTTPClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
+			model:               configured.Model,
+			reasoningEffort:     config.ResolveReasoningEffort(configured.ReasoningEffort),
+			apiKey:              configured.APIKey,
+			baseURL:             configured.BaseURL,
+			httpClient:          modelHTTPClient,
+			dailyTokenLimit:     configured.DailyTokenLimit,
+			dailyTokenTypes:     configured.DailyTokenTypes,
+			tokenLimit:          configured.TokenLimit,
+			tokenTypes:          configured.TokenTypes,
+			tokenWindow:         configured.TokenWindow,
+			tokenLimits:         configured.TokenLimits,
+			maxOutputTokens:     configured.MaxOutputTokens,
+			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
+			omitTextFormat:      configured.OmitTextFormat,
+			autoRouterCostTier:  configured.AutoRouterCostTier,
+			api:                 config.ResolveProviderAPI(configured.API),
+			pricingByModel:      cfg.ReviewModelPricing,
+			requestTimeout:      configured.RequestTimeout,
+		})
 	}
 	return client
-}
-
-func newConfiguredProvider(configured config.ProviderConfig, httpClient *http.Client, pricing map[string]config.ModelPricing) provider {
-	return provider{
-		usagePeriod:         configured.UsagePeriod,
-		id:                  configured.ID,
-		sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
-		model:               configured.Model,
-		reasoningEffort:     config.ResolveReasoningEffort(configured.ReasoningEffort),
-		apiKey:              configured.APIKey,
-		baseURL:             configured.BaseURL,
-		httpClient:          httpClient,
-		dailyTokenLimit:     configured.DailyTokenLimit,
-		dailyTokenTypes:     configured.DailyTokenTypes,
-		tokenLimit:          configured.TokenLimit,
-		tokenTypes:          configured.TokenTypes,
-		tokenWindow:         configured.TokenWindow,
-		tokenLimits:         configured.TokenLimits,
-		maxOutputTokens:     configured.MaxOutputTokens,
-		omitMaxOutputTokens: configured.OmitMaxOutputTokens,
-		omitTextFormat:      configured.OmitTextFormat,
-		autoRouterCostTier:  configured.AutoRouterCostTier,
-		api:                 config.ResolveProviderAPI(configured.API),
-		pricingByModel:      pricing,
-		requestTimeout:      configured.RequestTimeout,
-	}
 }
 
 // newProviderSDK builds one SDK handle. It sends the Cloudflare Access headers

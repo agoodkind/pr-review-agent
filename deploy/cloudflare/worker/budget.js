@@ -32,7 +32,7 @@ function operatorCanRead(payload) {
     return Object.keys(payload).length === 1;
   }
   const fields = Object.hasOwn(payload, "action") ? USAGE_READ_FIELDS : DAILY_READ_FIELDS;
-  if (Object.hasOwn(payload, "action") && payload.action !== "query_usage" && payload.action !== "summarize_usage") {
+  if (Object.hasOwn(payload, "action") && payload.action !== "query_usage") {
     return false;
   }
   return Object.keys(payload).every(function (key) { return fields.has(key); });
@@ -63,7 +63,7 @@ export async function handleProviderBudget(request, env, verifySignature) {
       return new Response("operator token permits counter reads only", { status: 403 });
     }
     if (Object.hasOwn(payload, "action")) {
-      if (payload.action !== "query_usage" && payload.action !== "report_usage" && payload.action !== "storage_stats" && payload.action !== "summarize_usage") {
+      if (payload.action !== "query_usage" && payload.action !== "report_usage" && payload.action !== "storage_stats") {
         return new Response("invalid budget action", { status: 400 });
       }
       pathname = `/${payload.action}`;

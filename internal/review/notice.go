@@ -56,7 +56,6 @@ func (service *Service) reportFailedCheck(
 ) error {
 	logger := gklog.L(ctx)
 	progress.Failed = true
-	service.enrichProviderPeriodUsage(ctx, &progress)
 	var statuses []ProviderStatus
 	collectProviderStatuses(cause, &statuses)
 	recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(cause), quotaRecovery(statuses))
@@ -326,7 +325,7 @@ func (service *Service) writeFailureSummary(
 			progress.FilesReviewed == 0 && progress.Chunks == 0 && len(progress.Models) == 0 &&
 			len(progress.Observed) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
 			len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0 {
-			failureProse = renderMaintenanceFailure(refreshProviderPeriodDetails(existingBody, progress.Usage), title, detail)
+			failureProse = renderMaintenanceFailure(existingBody, title, detail)
 			if !strings.Contains(existingBody, reviewDetailsStart) {
 				failureProse += "\n\n" + RenderDetails(progress)
 			}

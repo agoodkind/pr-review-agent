@@ -657,7 +657,6 @@ func (service *Service) concludeStructurallyIncomplete(
 	summary.Report = report
 	summary.Models = pass.analysis().Models
 	summary.Usage = UsageFromContext(ctx)
-	service.enrichProviderPeriodUsage(ctx, &summary)
 	failures := pass.unreadChunks()
 	failureState := pass.scopeFailures(ctx)
 	statuses := failureState.statuses

@@ -62,8 +62,8 @@
     "requests",
     "tokens",
     "cost",
-    "period_usage",
     "quota",
+    "period_usage",
     "result"
   ],
   "failure_codes": [

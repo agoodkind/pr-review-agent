@@ -15,12 +15,11 @@ type providerDetailRow struct {
 	models   []string
 	priced   int
 	tiers    []string
-	period   *ProviderPeriodUsage
+	periods  []ProviderPeriodUsage
 }
 
 func renderProviderDetails(summary UsageSummary) string {
-	hasPeriods := slices.Contains(summary.ProviderColumns, reviewrules.ProviderPeriodUsageColumn) && len(summary.PeriodUsage) > 0
-	if len(summary.ProviderAttempts) == 0 && !hasPeriods || len(summary.ProviderColumns) == 0 {
+	if len(summary.ProviderAttempts) == 0 || len(summary.ProviderColumns) == 0 {
 		return ""
 	}
 	var builder strings.Builder
@@ -41,7 +40,7 @@ func renderProviderDetails(summary UsageSummary) string {
 		builder.WriteString("\n")
 	}
 	if slices.Contains(summary.ProviderColumns, reviewrules.ProviderPeriodUsageColumn) {
-		builder.WriteString("\n" + providerPeriodScope + "\n")
+		builder.WriteString("\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. Dollar amounts estimate cost from configured prices and do not represent account charges.\n")
 	}
 	return builder.String()
 }
@@ -54,7 +53,7 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 		})
 		if index < 0 {
 			var usage ModelUsage
-			rows = append(rows, providerDetailRow{attempt: attempt, attempts: nil, usage: usage, models: nil, priced: 0, tiers: nil, period: nil})
+			rows = append(rows, providerDetailRow{attempt: attempt, attempts: nil, usage: usage, models: nil, priced: 0, tiers: nil, periods: nil})
 			index = len(rows) - 1
 		}
 		if attempt.Sequence > rows[index].attempt.Sequence {
@@ -62,26 +61,13 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 		}
 		rows[index].attempts = append(rows[index].attempts, attempt)
 	}
-	periods := summary.PeriodUsage
-	if !slices.Contains(summary.ProviderColumns, reviewrules.ProviderPeriodUsageColumn) {
-		periods = nil
-	}
-	for _, period := range periods {
-		index := slices.IndexFunc(rows, func(row providerDetailRow) bool {
-			return row.attempt.Status.ProviderID == period.ProviderID && row.attempt.Status.Model == period.RequestedModel
-		})
-		if index < 0 {
-			var row providerDetailRow
-			row.attempt.Status.ProviderID = period.ProviderID
-			row.attempt.Status.Model = period.RequestedModel
-			rows = append(rows, row)
-			index = len(rows) - 1
-		}
-		snapshot := period
-		rows[index].period = &snapshot
-	}
 	for index := range rows {
 		row := &rows[index]
+		for _, period := range summary.PeriodUsage {
+			if period.ProviderID == row.attempt.Status.ProviderID && period.RequestedModel == row.attempt.Status.Model {
+				row.periods = append(row.periods, period)
+			}
+		}
 		for _, model := range summary.Models {
 			if model.ProviderID != row.attempt.Status.ProviderID || model.RequestedModel != row.attempt.Status.Model {
 				continue
@@ -115,10 +101,10 @@ func providerColumnHeading(column reviewrules.ProviderDetailColumn) string {
 		return "Reported tokens"
 	case reviewrules.ProviderCostColumn:
 		return "Estimated cost"
-	case reviewrules.ProviderPeriodUsageColumn:
-		return "Period usage"
 	case reviewrules.ProviderQuotaColumn:
 		return "App quota before last attempt"
+	case reviewrules.ProviderPeriodUsageColumn:
+		return "Period usage"
 	case reviewrules.ProviderResultColumn:
 		return "Result"
 	}
@@ -127,9 +113,6 @@ func providerColumnHeading(column reviewrules.ProviderDetailColumn) string {
 
 func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDetailRow) string {
 	attempt := row.attempt
-	if len(row.attempts) == 0 && column != reviewrules.ProviderIdentityColumn && column != reviewrules.ProviderModelsColumn && column != reviewrules.ProviderPeriodUsageColumn {
-		return "unavailable"
-	}
 	switch column {
 	case reviewrules.ProviderIdentityColumn:
 		return usageModelCell(attempt.Status.ProviderID)
@@ -180,8 +163,7 @@ func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDe
 	case reviewrules.ProviderQuotaColumn:
 		return providerQuotaCell(attempt.Status)
 	case reviewrules.ProviderPeriodUsageColumn:
-		key := ProviderModelKey{ProviderID: attempt.Status.ProviderID, RequestedModel: attempt.Status.Model}
-		return providerPeriodCell(key, row.period)
+		return providerPeriodUsageCell(row.periods)
 	case reviewrules.ProviderResultColumn:
 		return providerResultCell(row.attempts)
 	}
