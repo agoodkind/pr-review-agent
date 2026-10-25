@@ -63,6 +63,7 @@
     "tokens",
     "cost",
     "quota",
+    "period_usage",
     "result"
   ],
   "failure_codes": [
