@@ -43,6 +43,9 @@ func (client *Client) NextAvailable(ctx context.Context) (time.Time, error) {
 			limits = append(limits, quota.Limit{Limit: target.tokenLimit, TokenTypes: target.tokenTypes, Window: target.tokenWindow})
 		}
 		for _, limit := range limits {
+			if limit.Limit == 0 {
+				continue
+			}
 			checked, err := client.checkWindowBudget(ctx, target, now, snapshot, limit)
 			check(checked, err)
 		}

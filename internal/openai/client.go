@@ -30,7 +30,6 @@ import (
 
 // provider is one model endpoint the client can send a completion to.
 type provider struct {
-	usagePeriod         *quota.Window
 	id                  string
 	sdk                 openaigo.Client
 	model               string
@@ -99,7 +98,6 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	fallbackOnUsageExceeded := true
 	if len(configuredProviders) == 0 {
 		configuredProviders = []config.ProviderConfig{{
-			UsagePeriod:          nil,
 			ID:                   "primary",
 			BaseURL:              cfg.ClydeBaseURL,
 			APIKey:               cfg.ClydeAPIKey,
@@ -123,7 +121,6 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		}}
 		if cfg.HasFallback() {
 			configuredProviders = append(configuredProviders, config.ProviderConfig{
-				UsagePeriod:          nil,
 				ID:                   "fallback",
 				BaseURL:              cfg.FallbackBaseURL,
 				APIKey:               cfg.FallbackAPIKey,
@@ -178,7 +175,6 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 
 func newConfiguredProvider(configured config.ProviderConfig, httpClient *http.Client, pricing map[string]config.ModelPricing) provider {
 	return provider{
-		usagePeriod:         configured.UsagePeriod,
 		id:                  configured.ID,
 		sdk:                 newProviderSDK(httpClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
 		model:               configured.Model,

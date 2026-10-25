@@ -76,12 +76,15 @@ func (client *Client) checkBudget(ctx context.Context, target provider) (budgetS
 	if err != nil {
 		return snapshot, err
 	}
-	for index, limit := range target.tokenLimits {
+	for _, limit := range target.tokenLimits {
+		if limit.Limit == 0 {
+			continue
+		}
 		checked, checkErr := client.checkWindowBudget(ctx, target, now, snapshot, limit)
 		if checkErr != nil {
 			return checked, checkErr
 		}
-		if index == 0 && target.dailyTokenLimit == 0 && target.tokenLimit == 0 {
+		if !snapshot.known && target.dailyTokenLimit == 0 && target.tokenLimit == 0 {
 			snapshot = checked
 		}
 	}

@@ -26,37 +26,49 @@ func (client *Client) LoadProviderPeriodUsage(ctx context.Context, keys []review
 	var results []review.ProviderPeriodUsage
 	var failures []error
 	seen := make(map[review.ProviderModelKey]bool)
-	byProvider := make(map[string]review.ProviderPeriodUsage)
+	type periodKey struct {
+		providerID string
+		window     quota.Window
+	}
+	byPeriod := make(map[periodKey]review.ProviderPeriodUsage)
 	for _, key := range keys {
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		if cached, exists := byProvider[key.ProviderID]; exists {
-			cached.RequestedModel = key.RequestedModel
-			results = append(results, cached)
-			continue
-		}
-		var result review.ProviderPeriodUsage
-		result.ProviderID, result.RequestedModel, result.AsOfMS = key.ProviderID, key.RequestedModel, at.UnixMilli()
 		index := slices.IndexFunc(client.providers, func(target provider) bool { return target.id == key.ProviderID })
-		if index < 0 || client.providers[index].usagePeriod == nil {
-			byProvider[key.ProviderID] = result
+		var target provider
+		if index >= 0 {
+			target = client.providers[index]
+		}
+		windows := providerUsageWindows(target)
+		if len(windows) == 0 {
+			var emptyWindow quota.Window
+			windows = []quota.Window{emptyWindow}
+		}
+		for _, window := range windows {
+			cacheKey := periodKey{providerID: key.ProviderID, window: window}
+			if cached, exists := byPeriod[cacheKey]; exists {
+				cached.RequestedModel = key.RequestedModel
+				results = append(results, cached)
+				continue
+			}
+			var result review.ProviderPeriodUsage
+			result.ProviderID, result.RequestedModel, result.AsOfMS = key.ProviderID, key.RequestedModel, at.UnixMilli()
+			result.Window = window
+			var err error
+			if window.Mode != "" {
+				result.Bounds, err = window.Bounds(at)
+				if err == nil && client.budgetURL != "" && len(client.budgetSigningKey) > 0 && !review.ProviderUsageDeliveryFailed(ctx, key.ProviderID) {
+					result, err = client.readProviderPeriod(ctx, target, result)
+				}
+			}
+			if err != nil {
+				failures = append(failures, fmt.Errorf("provider %s period usage: %w", key.ProviderID, err))
+			}
+			byPeriod[cacheKey] = result
 			results = append(results, result)
-			continue
 		}
-		target := client.providers[index]
-		result.Window = *target.usagePeriod
-		var err error
-		result.Bounds, err = result.Window.Bounds(at)
-		if err == nil && client.budgetURL != "" && len(client.budgetSigningKey) > 0 && !review.ProviderUsageDeliveryFailed(ctx, key.ProviderID) {
-			result, err = client.readProviderPeriod(ctx, target, result)
-		}
-		if err != nil {
-			failures = append(failures, fmt.Errorf("provider %s period usage: %w", key.ProviderID, err))
-		}
-		byProvider[key.ProviderID] = result
-		results = append(results, result)
 	}
 	failure := errors.Join(failures...)
 	if failure != nil {
@@ -100,4 +112,19 @@ func (client *Client) readProviderPeriod(ctx context.Context, target provider, r
 	result.CostComplete = result.PricedRequests == result.ReportedRequests
 	result.Available = true
 	return result, nil
+}
+
+func providerUsageWindows(target provider) []quota.Window {
+	var windows []quota.Window
+	if target.tokenWindow.Mode != "" {
+		windows = append(windows, target.tokenWindow)
+	} else if target.dailyTokenLimit > 0 {
+		windows = append(windows, quota.Window{Mode: quota.Cron, Duration: "", Anchor: "", Schedule: "0 0 * * *", Timezone: "UTC"})
+	}
+	for _, limit := range target.tokenLimits {
+		if !slices.Contains(windows, limit.Window) {
+			windows = append(windows, limit.Window)
+		}
+	}
+	return windows
 }

@@ -103,6 +103,44 @@ func TestProviderPeriodTotalsUseRealStorageAcrossModelsAndProviders(t *testing.T
 	}
 }
 
+func TestProviderPeriodTotalsUseEachDistinctQuotaWindow(t *testing.T) {
+	endpoint := startBudgetWorker(t)
+	storage := quota.NewClient(endpoint, []byte("test-review-budget-secret"), nil)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	reportPeriodUsage(t, storage, now, "account_a", "model", "model", 10, 0, 0, 1, 11)
+	reportPeriodUsage(t, storage, now.Add(-2*time.Hour), "account_a", "older-model", "model", 20, 0, 0, 2, 22)
+	budgetURL, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hour := quota.Window{Mode: quota.Rolling, Duration: "1h"}
+	day := quota.Window{Mode: quota.Rolling, Duration: "24h"}
+	client := openai.NewClient(config.Config{
+		ProviderBudgetURL: budgetURL, GitHubWebhookSecret: []byte("test-review-budget-secret"),
+		Providers: []config.ProviderConfig{{
+			ID: "account_a", Model: "model", TokenWindow: hour,
+			TokenLimits: []quota.Limit{{Window: day}, {Window: hour}},
+		}},
+		ReviewModelPricing: map[string]config.ModelPricing{"model": {InputPerMillionTokens: 1, OutputPerMillionTokens: 2}},
+	}, nil)
+	periods, err := client.LoadProviderPeriodUsage(t.Context(), []review.ProviderModelKey{
+		{ProviderID: "account_a", RequestedModel: "model"},
+		{ProviderID: "account_a", RequestedModel: "older-model"},
+	}, now.Add(time.Millisecond))
+	if err != nil || len(periods) != 4 {
+		t.Fatalf("Each display row must include each distinct quota window: %+v, %v", periods, err)
+	}
+	for index, period := range periods {
+		wantWindow, wantTokens := hour, int64(11)
+		if index%2 == 1 {
+			wantWindow, wantTokens = day, 33
+		}
+		if period.Window != wantWindow || period.TotalTokens != wantTokens || !period.Available || !period.CostComplete {
+			t.Fatalf("Each quota window must retain its own provider-wide total: %+v", period)
+		}
+	}
+}
+
 func TestProviderPeriodSummaryRejectsTooManyGroupsWithoutTruncating(t *testing.T) {
 	storage := quota.NewClient(startBudgetWorker(t), []byte("test-review-budget-secret"), nil)
 	now := time.Now().UTC().Truncate(time.Millisecond)
@@ -143,8 +181,8 @@ func periodUsageClient(t *testing.T, endpoint string, window quota.Window) *open
 	return openai.NewClient(config.Config{
 		ProviderBudgetURL: budgetURL, GitHubWebhookSecret: []byte("test-review-budget-secret"),
 		Providers: []config.ProviderConfig{
-			{ID: "account_a", Model: config.AutoRouterModel, UsagePeriod: &window},
-			{ID: "account_b", Model: config.AutoRouterModel, UsagePeriod: &window},
+			{ID: "account_a", Model: config.AutoRouterModel, TokenWindow: window},
+			{ID: "account_b", Model: config.AutoRouterModel, TokenWindow: window},
 		},
 		ReviewModelPricing: map[string]config.ModelPricing{
 			"routed-v1":     {InputPerMillionTokens: 2, CachedInputPerMillionTokens: 0.2, CacheWritePerMillionTokens: &writes, OutputPerMillionTokens: 8},

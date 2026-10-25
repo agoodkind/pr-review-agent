@@ -95,7 +95,6 @@ const (
 
 // ProviderConfig contains one validated model endpoint and its credentials.
 type ProviderConfig struct {
-	UsagePeriod          *quota.Window
 	ID                   string
 	BaseURL              *url.URL
 	Model                string
@@ -120,7 +119,6 @@ type ProviderConfig struct {
 }
 
 type providerDefinition struct {
-	UsagePeriod                 *quota.Window      `json:"usage_period,omitempty"`
 	ID                          string             `json:"id"`
 	BaseURL                     string             `json:"base_url"`
 	Model                       string             `json:"model"`
@@ -192,7 +190,6 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 			return nil, fmt.Errorf("%s requires both Cloudflare Access credentials", prefix)
 		}
 		configured[definition.ID] = ProviderConfig{
-			UsagePeriod:          definition.UsagePeriod,
 			ID:                   definition.ID,
 			BaseURL:              baseURL,
 			Model:                definition.Model,
@@ -251,6 +248,9 @@ func (definition providerDefinition) tokenLimit() int64 {
 
 func (definition providerDefinition) tokenWindow() quota.Window {
 	if definition.TokenWindow == nil {
+		if definition.DailyTokenLimit != nil {
+			return quota.Window{Mode: quota.Cron, Duration: "", Anchor: "", Schedule: "0 0 * * *", Timezone: "UTC"}
+		}
 		var window quota.Window
 		return window
 	}
@@ -258,12 +258,6 @@ func (definition providerDefinition) tokenWindow() quota.Window {
 }
 
 func validateProviderQuota(definition providerDefinition) error {
-	if definition.UsagePeriod != nil {
-		if err := definition.UsagePeriod.Validate(); err != nil {
-			slog.Warn("Invalid provider usage period", "provider_id", definition.ID, "err", err)
-			return fmt.Errorf("provider %q usage_period: %w", definition.ID, err)
-		}
-	}
 	for index, limit := range definition.TokenLimits {
 		if err := limit.Validate(); err != nil {
 			return fmt.Errorf("provider %q token_limits[%d]: %w", definition.ID, index, err)
@@ -294,9 +288,17 @@ func validateProviderQuota(definition providerDefinition) error {
 	return nil
 }
 
-// HasTokenLimit includes daily, generic, and additional accounting windows.
+// HasTokenLimit reports whether any configured window has a positive cap.
 func (provider ProviderConfig) HasTokenLimit() bool {
-	return provider.DailyTokenLimit > 0 || provider.TokenLimit > 0 || len(provider.TokenLimits) > 0
+	if provider.DailyTokenLimit > 0 || provider.TokenLimit > 0 {
+		return true
+	}
+	for _, limit := range provider.TokenLimits {
+		if limit.Limit > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func validateProviderLimits(definition providerDefinition) (time.Duration, error) {
