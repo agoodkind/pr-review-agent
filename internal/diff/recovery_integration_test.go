@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,6 +370,9 @@ func (source *repositorySource) GetFileContent(ctx context.Context, _ int64, _ d
 	}
 	fields := strings.Fields(string(entry))
 	if len(fields) < 3 {
+		if len(fields) == 0 {
+			return githubapp.FileContent{}, githubapp.APIError{StatusCode: http.StatusNotFound, Message: "pinned file does not exist"}
+		}
 		return githubapp.FileContent{}, errors.New("Git did not return the pinned file entry")
 	}
 	if fields[0] == "160000" {
