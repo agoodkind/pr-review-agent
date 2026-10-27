@@ -69,7 +69,7 @@ func (summary Summary) Verdict() string {
 		return "This review neither approves nor requests changes."
 	}
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
-		return "This review found no severe defects."
+		return "This review did not identify findings at or above the minimum importance."
 	}
 	if len(unpublishedSummaryFindings(summary, summary.Metadata)) > 0 {
 		if summary.MetadataFindingsDisplay == reviewrules.FindingsHidden {

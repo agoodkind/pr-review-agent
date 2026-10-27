@@ -3391,7 +3391,7 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 // the page, which is what a reader saw twice two seconds apart.
 var summaryProse = []string{
 	"## Review",
-	"This review found no severe defects.",
+	"This review did not identify findings at or above the minimum importance.",
 	"This review found severe defects and listed them inline.",
 	"<summary>Review details</summary>",
 }
