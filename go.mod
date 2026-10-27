@@ -8,7 +8,7 @@ require (
 	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/go-enry/go-enry/v2 v2.9.6
 	github.com/go-git/go-git/v5 v5.19.3
-	github.com/openai/openai-go/v3 v3.86.0
+	github.com/openai/openai-go/v3 v3.88.0
 	github.com/robfig/cron/v3 v3.0.1
 	goodkind.io/gklog v0.4.5
 	google.golang.org/genai v1.76.0
@@ -47,7 +47,7 @@ require (
 	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
-	google.golang.org/api v0.308.0 // indirect
+	google.golang.org/api v0.309.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
