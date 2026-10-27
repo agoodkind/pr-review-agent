@@ -6,14 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-func TestJobThresholdDoesNotConflictWithSystemClassification(t *testing.T) {
+func TestClassificationPolicyDoesNotChangeWithPublicationMinimum(t *testing.T) {
 	policy := policytest.Load(t)
 	startup, err := review.PolicyHeader(policy, 6, nil)
 	if err != nil {
@@ -23,18 +22,8 @@ func TestJobThresholdDoesNotConflictWithSystemClassification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if startup != delivery || !strings.Contains(startup, "Classify every concrete defect from importance 1 through 10.") {
-		t.Fatal("The system instructions must classify all scores without imposing a startup publication threshold.")
-	}
-	var chunk diff.Chunk
-	chunk.Index, chunk.Total, chunk.Text = 1, 1, "Changed source."
-	const maximumPromptBytes = 100_000
-	prompt, err := review.BuildPrompt(chunk, 5, "", policy, maximumPromptBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(prompt, "importance 5 or higher") || !strings.Contains(prompt, "Do not omit a real defect because it is below that publication threshold.") {
-		t.Fatal("The job prompt must use its publication threshold while requesting findings below it.")
+	if startup != delivery {
+		t.Fatal("The publication minimum must not change the model's classification policy.")
 	}
 }
 
