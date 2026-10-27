@@ -45,7 +45,7 @@ func (client *Client) LoadProviderPeriodUsage(ctx context.Context, keys []review
 			var result review.ProviderPeriodUsage
 			result.ProviderID, result.RequestedModel, result.AsOfMS = key.ProviderID, key.RequestedModel, at.UnixMilli()
 			result.Window = window
-			if window.Mode != "" && client.budgetURL != "" && len(client.budgetSigningKey) > 0 {
+			if client.budgetURL != "" && len(client.budgetSigningKey) > 0 {
 				var err error
 				result, err = client.readProviderPeriod(ctx, target, result)
 				if err != nil {
@@ -64,10 +64,14 @@ func (client *Client) LoadProviderPeriodUsage(ctx context.Context, keys []review
 
 func (client *Client) readProviderPeriod(ctx context.Context, target provider, result review.ProviderPeriodUsage) (review.ProviderPeriodUsage, error) {
 	logger := gklog.L(ctx)
-	bounds, err := result.Window.Bounds(time.UnixMilli(result.AsOfMS))
-	if err != nil {
-		logger.WarnContext(ctx, "Provider period window failed", slog.String("err", err.Error()))
-		return result, fmt.Errorf("calculate provider period window: %w", err)
+	bounds := quota.Bounds{StartMS: 0, EndMS: result.AsOfMS, IncludeStart: true, IncludeEnd: true}
+	if result.Window.Mode != "" {
+		var err error
+		bounds, err = result.Window.Bounds(time.UnixMilli(result.AsOfMS))
+		if err != nil {
+			logger.WarnContext(ctx, "Provider period window failed", slog.String("err", err.Error()))
+			return result, fmt.Errorf("calculate provider period window: %w", err)
+		}
 	}
 	result.Bounds = bounds
 	if result.AsOfMS < bounds.EndMS {
@@ -81,6 +85,12 @@ func (client *Client) readProviderPeriod(ctx context.Context, target provider, r
 	}
 	result.HistoryStartMS = history.HistoryStartMS
 	result.HistoryComplete = result.Bounds.StartMS >= history.HistoryStartMS
+	if result.Window.Mode == "" {
+		result.Bounds.StartMS = min(history.HistoryStartMS, result.AsOfMS)
+		for _, event := range history.Events {
+			result.Bounds.StartMS = min(result.Bounds.StartMS, event.AdmittedAtMS)
+		}
+	}
 	for _, event := range history.Events {
 		if event.TotalTokens > quota.MaximumInteger-result.TotalTokens {
 			return result, errors.New("provider period usage exceeds the accounting integer range")
