@@ -35,7 +35,11 @@ func providerPeriodUsageCell(periods []ProviderPeriodUsage) string {
 			"Captured " + periodTimestamp(period.AsOfMS),
 		}
 		if !period.HistoryComplete {
-			parts = append(parts, "Partial history from "+periodTimestamp(period.HistoryStartMS))
+			if period.Window.Mode == "" {
+				parts = append(parts, "Recorded history begins "+periodTimestamp(period.HistoryStartMS))
+			} else {
+				parts = append(parts, "Partial history from "+periodTimestamp(period.HistoryStartMS))
+			}
 		}
 		if !period.CostComplete && period.PricedRequests > 0 {
 			parts = append(parts, fmt.Sprintf("Prices cover %d of %d requests", period.PricedRequests, period.ReportedRequests))
@@ -48,7 +52,7 @@ func providerPeriodUsageCell(periods []ProviderPeriodUsage) string {
 func providerPeriodWindowLabel(window quota.Window) string {
 	label := usageModelCell(string(window.Mode))
 	if window.Mode == "" {
-		return "Period unknown"
+		return "Recorded usage"
 	}
 	if window.Duration != "" {
 		label += " " + usageModelCell(window.Duration)

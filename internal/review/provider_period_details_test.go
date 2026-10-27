@@ -77,3 +77,33 @@ func TestRenderDetailsSeparatesPeriodTotalsFromReviewUsage(t *testing.T) {
 	}
 	t.Log(body[strings.Index(body, "#### Provider details"):])
 }
+
+func TestRenderDetailsShowsRecordedUsageWithoutQuotaWindow(t *testing.T) {
+	var period review.ProviderPeriodUsage
+	period.ProviderID, period.RequestedModel = "uncapped", "model"
+	period.Available, period.CostComplete = true, true
+	period.TotalTokens, period.EstimatedCostUSD = 1_200_000, 0.24
+	period.ReportedRequests, period.PricedRequests = 2, 2
+	period.HistoryStartMS = time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).UnixMilli()
+	period.AsOfMS = time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC).UnixMilli()
+	period.Bounds.StartMS, period.Bounds.EndMS = period.HistoryStartMS, period.AsOfMS
+	var attempt review.ProviderAttempt
+	attempt.Status.ProviderID, attempt.Status.Model, attempt.Count = "uncapped", "model", 1
+	var summary review.Summary
+	summary.Usage.ProviderColumns = []reviewrules.ProviderDetailColumn{reviewrules.ProviderIdentityColumn, reviewrules.ProviderPeriodUsageColumn}
+	summary.Usage.ProviderAttempts = []review.ProviderAttempt{attempt}
+	summary.Usage.PeriodUsage = []review.ProviderPeriodUsage{period}
+	body := review.RenderDetails(summary)
+	for _, expected := range []string{
+		"Recorded usage<br>1.2m tokens / ~$0.24",
+		"2026-10-20 00:00:00 UTC to 2026-10-27 00:00:00 UTC",
+		"Recorded history begins 2026-10-20 00:00:00 UTC",
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("Recorded usage without a quota window is missing %q.\n%s", expected, body)
+		}
+	}
+	if strings.Contains(body, "Period unknown") || strings.Contains(body, "unavailable") {
+		t.Fatalf("The renderer discarded known recorded usage.\n%s", body)
+	}
+}
