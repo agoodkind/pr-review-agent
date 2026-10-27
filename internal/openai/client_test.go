@@ -200,8 +200,8 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !strings.Contains(systemContent, configuredPolicy) {
 		t.Fatalf("system message missing configured review rules")
 	}
-	if !strings.Contains(systemContent, "importance 7 or higher") {
-		t.Fatalf("system message missing configured importance")
+	if !strings.Contains(systemContent, "Classify every concrete defect from importance 1 through 10.") || strings.Contains(systemContent, "importance 7 or higher") {
+		t.Fatal("The system instructions must classify every score without repeating the startup publication threshold.")
 	}
 	if strings.Contains(systemContent, "security breach") {
 		t.Fatalf("system message restricts configurable importance to fixed categories")

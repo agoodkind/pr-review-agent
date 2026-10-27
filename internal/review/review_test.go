@@ -141,7 +141,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			decision:  domain.ReviewDecisionApprove,
 			published: nil,
 			blocking:  nil,
-			verdict:   "This review found no severe defects.",
+			verdict:   "This review did not identify findings at or above the minimum importance.",
 		},
 		{
 			name:      "request changes over a published finding",
@@ -3614,7 +3614,7 @@ func TestResolvedThreadsRefreshTheVerdictAtAReviewedHead(t *testing.T) {
 	// The visible comment must not keep claiming severe findings after the
 	// verdict flipped.
 	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
-	if !ok || !strings.Contains(body, "This review found no severe defects.") {
+	if !ok || !strings.Contains(body, "This review did not identify findings at or above the minimum importance.") {
 		t.Fatalf("summary comment = %v, want the refreshed verdict prose", body)
 	}
 }

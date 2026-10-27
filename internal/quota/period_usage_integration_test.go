@@ -3,6 +3,7 @@
 package quota_test
 
 import (
+	"context"
 	"math"
 	"net/url"
 	"testing"
@@ -75,11 +76,62 @@ func TestPeriodDisplayReadsExistingQuotaHistory(t *testing.T) {
 	}
 }
 
-func TestPeriodDisplayWithoutConfiguredWindowsRemainsUnavailable(t *testing.T) {
+func TestPeriodDisplayWithoutStorageRemainsUnavailable(t *testing.T) {
 	client := openai.NewClient(config.Config{Providers: []config.ProviderConfig{{ID: "uncapped", Model: "model"}}}, nil)
 	periods, err := client.LoadProviderPeriodUsage(t.Context(), nil, time.Now())
 	if err != nil || len(periods) != 1 || periods[0].Available || periods[0].Window.Mode != "" {
-		t.Fatalf("An uncapped provider without a configured window must remain unavailable: %+v, %v", periods, err)
+		t.Fatalf("An uncapped provider without storage must remain unavailable: %+v, %v", periods, err)
+	}
+}
+
+func TestPeriodDisplayReadsRecordedUsageWithoutAQuotaWindow(t *testing.T) {
+	endpoint := startBudgetWorker(t)
+	storage := quota.NewClient(endpoint, []byte("test-review-budget-secret"), nil)
+	budgetURL, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := openai.NewClient(config.Config{
+		ProviderBudgetURL: budgetURL, GitHubWebhookSecret: []byte("test-review-budget-secret"),
+		Providers:          []config.ProviderConfig{{ID: "uncapped", Model: "model"}},
+		ReviewModelPricing: map[string]config.ModelPricing{"routed": {InputPerMillionTokens: 2, OutputPerMillionTokens: 8}},
+	}, nil)
+	at := time.UnixMilli(1)
+	periods, err := client.LoadProviderPeriodUsage(t.Context(), nil, at)
+	if err != nil || len(periods) != 1 || !periods[0].Available || periods[0].ReportedRequests != 0 || periods[0].TotalTokens != 0 || !periods[0].CostComplete || periods[0].HistoryStartMS <= 0 {
+		t.Fatalf("A successful empty history read must report recorded zero usage with a measured history boundary: %+v, %v", periods, err)
+	}
+	if periods[0].Bounds.StartMS != at.UnixMilli() || periods[0].Bounds.EndMS != at.UnixMilli() || periods[0].HistoryStartMS <= at.UnixMilli() {
+		t.Fatalf("An empty read must retain its measured history boundary without displaying a start after its snapshot: %+v", periods[0])
+	}
+	at = time.Now().UTC().Add(time.Minute).Truncate(time.Millisecond)
+	older := time.UnixMilli(periods[0].HistoryStartMS).Add(-24 * time.Hour)
+	reportDisplayUsage(t, storage, older, "uncapped", "model", "routed", 20, 0, 0, 2, 22)
+	reportDisplayUsage(t, storage, at, "uncapped", "model", "routed", 100, 0, 0, 20, 777)
+	reportDisplayUsage(t, storage, at, "uncapped", "other", "routed", 10000, 0, 0, 0, 10000)
+	reportDisplayUsage(t, storage, at, "other_account", "model", "routed", 10000, 0, 0, 0, 10000)
+	reportDisplayUsage(t, storage, at.Add(time.Second), "uncapped", "model", "routed", 10000, 0, 0, 0, 10000)
+	ctx, recorder := review.WithUsageRecorder(t.Context())
+	review.RecordModelUsage(ctx, review.ModelUsage{ProviderID: "uncapped", RequestedModel: "model", TotalTokens: 777, ReportedRequests: 1})
+	periods, err = client.LoadProviderPeriodUsage(ctx, nil, at)
+	if err != nil || len(periods) != 1 || !periods[0].Available || periods[0].Window.Mode != "" || periods[0].TotalTokens != 799 || periods[0].ReportedRequests != 2 || !periods[0].CostComplete || math.Abs(periods[0].EstimatedCostUSD-0.000416) > 1e-12 {
+		t.Fatalf("Recorded usage must preserve the requested-model bucket, reported-model prices, and snapshot cutoff: %+v, %v", periods, err)
+	}
+	if periods[0].Bounds.StartMS != older.UnixMilli() || periods[0].Bounds.EndMS != at.UnixMilli() || periods[0].AsOfMS != at.UnixMilli() || periods[0].HistoryComplete || recorder.Summary().TotalTokens != 777 {
+		t.Fatalf("Recorded dates must include admissions before the history boundary without adding current usage twice: %+v", periods[0])
+	}
+	if err := storage.Report(t.Context(), quota.ReportRequest{ProviderID: "uncapped", Model: "model", AdmittedAtMS: at.UnixMilli(), Usage: quota.Usage{InputTokens: 1, TotalTokens: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	periods, err = client.LoadProviderPeriodUsage(ctx, nil, at)
+	if err != nil || !periods[0].Available || periods[0].TotalTokens != 800 || periods[0].CostComplete || periods[0].PricedRequests != 2 {
+		t.Fatalf("Missing pricing evidence must retain known recorded tokens and the priced subtotal: %+v, %v", periods, err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	periods, err = client.LoadProviderPeriodUsage(cancelled, nil, at)
+	if err == nil || len(periods) != 1 || periods[0].Available {
+		t.Fatalf("A failed recorded-history read must remain unavailable: %+v, %v", periods, err)
 	}
 }
 

@@ -100,7 +100,7 @@
   "REVIEW_MAX_PROMPT_BYTES": "262144",
   "REVIEW_MAX_CHUNKS": "60",
   "REVIEW_MAX_FILES": "100",
-  "REVIEW_MIN_IMPORTANCE": "6",
+  "REVIEW_MIN_IMPORTANCE": "5",
   "REVIEW_RULE_IMPORTANCE": {
     "changed_documentation": 10,
     "review_comment_writing": 10,
