@@ -1033,8 +1033,8 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 		t.Fatalf("the pull request carries %d Review headings, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
 			headings, comment, verdict)
 	}
-	sentences := strings.Count(comment, "This review found no severe defects.") +
-		strings.Count(verdict, "This review found no severe defects.")
+	sentences := strings.Count(comment, "This review did not identify findings at or above the minimum importance.") +
+		strings.Count(verdict, "This review did not identify findings at or above the minimum importance.")
 	if sentences != 1 {
 		t.Fatalf("the pull request states the verdict sentence %d times, want exactly 1\ncomment:\n%s\nverdict review:\n%s",
 			sentences, comment, verdict)
