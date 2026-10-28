@@ -81,6 +81,12 @@ func (service *Service) updateStandingVerdict(ctx context.Context, job domain.Re
 	if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
 		return err
 	}
+	if standing.CommitID != summary.Head {
+		return nil
+	}
+	if standing.State == reviewStateChangesRequested && strings.TrimSpace(standing.Body) == "" {
+		return nil
+	}
 	body, err := service.nativeVerdictBody(ctx, job, summary)
 	if err != nil {
 		return err
@@ -89,11 +95,36 @@ func (service *Service) updateStandingVerdict(ctx context.Context, job domain.Re
 }
 
 func (service *Service) standingVerdict(job domain.ReviewJob, reviews []githubapp.Review, summary Summary) headVerdict {
+	latest := githubapp.LatestDecisionReview(reviews, service.botLogin)
+	if summary.Decision == domain.ReviewDecisionRequestChanges && latest.State == reviewStateChangesRequested {
+		return headVerdict{review: latest, found: true, withdrawn: false}
+	}
 	if summary.Decision == domain.ReviewDecisionApprove && !service.settingsFor(job).approveEachCommit {
-		latest := githubapp.LatestDecisionReview(reviews, service.botLogin)
 		if latest.State == reviewStateApproved {
 			return headVerdict{review: latest, found: true, withdrawn: false}
 		}
 	}
 	return latestBotVerdictAtHead(reviews, service.botLogin, summary.Head)
+}
+
+func (service *Service) preserveDismissedRejection(ctx context.Context, job domain.ReviewJob, reviews []githubapp.Review) (bool, error) {
+	logger := gklog.L(ctx)
+	latest := githubapp.LatestDecisionReviewAtHead(reviews, service.botLogin, job.Head)
+	if latest.State != reviewStateDismissed || latest.CommitID != job.Head {
+		return false, nil
+	}
+	dismissal, found, err := service.github.FindReviewDismissal(ctx, job.InstallationID, job.Repository, job.Number, latest.ID)
+	if err != nil {
+		logger.WarnContext(ctx, "read dismissed rejection before publishing", "review_id", latest.ID, "err", err)
+		return false, fmt.Errorf("read dismissed rejection before publishing: %w", err)
+	}
+	if !found {
+		return false, errors.New("review dismissal event is not available")
+	}
+	blocked, err := dismissedReviewBlocked(dismissal, latest.Body)
+	if err != nil {
+		logger.WarnContext(ctx, "read original dismissed decision before publishing", "review_id", latest.ID, "err", err)
+		return false, err
+	}
+	return blocked && !automaticFailureDismissal(dismissal, service.botLogin, latest.ID), nil
 }

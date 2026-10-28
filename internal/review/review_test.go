@@ -759,26 +759,26 @@ func TestAModelRefusalIsNotRetriedAndLeavesItsChunkPending(t *testing.T) {
 	assertNoVerdictOverAnUnreadHead(t, fixture)
 }
 
-// assertNoVerdictOverAnUnreadHead proves a run that could not read the
-// whole head touched no review object and still held the merge gate.
-//
-// A failure to read is not a finding. An earlier design submitted a blocking
-// review here, and a model provider outage then blocked every open pull
-// request with requested changes nobody had requested. The check concluding
-// without passing is what holds the gate; the review objects stay untouched so
-// the pull request carries no judgment the run never earned.
+// An incomplete review can request changes only with a published finding.
 func assertNoVerdictOverAnUnreadHead(t *testing.T, fixture *serviceFixture) {
 	t.Helper()
-	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("a verdict was submitted over a head that was not fully read: %v",
-			fixture.state.lastSubmitReview)
+	if submitted := fixture.state.lastSubmitReview; submitted != nil {
+		comments, _ := submitted["comments"].([]any)
+		body, _ := submitted["body"].(string)
+		if submitted["event"] != string(domain.ReviewDecisionRequestChanges) || len(comments) != 1 || body != "" || len(fixture.state.streamedComments) == 0 {
+			t.Fatalf("An incomplete read published a verdict without an immediate inline finding: %v", submitted)
+		}
 	}
 	if fixture.state.lastUpdateReview != nil {
 		t.Fatalf("a review was updated over a head that was not fully read: %v",
 			fixture.state.lastUpdateReview)
 	}
-	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
+	for _, dismissal := range fixture.state.dismissals {
+		if !slices.ContainsFunc(fixture.state.submittedReviews, func(item map[string]any) bool {
+			return fmt.Sprintf("%.0f", item["id"]) == dismissal["review_id"] && item["state"] == "DISMISSED"
+		}) {
+			t.Fatalf("The incomplete run dismissed an earlier review: %v", dismissal)
+		}
 	}
 	assertDeclinedCheckDoesNotPass(t, fixture)
 }
@@ -1382,9 +1382,8 @@ func TestACommentGitHubRefusesFallsBackToTheSummaryWithoutBlocking(t *testing.T)
 	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
 		t.Fatalf("last reviewed = %q, want the head: the chunk was read", state.LastReviewed)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
-		t.Fatalf("event = %v, want COMMENT without a published inline finding",
-			fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("The fallback created an unnecessary native review: %v", fixture.state.lastSubmitReview)
 	}
 	body, ok := fixture.state.issueComments[0]["body"].(string)
 	if !ok || !strings.Contains(body, "GitHub could not place the finding inline") {
@@ -2195,8 +2194,8 @@ func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing
 	if len(owed.Completed) != 2 {
 		t.Fatalf("completed = %v, want both chunks recorded as read", owed.Completed)
 	}
-	if len(fixture.state.submittedReviews) != 0 {
-		t.Fatalf("submitted reviews = %d, want none: the run stopped before submitting",
+	if len(fixture.state.submittedReviews) != 1 || fixture.state.submittedReviews[0]["state"] != "DISMISSED" {
+		t.Fatalf("submitted reviews = %d, want the early inline rejection dismissed after the failure",
 			len(fixture.state.submittedReviews))
 	}
 	if fixture.state.checkRuns[0]["status"] != "completed" || fixture.state.checkRuns[0]["conclusion"] != "failure" {
@@ -2211,7 +2210,7 @@ func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing
 		t.Fatalf("redelivered Run: %v", err)
 	}
 
-	if len(fixture.state.submittedReviews) != 1 {
+	if len(fixture.state.submittedReviews) != 2 {
 		t.Fatalf("submitted reviews = %d, want the verdict the dead run owed",
 			len(fixture.state.submittedReviews))
 	}
@@ -2562,13 +2561,8 @@ func TestAForcedRunStillDeclinesAnOversizedDelta(t *testing.T) {
 	}
 }
 
-// An incomplete run is not a judgment, so it must leave no review object at
-// all. An earlier design submitted a blocking review here, and a model
-// provider outage then turned every open pull request into a wall of requested
-// changes nobody had requested, each indistinguishable from a human reviewer
-// objecting. The merge gate does not need the review: the check concludes
-// without passing.
-func TestAnIncompleteRunTouchesNoReviewObject(t *testing.T) {
+// A failed read preserves findings and does not approve unread changes.
+func TestAnIncompleteRunPublishesOnlyItsActualInlineFindings(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		collector:         twoChunkCollector{},
 		minimumImportance: 9,
@@ -2582,16 +2576,14 @@ func TestAnIncompleteRunTouchesNoReviewObject(t *testing.T) {
 		t.Fatalf("second Run: %v", err)
 	}
 
-	if len(fixture.state.submittedReviews) != 0 {
-		t.Fatalf("submitted reviews = %d, want none: a failure to read is not a finding",
+	if len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted reviews = %d, want the single review containing the actual finding",
 			len(fixture.state.submittedReviews))
 	}
 	if fixture.state.lastUpdateReview != nil {
 		t.Fatalf("updated review = %v, want none", fixture.state.lastUpdateReview)
 	}
-	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want none", fixture.state.dismissals)
-	}
+	assertNoVerdictOverAnUnreadHead(t, fixture)
 	// The gate still holds and the reader still learns what happened: the one
 	// comment names the owed work, and the check does not pass.
 	assertDeclinedCheckDoesNotPass(t, fixture)
@@ -2885,31 +2877,9 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 	// the finding posts as its chunk answers, the checkpoint follows it, and
 	// only then come the head refresh, the thread read the verdict is computed
 	// from, and the review that carries it.
-	wantOrder := []string{
-		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
-		"POST /repos/owner/repo/check-runs",
-		"PATCH /repos/owner/repo/check-runs/77",
-		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"GET /repos/owner/repo/issues/7/comments",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
-		"GET /repos/owner/repo/pulls/7",
-		"POST /repos/owner/repo/pulls/7/comments",
-		"GET /repos/owner/repo/issues/7/comments",
-		"PATCH /repos/owner/repo/issues/comments/2000",
-		"GET /repos/owner/repo/pulls/7",
-		"POST /graphql",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"POST /graphql",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /graphql",
-		"POST /repos/owner/repo/pulls/7/reviews",
-		"GET /repos/owner/repo/issues/7/comments",
-		"PATCH /repos/owner/repo/issues/comments/2000",
-		"PATCH /repos/owner/repo/check-runs/77",
+	if len(fixture.state.issueComments) != 1 || len(fixture.state.submittedReviews) != 1 || len(fixture.state.streamedComments) != 1 {
+		t.Fatal("The run must publish one editable summary and one inline-backed native rejection.")
 	}
-	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
 
 	if fixture.state.lastSubmitReview == nil {
 		t.Fatal("SubmitReview was not called")
@@ -3678,8 +3648,8 @@ func TestReplyReconcilesOpenThreadsAtAReviewedHead(t *testing.T) {
 		t.Fatalf("submitted review = %v, want none while a bot thread is open", fixture.state.lastSubmitReview)
 	}
 	body, readable := fixture.state.lastUpdateReview["body"].(string)
-	if !readable || !strings.HasPrefix(body, openThread.RootComment.Body+".\n\n") {
-		t.Fatalf("updated review body = %q, want the remaining finding explanation", body)
+	if !readable || !strings.Contains(body, "https://github.com/owner/repo/pull/7#discussion_r700") || strings.Contains(body, openThread.RootComment.Body) {
+		t.Fatalf("updated review body = %q, want a direct finding link without copied finding prose", body)
 	}
 	if priorReview["id"] != priorReviewID || priorReview["state"] != "CHANGES_REQUESTED" || priorReview["body"] != body {
 		t.Fatal("The refresh must update the existing requested-changes review without changing its identity or state.")
@@ -3710,9 +3680,8 @@ func TestThreadResolutionCannotApproveAPartiallyReviewedHead(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
-		t.Fatalf("submitted review = %v, want COMMENT: the head was never fully reviewed",
-			fixture.state.lastSubmitReview)
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("The incomplete refresh created an unnecessary native review: %v", fixture.state.lastSubmitReview)
 	}
 	if len(fixture.state.dismissals) != 1 {
 		t.Fatalf("dismissals = %v, want the unsupported earlier block removed", fixture.state.dismissals)
@@ -4287,31 +4256,9 @@ func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	wantOrder := []string{
-		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
-		"POST /repos/owner/repo/check-runs",
-		"PATCH /repos/owner/repo/check-runs/77",
-		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"GET /repos/owner/repo/issues/7/comments",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
-		"GET /repos/owner/repo/pulls/7",
-		"POST /repos/owner/repo/pulls/7/comments",
-		"GET /repos/owner/repo/issues/7/comments",
-		"PATCH /repos/owner/repo/issues/comments/2000",
-		"GET /repos/owner/repo/pulls/7",
-		"POST /graphql",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"POST /graphql",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /graphql",
-		"POST /repos/owner/repo/pulls/7/reviews",
-		"GET /repos/owner/repo/issues/7/comments",
-		"PATCH /repos/owner/repo/issues/comments/2000",
-		"PATCH /repos/owner/repo/check-runs/77",
+	if len(fixture.state.issueComments) != 1 || len(fixture.state.submittedReviews) != 1 || len(fixture.state.streamedComments) != 1 {
+		t.Fatal("The run must preserve foreign reviews and publish one inline-backed native rejection.")
 	}
-	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
 	if fixture.state.lastSubmitReview == nil {
 		t.Fatal("SubmitReview was not called")
 	}
@@ -4370,6 +4317,7 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		submitReviewStatus: http.StatusInternalServerError,
+		model:              &sequenceModel{results: []domain.ReviewResult{{Findings: nil}}},
 	})
 
 	err := fixture.run(context.Background(), fixture.job())
@@ -4379,32 +4327,9 @@ func TestServiceFailsCheckWhenReviewPublicationFails(t *testing.T) {
 
 	// One comment is created at the start and edited from then on, including by
 	// the failure notice, so nothing here posts a second one.
-	wantOrder := []string{
-		"GET /repos/owner/repo/commits/a3c4f1cac7f595bc824704b9d2a1f1191630dc32/check-runs",
-		"POST /repos/owner/repo/check-runs",
-		"PATCH /repos/owner/repo/check-runs/77",
-		"GET /repos/owner/repo/pulls/7",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"GET /repos/owner/repo/issues/7/comments",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /repos/owner/repo/issues/7/comments",
-		"GET /repos/owner/repo/pulls/7",
-		"POST /repos/owner/repo/pulls/7/comments",
-		"GET /repos/owner/repo/issues/7/comments",
-		"PATCH /repos/owner/repo/issues/comments/2000",
-		"GET /repos/owner/repo/pulls/7",
-		"POST /graphql",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"POST /graphql",
-		"GET /repos/owner/repo/issues/7/comments",
-		"POST /graphql",
-		"POST /repos/owner/repo/pulls/7/reviews",
-		"GET /repos/owner/repo/pulls/7/reviews",
-		"PATCH /repos/owner/repo/check-runs/77",
-		"GET /repos/owner/repo/issues/7/comments",
-		"PATCH /repos/owner/repo/issues/comments/2000",
+	if len(fixture.state.issueComments) != 1 || len(fixture.state.submittedReviews) != 0 || len(fixture.state.streamedComments) != 0 {
+		t.Fatal("The refused approval must update one failure summary without creating a review.")
 	}
-	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
 	if fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
@@ -5269,8 +5194,11 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 			if output["title"] != stage.title {
 				t.Fatalf("title = %v, want %q", output["title"], stage.title)
 			}
-			if fixture.state.lastSubmitReview != nil {
-				t.Fatalf("submitted review = %v, want none on a failure", fixture.state.lastSubmitReview)
+			if submitted := fixture.state.lastSubmitReview; submitted != nil {
+				comments, _ := submitted["comments"].([]any)
+				if submitted["event"] != string(domain.ReviewDecisionRequestChanges) || len(comments) != 1 || len(fixture.state.streamedComments) != 1 || len(fixture.state.submittedReviews) != 1 || fixture.state.submittedReviews[0]["state"] != "DISMISSED" {
+					t.Fatalf("The failed run retained a verdict without a published inline finding: %v", submitted)
+				}
 			}
 			if body := failureSummaryComment(t, fixture); !strings.Contains(body, stage.title) {
 				t.Fatalf("summary comment = %q, want %q", body, stage.title)
@@ -5327,6 +5255,7 @@ func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T)
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			testCase.options.model = &sequenceModel{results: []domain.ReviewResult{{Findings: nil}}}
 			fixture := newServiceFixture(t, testCase.options)
 
 			if err := fixture.run(context.Background(), fixture.job()); err == nil {
@@ -5713,8 +5642,8 @@ func TestServiceKeepsPublishingWhileAnEarlierThreadIsOpen(t *testing.T) {
 			len(fixture.state.streamedComments))
 	}
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
-	if !ok || len(comments) != 0 {
-		t.Fatalf("comments = %v, want none: they posted as their chunk answered",
+	if !ok || len(comments) != 1 {
+		t.Fatalf("comments = %v, want the first finding submitted immediately with its decision",
 			fixture.state.lastSubmitReview["comments"])
 	}
 }
@@ -5960,21 +5889,23 @@ func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 	submitIndex := -1
 	for index, route := range fixture.state.requestOrder {
 		switch route {
-		case "POST /repos/owner/repo/pulls/7/comments":
-			commentIndex = index
+		case "PATCH /repos/owner/repo/issues/comments/2000":
+			if commentIndex < 0 {
+				commentIndex = index
+			}
 		case "POST /repos/owner/repo/pulls/7/reviews":
 			if submitIndex < 0 {
 				submitIndex = index
 			}
 		}
 	}
-	if commentIndex < 0 || submitIndex < 0 || commentIndex > submitIndex {
-		t.Fatalf("comment posted at %d and review submitted at %d, want the comment first",
+	if commentIndex < 0 || submitIndex < 0 || submitIndex > commentIndex {
+		t.Fatalf("checkpoint written at %d and inline review submitted at %d, want the finding before its checkpoint",
 			commentIndex, submitIndex)
 	}
 	submitted, ok := fixture.state.lastSubmitReview["comments"].([]any)
-	if !ok || len(submitted) != 0 {
-		t.Fatalf("submitted comments = %v, want none because they already posted",
+	if !ok || len(submitted) != 1 || len(fixture.state.submittedReviews) != 1 {
+		t.Fatalf("submitted comments = %v, want one immediate finding without another native review",
 			fixture.state.lastSubmitReview["comments"])
 	}
 }
@@ -7027,7 +6958,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			events = append(events, map[string]any{
 				"event":            "review_dismissed",
 				"actor":            map[string]any{"login": testBotLogin},
-				"dismissed_review": map[string]any{"review_id": reviewID, "dismissal_message": dismissal["message"]},
+				"dismissed_review": map[string]any{"review_id": reviewID, "dismissal_message": dismissal["message"], "state": dismissal["original_state"]},
 			})
 		}
 		for _, page := range state.reviewPages {
@@ -7135,21 +7066,7 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
-		state.streamedComments = append(state.streamedComments, body)
-		// A posted comment opens a review thread, which is one of the two
-		// inputs the verdict is computed from.
-		state.threadNodes = append(state.threadNodes, map[string]any{
-			"id":         fmt.Sprintf("streamed-thread-%d", len(state.streamedComments)),
-			"isResolved": false,
-			"comments": map[string]any{"nodes": []map[string]any{{
-				"databaseId": float64(900 + len(state.streamedComments)),
-				"body":       body["body"],
-				"path":       body["path"],
-				"line":       body["line"],
-				"startLine":  body["start_line"],
-				"author":     map[string]any{"login": testBotLogin},
-			}}},
-		})
+		state.recordInlineComment(body)
 		serviceWriteJSON(writer, http.StatusCreated, map[string]any{
 			"id":   float64(900 + len(state.streamedComments)),
 			"body": body["body"],
@@ -7169,6 +7086,35 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
+		}
+		comments, _ := body["comments"].([]any)
+		if len(comments) > 0 {
+			if state.createCommentHangup {
+				hijacker, ok := writer.(http.Hijacker)
+				if !ok {
+					http.Error(writer, "cannot hijack", http.StatusInternalServerError)
+					return
+				}
+				connection, _, err := hijacker.Hijack()
+				if err != nil {
+					http.Error(writer, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				_ = connection.Close()
+				return
+			}
+			if state.createCommentStatus != http.StatusOK {
+				serviceWriteJSON(writer, state.createCommentStatus, map[string]any{"message": "create review comment failed"})
+				return
+			}
+			for _, value := range comments {
+				comment, ok := value.(map[string]any)
+				if !ok {
+					http.Error(writer, "invalid inline comment", http.StatusBadRequest)
+					return
+				}
+				state.recordInlineComment(comment)
+			}
 		}
 		state.lastSubmitReview = body
 		// A submitted review is one GitHub lists from then on, which is how a
@@ -7208,12 +7154,14 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		for _, page := range state.reviewPages {
 			for _, item := range page {
 				if fmt.Sprintf("%.0f", item["id"]) == body["review_id"] {
+					body["original_state"] = strings.ToLower(fmt.Sprint(item["state"]))
 					item["state"] = "DISMISSED"
 				}
 			}
 		}
 		for _, item := range state.submittedReviews {
 			if fmt.Sprintf("%.0f", item["id"]) == body["review_id"] {
+				body["original_state"] = strings.ToLower(fmt.Sprint(item["state"]))
 				item["state"] = "DISMISSED"
 			}
 		}
@@ -7391,9 +7339,23 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 	writer.WriteHeader(http.StatusNotFound)
 }
 
-// threadNodesFor renders configured threads the way the GraphQL API returns
-// them, so the service reads its own threads through the real client rather
-// than through a hand-built double.
+func (state *serviceServerState) recordInlineComment(body map[string]any) {
+	state.streamedComments = append(state.streamedComments, body)
+	state.threadNodes = append(state.threadNodes, map[string]any{
+		"id":         fmt.Sprintf("streamed-thread-%d", len(state.streamedComments)),
+		"isResolved": false,
+		"comments": map[string]any{"nodes": []map[string]any{{
+			"databaseId": float64(900 + len(state.streamedComments)),
+			"body":       body["body"],
+			"path":       body["path"],
+			"line":       body["line"],
+			"startLine":  body["start_line"],
+			"author":     map[string]any{"login": testBotLogin},
+		}}},
+	})
+}
+
+// threadNodesFor renders configured threads in the GraphQL response format.
 func threadNodesFor(threads []githubapp.ReviewThread) []map[string]any {
 	nodes := make([]map[string]any, 0, len(threads))
 	for _, thread := range threads {

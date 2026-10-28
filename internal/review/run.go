@@ -65,6 +65,8 @@ type chunkPass struct {
 	disputePrompt string
 
 	publicationMu   sync.Mutex
+	nativeVerdictMu sync.Mutex
+	nativeRejection bool
 	mu              sync.Mutex
 	collector       *findingCollector
 	models          modelSet
@@ -125,6 +127,8 @@ func newChunkPass(
 		disputes:        disputes,
 		disputePrompt:   disputePrompt,
 		publicationMu:   sync.Mutex{},
+		nativeVerdictMu: sync.Mutex{},
+		nativeRejection: false,
 		mu:              sync.Mutex{},
 		collector:       newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
 		models:          modelSet{names: nil, seen: nil},
@@ -814,14 +818,7 @@ func (service *Service) postChunkFindings(
 	var transientErr error
 	for _, post := range posts {
 		post.comment.Body += "\n\n" + footer
-		err := service.github.CreateReviewComment(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			job.Number,
-			head,
-			post.comment,
-		)
+		err := service.postInlineFinding(ctx, job, head, post.comment, pass)
 		if err != nil {
 			logger.ErrorContext(
 				ctx,

@@ -864,11 +864,25 @@ func (service *Service) publishVerdict(
 		)
 	}
 	standing := service.standingVerdict(job, reviews, summary)
+	withdrawnByHuman := false
+	if summary.Decision == domain.ReviewDecisionRequestChanges {
+		withdrawnByHuman, err = service.preserveDismissedRejection(ctx, job, reviews)
+		if err != nil {
+			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
+		}
+	}
 	decisionState := reviewStateFor(summary.Decision)
 	unchanged := standing.found && !standing.withdrawn &&
 		standing.review.State == decisionState &&
 		latestBotVerdictState(reviews, service.botLogin) == decisionState
-	if unchanged {
+	switch {
+	case summary.Decision == domain.ReviewDecisionComment:
+		if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
+			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
+		}
+	case withdrawnByHuman:
+		logger.InfoContext(ctx, "review verdict withheld", "reason", "block_withdrawn_by_hand")
+	case unchanged:
 		if err := service.updateStandingVerdict(ctx, job, standing.review, summary); err != nil {
 			return service.failCheck(
 				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
@@ -880,7 +894,7 @@ func (service *Service) publishVerdict(
 			slog.Int64("review_id", standing.review.ID),
 			slog.String("event", string(summary.Decision)),
 		)
-	} else {
+	default:
 		publishedReview, err := service.submitInlineBackedVerdict(ctx, job, summary)
 		if err != nil {
 			return service.failCheck(

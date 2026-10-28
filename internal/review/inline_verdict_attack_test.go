@@ -9,7 +9,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/marker"
 )
 
-func TestInlineVerdictFinalThreadResolutionWithdrawsOnlyOwnUnsupportedBlock(t *testing.T) {
+func TestInlineVerdictFinalThreadResolutionPreservesHistoricalReviews(t *testing.T) {
 	thread := botThreadAt("resolved-during-report", 5, false)
 	model := &resolveInlineDuringReportModel{sequenceModel: &sequenceModel{results: []domain.ReviewResult{{}}}}
 	fixture := newServiceFixture(t, serviceFixtureOptions{
@@ -40,7 +40,7 @@ func TestInlineVerdictFinalThreadResolutionWithdrawsOnlyOwnUnsupportedBlock(t *t
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatalf("submitted review = %v, want no guessed verdict", fixture.state.lastSubmitReview)
 	}
-	wantStates := []string{"DISMISSED", "APPROVED", "CHANGES_REQUESTED"}
+	wantStates := []string{"CHANGES_REQUESTED", "APPROVED", "CHANGES_REQUESTED"}
 	for index, want := range wantStates {
 		if got := fixture.state.reviewPages[0][index]["state"]; got != want {
 			t.Fatalf("review %d state = %v, want %s", index, got, want)

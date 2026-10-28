@@ -252,6 +252,7 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		collectDisputes(nil, summaryCommentTestBotLogin, postHead),
 		"",
 	)
+	pass.nativeRejection = true
 	service := &Service{
 		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
 		reviewPolicy:       policytest.Load(t),

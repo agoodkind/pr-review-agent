@@ -31,8 +31,8 @@ func TestInlineVerdictDismissalFailureCannotApproveOnRetry(t *testing.T) {
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("retry Run: %v", err)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
-		t.Fatalf("retry event = %v, want COMMENT while severe finding remains unplaced", fixture.state.lastSubmitReview["event"])
+	if fixture.state.lastSubmitReview != nil {
+		t.Fatalf("The retry published an unnecessary native review: %v", fixture.state.lastSubmitReview)
 	}
 	if fixture.state.reviewPages[0][0]["state"] != "DISMISSED" || len(fixture.state.dismissals) != 1 {
 		t.Fatalf("recovered cleanup = %v review=%v, want one successful dismissal", fixture.state.dismissals, fixture.state.reviewPages[0][0])

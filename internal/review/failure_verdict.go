@@ -79,14 +79,28 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 	if latest.State != reviewStateChangesRequested {
 		return nil
 	}
+	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
 	var data reviewrules.PromptData
+	data.Input = service.terminalFailureLead(ctx, cause)
+	if err != nil {
+		logger.WarnContext(ctx, "read failure dismissal summary", slog.String("err", err.Error()))
+	} else {
+		comment, found := findSummaryComment(comments, service.botLogin)
+		if found && comment.ID > 0 {
+			data.SummaryURL = nativeSummaryURL(job.Repository, job.Number, comment.ID)
+		} else {
+			logger.WarnContext(ctx, "failure dismissal summary is unavailable")
+		}
+	}
 	message, err := service.reviewPolicy.Render("failure.dismiss", data)
 	if err != nil {
 		logger.WarnContext(ctx, "render failure dismissal", slog.String("err", err.Error()))
 		return fmt.Errorf("render failure dismissal: %w", err)
 	}
 	message += "\n\n" + marker.FailureDismissal(latest.ID)
-	if _, err := service.github.DismissReview(ctx, job.InstallationID, job.Repository, job.Number, latest.ID, message); err != nil {
+	dismissCtx, cancelDismiss := service.publicationContext(ctx)
+	defer cancelDismiss()
+	if _, err := service.github.DismissReview(dismissCtx, job.InstallationID, job.Repository, job.Number, latest.ID, message); err != nil {
 		logger.WarnContext(ctx, "dismiss standing rejection after failure", slog.Int64("review_id", latest.ID), slog.String("err", err.Error()))
 		return fmt.Errorf("dismiss standing rejection after failure: %w", err)
 	}
@@ -156,23 +170,7 @@ func (service *Service) terminalFailureDetail(ctx context.Context, job domain.Re
 	}
 	var failures []terminalProviderFailure
 	collectTerminalProviderFailures(cause, &failures)
-	var data reviewrules.PromptData
-	for _, class := range failureClassesOf(cause) {
-		if unexpectedFailureClass(class) {
-			data.FailureClass = string(class)
-			break
-		}
-	}
-	template := "failure.service"
-	for _, failure := range failures {
-		if failure.status.Cause == ProviderRequestFailed && unexpectedFailureClass(failure.class) {
-			data = service.terminalFailureData(failure)
-			template = "failure.provider"
-			break
-		}
-	}
-	data.FailureClass = service.failureClassLabel(ctx, data.FailureClass)
-	visible := service.renderFailureTemplate(ctx, template, data)
+	visible := service.terminalFailureLead(ctx, cause)
 	var rows strings.Builder
 	for _, failure := range failures {
 		row := service.terminalFailureData(failure)
@@ -180,10 +178,56 @@ func (service *Service) terminalFailureDetail(ctx context.Context, job domain.Re
 		rows.WriteString(service.renderFailureTemplate(ctx, "failure.row", row))
 	}
 	if rows.Len() > 0 {
+		var data reviewrules.PromptData
 		data.Input = rows.String()
 		visible += "\n\n" + service.renderFailureTemplate(ctx, "failure.details", data)
 	}
 	return visible + "\n\n" + detail
+}
+
+func terminalFailureClass(cause error) config.FailureClass {
+	return failureClassOf(terminalFailureCause(cause))
+}
+
+func terminalFailureCause(cause error) error {
+	for current := cause; current != nil; {
+		if joined, ok := current.(joinedFailure); ok {
+			for _, child := range slices.Backward(joined.Unwrap()) {
+				if child != nil {
+					return terminalFailureCause(child)
+				}
+			}
+		}
+		if _, ok := current.(providerFailureStatus); ok {
+			return current
+		}
+		wrapped, ok := current.(wrappedFailure)
+		if !ok {
+			break
+		}
+		current = wrapped.Unwrap()
+	}
+	return cause
+}
+
+func (service *Service) terminalFailureLead(ctx context.Context, cause error) string {
+	terminal := terminalFailureCause(cause)
+	var failures []terminalProviderFailure
+	collectTerminalProviderFailures(terminal, &failures)
+	var data reviewrules.PromptData
+	data.FailureClass = string(failureClassOf(terminal))
+	data.FailureStatus = "not reported"
+	var githubFailure githubapp.APIError
+	if errors.As(terminal, &githubFailure) {
+		data.FailureStatus = fmt.Sprintf("HTTP %d", githubFailure.StatusCode)
+	}
+	template := "failure.service"
+	if len(failures) > 0 {
+		data = service.terminalFailureData(failures[len(failures)-1])
+		template = "failure.provider"
+	}
+	data.FailureClass = service.failureClassLabel(ctx, data.FailureClass)
+	return service.renderFailureTemplate(ctx, template, data)
 }
 
 func (service *Service) failureClassLabel(ctx context.Context, class string) string {

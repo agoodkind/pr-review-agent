@@ -107,7 +107,7 @@ func TestInlineVerdictRechecksThreadsAfterFinalReport(t *testing.T) {
 	}
 }
 
-func TestInlineVerdictFallbackRemainsCommentOnRepeatedRefresh(t *testing.T) {
+func TestInlineVerdictFallbackUpdatesOnlyTheSummaryOnRepeatedRefresh(t *testing.T) {
 	for _, priorState := range []string{"", "APPROVED", "CHANGES_REQUESTED"} {
 		t.Run(priorState, func(t *testing.T) {
 			model := &sequenceModel{results: []domain.ReviewResult{{Findings: []domain.Finding{severeFinding()}}}}
@@ -128,8 +128,8 @@ func TestInlineVerdictFallbackRemainsCommentOnRepeatedRefresh(t *testing.T) {
 				if err := fixture.run(context.Background(), job); err != nil {
 					t.Fatalf("Run %s: %v", delivery, err)
 				}
-				if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionComment) {
-					t.Fatalf("review event on %s = %v, want COMMENT for unplaced finding", delivery, fixture.state.lastSubmitReview["event"])
+				if fixture.state.lastSubmitReview != nil {
+					t.Fatalf("The %s delivery published an unnecessary native review: %v", delivery, fixture.state.lastSubmitReview)
 				}
 			}
 			if model.callCount != 1 {

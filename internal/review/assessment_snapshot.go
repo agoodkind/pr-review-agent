@@ -35,7 +35,7 @@ func parseAssessmentSnapshot(body string) assessmentSnapshot {
 		omissionsAccepted: false,
 		decisionReason:    decodeDecisionReasonMarker(body),
 		approvalWithheld:  strings.Contains(body, approvalWithheldMarker),
-		legacyWholeHead:   !strings.Contains(body, unreviewedHeadReason),
+		legacyWholeHead:   strings.TrimSpace(body) != "" && !strings.Contains(body, unreviewedHeadReason),
 	}
 	if accepted, found := decodeOmissionDecisionMarker(body); found {
 		snapshot.omissionsAccepted = accepted

@@ -67,7 +67,7 @@ func (client *Client) ListReviews(
 	return reviews, nil
 }
 
-// SubmitReview posts one complete pull request review.
+// SubmitReview publishes a GitHub review with the supplied comments and decision.
 func (client *Client) SubmitReview(
 	ctx context.Context,
 	installationID int64,
@@ -135,12 +135,7 @@ type createReviewCommentBody struct {
 	CommitID string `json:"commit_id"`
 }
 
-// CreateReviewComment posts one finding on its own, as soon as it is found.
-//
-// A review submitted with its comments attached publishes nothing until every
-// chunk has answered, so a run that stops early leaves the reader with none of
-// what it did find. Posting each finding on arrival means the work already done
-// survives whatever happens to the rest of the run.
+// CreateReviewComment publishes one inline finding without changing the review decision.
 func (client *Client) CreateReviewComment(
 	ctx context.Context,
 	installationID int64,

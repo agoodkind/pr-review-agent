@@ -12,6 +12,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const (
@@ -59,10 +60,6 @@ func (service *Service) reportFailedCheck(
 	var statuses []ProviderStatus
 	collectProviderStatuses(cause, &statuses)
 	recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(cause), quotaRecovery(statuses))
-	var dismissErr error
-	if conclusion != checkConclusionCancelled {
-		dismissErr = service.dismissFailureVerdict(ctx, job, cause)
-	}
 	title := failureTitle(stage, cause)
 	detail := service.terminalFailureDetail(ctx, job, cause)
 	checkSummary := detail + "\n\n" + RenderDetails(progress)
@@ -82,6 +79,10 @@ func (service *Service) reportFailedCheck(
 		}
 	}
 	service.writeFailureSummary(ctx, job, progress, title, detail)
+	var dismissErr error
+	if conclusion != checkConclusionCancelled {
+		dismissErr = service.dismissFailureVerdict(ctx, job, cause)
+	}
 	if completeErr != nil {
 		return errors.Join(cause, dismissErr, fmt.Errorf("complete check run: %w", completeErr))
 	}
@@ -101,7 +102,7 @@ func (service *Service) reportFailedCheck(
 // A failed model call never reaches here. It leaves its chunk pending rather
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
-	switch failureClassOf(cause) {
+	switch terminalFailureClass(cause) {
 	case config.FailureDailyBudget:
 		return checkFailureDailyBudget
 	case config.FailureUsageExceeded:
@@ -325,7 +326,13 @@ func (service *Service) writeFailureSummary(
 			progress.FilesReviewed == 0 && progress.Chunks == 0 && len(progress.Models) == 0 &&
 			len(progress.Observed) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
 			len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0 {
-			failureProse = renderMaintenanceFailure(existingBody, title, detail)
+			currentDetail := detail
+			if strings.Contains(existingBody, reviewDetailsStart) {
+				var data reviewrules.PromptData
+				data.Identity = codeSpan(shortHead(progress.Head))
+				currentDetail = service.renderFailureTemplate(ctx, "failure.saved", data) + "\n\n" + detail
+			}
+			failureProse = renderMaintenanceFailure(existingBody, title, currentDetail)
 			if !strings.Contains(existingBody, reviewDetailsStart) {
 				failureProse += "\n\n" + RenderDetails(progress)
 			}

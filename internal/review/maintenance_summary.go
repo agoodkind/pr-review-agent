@@ -26,7 +26,22 @@ func preserveCheckpointSummary(state marker.State, body string) bool {
 }
 
 func renderMaintenanceFailure(body, title, detail string) string {
-	return renderCheckpointNotice(body, "### "+title+"\n\n"+detail)
+	return renderCheckpointNotice(stripActiveReviewProgress(body), "### "+title+"\n\n"+detail)
+}
+
+func stripActiveReviewProgress(body string) string {
+	prefix, remaining, found := strings.Cut(body, "\n\n")
+	if !found || strings.TrimSpace(prefix) != "## Review" {
+		return body
+	}
+	progress, remaining, found := strings.Cut(remaining, "\n\n")
+	if !strings.HasPrefix(progress, "Reviewing `") || strings.Contains(progress, "\n") {
+		return body
+	}
+	if !found {
+		return prefix
+	}
+	return prefix + "\n\n" + remaining
 }
 
 func renderCheckpointNotice(body, notice string) string {
