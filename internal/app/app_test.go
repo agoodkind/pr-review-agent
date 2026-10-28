@@ -1324,7 +1324,7 @@ func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
 	}
 }
 
-func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
+func TestEndToEndGitHubFailurePreservesPendingReview(t *testing.T) {
 	withIntegrationLock(t)
 	fixture := newAppFixture(t, appFixtureOptions{
 		clydeResponses: []string{defectiveReviewContent(domain.Finding{
@@ -1346,14 +1346,17 @@ func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForClydeCalls(t, 1)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if fixture.githubState.lastCheckConclusion() == "failure" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	fixture.waitForCheckCompletions(t, 1)
+	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "action_required" {
+		t.Fatalf("check conclusion = %q, want action_required while the finding remains unpublished", conclusion)
 	}
-	t.Fatalf("check conclusion = %q, want failure", fixture.githubState.lastCheckConclusion())
+	state, valid := marker.DecodeState(fixture.githubState.summaryCommentBody())
+	if !valid || len(state.Pending) != 1 || state.LastReviewed != "" {
+		t.Fatalf("The failed first finding advanced or erased its review checkpoint: %+v", state)
+	}
+	if fixture.githubState.submitReviewCount() != 0 || len(fixture.githubState.streamedCommentBodies()) != 0 {
+		t.Fatal("The failed first finding created a review or an inline comment.")
+	}
 }
 
 func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
@@ -1546,6 +1549,8 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	})
 	_ = opened.Body.Close()
 	fixture.waitForSubmitReviews(t, 1)
+	fixture.waitForCheckCompletions(t, 1)
+	fixture.waitForSummaryHead(t, testDefectiveHead)
 
 	fixture.githubState.setHead(testCorrectedHead)
 	fixture.githubState.setChangedFiles(correctedChangedFiles())
@@ -1559,7 +1564,10 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	_ = sync.Body.Close()
 
 	fixture.waitForClydeCalls(t, 5)
-	fixture.waitForSubmitReviews(t, 2)
+	fixture.waitForCheckCompletions(t, 2)
+	if count := fixture.githubState.submitReviewCount(); count != 1 {
+		t.Fatalf("submit review count = %d, want the existing requested-changes decision retained", count)
+	}
 	// The comment is rewritten after the review is submitted, and again at every
 	// chunk checkpoint before it, so waiting on the review or on an update count
 	// races the rewrite this test reads. Wait for the state it asserts.
@@ -2426,6 +2434,7 @@ type githubServerState struct {
 	nextCheckRunID       int64
 	submitReviews        []map[string]any
 	submitReviewStatus   int
+	reviewDismissals     []map[string]any
 	streamedComments     []map[string]any
 	listReviewPages      [][]map[string]any
 	reviewPageIndex      int
@@ -2516,6 +2525,16 @@ func (state *githubServerState) handleCreateReviewComment(
 		return
 	}
 	state.mu.Lock()
+	count := state.recordReviewComment(body)
+	state.mu.Unlock()
+	writeJSON(writer, http.StatusCreated, map[string]any{
+		"id":   float64(count),
+		"body": body["body"],
+		"user": map[string]any{"login": testBotLogin},
+	})
+}
+
+func (state *githubServerState) recordReviewComment(body map[string]any) int {
 	state.streamedComments = append(state.streamedComments, body)
 	count := len(state.streamedComments)
 	// A posted comment starts a review thread, which is what the next run
@@ -2538,12 +2557,7 @@ func (state *githubServerState) handleCreateReviewComment(
 			}},
 		},
 	})
-	state.mu.Unlock()
-	writeJSON(writer, http.StatusCreated, map[string]any{
-		"id":   float64(900 + count),
-		"body": body["body"],
-		"user": map[string]any{"login": testBotLogin},
-	})
+	return count
 }
 
 func (state *githubServerState) handleListIssueComments(writer http.ResponseWriter) {
@@ -2798,6 +2812,13 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		state.handleListReviews(writer)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/timeline") {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		events := append([]map[string]any{}, state.reviewDismissals...)
+		writeJSON(writer, http.StatusOK, events)
+		return
+	}
 
 	// The service's one top level comment lives under the issue comments
 	// endpoint, distinct from the inline review comments matched below.
@@ -3019,6 +3040,7 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 	}
 
 	state.mu.Lock()
+	defer state.mu.Unlock()
 	state.submitReviews = append(state.submitReviews, body)
 	commitID, _ := body["commit_id"].(string)
 	reviewBody, _ := body["body"].(string)
@@ -3029,21 +3051,24 @@ func (state *githubServerState) handleSubmitReview(writer http.ResponseWriter, r
 		"state":     githubReviewStateForEvent(body["event"]),
 		"user":      map[string]any{"login": testBotLogin},
 	}
+	comments, _ := body["comments"].([]any)
+	for _, raw := range comments {
+		comment, ok := raw.(map[string]any)
+		if !ok {
+			writeJSON(writer, http.StatusUnprocessableEntity, map[string]any{"message": "invalid review comment"})
+			return
+		}
+		comment["commit_id"] = commitID
+		comment["pull_request_review_id"] = review["id"]
+		state.recordReviewComment(comment)
+	}
 	if len(state.listReviewPages) == 0 {
 		state.listReviewPages = [][]map[string]any{{review}}
 	} else {
 		state.listReviewPages[0] = append(state.listReviewPages[0], review)
 	}
 	state.reviewPageIndex = 0
-	state.mu.Unlock()
-
-	writeJSON(writer, http.StatusOK, map[string]any{
-		"id":        float64(42),
-		"commit_id": body["commit_id"],
-		"state":     body["event"],
-		"body":      body["body"],
-		"user":      map[string]any{"login": testBotLogin},
-	})
+	writeJSON(writer, http.StatusOK, review)
 }
 
 func (state *githubServerState) handleUpdateReview(writer http.ResponseWriter, request *http.Request) {
@@ -3052,7 +3077,8 @@ func (state *githubServerState) handleUpdateReview(writer http.ResponseWriter, r
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
-	reviewIDText := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]
+	reviewPath := strings.TrimSuffix(request.URL.Path, "/dismissals")
+	reviewIDText := reviewPath[strings.LastIndex(reviewPath, "/")+1:]
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	for pageIndex, page := range state.listReviewPages {
@@ -3060,7 +3086,19 @@ func (state *githubServerState) handleUpdateReview(writer http.ResponseWriter, r
 			if fmt.Sprintf("%.0f", item["id"]) != reviewIDText {
 				continue
 			}
-			item["body"] = body["body"]
+			if strings.HasSuffix(request.URL.Path, "/dismissals") {
+				state.reviewDismissals = append(state.reviewDismissals, map[string]any{
+					"event": "review_dismissed",
+					"actor": map[string]any{"login": testBotLogin},
+					"dismissed_review": map[string]any{
+						"review_id": item["id"], "dismissal_message": body["message"],
+						"state": strings.ToLower(fmt.Sprint(item["state"])),
+					},
+				})
+				item["state"] = "DISMISSED"
+			} else {
+				item["body"] = body["body"]
+			}
 			state.listReviewPages[pageIndex][reviewIndex] = item
 			writeJSON(writer, http.StatusOK, item)
 			return
@@ -3396,19 +3434,16 @@ var summaryProse = []string{
 	"<summary>Review details</summary>",
 }
 
-// assertVerdictBody checks the actual blocking explanation and hidden recovery data.
+// assertVerdictBody checks that native decisions do not repeat the editable summary.
 func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string, blocking bool, explanation string) {
 	t.Helper()
+	if value != nil && value != "" {
+		t.Fatalf("The native review includes a standalone body: %v.", value)
+	}
 	if !blocking {
-		if value != nil && value != "" {
-			t.Fatalf("The approval includes native body %v.", value)
-		}
 		return
 	}
-	body, ok := value.(string)
-	if !ok {
-		t.Fatalf("body = %v, want string", value)
-	}
+	body := fixture.githubState.summaryCommentBody()
 	if markerHead, found := marker.FindReview(body); !found || markerHead != domain.HeadSHA(head) {
 		t.Fatalf("body = %q, want the review marker for %s", body, head)
 	}
@@ -3421,10 +3456,6 @@ func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string
 	fixture.githubState.mu.Unlock()
 	if commentCount != 1 || commentID == nil {
 		t.Fatalf("The native review requires one canonical summary, but the fixture contains %d comments.", commentCount)
-	}
-	visible, checkpoint, found := strings.Cut(body, "\n\n")
-	if !found || visible != explanation {
-		t.Fatalf("The native review contains %q instead of the expected blocking sentence %q.", visible, explanation)
 	}
 	currentInlineCount := 0
 	for _, comment := range fixture.githubState.streamedCommentBodies() {
@@ -3441,17 +3472,9 @@ func assertVerdictBody(t *testing.T, fixture *appFixture, value any, head string
 	if currentInlineCount != 1 {
 		t.Fatalf("The current head must retain exactly one inline finding, but it has %d.", currentInlineCount)
 	}
-	if !strings.Contains(checkpoint, "<!-- pr-review-agent:metadata:v1 ") {
-		t.Fatal("The native rejection omitted its hidden metadata recovery record.")
+	if !strings.Contains(body, "<!-- pr-review-agent:metadata:v1 ") {
+		t.Fatal("The editable summary omitted its metadata recovery record.")
 	}
-	for _, line := range strings.Split(checkpoint, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && (!strings.HasPrefix(line, "<!--") || !strings.HasSuffix(line, "-->")) {
-			t.Fatalf("The native review repeats visible prose after its blocking explanation: %q", line)
-		}
-	}
-	// The marker records the decision because a dismissal erases GitHub's own
-	// record of it, and the withheld-block rule reads it back from here.
 	if marker.ReviewBlocked(body) != blocking {
 		t.Fatalf("verdict body records blocked=%v, want %v: %q", marker.ReviewBlocked(body), blocking, body)
 	}

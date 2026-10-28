@@ -168,7 +168,7 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 		compiled[name] = parsed
 	}
-	for _, name := range []string{"native.summary_link", "native.request_changes", "schema.file_assessment.reason", "coverage.classification_incomplete", "classification.system", "classification.required", "classification.file_evidence"} {
+	for _, name := range []string{"native.summary_link", "native.request_changes", "failure.saved", "schema.file_assessment.reason", "coverage.classification_incomplete", "classification.system", "classification.required", "classification.file_evidence"} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
 		}

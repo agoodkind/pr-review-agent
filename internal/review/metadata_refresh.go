@@ -29,7 +29,7 @@ func (service *Service) reviewCurrentMetadata(
 	metadataInput := diff.ReviewInput{
 		PullRequest: pullRequest, Files: nil, Metadata: input.Metadata, MergeBase: "",
 	}
-	support, err := pullRequestPrompt(pullRequest, input.Files, service.reviewPolicy)
+	support, err := BuildPullRequestContext(pullRequest, input.Files, service.reviewPolicy)
 	if err != nil {
 		gklog.L(ctx).WarnContext(ctx, "Build pull request prose context failed", "err", err)
 		return empty, err

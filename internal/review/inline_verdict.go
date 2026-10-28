@@ -65,28 +65,20 @@ func (service *Service) withdrawUnsupportedVerdicts(
 		logger.ErrorContext(ctx, "read reviews before withholding verdict", slog.String("err", err.Error()))
 		return fmt.Errorf("read reviews before withholding verdict: %w", err)
 	}
-	withdrawn := 0
-	for _, item := range reviews {
-		if item.Author != service.botLogin {
-			continue
-		}
-		message := unsupportedInlineVerdictMessage
-		if item.State == reviewStateApproved && approvalWithheld {
-			message = withheldApprovalMessage
-		} else if item.State != reviewStateChangesRequested {
-			continue
-		}
-		if _, err := service.github.DismissReview(
-			ctx, job.InstallationID, job.Repository, job.Number, item.ID, message,
-		); err != nil {
-			logger.ErrorContext(ctx, "withdraw unsupported verdict", slog.Int64("review_id", item.ID), slog.String("err", err.Error()))
-			return fmt.Errorf("withdraw unsupported verdict %d: %w", item.ID, err)
-		}
-		withdrawn++
+	latest := githubapp.LatestDecisionReview(reviews, service.botLogin)
+	message := unsupportedInlineVerdictMessage
+	if latest.State == reviewStateApproved && approvalWithheld {
+		message = withheldApprovalMessage
+	} else if latest.State != reviewStateChangesRequested {
+		return nil
 	}
-	if withdrawn > 0 {
-		logger.InfoContext(ctx, "review verdicts withdrawn", slog.Int("count", withdrawn))
+	if _, err := service.github.DismissReview(
+		ctx, job.InstallationID, job.Repository, job.Number, latest.ID, message,
+	); err != nil {
+		logger.ErrorContext(ctx, "withdraw unsupported verdict", slog.Int64("review_id", latest.ID), slog.String("err", err.Error()))
+		return fmt.Errorf("withdraw unsupported verdict %d: %w", latest.ID, err)
 	}
+	logger.InfoContext(ctx, "review verdict withdrawn", slog.Int64("review_id", latest.ID))
 	return nil
 }
 

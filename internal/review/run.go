@@ -65,6 +65,8 @@ type chunkPass struct {
 	disputePrompt string
 
 	publicationMu   sync.Mutex
+	nativeVerdictMu sync.Mutex
+	nativeRejection bool
 	mu              sync.Mutex
 	collector       *findingCollector
 	models          modelSet
@@ -125,6 +127,8 @@ func newChunkPass(
 		disputes:        disputes,
 		disputePrompt:   disputePrompt,
 		publicationMu:   sync.Mutex{},
+		nativeVerdictMu: sync.Mutex{},
+		nativeRejection: false,
 		mu:              sync.Mutex{},
 		collector:       newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
 		models:          modelSet{names: nil, seen: nil},
@@ -697,7 +701,7 @@ func (service *Service) reviewOneChunk(
 	nothing := chunkOutcome{unread: false, shortfall: false}
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	promptShortfall := pass.structuralShortfall()
-	pullRequestContext, err := pullRequestPrompt(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
+	pullRequestContext, err := BuildPullRequestContext(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
 	if err != nil {
 		cancel()
 		gklog.L(ctx).ErrorContext(ctx, "Pull request prompt rendering failed", "err", err)
@@ -814,14 +818,7 @@ func (service *Service) postChunkFindings(
 	var transientErr error
 	for _, post := range posts {
 		post.comment.Body += "\n\n" + footer
-		err := service.github.CreateReviewComment(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			job.Number,
-			head,
-			post.comment,
-		)
+		err := service.postInlineFinding(ctx, job, head, post.comment, pass)
 		if err != nil {
 			logger.ErrorContext(
 				ctx,

@@ -189,7 +189,6 @@ func (service *Service) refreshReviewedCheck(
 		var statuses []ProviderStatus
 		collectProviderStatuses(err, &statuses)
 		recordAssessment(ctx, domain.AssessmentFailed, nil, failureNames(err), quotaRecovery(statuses))
-		dismissErr := service.dismissFailureVerdict(ctx, job, err)
 		detail := service.terminalFailureDetail(ctx, job, err)
 		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
 			"failure", "Review refresh failed", detail)
@@ -197,6 +196,7 @@ func (service *Service) refreshReviewedCheck(
 		progress.Head = job.Head
 		progress.Failed = true
 		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
+		dismissErr := service.dismissFailureVerdict(ctx, job, err)
 		if completionErr == nil {
 			return &reportedFailureError{cause: errors.Join(err, dismissErr)}
 		}
@@ -291,22 +291,9 @@ func (service *Service) loadVerdictRefreshInputs(
 		reviews = listed
 	}
 	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
-	blockWithdrawn := verdict.withdrawn && dismissedVerdictBlocked(verdict.review.Body)
-	if verdict.withdrawn && (blockWithdrawn || verdict.review.Body == "") {
-		dismissal, found, err := service.github.FindReviewDismissal(ctx, job.InstallationID, job.Repository, job.Number, verdict.review.ID)
-		if err != nil {
-			logger.WarnContext(ctx, "read failure dismissal provenance", slog.String("err", err.Error()))
-			return missing, fmt.Errorf("read failure dismissal provenance: %w", err)
-		}
-		if !found {
-			return missing, errors.New("review dismissal event is not available")
-		}
-		blocked, err := dismissedReviewBlocked(dismissal, verdict.review.Body)
-		if err != nil {
-			logger.WarnContext(ctx, "read original dismissed decision", slog.String("err", err.Error()))
-			return missing, err
-		}
-		blockWithdrawn = blocked && !automaticFailureDismissal(dismissal, service.botLogin, verdict.review.ID)
+	blockWithdrawn, err := service.preserveDismissedRejection(ctx, job, reviews)
+	if err != nil {
+		return missing, err
 	}
 	assessment, found, err := service.completedSummaryAssessment(ctx, job)
 	if err != nil {
@@ -314,6 +301,9 @@ func (service *Service) loadVerdictRefreshInputs(
 	}
 	if !found {
 		assessment = parseAssessmentSnapshot(verdict.review.Body)
+		if verdict.review.State == reviewStateApproved && verdict.review.Body == "" {
+			assessment.legacyWholeHead = true
+		}
 	}
 	if !verdict.found && !found {
 		return missing, nil
@@ -397,6 +387,9 @@ type refreshedVerdict struct {
 // Otherwise a verdict matching what GitHub already shows is not submitted,
 // because a second identical verdict is noise.
 func (refreshed refreshedVerdict) mayPublish() bool {
+	if refreshed.decision == domain.ReviewDecisionComment {
+		return false
+	}
 	if refreshed.blockWithdrawn && refreshed.decision != domain.ReviewDecisionApprove {
 		return false
 	}
