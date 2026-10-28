@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -51,7 +52,8 @@ var errCommentRefused = errors.New("github refused a review comment")
 // Chunks answer concurrently, so every field here is guarded. The model call
 // and the comment posts happen outside the lock; only the bookkeeping is inside.
 type chunkPass struct {
-	work deltaWork
+	work      deltaWork
+	startedAt time.Time
 	// settings are the values this run is bound by, carried here so a chunk
 	// reads what the delivery asked for rather than what the process booted
 	// with. They are written once and read concurrently without the lock.
@@ -119,9 +121,10 @@ func newChunkPass(
 	selection *publicationState,
 	disputes disputeContext,
 	disputePrompt string,
+	startedAt time.Time,
 ) *chunkPass {
 	return &chunkPass{
-		work:            work,
+		work: work, startedAt: startedAt,
 		settings:        settings,
 		selection:       selection,
 		disputes:        disputes,
@@ -663,6 +666,7 @@ func (service *Service) checkpoint(
 	tracker.state.Status = marker.StateReviewing
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
 		Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
+			RenderDetails(service.progressSummary(ctx, job, pass, tracker.completed)) + "\n\n" +
 			renderMetadataFindings(pass.metadataFindings()) + "\n" +
 			encodeFileAssessments(pass.fileAssessments(), service.reviewPolicy.FileAssessmentMaximumBytes()) + "\n" + encodeMetadataRecord(metadataReviewRecord{
 			Head: head, Revision: diff.PullRequestRevision(pass.work.PullRequest), Findings: pass.metadataFindings(),

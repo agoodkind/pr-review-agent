@@ -1,11 +1,62 @@
 package review
 
 import (
+	"context"
+	"slices"
 	"time"
 
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
+
+func (service *Service) progressSummary(ctx context.Context, job domain.ReviewJob, pass *chunkPass, completed []string) Summary {
+	pass.mu.Lock()
+	var summary Summary
+	summary.InProgress = true
+	summary.Head = job.Head
+	summary.Forced = job.Forced
+	summary.Duration = service.now().Sub(pass.startedAt)
+	summary.MinimumImportance = pass.settings.minimumImportance
+	summary.Models = slices.Clone(pass.work.AssessmentModels)
+	for _, model := range pass.models.names {
+		if !slices.Contains(summary.Models, model) {
+			summary.Models = append(summary.Models, model)
+		}
+	}
+	summary.Observed = slices.Clone(pass.collector.observed)
+	summary.Eligible = slices.Clone(pass.collector.anchored)
+	summary.Published = slices.Clone(pass.published)
+	summary.Chunks = len(completed)
+	pass.mu.Unlock()
+	for _, file := range pass.work.Files {
+		if completedFileReview(file, pass.work.Chunks, completed) {
+			summary.FilesReviewed++
+		}
+	}
+	summary.Usage = UsageFromContext(ctx)
+	summary.FileAssessments = pass.fileAssessments()
+	summary.FileAssessmentsDisplay = service.reviewPolicy.FileAssessmentsDisplay()
+	summary.FileAssessmentMaximumBytes = service.reviewPolicy.FileAssessmentMaximumBytes()
+	return summary
+}
+
+func completedFileReview(file diff.FileContext, chunks []diff.Chunk, completed []string) bool {
+	if !file.CoverageComplete {
+		return false
+	}
+	found := false
+	for _, chunk := range chunks {
+		if chunk.RelationshipReview || !slices.Contains(chunk.Paths, file.Path) {
+			continue
+		}
+		found = true
+		if !chunk.CoverageComplete || !slices.Contains(completed, chunkID(chunk)) {
+			return false
+		}
+	}
+	return found
+}
 
 // reviewProgress records what one review has learned so far. A review that
 // stops early reports this, so the reader sees which model answered, how much
@@ -125,6 +176,7 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		Threads:                    progress.threads,
 		Reached:                    progress.stage,
 		Failed:                     true,
+		InProgress:                 false,
 		Forced:                     progress.forced,
 		FileAssessments:            progress.fileAssessments,
 		FileAssessmentsDisplay:     progress.fileAssessmentsDisplay,

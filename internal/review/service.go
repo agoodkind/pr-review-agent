@@ -443,7 +443,12 @@ func (service *Service) reviewOwedWork(
 			return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
 		}
 	}
-	service.announceStart(ctx, job, head)
+	progress.fileAssessments = work.FileAssessments
+	progress.models = work.AssessmentModels
+	started := progress.summary(service.now())
+	started.Failed = false
+	started.InProgress = true
+	service.announceStart(ctx, job, started)
 
 	threads, err := service.reconcileThreads(ctx, job, checkRun.ID, progress)
 	if err != nil {
@@ -459,7 +464,7 @@ func (service *Service) reviewOwedWork(
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
 	}
-	pass := newChunkPass(work, settings, &selection, disputes, disputePrompt)
+	pass := newChunkPass(work, settings, &selection, disputes, disputePrompt, startedAt)
 	pass.seedFileAssessments(service.reviewPolicy)
 	for _, finding := range retainedMetadata {
 		pass.metadata = append(pass.metadata, finding)
@@ -764,25 +769,25 @@ func (service *Service) publish(
 			Summary:     "",
 			Walkthrough: nil,
 		},
-		Blocking:                   blocking,
-		Models:                     analysis.Models,
-		Usage:                      UsageFromContext(ctx),
-		Duration:                   service.now().Sub(startedAt),
-		FilesReviewed:              analysis.FilesReviewed,
-		Chunks:                     analysis.Chunks,
-		CoverageComplete:           analysis.CoverageComplete,
-		MinimumImportance:          settings.minimumImportance,
-		Observed:                   analysis.Observed,
-		Eligible:                   analysis.Anchored,
-		Published:                  published,
-		Fallback:                   fallback,
-		Metadata:                   metadata,
-		MetadataRevision:           diff.PullRequestRevision(pass.work.PullRequest),
-		MetadataFindingsDisplay:    service.reviewPolicy.MetadataFindingsDisplay(),
-		PriorReviews:               traceReviews(reviews, service.botLogin),
-		Threads:                    traceThreads(threads, service.botLogin),
-		Reached:                    "",
-		Failed:                     false,
+		Blocking:                blocking,
+		Models:                  analysis.Models,
+		Usage:                   UsageFromContext(ctx),
+		Duration:                service.now().Sub(startedAt),
+		FilesReviewed:           analysis.FilesReviewed,
+		Chunks:                  analysis.Chunks,
+		CoverageComplete:        analysis.CoverageComplete,
+		MinimumImportance:       settings.minimumImportance,
+		Observed:                analysis.Observed,
+		Eligible:                analysis.Anchored,
+		Published:               published,
+		Fallback:                fallback,
+		Metadata:                metadata,
+		MetadataRevision:        diff.PullRequestRevision(pass.work.PullRequest),
+		MetadataFindingsDisplay: service.reviewPolicy.MetadataFindingsDisplay(),
+		PriorReviews:            traceReviews(reviews, service.botLogin),
+		Threads:                 traceThreads(threads, service.botLogin),
+		Reached:                 "",
+		Failed:                  false, InProgress: false,
 		Forced:                     job.Forced,
 		Omissions:                  nil,
 		OmissionsAccepted:          omissionsAccepted,

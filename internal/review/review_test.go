@@ -6543,6 +6543,14 @@ func TestTheReviewSaysItStartedBeforeItReadsAnything(t *testing.T) {
 	if !strings.Contains(first, "This comment is rewritten when the review finishes.") {
 		t.Fatalf("the first thing written to the pull request was %q, want the review saying it started", first)
 	}
+	if strings.Count(first, "<summary>Review details</summary>") != 1 ||
+		!strings.Contains(first, "| Status | Review in progress |") ||
+		!strings.Contains(first, "| Minimum importance | `7` |") {
+		t.Fatalf("The start comment must include the current run details: %s", first)
+	}
+	if strings.Contains(first, "All file content inspected") || strings.Contains(first, "Review scope assessed") {
+		t.Fatalf("The start comment must not report a completed assessment: %s", first)
+	}
 	// Nothing is reviewed yet, so the first write must not claim this head was.
 	if _, found := marker.FindReview(first); found {
 		t.Fatalf("the start comment carries a review marker, so the next run reads this head as done: %q", first)
@@ -6579,6 +6587,21 @@ func TestProgressOmitsPublishedInlineFindings(t *testing.T) {
 	}
 	if progress == "" {
 		t.Fatalf("no progress body was written: %v", fixture.state.issueCommentBodies)
+	}
+	if strings.Count(progress, "<summary>Review details</summary>") != 1 {
+		t.Fatalf("The progress comment must include exactly one review details section: %s", progress)
+	}
+	for _, row := range []string{
+		"| Status | Review in progress |",
+		"| Files reviewed | `1` |",
+		"| Diff chunks | `1` |",
+		"| Minimum importance | `9` |",
+		"| Findings published inline | `1` at importance",
+		"| Requests |",
+	} {
+		if !strings.Contains(progress, row) {
+			t.Fatalf("The progress comment omits %q: %s", row, progress)
+		}
 	}
 	if strings.Contains(progress, "Resolve these inline findings:") || strings.Contains(progress, "`file0.go`:2") {
 		t.Fatalf("progress repeats an inline finding: %q", progress)
