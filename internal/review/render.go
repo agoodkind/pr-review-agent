@@ -57,7 +57,8 @@ type Summary struct {
 	Reached string
 	// Failed marks a review that stopped early, so the detail table reports
 	// progress rather than a result.
-	Failed bool
+	Failed     bool
+	InProgress bool
 	// Forced marks a run a label asked for, so the top-level review comment can
 	// explain why the same pull request was reviewed again.
 	Forced bool
@@ -101,9 +102,12 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 		{"Files reviewed", fmt.Sprintf("`%d`", summary.FilesReviewed)},
 		{"Diff chunks", fmt.Sprintf("`%d`", summary.Chunks)},
 	}
-	if summary.Failed {
+	switch {
+	case summary.InProgress:
+		rows = append(rows, [2]string{"Status", "Review in progress"})
+	case summary.Failed:
 		rows = append(rows, [2]string{"Reached", formatReached(summary.Reached)})
-	} else {
+	default:
 		rows = append(rows, [2]string{"All file content inspected", formatYesNo(summary.CoverageComplete)})
 		rows = append(rows, [2]string{"Review scope assessed", formatYesNo(reviewScopeAssessed(summary))})
 	}

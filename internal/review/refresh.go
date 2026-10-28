@@ -463,7 +463,7 @@ func (service *Service) applyRefreshedVerdict(
 		PriorReviews:            nil,
 		Threads:                 traceThreads(refreshed.threads, service.botLogin),
 		Reached:                 "",
-		Failed:                  false,
+		Failed:                  false, InProgress: false,
 		// A refresh runs only at a head some earlier run already reviewed, which
 		// is a gate a forced run never reaches.
 		Forced: false,

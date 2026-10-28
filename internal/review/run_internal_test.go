@@ -251,6 +251,7 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		&selection,
 		collectDisputes(nil, summaryCommentTestBotLogin, postHead),
 		"",
+		time.Now(),
 	)
 	pass.nativeRejection = true
 	service := &Service{
@@ -380,6 +381,7 @@ func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
 		&publicationState{},
 		disputeContext{},
 		"",
+		time.Now(),
 	)
 	candidates := []domain.Finding{
 		{Path: "a.go", StartLine: 1, EndLine: 1, Title: "one", Body: "b", Evidence: "e", Importance: 8},
