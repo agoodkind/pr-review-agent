@@ -4399,7 +4399,7 @@ func TestServiceDeclinesAnOverBudgetDeltaBeforeAnyModelCall(t *testing.T) {
 	if !ok {
 		t.Fatalf("summary comment body = %v, want a string", fixture.state.issueComments[0]["body"])
 	}
-	if !strings.Contains(body, "2 diff chunks") {
+	if !strings.Contains(body, "reviewable chunk count (2)") {
 		t.Fatalf("summary comment body = %q, want the measured chunk count", body)
 	}
 	if !strings.Contains(body, "1 chunk review budget") {

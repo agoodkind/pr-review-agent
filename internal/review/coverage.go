@@ -422,7 +422,7 @@ func (service *Service) decideUnreadableMetadata(ctx context.Context, pass *chun
 		logger.ErrorContext(ctx, "Unread content prompt rendering failed", "err", err)
 		return err
 	}
-	contextText, err := pullRequestPrompt(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
+	contextText, err := BuildPullRequestContext(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
 	if err != nil {
 		logger.ErrorContext(ctx, "Pull request prompt rendering failed", "err", err)
 		return err
@@ -469,6 +469,15 @@ func (service *Service) decideUnreadableMetadata(ctx context.Context, pass *chun
 	return nil
 }
 
+// BuildPullRequestContext renders the configured pull request context.
+func BuildPullRequestContext(
+	pullRequest githubapp.PullRequest,
+	files []diff.FileContext,
+	policy reviewrules.Policy,
+) (string, error) {
+	return pullRequestPrompt(pullRequest, files, policy)
+}
+
 func pullRequestPrompt(
 	pullRequest githubapp.PullRequest,
 	files []diff.FileContext,
@@ -496,7 +505,7 @@ func pullRequestPrompt(
 }
 
 func reviewContext(pullRequest githubapp.PullRequest, files []diff.FileContext, shortfall structuralShortfall, maximumBytes int, policy reviewrules.Policy) (string, error) {
-	pullRequestContext, err := pullRequestPrompt(pullRequest, files, policy)
+	pullRequestContext, err := BuildPullRequestContext(pullRequest, files, policy)
 	if err != nil {
 		return "", err
 	}
