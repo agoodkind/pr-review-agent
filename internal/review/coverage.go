@@ -475,14 +475,6 @@ func BuildPullRequestContext(
 	files []diff.FileContext,
 	policy reviewrules.Policy,
 ) (string, error) {
-	return pullRequestPrompt(pullRequest, files, policy)
-}
-
-func pullRequestPrompt(
-	pullRequest githubapp.PullRequest,
-	files []diff.FileContext,
-	policy reviewrules.Policy,
-) (string, error) {
 	var contextText strings.Builder
 	fmt.Fprintf(
 		&contextText,

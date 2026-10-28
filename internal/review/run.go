@@ -701,7 +701,7 @@ func (service *Service) reviewOneChunk(
 	nothing := chunkOutcome{unread: false, shortfall: false}
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	promptShortfall := pass.structuralShortfall()
-	pullRequestContext, err := pullRequestPrompt(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
+	pullRequestContext, err := BuildPullRequestContext(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
 	if err != nil {
 		cancel()
 		gklog.L(ctx).ErrorContext(ctx, "Pull request prompt rendering failed", "err", err)

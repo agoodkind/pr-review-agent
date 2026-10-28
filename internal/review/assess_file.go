@@ -40,7 +40,7 @@ func BuildFileAssessmentPrompt(model Model, pullRequest githubapp.PullRequest, f
 	if err != nil {
 		return "", err
 	}
-	parent, err := pullRequestPrompt(pullRequest, files, policy)
+	parent, err := BuildPullRequestContext(pullRequest, files, policy)
 	if err != nil {
 		return "", err
 	}
