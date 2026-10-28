@@ -2860,6 +2860,7 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	}
 }
 
+// The first inline finding and rejection publish together before the checkpoint.
 func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 	fixture.state.reviewPages = [][]map[string]any{{}}
@@ -2872,11 +2873,6 @@ func TestServicePublishesOneCompleteReviewAndCompletesCheck(t *testing.T) {
 		t.Fatalf("reconcile call count = %d, want 1", fixture.reconciler.callCount)
 	}
 
-	// The comment saying the review began comes as soon as the run knows it has
-	// work, so the pull request is never silent while a long delta is read. Then
-	// the finding posts as its chunk answers, the checkpoint follows it, and
-	// only then come the head refresh, the thread read the verdict is computed
-	// from, and the review that carries it.
 	if len(fixture.state.issueComments) != 1 || len(fixture.state.submittedReviews) != 1 || len(fixture.state.streamedComments) != 1 {
 		t.Fatal("The run must publish one editable summary and one inline-backed native rejection.")
 	}
@@ -4237,6 +4233,7 @@ func TestAFailedVerdictRefreshFailsTheCheckAndDismissesItsRejection(t *testing.T
 	}
 }
 
+// A foreign marker does not suppress the bot's own inline finding and rejection.
 func TestServiceIgnoresForeignReviewMarker(t *testing.T) {
 	head := domain.HeadSHA(testHeadSHA)
 	fixture := newServiceFixture(t, serviceFixtureOptions{
@@ -5854,12 +5851,7 @@ func TestServiceStopsPublicationWhenTheServiceShutsDown(t *testing.T) {
 	}
 }
 
-// A finding reaches the pull request as soon as its chunk answers, so the run
-// stopping later cannot take it away.
-//
-// This is the whole point of streaming. Before, a review held every finding
-// until the last chunk answered, so a provider refusal or an expired deadline
-// left the reader with nothing even though most of the diff had been read.
+// The first finding publishes with its rejection before the progress checkpoint.
 func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{
 		minimumImportance: 9,
@@ -5883,8 +5875,6 @@ func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 	if len(fixture.state.streamedComments) != 1 {
 		t.Fatalf("streamed comments = %d, want one", len(fixture.state.streamedComments))
 	}
-	// The comment posts before the review that carries the verdict, which is
-	// what makes it survive a run that never reaches that submission.
 	commentIndex := -1
 	submitIndex := -1
 	for index, route := range fixture.state.requestOrder {
