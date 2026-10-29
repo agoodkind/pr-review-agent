@@ -27,7 +27,7 @@ import (
 func TestUsageTotalsPreservePricingInputsAndStoredSDKEnvelopes(t *testing.T) {
 	endpoint := startBudgetWorker(t)
 	storage := quota.NewClient(endpoint, []byte("test-review-budget-secret"), nil)
-	at := time.Now().UTC().Truncate(time.Millisecond)
+	at := time.Now().UTC().Truncate(24 * time.Hour).Add(-71 * time.Hour)
 	native := &quota.SDKUsage{API: "responses", Model: "routed", ResponseID: "native-response", UsageJSON: `{"future_metadata":"` + strings.Repeat("界", 1000) + `","future_count":123456789012345678901234567890}`}
 	cases := []quota.Usage{
 		{InputTokens: 100, OutputTokens: 20, TotalTokens: 125, CachedInputTokens: totalsCounter(40), CacheWriteTokens: totalsCounter(10), ServiceTier: "default", SDKUsage: native},
@@ -48,7 +48,7 @@ func TestUsageTotalsPreservePricingInputsAndStoredSDKEnvelopes(t *testing.T) {
 	for _, excluded := range []quota.ReportRequest{
 		{ProviderID: "another", Model: "configured", AdmittedAtMS: at.UnixMilli(), Usage: quota.Usage{TotalTokens: 1000}},
 		{ProviderID: "totals", Model: "another", AdmittedAtMS: at.UnixMilli(), Usage: quota.Usage{TotalTokens: 1000}},
-		{ProviderID: "totals", Model: "configured", AdmittedAtMS: at.Add(time.Hour).UnixMilli(), Usage: quota.Usage{TotalTokens: 1000}},
+		{ProviderID: "totals", Model: "configured", AdmittedAtMS: at.Add(48 * time.Hour).UnixMilli(), Usage: quota.Usage{TotalTokens: 1000}},
 	} {
 		if err := storage.Report(t.Context(), excluded); err != nil {
 			t.Fatal(err)
@@ -80,9 +80,16 @@ func TestUsageTotalsPreservePricingInputsAndStoredSDKEnvelopes(t *testing.T) {
 	if !reflect.DeepEqual(totals.Groups, want) || totals.SnapshotSequence != before.SnapshotSequence || totals.HistoryStartMS != before.HistoryStartMS {
 		t.Fatalf("Grouped totals changed pricing inputs or history identity: %+v", totals)
 	}
+	day := at.Truncate(24 * time.Hour)
+	saved, err := storage.QueryTotals(t.Context(), "totals", "configured", quota.Bounds{StartMS: day.UnixMilli(), EndMS: day.Add(24 * time.Hour).UnixMilli(), IncludeStart: true, IncludeEnd: false})
+	if err != nil || !reflect.DeepEqual(saved.Groups, want) {
+		t.Fatalf("Saved bucket totals changed pricing groups: %+v, %v", saved, err)
+	}
 	totalsPrice(t, totals.Groups, nil, 0.000102, 4)
 	writePrice := float64(3)
 	totalsPrice(t, totals.Groups, &writePrice, 0.0004, 5)
+	totalsPrice(t, saved.Groups, nil, 0.000102, 4)
+	totalsPrice(t, saved.Groups, &writePrice, 0.0004, 5)
 	after, err := storage.Query(t.Context(), "totals", "configured", bounds)
 	if err != nil || !reflect.DeepEqual(before, after) || !reflect.DeepEqual(after.Events[0].SDKUsage, native) {
 		t.Fatal("Reading totals changed stored events or native SDK envelopes.")
@@ -207,6 +214,27 @@ func TestUsageTotalsPaginationPreservesSequenceSnapshotAndByteBound(t *testing.T
 
 func totalsCounter(value int64) *int64 {
 	return &value
+}
+
+func TestStoredUsageTotalsExposeActualStorageCounts(t *testing.T) {
+	storage := quota.NewClient(startBudgetWorker(t), []byte("test-review-budget-secret"), nil)
+	start := time.Now().UTC().Truncate(24 * time.Hour).Add(-72 * time.Hour)
+	for index := range 2 {
+		reportDisplayUsage(t, storage, start.Add(time.Duration(index+1)*time.Hour), "saved_counts", "configured", "routed", 10, 0, 0, 2, 12)
+	}
+	before, err := storage.Storage(t.Context())
+	if err != nil || before.Events != 2 || before.SDKRecords != 2 || before.TotalsBuckets != 0 || before.TotalsGroups != 0 {
+		t.Fatalf("Read raw storage counts before lazy backfill: %+v, %v", before, err)
+	}
+	bounds := quota.Bounds{StartMS: start.UnixMilli(), EndMS: start.Add(24 * time.Hour).UnixMilli(), IncludeStart: true, IncludeEnd: false}
+	totals, err := storage.QueryTotals(t.Context(), "saved_counts", "configured", bounds)
+	if err != nil || len(totals.Groups) != 1 || totals.Groups[0].Requests != 2 || totals.Groups[0].TotalTokens != 24 {
+		t.Fatalf("Read saved totals: %+v, %v", totals, err)
+	}
+	after, err := storage.Storage(t.Context())
+	if err != nil || after.Events != before.Events || after.SDKRecords != before.SDKRecords || after.SDKPayloadBytes != before.SDKPayloadBytes || after.TotalsBuckets != 1 || after.TotalsGroups != 1 {
+		t.Fatalf("Storage statistics must distinguish saved totals from original SDK records: %+v, %v", after, err)
+	}
 }
 
 func totalsPrice(t *testing.T, groups []quota.UsageTotalsGroup, writes *float64, wantCost float64, wantRequests int64) {

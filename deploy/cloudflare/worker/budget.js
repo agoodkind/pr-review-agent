@@ -28,7 +28,7 @@ const USAGE_READ_FIELDS = new Set([
 ]);
 const TOTALS_READ_FIELDS = new Set([
   "action", "provider_id", "model", "start_ms", "end_ms", "include_start", "include_end",
-  "after_group", "snapshot_sequence", "page_size",
+  "after_group", "snapshot_sequence", "page_size", "retention_generation",
 ]);
 
 function operatorCanRead(payload) {

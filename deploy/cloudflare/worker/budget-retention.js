@@ -2,6 +2,7 @@ import retentionSelect from "./budget-retention-select.sql";
 import retentionSDK from "./budget-retention-sdk.sql";
 import retentionDetails from "./budget-retention-details.sql";
 import retentionEvent from "./budget-retention-event.sql";
+import { invalidatePrunedUsageTotals } from "./budget-totals-cache.js";
 
 export const dayMilliseconds = 86400000;
 
@@ -30,7 +31,15 @@ export async function maintainUsageStorage(storage, settings, now) {
       cutoff = Math.max(previous, now - settings.effectiveAge, 0);
       await transaction.put("usage_retention_cutoff_ms", cutoff);
       const rows = storage.sql.exec(retentionSelect, cutoff, settings.batchSize).toArray();
+      if (rows.length > 0) {
+        const generation = (await transaction.get("usage_totals_retention_generation")) ?? 0;
+        if (!Number.isSafeInteger(generation + 1)) {
+          throw new Error("usage totals retention generation exceeds the safe integer range");
+        }
+        await transaction.put("usage_totals_retention_generation", generation + 1);
+      }
       for (const row of rows) {
+        invalidatePrunedUsageTotals(storage, row.sequence);
         storage.sql.exec(retentionSDK, row.sequence);
         storage.sql.exec(retentionDetails, row.sequence);
         storage.sql.exec(retentionEvent, row.sequence);

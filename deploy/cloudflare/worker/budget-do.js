@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import runtime from "../../../runtime.json" with { type: "json" };
 import usageSchema from "./budget-schema.sql";
+import totalsSchema from "./budget-totals-schema.sql";
 import usageHistory from "./budget-history.sql";
 import usageReport from "./budget-report.sql";
 import usageSnapshot from "./budget-snapshot.sql";
@@ -11,6 +12,8 @@ import storageStats from "./budget-storage-stats.sql";
 import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
 import { dayMilliseconds, maintainUsageStorage, normalizeSDKFingerprint, sdkFingerprint } from "./budget-retention.js";
 import { queryUsageTotals } from "./budget-totals.js";
+import { updateUsageTotals } from "./budget-totals-cache.js";
+import { durationMilliseconds } from "./budget-duration.js";
 
 const MAXIMUM_PAGE_SIZE = 500;
 
@@ -62,22 +65,6 @@ async function migrateLegacyUsage(transaction, day, providerId, model) {
   await transaction.delete(legacyKey);
 }
 
-const durationUnits = { ns: 0.000001, us: 0.001, ms: 1, s: 1000, m: 60000, h: 3600000 };
-
-function durationMilliseconds(value, name, allowZero = false) {
-  if (typeof value !== "string" || !/^(\d+(?:\.\d+)?(?:ns|us|ms|s|m|h))+$/.test(value)) {
-    throw new Error(`${name} requires an elapsed duration such as 24h`);
-  }
-  let result = 0;
-  for (const part of value.matchAll(/(\d+(?:\.\d+)?)(ns|us|ms|s|m|h)/g)) {
-    result += Number(part[1]) * durationUnits[part[2]];
-  }
-  if (!Number.isSafeInteger(result) || result < 0 || (!allowZero && result === 0)) {
-    throw new Error(`${name} requires a positive whole number of milliseconds`);
-  }
-  return result;
-}
-
 function usageRetentionSettings(override) {
   const configured = override ?? runtime.PROVIDER_USAGE_RETENTION;
   const settings = typeof configured === "string" ? JSON.parse(configured) : configured;
@@ -120,7 +107,10 @@ export class ProviderBudget extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.ctx.storage.sql.exec(usageSchema);
+    this.ctx.storage.sql.exec(totalsSchema);
     this.retention = usageRetentionSettings(env.PROVIDER_USAGE_RETENTION);
+    this.totalsBucketWidth = durationMilliseconds(env.PROVIDER_USAGE_TOTAL_BUCKET_WIDTH ??
+      runtime.PROVIDER_USAGE_TOTAL_BUCKET_WIDTH ?? "24h", "PROVIDER_USAGE_TOTAL_BUCKET_WIDTH");
     this.ctx.blockConcurrencyWhile(() => this.ensureMaintenance());
   }
 
@@ -277,6 +267,7 @@ export class ProviderBudget extends DurableObject {
         if (sdkUsage !== undefined && sdkUsage !== null) {
           this.ctx.storage.sql.exec(usageSDK, inserted.sequence, serializedSDK);
         }
+        updateUsageTotals(this.ctx.storage, providerId, model, admittedAt, inserted.sequence, this.totalsBucketWidth);
         if (reportId !== undefined) {
           await transaction.put(reportKey, fingerprint);
           await transaction.put(detailsKey, detailsFingerprint);
@@ -329,7 +320,7 @@ export class ProviderBudget extends DurableObject {
         return new Response("invalid model", { status: 400 });
       }
       if (pathname === "/query_usage_totals") {
-        return queryUsageTotals(this.ctx.storage, payload);
+        return queryUsageTotals(this.ctx.storage, payload, this.totalsBucketWidth);
       }
       return pathname === "/query_usage" ? this.queryUsage(payload) : this.reportUsage(payload);
     }
