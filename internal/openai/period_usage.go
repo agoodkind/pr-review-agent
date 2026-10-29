@@ -16,8 +16,6 @@ import (
 
 // LoadProviderPeriodUsage reads existing provider and requested-model quota history once per window.
 func (client *Client) LoadProviderPeriodUsage(ctx context.Context, keys []review.ProviderModelKey, at time.Time) ([]review.ProviderPeriodUsage, error) {
-	ctx, cancel := context.WithTimeout(ctx, budgetRequestTimeout)
-	defer cancel()
 	if len(keys) == 0 {
 		for _, target := range client.providers {
 			keys = append(keys, review.ProviderModelKey{ProviderID: target.id, RequestedModel: target.model})
@@ -63,6 +61,8 @@ func (client *Client) LoadProviderPeriodUsage(ctx context.Context, keys []review
 }
 
 func (client *Client) readProviderPeriod(ctx context.Context, target provider, result review.ProviderPeriodUsage) (review.ProviderPeriodUsage, error) {
+	ctx, cancel := context.WithTimeout(ctx, budgetRequestTimeout)
+	defer cancel()
 	logger := gklog.L(ctx)
 	bounds := quota.Bounds{StartMS: 0, EndMS: result.AsOfMS, IncludeStart: true, IncludeEnd: true}
 	if result.Window.Mode != "" {
