@@ -21,6 +21,7 @@ type pendingScopePublication struct {
 }
 
 func (service *Service) publishPendingScope(ctx context.Context, publication pendingScopePublication, progress *reviewProgress) error {
+	service.enrichProviderPeriodUsage(ctx, &publication.summary)
 	publicationCtx, cancel := service.publicationContext(ctx)
 	defer cancel()
 	if _, err := persistAssessment(publicationCtx, publication.checkRunID); err != nil {

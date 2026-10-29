@@ -27,7 +27,7 @@ async function unusedPort() {
   return port;
 }
 
-async function startRuntime(port, persistPath, retention) {
+async function startRuntime(port, persistPath, retention, totalsWidth) {
   const wrangler = path.join(cloudflareDirectory, "node_modules/.bin/wrangler");
   const operatorDigest = createHash("sha256").update("test-operator-token").digest("hex");
   const arguments_ = [
@@ -37,6 +37,9 @@ async function startRuntime(port, persistPath, retention) {
   ];
   if (retention !== undefined) {
     arguments_.push("--var", `PROVIDER_USAGE_RETENTION:${JSON.stringify(retention)}`);
+  }
+  if (totalsWidth !== undefined) {
+    arguments_.push("--var", `PROVIDER_USAGE_TOTAL_BUCKET_WIDTH:${totalsWidth}`);
   }
   const child = spawn(wrangler, arguments_, { cwd: cloudflareDirectory, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
@@ -117,6 +120,14 @@ function reportUsage(port, providerId, admittedAt, options = {}) {
     action: "report_usage", provider_id: providerId, model: modelId,
     admitted_at_ms: admittedAt, input_tokens: 11, output_tokens: 7, total_tokens: 20,
     ...options,
+  });
+}
+
+function queryTotals(port, providerId, start, end, options = {}) {
+  return budgetRequest(port, {
+    action: "query_usage_totals", provider_id: providerId, model: modelId,
+    start_ms: start, end_ms: end, include_start: true, include_end: true,
+    after_group: 0, snapshot_sequence: 0, page_size: 500, ...options,
   });
 }
 
@@ -511,6 +522,180 @@ test("timestamped usage preserves daily accounting and stable range snapshots", 
     assert.equal((await check(port, "replayed")).used, 18);
     assert.deepEqual(await queryUsage(port, providerId, 0, Date.now()), persisted);
     assert.equal((await check(port, providerId)).used, 511);
+  } finally {
+    await stopRuntime(runtime);
+    await rm(persistPath, { recursive: true, force: true });
+  }
+});
+
+test("saved totals preserve raw records, delayed admissions, snapshots, and width changes", async function () {
+  const persistPath = await mkdtemp(path.join(os.tmpdir(), "pr-agent-saved-totals-"));
+  const port = await unusedPort();
+  const hour = 3600000;
+  const start = Math.floor((Date.now() - 48 * hour) / hour) * hour;
+  const end = start + 4 * hour;
+  const disabled = { max_age: "0s", cleanup_interval: "100ms", batch_size: 1 };
+  const native = { api: "responses", model: "reported_model", response_id: "stored-response",
+    usage_json: '{"future_count":123456789012345678901234567890,"future_data":[null,true]}' };
+  const details = { cached_input_tokens: 4, cache_write_tokens: 3, service_tier: "default", sdk_usage: native };
+  const stats = () => operatorRequest(port, JSON.stringify({ action: "storage_stats" }));
+  let runtime;
+  try {
+    runtime = await startRuntime(port, persistPath, disabled, "1h");
+    for (const [index, admission] of [start + 1000, start + 2000, start + 3 * hour + 1000].entries()) {
+      await reportUsage(port, "saved", admission, { ...details, report_id: `saved-${index}` });
+    }
+    const original = await queryUsage(port, "saved", start, end, { include_end: false });
+    assert.equal((await stats()).totals_buckets, 0);
+    const initial = await queryTotals(port, "saved", start, end, { include_end: false });
+    assert.equal(initial.groups.length, 1);
+    assert.deepEqual([initial.groups[0].requests, initial.groups[0].total_tokens], [3, 60]);
+    assert.equal(initial.groups[0].first_admitted_at_ms, start + 1000);
+    assert.deepEqual([(await stats()).totals_buckets, (await stats()).totals_groups], [2, 2]);
+    assert.deepEqual(await queryUsage(port, "saved", start, end, { include_end: false }), original);
+
+    const late = { ...details, report_id: "saved-late", sdk_usage: { ...native, model: "late_model" } };
+    await reportUsage(port, "saved", start + 500, late);
+    assert.deepEqual([(await stats()).totals_buckets, (await stats()).totals_groups], [2, 3]);
+    await reportUsage(port, "saved", start + 400, { ...details, report_id: "saved-late-existing" });
+    assert.deepEqual([(await stats()).totals_buckets, (await stats()).totals_groups], [2, 3]);
+    const updated = await queryTotals(port, "saved", start, end, { include_end: false });
+    assert.equal(updated.groups[0].reported_model, "late_model");
+    assert.equal(updated.groups[0].first_admitted_at_ms, start + 500);
+    assert.equal(updated.groups[1].first_admitted_at_ms, start + 400);
+    assert.equal(updated.groups[1].requests, 4);
+    assert.equal(updated.groups.reduce(function (count, group) { return count + group.requests; }, 0), 5);
+    const historical = await queryTotals(port, "saved", start, end, {
+      include_end: false, snapshot_sequence: initial.snapshot_sequence,
+      retention_generation: initial.retention_generation,
+    });
+    assert.deepEqual(historical.groups, initial.groups);
+    await reportUsage(port, "saved", start + 500, late);
+    assert.deepEqual((await queryTotals(port, "saved", start, end, { include_end: false })).groups, updated.groups);
+    await budgetRequest(port, { action: "report_usage", provider_id: "saved", model: modelId,
+      admitted_at_ms: start + 500, input_tokens: 11, output_tokens: 7, total_tokens: 21, ...late }, 409);
+    for (const [left, right, includeStart, includeEnd] of [
+      [start + 750, start + 2000, true, false],
+      [start + 500, start + 2000, false, true],
+      [start + 500, end, true, false],
+    ]) {
+      const selected = await queryUsage(port, "saved", left, right, { include_start: includeStart, include_end: includeEnd });
+      const grouped = await queryTotals(port, "saved", left, right, { include_start: includeStart, include_end: includeEnd });
+      assert.equal(grouped.groups.reduce(function (count, group) { return count + group.requests; }, 0), selected.events.length);
+      assert.equal(grouped.groups.reduce(function (count, group) { return count + group.total_tokens; }, 0),
+        selected.events.reduce(function (count, event) { return count + event.total_tokens; }, 0));
+    }
+
+    const beforeRestart = await queryUsage(port, "saved", start, end);
+    await stopRuntime(runtime);
+    runtime = await startRuntime(port, persistPath, disabled, "2h");
+    const resized = await queryTotals(port, "saved", start, end, { include_end: false });
+    assert.deepEqual(resized.groups, updated.groups);
+    const completeStarts = new Set([start + 1000, start + 2000, start + 3 * hour + 1000, start + 500]
+      .map(function (admission) { return Math.floor(admission / (2 * hour)) * (2 * hour); })
+      .filter(function (bucket) { return bucket >= start && bucket + 2 * hour <= end; }));
+    assert.equal((await stats()).totals_buckets, completeStarts.size);
+    const savedCount = (await stats()).totals_buckets;
+    await stopRuntime(runtime);
+    runtime = await startRuntime(port, persistPath, disabled, "2h");
+    assert.equal((await stats()).totals_buckets, savedCount);
+    assert.deepEqual(await queryUsage(port, "saved", start, end), beforeRestart);
+
+    const overflowStart = Math.floor(start / (2 * hour)) * (2 * hour);
+    const overflowEnd = overflowStart + 2 * hour;
+    const first = { report_id: "cache-overflow-first", input_tokens: 0, output_tokens: 0,
+      total_tokens: Number.MAX_SAFE_INTEGER, sdk_usage: native };
+    await reportUsage(port, "cache_overflow", start + 1000, first);
+    const overflowSnapshot = await queryTotals(port, "cache_overflow", overflowStart, overflowEnd, { include_end: false });
+    const beforeFailure = await stats();
+    const second = { ...first, report_id: "cache-overflow-second", total_tokens: 1 };
+    assert.deepEqual(await reportUsage(port, "cache_overflow", start + 1000, second), { reported: true, sdk_usage_stored: true });
+    const afterFailure = await stats();
+    assert.equal(afterFailure.events, beforeFailure.events + 1);
+    assert.equal(afterFailure.sdk_records, beforeFailure.sdk_records + 1);
+    assert.equal(afterFailure.totals_buckets, beforeFailure.totals_buckets - 1);
+    const retained = await queryUsage(port, "cache_overflow", overflowStart, overflowEnd);
+    assert.deepEqual(retained.events.map(function (event) { return event.total_tokens; }), [Number.MAX_SAFE_INTEGER, 1]);
+    assert.ok(retained.events.every(function (event) { return JSON.stringify(event.sdk_usage) === JSON.stringify(native); }));
+    await budgetRequest(port, { action: "query_usage_totals", provider_id: "cache_overflow", model: modelId,
+      start_ms: overflowStart, end_ms: overflowEnd, include_start: true, include_end: false,
+      after_group: 0, snapshot_sequence: 0, page_size: 500 }, 400);
+    const beforeOverflow = await queryTotals(port, "cache_overflow", overflowStart, overflowEnd, {
+      include_end: false, snapshot_sequence: overflowSnapshot.snapshot_sequence,
+      retention_generation: overflowSnapshot.retention_generation,
+    });
+    assert.equal(beforeOverflow.groups[0].requests, 1);
+    assert.equal(beforeOverflow.groups[0].total_tokens, Number.MAX_SAFE_INTEGER);
+    const future = Date.now() + 48 * hour;
+    const futureStart = Math.floor(future / (2 * hour)) * (2 * hour);
+    await reportUsage(port, "future_saved", future, { ...details, report_id: "future-saved" });
+    assert.equal((await queryTotals(port, "future_saved", futureStart, futureStart + 2 * hour, { include_end: false })).groups[0].requests, 1);
+    assert.deepEqual((await queryTotals(port, "future_saved", 0, Date.now())).groups, []);
+    assert.deepEqual((await queryTotals(port, "future_saved", 0, future - 1)).groups, []);
+    assert.equal((await queryTotals(port, "future_saved", 0, future)).groups[0].requests, 1);
+    assert.equal((await check(port, "saved")).used, 0);
+  } finally {
+    await stopRuntime(runtime);
+    await rm(persistPath, { recursive: true, force: true });
+  }
+});
+
+test("pruning invalidates saved totals and rejects paging drift at an unchanged cutoff", async function () {
+  const persistPath = await mkdtemp(path.join(os.tmpdir(), "pr-agent-total-retention-"));
+  const port = await unusedPort();
+  const oldAdmission = Date.now() - 96 * 3600000;
+  const recentAdmission = Date.now() - 1000;
+  const disabled = { max_age: "0s", cleanup_interval: "100ms", batch_size: 1 };
+  const native = { api: "responses", model: "retained-model", usage_json: '{"future":null}' };
+  const stats = () => operatorRequest(port, JSON.stringify({ action: "storage_stats" }));
+  async function until(predicate) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const snapshot = await stats();
+      if (predicate(snapshot)) {
+        return snapshot;
+      }
+      await new Promise(function (resolve) { setTimeout(resolve, 10); });
+    }
+    assert.fail("The expected real retention batch did not complete.");
+  }
+  let runtime;
+  try {
+    runtime = await startRuntime(port, persistPath, disabled, "1h");
+    for (let index = 0; index < 20; index += 1) {
+      await reportUsage(port, "pruned_totals", oldAdmission + index, {
+        report_id: `old-${index}`, sdk_usage: { ...native, model: `old-model-${index}` },
+      });
+    }
+    await reportUsage(port, "pruned_totals", recentAdmission, { report_id: "recent", sdk_usage: native });
+    await queryTotals(port, "pruned_totals", 0, Date.now());
+    assert.ok((await stats()).totals_buckets > 0);
+    await stopRuntime(runtime);
+    runtime = await startRuntime(port, persistPath, { ...disabled, max_age: "1h" }, "1h");
+    const firstPrune = await until(function (snapshot) { return snapshot.events < 21; });
+    assert.equal(firstPrune.totals_buckets, 0);
+    await stopRuntime(runtime);
+    runtime = await startRuntime(port, persistPath, { ...disabled, max_age: "72h" }, "1h");
+    const before = await stats();
+    const end = Date.now();
+    const firstPage = await queryTotals(port, "pruned_totals", 0, end, { page_size: 1 });
+    assert.ok(firstPage.next_group > 0);
+    assert.ok(firstPage.retention_generation > 0);
+    const nextPrune = await until(function (snapshot) { return snapshot.events < before.events; });
+    assert.equal(nextPrune.retention.cutoff_ms, firstPrune.retention.cutoff_ms);
+    await operatorRequest(port, JSON.stringify({ action: "query_usage_totals", provider_id: "pruned_totals", model: modelId,
+      start_ms: 0, end_ms: end, include_start: true, include_end: true,
+      after_group: firstPage.next_group, snapshot_sequence: firstPage.snapshot_sequence,
+      retention_generation: firstPage.retention_generation, page_size: 1 }), 409);
+    await until(function (snapshot) { return snapshot.events === 1; });
+    const result = await queryTotals(port, "pruned_totals", 0, Date.now());
+    assert.deepEqual([result.groups.length, result.groups[0].requests, result.groups[0].total_tokens], [1, 1, 20]);
+    const history = await queryUsage(port, "pruned_totals", 0, Date.now());
+    assert.equal(history.events.length, 1);
+    assert.deepEqual(history.events[0].sdk_usage, native);
+    await budgetRequest(port, { action: "report_usage", provider_id: "pruned_totals", model: modelId,
+      admitted_at_ms: oldAdmission, input_tokens: 11, output_tokens: 7, total_tokens: 20,
+      report_id: "old-0", sdk_usage: { ...native, model: "old-model-0" } }, 410);
   } finally {
     await stopRuntime(runtime);
     await rm(persistPath, { recursive: true, force: true });

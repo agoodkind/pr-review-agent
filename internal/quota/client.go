@@ -239,7 +239,7 @@ func validUsage(usage Usage) bool {
 		usage.TotalTokens >= 0 && usage.TotalTokens <= MaximumInteger
 }
 
-func post[Request QueryRequest | ReportRequest | dailyRequest | storageRequest, Response QueryResponse | reportResponse | DailySnapshot | StorageStats](ctx context.Context, client *Client, payload Request, result *Response) error {
+func post[Request QueryRequest | totalsRequest | ReportRequest | dailyRequest | storageRequest, Response QueryResponse | totalsPage | reportResponse | DailySnapshot | StorageStats](ctx context.Context, client *Client, payload Request, result *Response) error {
 	logger := gklog.L(ctx)
 	body, err := json.Marshal(payload)
 	if err != nil {

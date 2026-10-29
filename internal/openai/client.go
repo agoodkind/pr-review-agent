@@ -83,6 +83,7 @@ type Client struct {
 	budgetURL               string
 	budgetSigningKey        []byte
 	budgetReportPolicy      quota.ReportPolicy
+	usageQueryTimeout       time.Duration
 	httpClient              *http.Client
 	now                     clock.Clock
 	maximumRequestBytes     int
@@ -93,58 +94,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	configuredProviders := cfg.Providers
-	var emptyWindow quota.Window
-	fallbackOnUsageExceeded := true
-	if len(configuredProviders) == 0 {
-		configuredProviders = []config.ProviderConfig{{
-			ID:                   "primary",
-			BaseURL:              cfg.ClydeBaseURL,
-			APIKey:               cfg.ClydeAPIKey,
-			Model:                cfg.ReviewModel,
-			ReasoningEffort:      "",
-			DailyTokenLimit:      0,
-			DailyTokenTypes:      nil,
-			TokenLimit:           0,
-			TokenTypes:           nil,
-			TokenWindow:          emptyWindow,
-			TokenLimits:          nil,
-			MaxOutputTokens:      0,
-			OmitMaxOutputTokens:  false,
-			OmitTextFormat:       false,
-			AutoRouterCostTier:   "",
-			API:                  "",
-			CFAccessClientID:     cfg.CFAccessClientID,
-			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
-			Disabled:             false,
-			RequestTimeout:       0,
-		}}
-		if cfg.HasFallback() {
-			configuredProviders = append(configuredProviders, config.ProviderConfig{
-				ID:                   "fallback",
-				BaseURL:              cfg.FallbackBaseURL,
-				APIKey:               cfg.FallbackAPIKey,
-				Model:                cfg.FallbackModel,
-				ReasoningEffort:      "",
-				DailyTokenLimit:      0,
-				DailyTokenTypes:      nil,
-				TokenLimit:           0,
-				TokenTypes:           nil,
-				TokenWindow:          emptyWindow,
-				TokenLimits:          nil,
-				MaxOutputTokens:      0,
-				OmitMaxOutputTokens:  false,
-				OmitTextFormat:       false,
-				AutoRouterCostTier:   "",
-				API:                  "",
-				CFAccessClientID:     cfg.FallbackCFAccessClientID,
-				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
-				Disabled:             false,
-				RequestTimeout:       0,
-			})
-		}
-		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
-	}
+	configuredProviders, fallbackOnUsageExceeded := configuredModelProviders(cfg)
 	client := &Client{
 		providers:               make([]provider, 0, len(configuredProviders)),
 		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
@@ -156,6 +106,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		budgetURL:               "",
 		budgetSigningKey:        cfg.GitHubWebhookSecret,
 		budgetReportPolicy:      cfg.BudgetReportPolicy(),
+		usageQueryTimeout:       cfg.UsageQueryTimeout(),
 		httpClient:              httpClient,
 		now:                     clock.System,
 		maximumRequestBytes:     cfg.PromptBytes(),
@@ -192,6 +143,34 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 		})
 	}
 	return client
+}
+
+func configuredModelProviders(cfg config.Config) ([]config.ProviderConfig, bool) {
+	if len(cfg.Providers) > 0 {
+		return cfg.Providers, true
+	}
+	var emptyWindow quota.Window
+	providers := []config.ProviderConfig{{
+		ID: "primary", BaseURL: cfg.ClydeBaseURL, APIKey: cfg.ClydeAPIKey, Model: cfg.ReviewModel,
+		ReasoningEffort: "", DailyTokenLimit: 0, DailyTokenTypes: nil,
+		TokenLimit: 0, TokenTypes: nil, TokenWindow: emptyWindow, TokenLimits: nil,
+		MaxOutputTokens: 0, OmitMaxOutputTokens: false, OmitTextFormat: false,
+		AutoRouterCostTier: "", API: "", CFAccessClientID: cfg.CFAccessClientID,
+		CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
+		Disabled:             false, RequestTimeout: 0,
+	}}
+	if cfg.HasFallback() {
+		providers = append(providers, config.ProviderConfig{
+			ID: "fallback", BaseURL: cfg.FallbackBaseURL, APIKey: cfg.FallbackAPIKey, Model: cfg.FallbackModel,
+			ReasoningEffort: "", DailyTokenLimit: 0, DailyTokenTypes: nil,
+			TokenLimit: 0, TokenTypes: nil, TokenWindow: emptyWindow, TokenLimits: nil,
+			MaxOutputTokens: 0, OmitMaxOutputTokens: false, OmitTextFormat: false,
+			AutoRouterCostTier: "", API: "", CFAccessClientID: cfg.FallbackCFAccessClientID,
+			CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
+			Disabled:             false, RequestTimeout: 0,
+		})
+	}
+	return providers, cfg.FallbackOnUsageExceeded
 }
 
 // newProviderSDK builds one SDK handle. It sends the Cloudflare Access headers

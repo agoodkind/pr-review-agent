@@ -108,39 +108,41 @@ type LookupEnv func(string) (string, bool)
 const runtimeConfigPath = "/runtime.json"
 
 var runtimeConfigKeys = map[string]struct{}{
-	"SERVICE_FAILURE_VERDICT_POLICY": {},
-	"REASSESSMENT":                   {},
-	"CLYDE_BASE_URL":                 {},
-	"CONTAINER_SLEEP_AFTER":          {},
-	"FALLBACK_BASE_URL":              {},
-	"FALLBACK_MODEL":                 {},
-	"FALLBACK_ON":                    {},
-	"PROVIDERS":                      {},
-	"PROVIDER_PRIORITY":              {},
-	"PROVIDER_FAILURE_POLICY":        {},
-	"PROVIDER_BUDGET_URL":            {},
-	"PROVIDER_BUDGET_REPORT":         {},
-	"PROVIDER_USAGE_MAX_BYTES":       {},
-	"PROVIDER_USAGE_PAGE_BYTES":      {},
-	"PROVIDER_USAGE_RETENTION":       {},
-	"SERVICE_FAILURE_APPEARANCE":     {},
-	"GITHUB_APP_ID":                  {},
-	"GITHUB_BOT_LOGIN":               {},
-	"LOG_FORWARD_URL":                {},
-	"PORT":                           {},
-	"REVIEW_APPROVE_EACH_COMMIT":     {},
-	"REVIEW_CHUNK_TIMEOUT":           {},
-	"REVIEW_CHUNK_CONCURRENCY":       {},
-	"REVIEW_MAX_CHUNKS":              {},
-	"REVIEW_MAX_FILES":               {},
-	"REVIEW_MAX_PROMPT_BYTES":        {},
-	"REVIEW_MIN_IMPORTANCE":          {},
-	"REVIEW_RULE_IMPORTANCE":         {},
-	"REVIEW_RULES_FILE":              {},
-	"REVIEW_PROMPTS_FILE":            {},
-	"REVIEW_MODEL":                   {},
-	"REVIEW_MODEL_PRICING":           {},
-	"REVIEW_WORKERS":                 {},
+	"SERVICE_FAILURE_VERDICT_POLICY":    {},
+	"REASSESSMENT":                      {},
+	"CLYDE_BASE_URL":                    {},
+	"CONTAINER_SLEEP_AFTER":             {},
+	"FALLBACK_BASE_URL":                 {},
+	"FALLBACK_MODEL":                    {},
+	"FALLBACK_ON":                       {},
+	"PROVIDERS":                         {},
+	"PROVIDER_PRIORITY":                 {},
+	"PROVIDER_FAILURE_POLICY":           {},
+	"PROVIDER_BUDGET_URL":               {},
+	"PROVIDER_BUDGET_REPORT":            {},
+	"PROVIDER_USAGE_MAX_BYTES":          {},
+	"PROVIDER_USAGE_PAGE_BYTES":         {},
+	"PROVIDER_USAGE_QUERY_TIMEOUT":      {},
+	"PROVIDER_USAGE_TOTAL_BUCKET_WIDTH": {},
+	"PROVIDER_USAGE_RETENTION":          {},
+	"SERVICE_FAILURE_APPEARANCE":        {},
+	"GITHUB_APP_ID":                     {},
+	"GITHUB_BOT_LOGIN":                  {},
+	"LOG_FORWARD_URL":                   {},
+	"PORT":                              {},
+	"REVIEW_APPROVE_EACH_COMMIT":        {},
+	"REVIEW_CHUNK_TIMEOUT":              {},
+	"REVIEW_CHUNK_CONCURRENCY":          {},
+	"REVIEW_MAX_CHUNKS":                 {},
+	"REVIEW_MAX_FILES":                  {},
+	"REVIEW_MAX_PROMPT_BYTES":           {},
+	"REVIEW_MIN_IMPORTANCE":             {},
+	"REVIEW_RULE_IMPORTANCE":            {},
+	"REVIEW_RULES_FILE":                 {},
+	"REVIEW_PROMPTS_FILE":               {},
+	"REVIEW_MODEL":                      {},
+	"REVIEW_MODEL_PRICING":              {},
+	"REVIEW_WORKERS":                    {},
 }
 
 // ModelPricing holds estimated US dollar rates per million tokens.
@@ -153,17 +155,18 @@ type ModelPricing struct {
 
 // Config holds validated service configuration.
 type Config struct {
-	ApproveEachCommit     bool
-	FailureVerdictPolicy  FailureVerdictPolicy
-	Reassessment          Reassessment
-	Port                  string
-	ReviewWorkers         int
-	ReviewModel           string
-	ReviewModelPricing    map[string]ModelPricing
-	Providers             []ProviderConfig
-	ProviderFailurePolicy ProviderFailurePolicy
-	ProviderBudgetURL     *url.URL
-	ProviderBudgetReport  quota.ReportPolicy
+	ApproveEachCommit         bool
+	FailureVerdictPolicy      FailureVerdictPolicy
+	Reassessment              Reassessment
+	Port                      string
+	ReviewWorkers             int
+	ReviewModel               string
+	ReviewModelPricing        map[string]ModelPricing
+	Providers                 []ProviderConfig
+	ProviderFailurePolicy     ProviderFailurePolicy
+	ProviderBudgetURL         *url.URL
+	ProviderBudgetReport      quota.ReportPolicy
+	ProviderUsageQueryTimeout time.Duration
 	// ReviewMaxFiles and ReviewMaxChunks bound one run. Admission, not a
 	// timer, is what keeps a review finishable, so these are the only limits
 	// on how much work one invocation accepts.

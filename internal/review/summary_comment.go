@@ -49,6 +49,7 @@ func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob,
 			prose = renderCheckpointNotice(existingBody, strings.TrimPrefix(prose, "## Review\n\n"))
 		}
 		if !strings.Contains(prose, reviewDetailsStart) {
+			service.enrichProviderPeriodUsage(ctx, &summary)
 			prose += "\n\n" + RenderDetails(summary)
 		}
 		return summaryCommentContent{Prose: prose, State: state}

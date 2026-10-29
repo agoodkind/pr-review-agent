@@ -22,6 +22,9 @@ func (service *Service) concludeIncomplete(
 	summary Summary,
 	progress *reviewProgress,
 ) error {
+	service.enrichProviderPeriodUsage(ctx, &summary)
+	ctx, cancel := service.publicationContext(ctx)
+	defer cancel()
 	logger := gklog.L(ctx)
 	pending := len(state.Pending)
 	unread := pass.unreadChunks()

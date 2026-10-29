@@ -57,6 +57,7 @@ func (service *Service) reportFailedCheck(
 ) error {
 	logger := gklog.L(ctx)
 	progress.Failed = true
+	service.enrichProviderPeriodUsage(ctx, &progress)
 	var statuses []ProviderStatus
 	collectProviderStatuses(cause, &statuses)
 	recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(cause), quotaRecovery(statuses))
@@ -313,6 +314,7 @@ func (service *Service) writeFailureSummary(
 	title string,
 	detail string,
 ) {
+	service.enrichProviderPeriodUsage(ctx, &progress)
 	ctx, cancel := detachFromReviewDeadline(ctx, service.checkCompletionTimeout)
 	defer cancel()
 
