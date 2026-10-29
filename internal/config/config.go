@@ -373,19 +373,16 @@ func Load(lookup LookupEnv) (Config, error) {
 			return Config{}, err
 		}
 		cfg.Providers = providers
-		for _, provider := range providers {
-			if provider.Disabled || !provider.HasTokenLimit() {
-				continue
-			}
-			budgetURL, ok := loadRequiredText(lookup, "PROVIDER_BUDGET_URL")
-			if !ok {
-				return Config{}, errors.New("PROVIDER_BUDGET_URL is required for capped providers")
-			}
-			cfg.ProviderBudgetURL, err = parseRequiredHTTPSURL("PROVIDER_BUDGET_URL", budgetURL)
-			if err != nil {
-				return Config{}, err
-			}
-			break
+	}
+	if budgetURL, configured := loadRequiredText(lookup, "PROVIDER_BUDGET_URL"); configured {
+		cfg.ProviderBudgetURL, err = parseRequiredHTTPSURL("PROVIDER_BUDGET_URL", budgetURL)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	for _, provider := range cfg.Providers {
+		if !provider.Disabled && provider.HasTokenLimit() && cfg.ProviderBudgetURL == nil {
+			return Config{}, errors.New("PROVIDER_BUDGET_URL is required for capped providers")
 		}
 	}
 
