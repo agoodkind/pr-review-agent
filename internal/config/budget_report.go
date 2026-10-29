@@ -69,5 +69,9 @@ func loadDeliveryPolicies(lookup LookupEnv, cfg *Config) error {
 		return err
 	}
 	cfg.ProviderBudgetReport, err = loadBudgetReportPolicy(lookup)
+	if err != nil {
+		return err
+	}
+	cfg.ProviderUsageQueryTimeout, err = loadUsageQueryTimeout(lookup)
 	return err
 }

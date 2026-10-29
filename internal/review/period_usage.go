@@ -24,11 +24,16 @@ func (service *Service) enrichProviderPeriodUsage(ctx context.Context, summary *
 	if !enabled || !available {
 		return
 	}
+	if len(summary.Usage.ProviderAttempts) == 0 || len(summary.Usage.PeriodUsage) > 0 {
+		return
+	}
 	var keys []ProviderModelKey
 	for _, attempt := range summary.Usage.ProviderAttempts {
 		keys = append(keys, ProviderModelKey{ProviderID: attempt.Status.ProviderID, RequestedModel: attempt.Status.Model})
 	}
-	periods, err := loader.LoadProviderPeriodUsage(ctx, keys, service.now())
+	queryCtx, cancel := service.publicationContext(ctx)
+	defer cancel()
+	periods, err := loader.LoadProviderPeriodUsage(queryCtx, keys, service.now())
 	if err != nil {
 		gklog.L(ctx).WarnContext(ctx, "Read provider period usage failed", "err", err)
 	}

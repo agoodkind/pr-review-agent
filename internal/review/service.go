@@ -271,6 +271,7 @@ func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cau
 	}
 	now := service.now()
 	progress := service.newProgress(job, service.settingsFor(job), now).summary(now)
+	progress.Usage = UsageFromContext(parent)
 	return service.reportFailedCheck(
 		parent,
 		job,

@@ -38,6 +38,7 @@ func (service *Service) progressSummary(ctx context.Context, job domain.ReviewJo
 	summary.FileAssessments = pass.fileAssessments()
 	summary.FileAssessmentsDisplay = service.reviewPolicy.FileAssessmentsDisplay()
 	summary.FileAssessmentMaximumBytes = service.reviewPolicy.FileAssessmentMaximumBytes()
+	service.enrichProviderPeriodUsage(ctx, &summary)
 	return summary
 }
 

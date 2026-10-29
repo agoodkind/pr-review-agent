@@ -14,7 +14,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
-// LoadProviderPeriodUsage reads existing provider and requested-model quota history once per window.
+// LoadProviderPeriodUsage reads recorded provider and requested-model totals once per window.
 func (client *Client) LoadProviderPeriodUsage(ctx context.Context, keys []review.ProviderModelKey, at time.Time) ([]review.ProviderPeriodUsage, error) {
 	if len(keys) == 0 {
 		for _, target := range client.providers {
@@ -61,7 +61,7 @@ func (client *Client) LoadProviderPeriodUsage(ctx context.Context, keys []review
 }
 
 func (client *Client) readProviderPeriod(ctx context.Context, target provider, result review.ProviderPeriodUsage) (review.ProviderPeriodUsage, error) {
-	ctx, cancel := context.WithTimeout(ctx, budgetRequestTimeout)
+	ctx, cancel := context.WithTimeout(ctx, client.usageQueryTimeout)
 	defer cancel()
 	logger := gklog.L(ctx)
 	bounds := quota.Bounds{StartMS: 0, EndMS: result.AsOfMS, IncludeStart: true, IncludeEnd: true}
@@ -78,7 +78,7 @@ func (client *Client) readProviderPeriod(ctx context.Context, target provider, r
 		bounds.EndMS, bounds.IncludeEnd = result.AsOfMS, true
 	}
 	storage := quota.NewClient(client.budgetURL, client.budgetSigningKey, client.httpClient)
-	history, err := storage.Query(ctx, result.ProviderID, result.RequestedModel, bounds)
+	history, err := storage.QueryTotals(ctx, result.ProviderID, result.RequestedModel, bounds)
 	if err != nil {
 		logger.WarnContext(ctx, "Provider period history query failed", slog.String("err", err.Error()))
 		return result, fmt.Errorf("read provider period history: %w", err)
@@ -87,19 +87,19 @@ func (client *Client) readProviderPeriod(ctx context.Context, target provider, r
 	result.HistoryComplete = result.Bounds.StartMS >= history.HistoryStartMS
 	if result.Window.Mode == "" {
 		result.Bounds.StartMS = min(history.HistoryStartMS, result.AsOfMS)
-		for _, event := range history.Events {
-			result.Bounds.StartMS = min(result.Bounds.StartMS, event.AdmittedAtMS)
+		for _, group := range history.Groups {
+			result.Bounds.StartMS = min(result.Bounds.StartMS, group.FirstAdmittedAtMS)
 		}
 	}
-	for _, event := range history.Events {
-		if event.TotalTokens > quota.MaximumInteger-result.TotalTokens {
+	for _, group := range history.Groups {
+		if group.TotalTokens > quota.MaximumInteger-result.TotalTokens || group.Requests > quota.MaximumInteger-int64(result.ReportedRequests) {
 			return result, errors.New("provider period usage exceeds the accounting integer range")
 		}
-		result.TotalTokens += event.TotalTokens
-		result.ReportedRequests++
-		cost, priced := periodEventCost(target, result.RequestedModel, event.Usage)
+		result.TotalTokens += group.TotalTokens
+		result.ReportedRequests += int(group.Requests)
+		cost, priced := periodGroupCost(target, group.ReportedModel, group.Usage)
 		if priced {
-			result.PricedRequests++
+			result.PricedRequests += int(group.Requests)
 			result.EstimatedCostUSD += cost
 		}
 	}
@@ -108,11 +108,7 @@ func (client *Client) readProviderPeriod(ctx context.Context, target provider, r
 	return result, nil
 }
 
-func periodEventCost(target provider, requestedModel string, usage quota.Usage) (float64, bool) {
-	model := requestedModel
-	if usage.SDKUsage != nil && usage.SDKUsage.Model != "" {
-		model = usage.SDKUsage.Model
-	}
+func periodGroupCost(target provider, model string, usage quota.Usage) (float64, bool) {
 	pricing, found := config.FindModelPricing(target.pricingByModel, model)
 	if !found || (usage.InputTokens > 0 && (usage.CachedInputTokens == nil || usage.CacheWriteTokens == nil)) {
 		return 0, false

@@ -80,6 +80,8 @@
   "PROVIDER_BUDGET_URL": "https://agoodkind-nano-pr-reviewer.alex-ee7.workers.dev/internal/v1/provider_budget",
   "PROVIDER_USAGE_MAX_BYTES": "65536",
   "PROVIDER_USAGE_PAGE_BYTES": "131072",
+  "PROVIDER_USAGE_QUERY_TIMEOUT": "15s",
+  "PROVIDER_USAGE_TOTAL_BUCKET_WIDTH": "24h",
   "PROVIDER_USAGE_RETENTION": {
     "max_age": "0s",
     "cleanup_interval": "1h",
