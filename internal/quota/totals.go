@@ -47,6 +47,7 @@ func (client *Client) QueryTotals(ctx context.Context, providerID, requestedMode
 		Action: "query_usage_totals", ProviderID: providerID, Model: requestedModel,
 		StartMS: bounds.StartMS, EndMS: bounds.EndMS, IncludeStart: bounds.IncludeStart,
 		IncludeEnd: bounds.IncludeEnd, AfterGroup: 0, SnapshotSequence: 0, PageSize: maximumPageSize,
+		RetentionGeneration: nil,
 	}
 	var result TotalsResponse
 	first := true

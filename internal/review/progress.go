@@ -2,13 +2,60 @@ package review
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
+	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
+
+// checkpoint saves a completed chunk after GitHub accepts its findings.
+// A lock serializes updates to the shared summary comment.
+func (service *Service) checkpoint(
+	ctx context.Context,
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	id string,
+	tracker *pendingTracker,
+	pass *chunkPass,
+) error {
+	logger := gklog.L(ctx)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	tracker.unfinished = removeChunkID(tracker.unfinished, id)
+	tracker.completed = append(tracker.completed, id)
+	tracker.unread = removeChunkID(tracker.unread, id)
+	tracker.state.Pending = append([]string{}, tracker.unfinished...)
+	tracker.state.Completed = append([]string{}, tracker.completed...)
+	tracker.state.Unread = append([]string{}, tracker.unread...)
+	tracker.state.RunID = job.DeliveryID
+	tracker.state.Status = marker.StateReviewing
+	summary := service.progressSummary(ctx, job, pass, tracker.completed)
+	ctx, cancel := service.publicationContext(ctx)
+	defer cancel()
+	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
+		Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
+			RenderDetails(summary) + "\n\n" +
+			renderMetadataFindings(pass.metadataFindings()) + "\n" +
+			encodeFileAssessments(pass.fileAssessments(), service.reviewPolicy.FileAssessmentMaximumBytes()) + "\n" + encodeMetadataRecord(metadataReviewRecord{
+			Head: head, Revision: diff.PullRequestRevision(pass.work.PullRequest), Findings: pass.metadataFindings(),
+			Omissions: metadataOmissions(pass.structuralShortfall().Hunks), OmissionsAccepted: pass.acceptsOmissions(), DecisionReason: pass.decisionReason(),
+		}),
+		State: tracker.state,
+	})
+	if err != nil {
+		logger.ErrorContext(ctx, "advance checkpoint", slog.String("err", err.Error()))
+		return fmt.Errorf("advance checkpoint: %w", err)
+	}
+	logger.InfoContext(ctx, "review checkpoint advanced", slog.Int("pending", len(tracker.unfinished)))
+	return nil
+}
 
 func (service *Service) progressSummary(ctx context.Context, job domain.ReviewJob, pass *chunkPass, completed []string) Summary {
 	pass.mu.Lock()

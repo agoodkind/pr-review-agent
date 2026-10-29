@@ -853,6 +853,8 @@ func (service *Service) publishVerdict(
 	state marker.State,
 ) error {
 	service.enrichProviderPeriodUsage(ctx, &summary)
+	ctx, cancel := service.publicationContext(ctx)
+	defer cancel()
 	logger := gklog.L(ctx)
 	if acceptedFileScope(summary) {
 		var data reviewrules.PromptData

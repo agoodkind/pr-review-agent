@@ -104,6 +104,87 @@ func TestLiveCancelledReviewRetainsRecordedPeriodUsage(t *testing.T) {
 	t.Logf("Cancelled check %d and summary %d retained 22 stored tokens after caller cancellation. Original summary: %s", job.CheckRunID, original.ID, backup)
 }
 
+func TestLiveMetadataFailureRetainsRecordedPeriodUsage(t *testing.T) {
+	if os.Getenv("PR_AGENT_LIVE_PERIOD_FAILURE_TEST") != "1" {
+		t.Skip("The metadata period regression requires an explicit live fixture.")
+	}
+	endpoint, server := accountingWorkerTLS(t, 0)
+	cfg := loadUncappedRuntime(t, endpoint)
+	key := livePeriodPrivateKey(t)
+	cfg.GitHubPrivateKey = key
+	cfg.Providers = cfg.Providers[:1]
+	client := livePeriodHTTPClient(t, server)
+	model := openai.NewClient(cfg, client)
+	github := githubapp.NewClient(cfg, http.DefaultClient, clock.System, slog.Default())
+	reference := livePeriodReference(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	pullRequest, err := github.GetPullRequest(ctx, reference.InstallationID, reference.Repository, reference.Number)
+	if err != nil || pullRequest.State != "closed" || !pullRequest.Draft || !strings.Contains(strings.ToLower(pullRequest.Title), "fixture") {
+		t.Fatal("Select an explicit closed draft fixture for the metadata period regression.")
+	}
+	reference.Head = pullRequest.Head
+	original, comments := livePeriodSummary(t, ctx, github, reference, cfg.GitHubBotLogin)
+	state, valid := marker.DecodeState(original.Body)
+	if !valid || state.Status != marker.StateDone || state.LastReviewed != reference.Head || len(state.Pending) != 0 {
+		t.Fatal("The metadata regression requires a fixture with completed file coverage.")
+	}
+	backup := backupLivePeriodSummary(t, original)
+	t.Cleanup(func() {
+		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), time.Minute)
+		defer restoreCancel()
+		if _, err := github.UpdateIssueComment(restoreCtx, reference.InstallationID, reference.Repository, original.ID, original.Body); err != nil {
+			t.Error("Restore the original metadata fixture summary:", err)
+		}
+	})
+	prepared := removeLiveMetadataRecord(t, original.Body)
+	if _, err := github.UpdateIssueComment(ctx, reference.InstallationID, reference.Repository, original.ID, prepared); err != nil {
+		t.Fatal("The test could not prepare the metadata fixture summary.")
+	}
+	provider := cfg.Providers[0]
+	storage := quota.NewClient(endpoint, cfg.GitHubWebhookSecret, client)
+	reportDisplayUsage(t, storage, time.Now().UTC(), provider.ID, provider.Model, provider.Model, 20, 0, 0, 2, 22)
+	service := review.NewService(github, diff.NewCollector(github), model,
+		reconcile.NewService(github, model, cfg.GitHubBotLogin, slog.Default(), cfg.PromptBytes(), cfg.ReviewPolicy),
+		queue.NewKeyedLocker(), cfg.GitHubBotLogin, cfg.MinimumImportance, cfg.ReviewMaxFiles,
+		cfg.ReviewMaxChunks, cfg.ReviewChunkTimeout, cfg.ServiceFailureAppearance,
+		clock.System, slog.Default(), cfg.ChunkConcurrency(), cfg.PromptBytes(), cfg.ReviewPolicy)
+	job := domain.ReviewJob{PullRequestRef: reference, DeliveryID: "live-metadata-period-" + rand.Text(), MetadataOnly: true, RefreshVerdict: true}
+	job, admitted, err := service.Admit(ctx, job)
+	if err != nil || !admitted {
+		t.Fatal("GitHub did not admit the metadata period check.")
+	}
+	outcome, runErr := service.RunWithOutcome(ctx, job)
+	if runErr == nil || outcome.Disposition != domain.AssessmentFailed {
+		t.Fatal("The invalid provider credential did not fail the metadata reassessment.")
+	}
+	check, err := github.GetCheckRunDetails(ctx, reference.InstallationID, reference.Repository, job.CheckRunID)
+	if err != nil || check.Run.Status != "completed" || check.Run.Conclusion != "failure" || !strings.Contains(check.Summary, "Recorded usage<br>22 tokens /") {
+		t.Fatal("The failed metadata check did not display its independently stored usage.")
+	}
+	current, after := livePeriodSummary(t, ctx, github, reference, cfg.GitHubBotLogin)
+	_, preservedDetails, found := strings.Cut(original.Body, "<details>\n<summary>Review details</summary>")
+	preservedDetails, _, _ = strings.Cut(preservedDetails, "</details>")
+	if !found || len(after) != len(comments) || current.ID != original.ID || !strings.Contains(current.Body, preservedDetails) {
+		t.Fatal("The failed metadata refresh did not preserve the existing completed review details.")
+	}
+	assertLivePeriodCheckpoint(t, original.Body, current.Body)
+	t.Logf("Failed metadata check %d retained 22 stored tokens and preserved summary %d. Original summary: %s", job.CheckRunID, original.ID, backup)
+}
+
+func removeLiveMetadataRecord(t *testing.T, body string) string {
+	t.Helper()
+	before, remaining, found := strings.Cut(body, "<!-- pr-review-agent:metadata:v1 ")
+	if !found {
+		t.Fatal("The fixture requires a saved metadata assessment.")
+	}
+	_, after, found := strings.Cut(remaining, " -->")
+	if !found || strings.Contains(after, "<!-- pr-review-agent:metadata:v1 ") {
+		t.Fatal("The fixture must contain one complete metadata assessment.")
+	}
+	return before + after
+}
+
 func backupLivePeriodSummary(t *testing.T, original githubapp.IssueComment) string {
 	t.Helper()
 	directory, err := os.MkdirTemp("", "pragent-period-failure-live-")

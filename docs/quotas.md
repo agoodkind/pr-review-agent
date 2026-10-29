@@ -52,6 +52,19 @@ The app's quota is independent of provider API or subscription limits. An app de
 
 The [OpenAI rate-limit calculation](https://developers.openai.com/api/docs/guides/rate-limits) uses the larger of the output limit and a prompt-size estimate for admission.
 
+## Review usage totals
+
+Review details read grouped token counts and pricing inputs without downloading complete SDK records. Saved totals supplement the original events and SDK metadata.
+
+The following settings control display queries and saved totals independently of provider limits:
+
+| Field | Meaning |
+| --- | --- |
+| `PROVIDER_USAGE_QUERY_TIMEOUT` | Positive duration for one provider and requested-model display query. |
+| `PROVIDER_USAGE_TOTAL_BUCKET_WIDTH` | Positive duration in whole milliseconds for each stored summary interval. This storage setting does not change quota windows. |
+
+Queries use saved totals only for complete intervals within the requested range. They calculate partial interval edges from original event timestamps. Historical sequence snapshots also use original records when later reports changed a saved interval. Queries rebuild derived totals after a stored interval width change and preserve original records.
+
 ## Retention
 
 `PROVIDER_USAGE_RETENTION` configures storage cleanup independently of token limits.

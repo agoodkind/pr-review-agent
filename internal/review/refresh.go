@@ -188,13 +188,14 @@ func (service *Service) refreshReviewedCheck(
 		logger.ErrorContext(ctx, "refresh reviewed check", slog.String("err", err.Error()))
 		var statuses []ProviderStatus
 		collectProviderStatuses(err, &statuses)
-		recordAssessment(ctx, domain.AssessmentFailed, nil, failureNames(err), quotaRecovery(statuses))
+		now := service.now()
+		progress := service.newProgress(job, settings, now).summary(now)
+		progress.Usage = UsageFromContext(ctx)
+		service.enrichProviderPeriodUsage(ctx, &progress)
+		recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(err), quotaRecovery(statuses))
 		detail := service.terminalFailureDetail(ctx, job, err)
 		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
-			"failure", "Review refresh failed", detail)
-		var progress Summary
-		progress.Head = job.Head
-		progress.Failed = true
+			"failure", "Review refresh failed", detail+"\n\n"+RenderDetails(progress))
 		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
 		dismissErr := service.dismissFailureVerdict(ctx, job, err)
 		if completionErr == nil {
