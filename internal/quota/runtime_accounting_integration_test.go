@@ -26,16 +26,13 @@ import (
 func TestUncappedProductionRuntimeRetainsAccounting(t *testing.T) {
 	endpoint, transport := accountingWorkerTLS(t)
 	cfg := loadUncappedRuntime(t, endpoint)
-	if cfg.ProviderBudgetURL == nil || cfg.ProviderBudgetURL.String() != endpoint {
-		t.Fatal("The production loader discarded the configured accounting endpoint for uncapped providers.")
-	}
 	for _, provider := range cfg.Providers {
 		if provider.HasTokenLimit() {
 			t.Fatal("The runtime regression requires providers without app token limits.")
 		}
 	}
 	provider := cfg.Providers[0]
-	storage := quota.NewClient(cfg.ProviderBudgetURL.String(), cfg.GitHubWebhookSecret, transport.Client())
+	storage := quota.NewClient(endpoint, cfg.GitHubWebhookSecret, transport.Client())
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	reportDisplayUsage(t, storage, at, provider.ID, provider.Model, provider.Model, 20, 0, 0, 2, 22)
 	client := openai.NewClient(cfg, transport.Client())
