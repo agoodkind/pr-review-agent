@@ -8,6 +8,8 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
@@ -24,7 +26,7 @@ import (
 )
 
 func TestUncappedProductionRuntimeRetainsAccounting(t *testing.T) {
-	endpoint, transport := accountingWorkerTLS(t)
+	endpoint, transport := accountingWorkerTLS(t, 0)
 	cfg := loadUncappedRuntime(t, endpoint)
 	for _, provider := range cfg.Providers {
 		if provider.HasTokenLimit() {
@@ -58,7 +60,33 @@ func TestUncappedProductionRuntimeRetainsAccounting(t *testing.T) {
 	}
 }
 
-func accountingWorkerTLS(t *testing.T) (string, *httptest.Server) {
+func TestAccountingHistoryQueriesHaveIndependentTimeouts(t *testing.T) {
+	endpoint, transport := accountingWorkerTLS(t, time.Second)
+	cfg := loadUncappedRuntime(t, endpoint)
+	provider := cfg.Providers[0]
+	var keys []review.ProviderModelKey
+	for index := range 6 {
+		keys = append(keys, review.ProviderModelKey{ProviderID: provider.ID, RequestedModel: fmt.Sprintf("history-%d", index)})
+	}
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	storage := quota.NewClient(endpoint, cfg.GitHubWebhookSecret, transport.Client())
+	reportDisplayUsage(t, storage, at, provider.ID, keys[0].RequestedModel, provider.Model, 20, 0, 0, 2, 22)
+	client := openai.NewClient(cfg, transport.Client())
+	periods, err := client.LoadProviderPeriodUsage(t.Context(), keys, at.Add(time.Minute))
+	if err != nil || len(periods) != len(keys) {
+		t.Fatalf("Each delayed history query must have its own timeout: %v", err)
+	}
+	for _, period := range periods {
+		if !period.Available {
+			t.Fatalf("An earlier query consumed the timeout of a later history: %+v", period)
+		}
+	}
+	if periods[0].TotalTokens != 22 {
+		t.Fatalf("The delayed history must retain stored usage: %+v", periods[0])
+	}
+}
+
+func accountingWorkerTLS(t *testing.T, latency time.Duration) (string, *httptest.Server) {
 	t.Helper()
 	target, err := url.Parse(startBudgetWorker(t))
 	if err != nil {
@@ -66,7 +94,11 @@ func accountingWorkerTLS(t *testing.T) (string, *httptest.Server) {
 	}
 	path := target.Path
 	target.Path = ""
-	server := httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		time.Sleep(latency)
+		proxy.ServeHTTP(writer, request)
+	}))
 	t.Cleanup(server.Close)
 	return server.URL + path, server
 }
