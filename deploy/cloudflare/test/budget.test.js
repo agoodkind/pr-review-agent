@@ -606,7 +606,7 @@ test("saved totals preserve raw records, delayed admissions, snapshots, and widt
     const first = { report_id: "cache-overflow-first", input_tokens: 0, output_tokens: 0,
       total_tokens: Number.MAX_SAFE_INTEGER, sdk_usage: native };
     await reportUsage(port, "cache_overflow", start + 1000, first);
-    await queryTotals(port, "cache_overflow", overflowStart, overflowEnd, { include_end: false });
+    const overflowSnapshot = await queryTotals(port, "cache_overflow", overflowStart, overflowEnd, { include_end: false });
     const beforeFailure = await stats();
     const second = { ...first, report_id: "cache-overflow-second", total_tokens: 1 };
     assert.deepEqual(await reportUsage(port, "cache_overflow", start + 1000, second), { reported: true, sdk_usage_stored: true });
@@ -620,6 +620,12 @@ test("saved totals preserve raw records, delayed admissions, snapshots, and widt
     await budgetRequest(port, { action: "query_usage_totals", provider_id: "cache_overflow", model: modelId,
       start_ms: overflowStart, end_ms: overflowEnd, include_start: true, include_end: false,
       after_group: 0, snapshot_sequence: 0, page_size: 500 }, 400);
+    const beforeOverflow = await queryTotals(port, "cache_overflow", overflowStart, overflowEnd, {
+      include_end: false, snapshot_sequence: overflowSnapshot.snapshot_sequence,
+      retention_generation: overflowSnapshot.retention_generation,
+    });
+    assert.equal(beforeOverflow.groups[0].requests, 1);
+    assert.equal(beforeOverflow.groups[0].total_tokens, Number.MAX_SAFE_INTEGER);
     const future = Date.now() + 48 * hour;
     const futureStart = Math.floor(future / (2 * hour)) * (2 * hour);
     await reportUsage(port, "future_saved", future, { ...details, report_id: "future-saved" });
