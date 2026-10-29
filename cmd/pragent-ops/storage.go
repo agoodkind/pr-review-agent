@@ -12,19 +12,23 @@ import (
 )
 
 func storage(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
-	var runtimePath, tokenPath string
+	var runtimePath, tokenPath, signingKeyPath string
 	set := flag.NewFlagSet("storage", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&runtimePath, "runtime", "runtime.json", "Public provider runtime configuration.")
 	set.StringVar(&tokenPath, "operator-token-file", "", "File containing the registered operator token.")
+	set.StringVar(&signingKeyPath, "signing-key-file", "", "Read the provider-budget signing key from this file.")
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
 	}
-	if set.NArg() != 0 || tokenPath == "" {
-		return errors.New("storage requires --operator-token-file and accepts no positional arguments")
+	if set.NArg() != 0 {
+		return errors.New("storage does not accept positional arguments")
+	}
+	if (tokenPath == "") == (signingKeyPath == "") {
+		return errors.New("storage requires exactly one --operator-token-file or --signing-key-file")
 	}
 	data, err := os.ReadFile(runtimePath)
 	if err != nil {
@@ -35,7 +39,7 @@ func storage(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	if json.Unmarshal(data, &configuration) != nil || configuration.URL == "" {
 		return errors.New("runtime configuration requires PROVIDER_BUDGET_URL")
 	}
-	client, err := counterClient(configuration.URL, "", tokenPath)
+	client, err := counterClient(configuration.URL, signingKeyPath, tokenPath)
 	if err != nil {
 		return err
 	}
