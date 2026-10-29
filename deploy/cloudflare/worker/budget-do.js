@@ -10,6 +10,7 @@ import usageSDK from "./budget-sdk.sql";
 import storageStats from "./budget-storage-stats.sql";
 import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
 import { dayMilliseconds, maintainUsageStorage, normalizeSDKFingerprint, sdkFingerprint } from "./budget-retention.js";
+import { queryUsageTotals } from "./budget-totals.js";
 
 const MAXIMUM_PAGE_SIZE = 500;
 
@@ -312,7 +313,7 @@ export class ProviderBudget extends DurableObject {
       return this.storageStats();
     }
     if (pathname !== "/check" && pathname !== "/report" && pathname !== "/reserve" &&
-        pathname !== "/query_usage" && pathname !== "/report_usage") {
+        pathname !== "/query_usage" && pathname !== "/query_usage_totals" && pathname !== "/report_usage") {
       return new Response("not found", { status: 404 });
     }
     const payload = await request.json();
@@ -323,9 +324,12 @@ export class ProviderBudget extends DurableObject {
     if (model !== undefined && (typeof model !== "string" || model.length === 0 || model.length > 200)) {
       return new Response("invalid model", { status: 400 });
     }
-    if (pathname === "/query_usage" || pathname === "/report_usage") {
+    if (pathname === "/query_usage" || pathname === "/query_usage_totals" || pathname === "/report_usage") {
       if (model === undefined) {
         return new Response("invalid model", { status: 400 });
+      }
+      if (pathname === "/query_usage_totals") {
+        return queryUsageTotals(this.ctx.storage, payload);
       }
       return pathname === "/query_usage" ? this.queryUsage(payload) : this.reportUsage(payload);
     }
