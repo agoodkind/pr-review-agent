@@ -32,7 +32,8 @@ func renderProviderDetails(summary UsageSummary) string {
 		builder.WriteString(" --- |")
 	}
 	builder.WriteString("\n")
-	for _, row := range providerDetailRows(summary) {
+	rows := providerDetailRows(summary)
+	for _, row := range rows {
 		builder.WriteString("|")
 		for _, column := range summary.ProviderColumns {
 			fmt.Fprintf(&builder, " %s |", providerColumnValue(column, row))
@@ -41,6 +42,7 @@ func renderProviderDetails(summary UsageSummary) string {
 	}
 	if slices.Contains(summary.ProviderColumns, reviewrules.ProviderPeriodUsageColumn) {
 		builder.WriteString("\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. Dollar amounts estimate cost from configured prices and do not represent account charges.\n")
+		builder.WriteString(renderProviderPeriodDetails(rows))
 	}
 	return builder.String()
 }
