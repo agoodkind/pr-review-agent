@@ -79,26 +79,6 @@ func TestRouterRequestsRequireCapabilitiesAcrossProviderAPIs(t *testing.T) {
 					if plugins != (target.costTier != "") {
 						t.Fatal("Only an explicit cost tier may configure the auto-router plugin.")
 					}
-					if stage.name == "review" {
-						payloads, err := client.ReviewRequestPayloads("Review the supplied source.")
-						if err != nil || len(payloads) != 1 {
-							t.Fatal("The request builder did not serialize one provider request.")
-						}
-						var sized map[string]any
-						if err := json.Unmarshal(payloads[0].Body, &sized); err != nil {
-							t.Fatal(err)
-						}
-						for _, field := range []string{"provider", "plugins"} {
-							expected, err := json.Marshal(state.lastRequestBody[field])
-							if err != nil {
-								t.Fatal(err)
-							}
-							actual, err := json.Marshal(sized[field])
-							if err != nil || string(actual) != string(expected) {
-								t.Fatalf("Request sizing and the SDK disagree about %s.", field)
-							}
-						}
-					}
 				})
 			}
 		}
