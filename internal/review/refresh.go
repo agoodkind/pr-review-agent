@@ -429,9 +429,6 @@ func (service *Service) applyRefreshedVerdict(
 		return errMetadataChanged
 	}
 
-	blocking := blockingReasons(
-		refreshed.threads, service.botLogin, job.PullRequestRef,
-	)
 	summary := Summary{
 		FileAssessmentNote: "", Head: job.Head,
 		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
@@ -444,7 +441,7 @@ func (service *Service) applyRefreshedVerdict(
 			Summary:     "",
 			Walkthrough: nil,
 		},
-		Blocking:                blocking,
+		Blocking:                blockingReasons(refreshed.threads, service.botLogin, job.PullRequestRef),
 		Models:                  nil,
 		Usage:                   UsageFromContext(ctx),
 		Duration:                0,
@@ -457,6 +454,8 @@ func (service *Service) applyRefreshedVerdict(
 		Published:               nil,
 		Fallback:                nil,
 		Metadata:                refreshed.metadata,
+		metadataCheckpoint:      nil,
+		fallbackCheckpoint:      nil,
 		MetadataRevision:        refreshed.metadataRevision,
 		MetadataFindingsDisplay: service.reviewPolicy.MetadataFindingsDisplay(),
 		Omissions:               refreshed.omissions,

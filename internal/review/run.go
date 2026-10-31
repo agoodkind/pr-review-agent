@@ -66,19 +66,22 @@ type chunkPass struct {
 	disputes      disputeContext
 	disputePrompt string
 
-	publicationMu   sync.Mutex
-	nativeVerdictMu sync.Mutex
-	nativeRejection bool
-	mu              sync.Mutex
-	collector       *findingCollector
-	models          modelSet
-	overviewByChunk map[int][]string
-	reviewedChunks  map[string]bool
-	published       []domain.Finding
-	metadata        []domain.Finding
-	metadataSeen    map[string]struct{}
-	fallback        []domain.Finding
-	failures        []chunkFailure
+	publicationMu    sync.Mutex
+	nativeVerdictMu  sync.Mutex
+	nativeRejection  bool
+	mu               sync.Mutex
+	collector        *findingCollector
+	models           modelSet
+	overviewByChunk  map[int][]string
+	reviewedChunks   map[string]bool
+	published        []domain.Finding
+	metadata         []domain.Finding
+	metadataSeen     map[string]struct{}
+	retainedMetadata []domain.Finding
+	reassessedChunks map[string]bool
+	fallback         []domain.Finding
+	retainedFallback []domain.Finding
+	failures         []chunkFailure
 	// unreadable names hunks this service could not get a whole answer about.
 	// It is the run's own observation, not anything the model reported.
 	unreadable    []unreadHunk
@@ -125,32 +128,35 @@ func newChunkPass(
 ) *chunkPass {
 	return &chunkPass{
 		work: work, startedAt: startedAt,
-		settings:        settings,
-		selection:       selection,
-		disputes:        disputes,
-		disputePrompt:   disputePrompt,
-		publicationMu:   sync.Mutex{},
-		nativeVerdictMu: sync.Mutex{},
-		nativeRejection: false,
-		mu:              sync.Mutex{},
-		collector:       newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
-		models:          modelSet{names: nil, seen: nil},
-		overviewByChunk: make(map[int][]string),
-		reviewedChunks:  make(map[string]bool),
-		published:       make([]domain.Finding, 0),
-		metadata:        nil,
-		metadataSeen:    make(map[string]struct{}),
-		fallback:        make([]domain.Finding, 0),
-		failures:        make([]chunkFailure, 0),
-		unreadable:      make([]unreadHunk, 0),
-		coverage:        inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
-		requests:        0,
-		posted:          0,
-		failed:          0,
-		panicked:        nil,
-		assessmentErr:   nil,
-		votes:           0,
-		omissionsOK:     true,
+		settings:         settings,
+		selection:        selection,
+		disputes:         disputes,
+		disputePrompt:    disputePrompt,
+		publicationMu:    sync.Mutex{},
+		nativeVerdictMu:  sync.Mutex{},
+		nativeRejection:  false,
+		mu:               sync.Mutex{},
+		collector:        newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
+		models:           modelSet{names: nil, seen: nil},
+		overviewByChunk:  make(map[int][]string),
+		reviewedChunks:   make(map[string]bool),
+		published:        make([]domain.Finding, 0),
+		metadata:         nil,
+		metadataSeen:     make(map[string]struct{}),
+		retainedMetadata: nil,
+		reassessedChunks: make(map[string]bool),
+		fallback:         make([]domain.Finding, 0),
+		retainedFallback: nil,
+		failures:         make([]chunkFailure, 0),
+		unreadable:       make([]unreadHunk, 0),
+		coverage:         inputCoverageComplete(work.Files) && chunksCoverageComplete(work.Chunks),
+		requests:         0,
+		posted:           0,
+		failed:           0,
+		panicked:         nil,
+		assessmentErr:    nil,
+		votes:            0,
+		omissionsOK:      true,
 		decision: omissionDecision{
 			assessments: nil,
 			chunk:       0, acceptable: false, reason: "", recorded: false, complete: false,
@@ -291,7 +297,8 @@ func (pass *chunkPass) analysis() Analysis {
 func (pass *chunkPass) delivery() (posted int, failed int, fallback []domain.Finding) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
-	return pass.posted, pass.failed, append([]domain.Finding{}, pass.fallback...)
+	findings, checkpoint := pass.fallbackSnapshotLocked()
+	return pass.posted, pass.failed + len(checkpoint.Prior), findings
 }
 
 // requestCount reports how many model requests the pass spent, the truncation
@@ -638,6 +645,9 @@ func (service *Service) settleChunk(
 		)
 		return nil
 	}
+	pass.mu.Lock()
+	pass.reassessedChunks[id] = true
+	pass.mu.Unlock()
 	return service.checkpoint(ctx, job, head, id, tracker, pass)
 }
 

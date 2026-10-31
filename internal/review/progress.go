@@ -42,11 +42,8 @@ func (service *Service) checkpoint(
 	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
 		Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
 			RenderDetails(summary) + "\n\n" +
-			renderMetadataFindings(pass.metadataFindings()) + "\n" +
-			encodeFileAssessments(pass.fileAssessments(), service.reviewPolicy.FileAssessmentMaximumBytes()) + "\n" + encodeMetadataRecord(metadataReviewRecord{
-			Head: head, Revision: diff.PullRequestRevision(pass.work.PullRequest), Findings: pass.metadataFindings(),
-			Omissions: metadataOmissions(pass.structuralShortfall().Hunks), OmissionsAccepted: pass.acceptsOmissions(), DecisionReason: pass.decisionReason(),
-		}),
+			renderSummaryFindings(summary) + "\n" +
+			encodeFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes) + "\n" + renderFindingCheckpoints(summary),
 		State: tracker.state,
 	})
 	if err != nil {
@@ -85,6 +82,13 @@ func (service *Service) progressSummary(ctx context.Context, job domain.ReviewJo
 	summary.FileAssessments = pass.fileAssessments()
 	summary.FileAssessmentsDisplay = service.reviewPolicy.FileAssessmentsDisplay()
 	summary.FileAssessmentMaximumBytes = service.reviewPolicy.FileAssessmentMaximumBytes()
+	summary.Metadata, summary.metadataCheckpoint = pass.metadataSnapshot()
+	summary.MetadataRevision = diff.PullRequestRevision(pass.work.PullRequest)
+	summary.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
+	summary.Omissions = metadataOmissions(pass.structuralShortfall().Hunks)
+	summary.OmissionsAccepted = pass.acceptsOmissions()
+	summary.DecisionReason = pass.decisionReason()
+	summary.Fallback, summary.fallbackCheckpoint = pass.fallbackSnapshot()
 	service.enrichProviderPeriodUsage(ctx, &summary)
 	return summary
 }
@@ -124,6 +128,9 @@ type reviewProgress struct {
 	eligible                   []domain.Finding
 	published                  []domain.Finding
 	metadata                   []domain.Finding
+	metadataCheckpoint         *findingCheckpoint
+	fallback                   []domain.Finding
+	fallbackCheckpoint         *findingCheckpoint
 	metadataRevision           string
 	metadataFindingsDisplay    reviewrules.FindingDisplay
 	priorReviews               []reviewTrace
@@ -156,6 +163,9 @@ func newReviewProgress(
 		eligible:                   nil,
 		published:                  nil,
 		metadata:                   nil,
+		metadataCheckpoint:         nil,
+		fallback:                   nil,
+		fallbackCheckpoint:         nil,
 		metadataRevision:           "",
 		metadataFindingsDisplay:    metadataFindingsDisplay,
 		priorReviews:               nil,
@@ -215,8 +225,10 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		// comments on the page. Reporting none here would contradict what the
 		// reader sees on the same pull request.
 		Published:                  progress.published,
-		Fallback:                   nil,
+		Fallback:                   progress.fallback,
+		fallbackCheckpoint:         progress.fallbackCheckpoint,
 		Metadata:                   progress.metadata,
+		metadataCheckpoint:         progress.metadataCheckpoint,
 		MetadataRevision:           progress.metadataRevision,
 		MetadataFindingsDisplay:    progress.metadataFindingsDisplay,
 		Omissions:                  nil,

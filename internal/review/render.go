@@ -46,6 +46,8 @@ type Summary struct {
 	Published               []domain.Finding
 	Fallback                []domain.Finding
 	Metadata                []domain.Finding
+	metadataCheckpoint      *findingCheckpoint
+	fallbackCheckpoint      *findingCheckpoint
 	MetadataRevision        string
 	MetadataFindingsDisplay reviewrules.FindingDisplay
 	Omissions               []unreadHunk
@@ -236,11 +238,8 @@ const (
 
 func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
 	parts := []string{verdictSectionStart, "### Verdict", verdictLead(summary)}
-	if metadata := renderSummaryMetadata(summary); metadata != "" {
-		parts = append(parts, metadata)
-	}
-	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
-		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
+	if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(parts, findings)
 	}
 	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
 		parts = append(parts, withdrawnBlockNote)
@@ -306,11 +305,8 @@ func RenderVerdictBody(summary Summary) string {
 	if reason := encodeDecisionReasonMarker(scopeDecisionReason(summary.DecisionReason, summary.Omissions, summary.FileAssessments)); reason != "" {
 		parts = append(parts, reason)
 	}
-	if summary.MetadataRevision != "" {
-		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
-	}
-	if fallback := encodeFallbackRecord(summary); fallback != "" {
-		parts = append(parts, fallback)
+	if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
+		parts = append(parts, checkpoints)
 	}
 	return strings.Join(parts, "\n")
 }
@@ -516,11 +512,13 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 	if hasVerdict {
 		summary.Decision = domain.ReviewDecisionComment
 		parts = append(parts, renderVerdictSection(summary, false), RenderVerdictBody(summary))
-	} else if metadata := renderSummaryMetadata(summary); metadata != "" {
-		parts = append(parts, metadata)
+	} else if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(parts, findings)
 	}
-	if !hasVerdict && summary.MetadataRevision != "" {
-		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
+	if !hasVerdict {
+		if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
+			parts = append(parts, checkpoints)
+		}
 	}
 	parts = append(parts, RenderDetails(summary), marker.Summary())
 	return strings.Join(parts, "\n\n")
@@ -605,17 +603,11 @@ func RenderIncompleteBody(summary Summary, pending int, reason string, detail st
 			parts = append(parts, trimmed)
 		}
 	}
-	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
-		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
+	if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(parts, findings)
 	}
-	if record := encodeFallbackRecord(summary); record != "" {
-		parts = append(parts, record)
-	}
-	if metadata := renderSummaryMetadata(summary); metadata != "" {
-		parts = append(parts, metadata)
-	}
-	if summary.MetadataRevision != "" {
-		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
+	if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
+		parts = append(parts, checkpoints)
 	}
 	parts = append(parts, RenderDetails(summary, statuses...))
 	return strings.Join(parts, "\n\n")

@@ -20,12 +20,13 @@ const metadataRecordPrefix = "<!-- pr-review-agent:metadata:v1 "
 var errMetadataChanged = errors.New("pull request prose requires a current review")
 
 type metadataReviewRecord struct {
-	Head              domain.HeadSHA   `json:"head"`
-	Revision          string           `json:"revision"`
-	Findings          []domain.Finding `json:"findings"`
-	Omissions         []unreadHunk     `json:"omissions,omitempty"`
-	OmissionsAccepted bool             `json:"omissions_accepted,omitempty"`
-	DecisionReason    string           `json:"decision_reason,omitempty"`
+	Head              domain.HeadSHA     `json:"head"`
+	Revision          string             `json:"revision"`
+	Findings          []domain.Finding   `json:"findings"`
+	Checkpoint        *findingCheckpoint `json:"checkpoint,omitempty"`
+	Omissions         []unreadHunk       `json:"omissions,omitempty"`
+	OmissionsAccepted bool               `json:"omissions_accepted,omitempty"`
+	DecisionReason    string             `json:"decision_reason,omitempty"`
 }
 
 type metadataReviewRecordJSON struct {
@@ -34,6 +35,10 @@ type metadataReviewRecordJSON struct {
 }
 
 func encodeMetadataRecord(record metadataReviewRecord) string {
+	if err := record.Checkpoint.validate(record.Findings); err != nil {
+		slog.Error("Metadata review provenance encoding failed", "err", err)
+		return ""
+	}
 	record.DecisionReason = scopeDecisionReason(record.DecisionReason, record.Omissions, nil)
 	modes := make(map[reviewrules.ID]reviewrules.Deduplication)
 	record.Findings = append([]domain.Finding(nil), record.Findings...)
@@ -85,6 +90,9 @@ func decodeMetadataRecord(body string) (metadataReviewRecord, bool, error) {
 			return record, false, errors.New("the stored metadata finding is invalid")
 		}
 	}
+	if err := record.Checkpoint.validate(record.Findings); err != nil {
+		return record, false, err
+	}
 	return record, true, nil
 }
 
@@ -102,20 +110,36 @@ func (service *Service) readMetadataRecord(ctx context.Context, job domain.Revie
 	return decodeMetadataRecord(existing.Body)
 }
 
-func (service *Service) restoreCompletedMetadata(ctx context.Context, job domain.ReviewJob, pullRequest githubapp.PullRequest, chunks []diff.Chunk, completed []string) ([]domain.Finding, []string, error) {
-	record, found, err := service.readMetadataRecord(ctx, job)
+func (service *Service) restoreFindingCheckpoints(ctx context.Context, job domain.ReviewJob, pullRequest githubapp.PullRequest, chunks []diff.Chunk, completed []string) (metadataReviewRecord, fallbackReviewRecord, []string, error) {
+	var empty metadataReviewRecord
+	var record metadataReviewRecord
+	var fallback fallbackReviewRecord
+	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		return nil, completed, err
+		slog.WarnContext(ctx, "Read saved findings failed", slog.String("err", err.Error()))
+		return record, fallback, completed, fmt.Errorf("read saved findings: %w", err)
 	}
-	if found && record.Head == job.Head && record.Revision == diff.PullRequestRevision(pullRequest) {
-		return record.Findings, completed, nil
+	existing, found := findSummaryComment(comments, service.botLogin)
+	if !found {
+		return record, fallback, completed, nil
 	}
-	for _, chunk := range chunks {
-		if len(chunk.Metadata) > 0 {
-			completed = removeChunkID(completed, chunkID(chunk))
+	record, found, err = decodeMetadataRecord(existing.Body)
+	if err != nil {
+		return record, fallback, completed, err
+	}
+	revision := diff.PullRequestRevision(pullRequest)
+	if !found || record.Head != job.Head || record.Revision != revision {
+		record = empty
+		for _, chunk := range chunks {
+			if len(chunk.Metadata) > 0 {
+				completed = removeChunkID(completed, chunkID(chunk))
+			}
 		}
 	}
-	return nil, completed, nil
+	if saved, valid := readFallbackRecord(existing.Body, job.Head); valid && (saved.Revision == "" || saved.Revision == revision) {
+		fallback = saved
+	}
+	return record, fallback, completed, nil
 }
 
 func renderMetadataFindings(findings []domain.Finding) string {

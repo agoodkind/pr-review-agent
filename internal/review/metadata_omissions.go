@@ -2,7 +2,7 @@ package review
 
 func metadataRecordFromSummary(summary Summary) metadataReviewRecord {
 	return metadataReviewRecord{
-		Head: summary.Head, Revision: summary.MetadataRevision, Findings: summary.Metadata,
+		Head: summary.Head, Revision: summary.MetadataRevision, Findings: summary.Metadata, Checkpoint: summary.metadataCheckpoint,
 		Omissions: metadataOmissions(summary.Omissions), OmissionsAccepted: summary.OmissionsAccepted, DecisionReason: summary.DecisionReason,
 	}
 }

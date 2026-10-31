@@ -33,7 +33,12 @@ const (
 
 // Extend the existing GitHub fixture with real content collection endpoints.
 // Review publication still uses the same mutable HTTP state as every service run.
-func newContentCollectionFixture(t *testing.T, model *sequenceModel) (*serviceFixture, *atomic.Int32) {
+type contentCollectionOptions struct {
+	description  string
+	onlyMetadata bool
+}
+
+func newContentCollectionFixture(t *testing.T, model *sequenceModel, options ...contentCollectionOptions) (*serviceFixture, *atomic.Int32) {
 	t.Helper()
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 	contentStatus := &atomic.Int32{}
@@ -42,9 +47,21 @@ func newContentCollectionFixture(t *testing.T, model *sequenceModel) (*serviceFi
 		{"filename": "main.go", "status": "modified", "patch": "@@ -1 +1,2 @@\n package main\n+added\n"},
 		{"filename": collectionSubmodulePath, "status": "modified", "patch": "@@ -1 +1 @@\n-Subproject commit " + collectionSubmoduleOld + "\n+Subproject commit " + collectionSubmoduleNew + "\n"},
 	}
+	title := "title"
+	if len(options) > 0 && options[0].onlyMetadata {
+		files = nil
+		title = ""
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method == http.MethodGet {
 			switch {
+			case len(options) > 0 && isPullRequestRead(request):
+				serviceWriteJSON(writer, http.StatusOK, map[string]any{
+					"number": testPRNumber, "state": "open", "merged": false, "draft": false,
+					"title": title, "body": options[0].description,
+					"head": map[string]any{"sha": testHeadSHA}, "base": map[string]any{"sha": testBaseSHA},
+				})
+				return
 			case strings.HasSuffix(request.URL.Path, "/files"):
 				serviceWriteJSON(writer, http.StatusOK, files)
 				return

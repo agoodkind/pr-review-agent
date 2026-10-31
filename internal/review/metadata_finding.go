@@ -10,10 +10,46 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-func (pass *chunkPass) metadataFindings() []domain.Finding {
+func (pass *chunkPass) metadataSnapshot() ([]domain.Finding, *findingCheckpoint) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
-	return slices.Clone(pass.metadata)
+	findings := slices.Clone(pass.metadata)
+	checkpoint := &findingCheckpoint{Prior: nil}
+	seen := make(map[string]struct{}, len(findings))
+	for _, finding := range findings {
+		seen[metadataFindingKey(finding)] = struct{}{}
+	}
+	for _, finding := range pass.retainedMetadata {
+		if pass.metadataSourceReassessed(finding.Target()) {
+			continue
+		}
+		key := metadataFindingKey(finding)
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		checkpoint.Prior = append(checkpoint.Prior, len(findings))
+		findings = append(findings, finding)
+	}
+	return findings, checkpoint
+}
+
+// metadataSourceReassessed requires a complete answer for every chunk of the field.
+// The caller locks the pass before reading its assessment results.
+func (pass *chunkPass) metadataSourceReassessed(target domain.FindingTarget) bool {
+	found := false
+	for _, chunk := range pass.work.Chunks {
+		for _, source := range chunk.Metadata {
+			if source.Target() != target {
+				continue
+			}
+			found = true
+			if !chunk.CoverageComplete || !pass.reassessedChunks[chunkID(chunk)] {
+				return false
+			}
+		}
+	}
+	return found
 }
 
 func metadataFindingKey(finding domain.Finding) string {
