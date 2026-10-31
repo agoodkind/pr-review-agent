@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"strings"
 
 	"google.golang.org/genai"
 
@@ -166,8 +167,8 @@ func marshalProviderRequest(target provider, prompt, instructions, schemaName st
 		return nil, requestEncodingError(err)
 	}
 	payload["stream"] = json.RawMessage("true")
-	fields, enabled := responseRouting(target)
-	if target.api == config.ResponsesAPI && enabled {
+	fields, enabled := providerRouting(target)
+	if enabled {
 		encoded, err := json.Marshal(fields)
 		if err != nil {
 			return nil, requestEncodingError(err)
@@ -192,19 +193,25 @@ type responseRoutingProvider struct {
 }
 
 type responseRoutingConfiguration struct {
-	Plugins  []responseRoutingPlugin `json:"plugins"`
+	Plugins  []responseRoutingPlugin `json:"plugins,omitempty"`
 	Provider responseRoutingProvider `json:"provider"`
 }
 
-func responseRouting(target provider) (responseRoutingConfiguration, bool) {
-	if target.autoRouterCostTier == "" {
+func providerRouting(target provider) (responseRoutingConfiguration, bool) {
+	router := target.model == config.AutoRouterModel || target.model == config.FreeRouterModel
+	openRouter := target.baseURL != nil && strings.EqualFold(target.baseURL.Hostname(), "openrouter.ai")
+	if !router && !openRouter {
 		var empty responseRoutingConfiguration
 		return empty, false
 	}
-	return responseRoutingConfiguration{
-		Plugins:  []responseRoutingPlugin{{ID: "auto-router", CostTier: string(target.autoRouterCostTier)}},
+	routing := responseRoutingConfiguration{
+		Plugins:  nil,
 		Provider: responseRoutingProvider{RequireParameters: true},
-	}, true
+	}
+	if target.autoRouterCostTier != "" {
+		routing.Plugins = []responseRoutingPlugin{{ID: "auto-router", CostTier: string(target.autoRouterCostTier)}}
+	}
+	return routing, true
 }
 
 func marshalGeminiRequest(target provider, prompt, instructions string, schema json.RawMessage) (json.RawMessage, error) {
