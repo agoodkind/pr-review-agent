@@ -16,7 +16,8 @@ import (
 )
 
 func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{reconcileErr: errors.New("GitHub thread reconciliation failed")})
+	model := &sequenceModel{}
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: model, reconcileErr: errors.New("GitHub thread reconciliation failed")})
 	job := fixture.forcedJob()
 	pr, err := fixture.github.GetPullRequest(t.Context(), job.InstallationID, job.Repository, job.Number)
 	if err != nil {
@@ -37,14 +38,30 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 	if strings.Count(body, summary.Metadata[0].Body) != 1 || strings.Count(body, summary.Fallback[0].Body) != 1 || !review.MetadataMatches(body, job.Head, summary.MetadataRevision) {
 		t.Fatal("The reconciliation failure erased saved metadata or refused findings.")
 	}
-	const prefix = "<!-- pr-review-agent:fallback-record:v1 "
-	_, remaining, _ := strings.Cut(original, prefix)
-	payload, _, _ := strings.Cut(remaining, " -->")
-	if !strings.Contains(body, prefix+payload+" -->") {
-		t.Fatal("The reconciliation failure changed the saved refused finding checkpoint.")
-	}
 	if _, complete := marker.FindReview(body); complete || len(fixture.state.submittedReviews) != 0 || len(fixture.state.issueComments) != 1 {
 		t.Fatal("The failed reconciliation must preserve one incomplete summary without submitting a verdict.")
+	}
+	fixture.reconciler.err = nil
+	model.err = &openai.TruncatedError{Model: testReviewModel}
+	job.DeliveryID = "reconciliation-recovered-truncated"
+	admitted, accepted, err := fixture.service.Admit(t.Context(), job)
+	if err != nil || !accepted {
+		t.Fatalf("The recovered reconciliation did not admit the reassessment: %v.", err)
+	}
+	outcome, err := fixture.service.RunWithOutcome(t.Context(), admitted)
+	if err != nil || outcome.Disposition != domain.AssessmentIncomplete || outcome.CoverageComplete || len(model.prompts) == 0 {
+		t.Fatalf("The recovered reconciliation did not review the source with an interrupted response: %+v, %v.", outcome, err)
+	}
+	body = failureSummaryComment(t, fixture)
+	if strings.Count(body, summary.Metadata[0].Body) != 1 || strings.Count(body, summary.Fallback[0].Body) != 1 || !review.MetadataMatches(body, job.Head, summary.MetadataRevision) {
+		t.Fatal("The interrupted reassessment lost the saved metadata or refused finding after recovery.")
+	}
+	state := decodedSummaryState(t, fixture)
+	if state.LastReviewed != "" || state.Status == marker.StateDone || len(state.Pending)+len(state.Unread) == 0 {
+		t.Fatal("The interrupted reassessment completed source that still requires review.")
+	}
+	if _, complete := marker.FindReview(body); complete || len(fixture.state.submittedReviews) != 0 || len(fixture.state.issueComments) != 1 || fixture.state.issueComments[0]["id"] != float64(2000) {
+		t.Fatal("The interrupted reassessment must preserve the original incomplete summary without submitting a verdict.")
 	}
 }
 
