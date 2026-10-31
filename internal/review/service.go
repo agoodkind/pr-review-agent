@@ -379,7 +379,9 @@ func (service *Service) reviewOwedWork(
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
 	}
+	previousPolicy := state.PolicyRevision
 	state = bindCheckpointPolicy(state, pullRequest, service.reviewPolicy, settings)
+	policyChanged := previousPolicy != state.PolicyRevision
 	// Forcing is something a delivery does once, not on every attempt of itself.
 	// A delivery is admitted again whenever its check run is short of completed,
 	// and the check run is created before the review publishes anything, so the
@@ -437,13 +439,15 @@ func (service *Service) reviewOwedWork(
 	// writes its own account of why. One of them announcing a start first would
 	// leave the comment saying a review is under way that nobody is having, and
 	// a declined delta would say it twice and contradict itself.
-	var retainedMetadata []domain.Finding
-	if !fromScratch && hasState && len(state.Completed) > 0 {
-		retainedMetadata, state.Completed, err = service.restoreCompletedMetadata(ctx, job, pullRequest, work.Chunks, state.Completed)
+	var metadataRecord metadataReviewRecord
+	var fallbackRecord fallbackReviewRecord
+	if hasState {
+		metadataRecord, fallbackRecord, state.Completed, err = service.restoreFindingCheckpoints(ctx, job, pullRequest, work.Chunks, state.Completed)
 		if err != nil {
 			return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
 		}
 	}
+	progress.restoreFindings(metadataRecord, fallbackRecord)
 	progress.fileAssessments = work.FileAssessments
 	progress.models = work.AssessmentModels
 	started := progress.summary(service.now())
@@ -467,10 +471,7 @@ func (service *Service) reviewOwedWork(
 	}
 	pass := newChunkPass(work, settings, &selection, disputes, disputePrompt, startedAt)
 	pass.seedFileAssessments(service.reviewPolicy)
-	for _, finding := range retainedMetadata {
-		pass.metadata = append(pass.metadata, finding)
-		pass.metadataSeen[metadataFindingKey(finding)] = struct{}{}
-	}
+	pass.restoreFindings(metadataRecord, fallbackRecord, fromScratch || policyChanged, state.Completed)
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {
@@ -491,7 +492,8 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	posted, failed, _ := pass.delivery()
 	progress.applyAnalysis(analysis)
 	progress.applyPublished(pass.publishedFindings())
-	progress.metadata = pass.metadataFindings()
+	progress.metadata, progress.metadataCheckpoint = pass.metadataSnapshot()
+	progress.fallback, progress.fallbackCheckpoint = pass.fallbackSnapshot()
 	progress.metadataRevision = diff.PullRequestRevision(pass.work.PullRequest)
 	progress.fileAssessments = pass.fileAssessments()
 	logChunkFailures(ctx, unread, len(pass.work.Chunks), pass.requestCount())
@@ -721,15 +723,12 @@ func (service *Service) publish(
 	// Reading a commit proves it was reviewed, not that it is still the head. A
 	// verdict submitted here would judge a commit this run never read, so a
 	// moved head ends the run and leaves the work to the push that moved it.
-	currentPullRequest, err := service.github.GetPullRequest(ctx, job.InstallationID, job.Repository, job.Number)
+	currentPullRequest, err := service.publicationPullRequest(ctx, job, diff.PullRequestRevision(pass.work.PullRequest))
+	if errors.Is(err, errHeadMoved) {
+		return service.cancelCheck(ctx, job, checkRun.ID)
+	}
 	if err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, err)
-	}
-	if currentPullRequest.Head != head {
-		return service.cancelCheck(ctx, job, checkRun.ID)
-	}
-	if diff.PullRequestRevision(currentPullRequest) != diff.PullRequestRevision(pass.work.PullRequest) {
-		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
 	progress.reached("the head refresh")
 
@@ -737,7 +736,8 @@ func (service *Service) publish(
 	// review submitted here carries the verdict alone.
 	analysis := pass.analysis()
 	published := pass.publishedFindings()
-	metadata := pass.metadataFindings()
+	metadata, metadataCheckpoint := pass.metadataSnapshot()
+	_, fallbackCheckpoint := pass.fallbackSnapshot()
 	posted, failed, fallback := pass.delivery()
 	logPublishedFindings(ctx, analysis.Anchored, published, posted, failed)
 	progress.reached("finding selection")
@@ -783,6 +783,8 @@ func (service *Service) publish(
 		Published:               published,
 		Fallback:                fallback,
 		Metadata:                metadata,
+		metadataCheckpoint:      metadataCheckpoint,
+		fallbackCheckpoint:      fallbackCheckpoint,
 		MetadataRevision:        diff.PullRequestRevision(pass.work.PullRequest),
 		MetadataFindingsDisplay: service.reviewPolicy.MetadataFindingsDisplay(),
 		PriorReviews:            traceReviews(reviews, service.botLogin),

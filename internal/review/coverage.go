@@ -817,9 +817,12 @@ func renderUnreadableBody(summary Summary, notice, verdict string, statuses ...P
 		"### Verdict",
 		verdict,
 	}
-	if fallback := renderFallbackFindings(summary.Fallback); fallback != "" {
-		parts = append(parts, fallback)
+	if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(parts, findings)
 	}
 	parts = append(parts, verdictSectionEnd, RenderDetails(summary, statuses...))
+	if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
+		parts = append(parts, checkpoints)
+	}
 	return strings.Join(parts, "\n\n")
 }
