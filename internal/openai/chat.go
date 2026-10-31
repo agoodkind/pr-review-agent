@@ -26,7 +26,7 @@ func completeChat(
 	report usageReporter,
 ) (string, string, error) {
 	params := newChatParams(target, prompt, policy, schemaName, schema)
-	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
+	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params, providerOptions(target)...)
 	defer func() { _ = stream.Close() }()
 
 	return readChatCompletion(ctx, target, stream, report)

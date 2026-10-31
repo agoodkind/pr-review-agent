@@ -446,7 +446,7 @@ func completeWith(
 	if err != nil {
 		return "", "", err
 	}
-	stream := target.sdk.Responses.NewStreaming(ctx, params, responseOptions(target)...)
+	stream := target.sdk.Responses.NewStreaming(ctx, params, providerOptions(target)...)
 	defer func() {
 		_ = stream.Close()
 	}()
@@ -527,12 +527,16 @@ func completeWith(
 	return result, completionModel, nil
 }
 
-func responseOptions(target provider) []option.RequestOption {
-	fields, enabled := responseRouting(target)
+func providerOptions(target provider) []option.RequestOption {
+	fields, enabled := providerRouting(target)
 	if !enabled {
 		return nil
 	}
-	return []option.RequestOption{option.WithJSONSet("plugins", fields.Plugins), option.WithJSONSet("provider", fields.Provider)}
+	options := []option.RequestOption{option.WithJSONSet("provider", fields.Provider)}
+	if len(fields.Plugins) > 0 {
+		options = append(options, option.WithJSONSet("plugins", fields.Plugins))
+	}
+	return options
 }
 
 func newResponseParams(
