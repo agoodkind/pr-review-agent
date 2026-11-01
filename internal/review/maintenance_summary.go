@@ -83,6 +83,11 @@ func preservedReviewDetails(body string, summary Summary) string {
 }
 
 func preservedReportPrefix(body string) string {
+	if start := strings.Index(body, reportSectionStart); start >= 0 {
+		if end := strings.Index(body[start:], reportSectionEnd); end >= 0 {
+			return "## Review\n\n" + body[start:start+end+len(reportSectionEnd)]
+		}
+	}
 	end := strings.Index(body, verdictSectionStart)
 	if end < 0 {
 		end = strings.Index(body, "### Verdict")

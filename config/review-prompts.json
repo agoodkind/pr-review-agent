@@ -1,5 +1,5 @@
 {
-  "metadata_findings_display": "collapsed",
+  "metadata_findings_display": "expanded",
   "relationship_review": {
     "enabled": true,
     "maximum_pairs": 40
@@ -102,7 +102,7 @@
     "relationship.fragment": "File: {{.Path}}\nDiff fragment:\n{{.Input}}",
     "relationship.gap": "File: {{.Path}}\n[coverage incomplete: {{.Relationship}}; at least {{.Total}} required joint assessments remain]",
     "native.summary_link": "[Review summary]({{.SummaryURL}})",
-    "native.request_changes": "The finding [{{.Input}}]({{.SummaryURL}}) remains unresolved.",
+    "native.request_changes": "The finding {{.Input}} remains unresolved ([View required changes]({{.SummaryURL}})).",
     "inline.footer": "<sub><i>Already addressed this review? Please respond and resolve!</i></sub>",
     "failure.class.other": "an unexpected error",
     "failure.class.deadline": "a request timeout",

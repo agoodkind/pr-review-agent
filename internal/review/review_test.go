@@ -161,8 +161,8 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			body := review.RenderBody(summary)
 			previous := -1
 			for _, section := range []string{
-				"### Summary", "### Changes",
-				"### Verdict", "<summary>Review details</summary>",
+				"### Verdict", "### Summary", "### Changes",
+				"<summary>Review details</summary>",
 			} {
 				index := strings.Index(body, section)
 				if index <= previous {
