@@ -810,9 +810,6 @@ func RenderUnreadableBody(summary Summary, notice string, statuses ...ProviderSt
 func renderUnreadableBody(summary Summary, notice, verdict string, statuses ...ProviderStatus) string {
 	parts := []string{
 		"## Review",
-		"### Summary\n\n" + renderReportSummary(summary.Report),
-		"### Changes\n\n" + renderWalkthrough(summary.Report),
-		"### Omissions\n\n" + notice,
 		verdictSectionStart,
 		"### Verdict",
 		verdict,
@@ -820,7 +817,11 @@ func renderUnreadableBody(summary Summary, notice, verdict string, statuses ...P
 	if findings := renderSummaryFindings(summary); findings != "" {
 		parts = append(parts, findings)
 	}
-	parts = append(parts, verdictSectionEnd, RenderDetails(summary, statuses...))
+	parts = append(parts, verdictSectionEnd,
+		renderReportSection(summary.Report),
+		"### Omissions\n\n"+notice,
+		RenderDetails(summary, statuses...),
+	)
 	if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
 		parts = append(parts, checkpoints)
 	}

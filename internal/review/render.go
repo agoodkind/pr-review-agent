@@ -189,9 +189,8 @@ func acceptedFileScope(summary Summary) bool {
 func RenderBody(summary Summary) string {
 	parts := []string{
 		"## Review",
-		"### Summary\n\n" + renderReportSummary(summary.Report),
-		"### Changes\n\n" + renderWalkthrough(summary.Report),
 		renderVerdictSection(summary, false),
+		renderReportSection(summary.Report),
 	}
 	if summary.FileAssessmentsDisplay == reviewrules.FindingsExpanded {
 		parts = append(parts, renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes))
@@ -201,6 +200,15 @@ func RenderBody(summary Summary) string {
 	}
 	parts = append(parts, RenderDetails(summary), marker.Summary()+"\n"+RenderVerdictBody(summary))
 	return strings.Join(parts, "\n\n")
+}
+
+func renderReportSection(report Report) string {
+	return strings.Join([]string{
+		reportSectionStart,
+		"### Summary\n\n" + renderReportSummary(report),
+		"### Changes\n\n" + renderWalkthrough(report),
+		reportSectionEnd,
+	}, "\n\n")
 }
 
 func renderReportSummary(report Report) string {
@@ -234,6 +242,8 @@ func renderOmissions(hunks []unreadHunk) string {
 const (
 	verdictSectionStart = "<!-- pr-review-agent:verdict-section:start -->"
 	verdictSectionEnd   = "<!-- pr-review-agent:verdict-section:end -->"
+	reportSectionStart  = "<!-- pr-review-agent:report-section:start -->"
+	reportSectionEnd    = "<!-- pr-review-agent:report-section:end -->"
 )
 
 func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
@@ -339,7 +349,7 @@ const withdrawnBlockNote = "The blocking review on this commit was dismissed by 
 // prose has to carry because the refresh then submits no blocking review and
 // the comment is the only place a reader learns why.
 func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool, details, reportPrefix string) string {
-	parts := []string{reportPrefix, renderVerdictSection(summary, blockWithdrawn)}
+	parts := []string{renderVerdictBeforeReport(reportPrefix, renderVerdictSection(summary, blockWithdrawn))}
 	if len(summary.Omissions) > 0 && !summary.OmissionsAccepted {
 		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
 	}
@@ -379,14 +389,25 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 			}
 		}
 	}
-	updated := strings.TrimSpace(prose[:start]) + "\n\n" +
-		verdict + prose[end:]
+	updated := renderVerdictBeforeReport(strings.TrimSpace(prose[:start]), verdict) + prose[end:]
 	updated = refreshThreadDetails(updated, summary)
 	if markerStart := strings.LastIndex(updated, marker.Summary()); markerStart >= 0 {
 		updated = strings.TrimSpace(updated[:markerStart]) + "\n\n" + marker.Summary() + "\n" +
 			RenderVerdictBody(summary)
 	}
 	return updated
+}
+
+func renderVerdictBeforeReport(reportPrefix, verdict string) string {
+	heading, report, _ := strings.Cut(reportPrefix, "\n\n")
+	parts := []string{heading, verdict}
+	if report != "" {
+		if !strings.HasPrefix(report, reportSectionStart) {
+			report = reportSectionStart + "\n\n" + report + "\n\n" + reportSectionEnd
+		}
+		parts = append(parts, report)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func stripDurableStateMarker(body string) string {
