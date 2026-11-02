@@ -2,6 +2,8 @@ package review
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -67,11 +69,13 @@ func countResolvedThreadTraces(threads []threadTrace) int {
 }
 
 type findingTrace struct {
-	ID         string `json:"id"`
-	Path       string `json:"path"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-	Importance int    `json:"importance"`
+	ID         string                `json:"id"`
+	Surface    domain.FindingSurface `json:"surface"`
+	CommitSHA  domain.HeadSHA        `json:"commit_sha,omitempty"`
+	Path       string                `json:"path,omitempty"`
+	StartLine  int                   `json:"start_line"`
+	EndLine    int                   `json:"end_line"`
+	Importance int                   `json:"importance"`
 }
 
 type reviewTrace struct {
@@ -96,13 +100,25 @@ func traceFindings(ctx context.Context, findings []domain.Finding) ([]findingTra
 	logger := gklog.L(ctx)
 	traces := make([]findingTrace, 0, len(findings))
 	for _, finding := range findings {
-		findingID, err := marker.FindingID(finding)
+		var findingID string
+		var err error
+		if finding.EffectiveSurface() == domain.FindingFile {
+			findingID, err = marker.FindingID(finding)
+		} else {
+			err = finding.Validate()
+			if err == nil {
+				sum := sha256.Sum256([]byte(metadataFindingKey(finding)))
+				findingID = hex.EncodeToString(sum[:])
+			}
+		}
 		if err != nil {
 			logger.ErrorContext(ctx, "identify finding for trace", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("identify finding for trace: %w", err)
 		}
 		traces = append(traces, findingTrace{
 			ID:         findingID,
+			Surface:    finding.EffectiveSurface(),
+			CommitSHA:  finding.CommitSHA,
 			Path:       finding.Path,
 			StartLine:  finding.StartLine,
 			EndLine:    finding.EndLine,
