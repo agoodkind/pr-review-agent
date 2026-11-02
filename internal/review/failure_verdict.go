@@ -80,6 +80,20 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 		return nil
 	}
 	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
+	if validNativeMetadataBlock(latest) {
+		if err != nil {
+			logger.WarnContext(ctx, "preserve metadata rejection after summary read failure", "review_id", latest.ID, "err", err)
+			return nil
+		}
+		blocked, verificationErr := service.savedMetadataStillBlocks(ctx, job, comments)
+		if verificationErr != nil {
+			return verificationErr
+		}
+		if blocked {
+			logger.InfoContext(ctx, "preserve unresolved metadata rejection after failure", "review_id", latest.ID)
+			return nil
+		}
+	}
 	var data reviewrules.PromptData
 	data.Input = service.terminalFailureLead(ctx, cause)
 	if err != nil {
