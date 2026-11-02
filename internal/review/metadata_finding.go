@@ -20,9 +20,6 @@ func (pass *chunkPass) metadataSnapshot() ([]domain.Finding, *findingCheckpoint)
 		seen[metadataFindingKey(finding)] = struct{}{}
 	}
 	for _, finding := range pass.retainedMetadata {
-		if pass.metadataSourceReassessed(finding.Target()) {
-			continue
-		}
 		key := metadataFindingKey(finding)
 		if _, found := seen[key]; found {
 			continue
@@ -34,29 +31,15 @@ func (pass *chunkPass) metadataSnapshot() ([]domain.Finding, *findingCheckpoint)
 	return findings, checkpoint
 }
 
-// metadataSourceReassessed requires a complete answer for every chunk of the field.
-// The caller locks the pass before reading its assessment results.
-func (pass *chunkPass) metadataSourceReassessed(target domain.FindingTarget) bool {
-	found := false
-	for _, chunk := range pass.work.Chunks {
-		for _, source := range chunk.Metadata {
-			if source.Target() != target {
-				continue
-			}
-			found = true
-			if !chunk.CoverageComplete || !pass.reassessedChunks[chunkID(chunk)] {
-				return false
-			}
-		}
-	}
-	return found
-}
-
 func metadataFindingKey(finding domain.Finding) string {
 	if finding.Deduplication == reviewrules.DeduplicateLocation {
 		return fmt.Sprintf("%s:%s:%s:%d:%d", finding.EffectiveSurface(), finding.CommitSHA, finding.RuleID, finding.StartLine, finding.EndLine)
 	}
-	return fmt.Sprintf("%s:%s:%s:%s", finding.EffectiveSurface(), finding.CommitSHA, finding.RuleID, strings.TrimSpace(finding.Evidence))
+	evidence := strings.TrimSpace(finding.Evidence)
+	if evidence == "" {
+		evidence = finding.Title + "\n" + finding.Body + "\n" + finding.Suggestion
+	}
+	return fmt.Sprintf("%s:%s:%s:%s", finding.EffectiveSurface(), finding.CommitSHA, finding.RuleID, evidence)
 }
 
 // BuildMetadataIndex combines contiguous fragments using their original line numbers.

@@ -77,6 +77,17 @@ func (service *Service) upsertSummaryCommentFrom(
 	job domain.ReviewJob,
 	build func(marker.State, string) summaryCommentContent,
 ) error {
+	return service.upsertSummaryCommentFromChecked(ctx, job, func(state marker.State, body string) (summaryCommentContent, error) {
+		return build(state, body), nil
+	})
+}
+
+// upsertSummaryCommentFromChecked rejects invalid content before writing a comment.
+func (service *Service) upsertSummaryCommentFromChecked(
+	ctx context.Context,
+	job domain.ReviewJob,
+	build func(marker.State, string) (summaryCommentContent, error),
+) error {
 	logger := gklog.L(ctx)
 	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
@@ -92,12 +103,16 @@ func (service *Service) upsertSummaryCommentFrom(
 			existingState.RunID = job.DeliveryID
 			existingState.Status = marker.StateDone
 		}
+		content, err := build(existingState, existing.Body)
+		if err != nil {
+			return err
+		}
 		if _, err := service.github.UpdateIssueComment(
 			ctx,
 			job.InstallationID,
 			job.Repository,
 			existing.ID,
-			renderSummaryComment(build(existingState, existing.Body)),
+			renderSummaryComment(content),
 		); err != nil {
 			logger.ErrorContext(ctx, "update summary comment", slog.String("err", err.Error()))
 			return fmt.Errorf("update summary comment: %w", err)
@@ -105,7 +120,7 @@ func (service *Service) upsertSummaryCommentFrom(
 		logger.InfoContext(ctx, "summary comment updated", slog.Int64("comment_id", existing.ID))
 		return nil
 	}
-	firstContent := build(
+	firstContent, err := build(
 		marker.State{
 			PolicyRevision: "",
 			LastReviewed:   "", RunID: job.DeliveryID, Status: marker.StateDone, Pending: nil,
@@ -113,6 +128,9 @@ func (service *Service) upsertSummaryCommentFrom(
 		},
 		"",
 	)
+	if err != nil {
+		return err
+	}
 	created, err := service.github.CreateIssueComment(
 		ctx,
 		job.InstallationID,

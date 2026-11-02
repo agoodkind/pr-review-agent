@@ -10,9 +10,6 @@ import (
 
 func renderSummaryFindings(summary Summary) string {
 	var parts []string
-	if metadata := renderSummaryMetadata(summary); metadata != "" {
-		parts = append(parts, metadata)
-	}
 	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
 		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
 	}
@@ -55,7 +52,7 @@ func unpublishedSummaryFindings(summary Summary, findings []domain.Finding) []do
 	return remaining
 }
 
-func renderSummaryMetadata(summary Summary) string {
+func renderReviewMetadata(summary Summary) string {
 	if summary.MetadataFindingsDisplay == reviewrules.FindingsHidden {
 		return ""
 	}

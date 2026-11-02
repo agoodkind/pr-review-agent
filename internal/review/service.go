@@ -720,6 +720,21 @@ func (service *Service) publish(
 	progress *reviewProgress,
 	settings reviewSettings,
 ) error {
+	if len(state.Pending) == 0 && len(state.Unread) == 0 {
+		retained, assessmentErr := service.reassessMetadataFindings(ctx, job, pass.retainedMetadata, pass.work.Metadata, pass.work.PullRequest, settings)
+		if assessmentErr != nil {
+			return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, assessmentErr)
+		}
+		pass.retainedMetadata = retained
+	}
+	return service.publishReassessed(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress, settings)
+}
+
+func (service *Service) publishReassessed(
+	ctx context.Context, job domain.ReviewJob, head domain.HeadSHA,
+	checkRun githubapp.CheckRun, reviews []githubapp.Review, pass *chunkPass,
+	state marker.State, startedAt time.Time, progress *reviewProgress, settings reviewSettings,
+) error {
 	// Reading a commit proves it was reviewed, not that it is still the head. A
 	// verdict submitted here would judge a commit this run never read, so a
 	// moved head ends the run and leaves the work to the push that moved it.
@@ -865,6 +880,9 @@ func (service *Service) publishVerdict(
 			return err
 		}
 		summary.FileAssessmentNote = note
+	}
+	if err := service.checkpointCompletedPublication(ctx, job, checkRun.ID, summary, state); err != nil {
+		return err
 	}
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {

@@ -324,10 +324,13 @@ func (service *Service) writeFailureSummary(
 	prose += reassessmentNotice(ctx)
 	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, existingBody string) summaryCommentContent {
 		failureProse := prose
+		completedHead, markedComplete := marker.FindReview(existingBody)
+		completedPublication := completedHeadState(existing, job.Head) && markedComplete && completedHead == job.Head &&
+			MetadataMatches(existingBody, job.Head, progress.MetadataRevision)
 		if preserveCheckpointSummary(existing, existingBody) &&
-			progress.FilesReviewed == 0 && progress.Chunks == 0 && len(progress.Models) == 0 &&
-			len(progress.Observed) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
-			len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0 {
+			(completedPublication || progress.FilesReviewed == 0 && progress.Chunks == 0 && len(progress.Models) == 0 &&
+				len(progress.Observed) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
+				len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0) {
 			currentDetail := detail
 			if strings.Contains(existingBody, reviewDetailsStart) {
 				var data reviewrules.PromptData

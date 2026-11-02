@@ -9,11 +9,11 @@ The service accepts `opened`, `reopened`, `ready_for_review`, `synchronize`, and
 
 Mention `@goodkind-io-pr-agent` in a new top-level pull request comment to request a full review. A review label also requests a full review. Replies to the service's inline findings and changes to thread resolution refresh the verdict. The GitHub App requires `issue_comment`, `pull_request_review_comment`, `pull_request_review_thread`, and `pull_request` subscriptions.
 
-Reviews examine current pull request source and metadata. The service updates one summary comment with the purpose, changes, verdict, and actionable metadata findings. File findings appear inline. Title, description, and commit-message findings identify the source lines in the summary. The reviewer includes an exact replacement or deletion when a safe correction is available. A verified metadata defect still requests changes when an exact correction is unavailable. Collapsed details report models, duration, usage, estimated cost, coverage, and thread identifiers.
+Reviews examine current pull request source and metadata. The service updates one summary comment with the purpose, changes, verdict, and collapsed review details. File findings appear inline. Title, description, and commit-message findings identify their source lines in the native rejection review. The reviewer includes an exact replacement or deletion when a safe correction is available. A verified metadata defect still requests changes when an exact correction is unavailable. The summary does not repeat those findings. Review details report models, duration, usage, estimated cost, coverage, and thread identifiers.
 
 The hidden state marker records the last reviewed commit, pending and completed chunks, run identifier, status, and review context identity. Every summary update includes the marker. Resumed reviews reuse compatible completed chunks. A changed comparison, rule policy, or pull request context invalidates incompatible work and file exclusions. Older checkpoints retain their historical baseline but cannot establish compatibility for unfinished fragments.
 
-A title or description edit requires reassessment when it changes the saved review context. When edit coalescing is enabled, distinct deliveries postpone the queued review until the configured interval has elapsed since the latest edit. Superseded queued checks conclude `skipped` without model requests. A base-branch change, an edit to another field, or an edit without field details starts an immediate full review. Explicit full-review triggers also supersede pending metadata edits. Missing file coverage requires ordinary source review.
+A title or description edit requires reassessment when it changes the saved review context. The service checks each previous metadata finding against the current field before clearing it. An empty fresh review result does not resolve previous findings. Missing, uncertain, invalid, or failed assessments preserve those findings and prevent approval. When edit coalescing is enabled, distinct deliveries postpone the queued review until the configured interval has elapsed since the latest edit. Superseded queued checks conclude `skipped` without model requests. A base-branch change, an edit to another field, or an edit without field details starts an immediate full review. Explicit full-review triggers also supersede pending metadata edits. Missing file coverage requires ordinary source review.
 
 The service checks the configured file limit before sending model requests. It assesses every changed file before calculating review chunks. Configured exclusions omit generated artifact contents while retaining related source and manifest review. A remaining delta that exceeds its configured limit receives a specific size notice and an `action_required` check. The last reviewed commit does not advance until assessment completes.
 
@@ -39,7 +39,7 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-The service submits approvals without review bodies. Other native review bodies append hidden recovery data after a direct link to the editable summary. The `native.summary_link` template in the prompt configuration controls the visible link and uses `SummaryURL` for its destination. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Human dismissals and immediate inline publication retain their existing behavior.
+The service submits approvals without review bodies. Metadata rejection bodies contain the findings and corrections, a link to the editable summary, and hidden recovery data. The `native.summary_link` template in the prompt configuration controls that backlink and uses `SummaryURL` for its destination. When metadata findings follow an empty inline-backed rejection, the service submits one metadata rejection and updates that review on later same-head edits. Changed visible metadata on a later head requires a current-head rejection; unchanged metadata preserves the standing rejection. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Human dismissals and immediate inline publication retain their existing behavior.
 
 An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
 
@@ -97,13 +97,13 @@ Keep `GITHUB_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and the provider credentials
 
 ## Configure finding details
 
-Use the [rule-change procedure](#change-review-rules) to edit `metadata_findings_display` and select how the summary displays title, description, and commit-message findings.
+Use the [rule-change procedure](#change-review-rules) to edit `metadata_findings_display` and select how the native rejection displays title, description, and commit-message findings.
 
 | Value | Display |
 | --- | --- |
-| `expanded` | The summary displays the complete Prose findings section. |
-| `collapsed` | The summary puts the section inside a disclosure labeled Prose findings. |
-| `hidden` | The summary omits the section. Review decisions and stored findings remain active. |
+| `expanded` | The rejection displays the complete Prose findings section. |
+| `collapsed` | The rejection puts the section inside a disclosure labeled Prose findings. |
+| `hidden` | The rejection omits the section. Review decisions and stored findings remain active. |
 
 The renderer excludes findings with IDs that already appear in published inline comments. Findings that GitHub refused to publish inline remain in the summary. The service stores those unpublished findings separately so later thread refreshes can compare their IDs. Older summaries without that record retain their unpublished findings until a full review writes the record.
 
@@ -220,7 +220,7 @@ Run the same deployment command to resume an interrupted handoff. The command re
 
 ## Clear hidden review bodies
 
-Clearing a native review body prevents later body updates through GitHub's `PUT` endpoint because GitHub rejects reviews with missing bodies. The command stores the original text in a local private backup and retains native review decisions.
+GitHub rejects body updates through its `PUT` endpoint when the submitted review body is empty. The command stores the original text in a local private backup and retains native review decisions.
 
 The command selects the configured bot's approvals, requests for changes, and dismissed reviews when each body contains a valid review marker and no visible text. Cleanup requires one completed bot summary covering the current head. Already-empty bodies require no update.
 

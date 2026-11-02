@@ -21,6 +21,9 @@ var (
 )
 
 func (service *Service) nativeRequestedChangesBody(ctx context.Context, job domain.ReviewJob, summary Summary, commentID int64) (string, error) {
+	if len(summary.Metadata) > 0 {
+		return service.nativeMetadataRequestedChangesBody(job, summary, commentID)
+	}
 	data, err := service.nativeBlockingReason(ctx, job, summary, nativeSummaryURL(job.Repository, job.Number, commentID))
 	if err != nil {
 		return "", err
@@ -33,6 +36,24 @@ func (service *Service) nativeRequestedChangesBody(ctx context.Context, job doma
 		return "", errors.New("native.request_changes must include the finding label and permalink")
 	}
 	return body + "\n\n" + RenderVerdictBody(summary), nil
+}
+
+func (service *Service) nativeMetadataRequestedChangesBody(job domain.ReviewJob, summary Summary, commentID int64) (string, error) {
+	for _, finding := range summary.Metadata {
+		if finding.EffectiveSurface() == domain.FindingFile || finding.Validate() != nil {
+			return "", errors.New("native rejection requires an actionable metadata finding")
+		}
+	}
+	backlink, err := NativeReviewSummaryLink(service.reviewPolicy, job.Repository, job.Number, commentID, RenderVerdictBody(summary))
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, 0, 2)
+	if findings := renderReviewMetadata(summary); findings != "" {
+		parts = append(parts, findings)
+	}
+	parts = append(parts, backlink)
+	return strings.Join(parts, "\n\n"), nil
 }
 
 type nativeBlockingFinding struct {

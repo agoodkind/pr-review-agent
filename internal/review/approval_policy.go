@@ -82,16 +82,51 @@ func (service *Service) updateStandingVerdict(ctx context.Context, job domain.Re
 		return err
 	}
 	if standing.CommitID != summary.Head {
-		return nil
+		return service.publishChangedMetadataAtHead(ctx, job, standing, summary)
 	}
 	if standing.State == reviewStateChangesRequested && strings.TrimSpace(standing.Body) == "" {
-		return nil
+		if len(summary.Metadata) == 0 {
+			return nil
+		}
+		_, err := service.submitInlineBackedVerdict(ctx, job, summary)
+		return err
 	}
 	body, err := service.nativeVerdictBody(ctx, job, summary)
 	if err != nil {
 		return err
 	}
 	return service.updateVerdictBody(ctx, job, standing, body)
+}
+
+func (service *Service) publishChangedMetadataAtHead(ctx context.Context, job domain.ReviewJob, standing githubapp.Review, summary Summary) error {
+	if summary.Decision != domain.ReviewDecisionRequestChanges {
+		return nil
+	}
+	previous, recorded, err := decodeMetadataRecord(standing.Body)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Read standing metadata assessment failed", slog.String("err", err.Error()))
+		return fmt.Errorf("read standing metadata findings: %w", err)
+	}
+	if len(summary.Metadata) == 0 && (!recorded || len(previous.Findings) == 0) {
+		return nil
+	}
+	body, err := service.nativeVerdictBody(ctx, job, summary)
+	if err != nil {
+		return err
+	}
+	if visibleNativeVerdictBody(standing.Body, standing.CommitID, summary.Decision) == visibleNativeVerdictBody(body, summary.Head, summary.Decision) {
+		return nil
+	}
+	_, err = service.submitInlineBackedVerdict(ctx, job, summary)
+	return err
+}
+
+func visibleNativeVerdictBody(body string, head domain.HeadSHA, decision domain.ReviewDecision) string {
+	if checkpoint := strings.LastIndex(body, marker.Review(head, decision)); checkpoint >= 0 {
+		body = body[:checkpoint]
+	}
+	return strings.TrimSpace(body)
 }
 
 func (service *Service) standingVerdict(job domain.ReviewJob, reviews []githubapp.Review, summary Summary) headVerdict {

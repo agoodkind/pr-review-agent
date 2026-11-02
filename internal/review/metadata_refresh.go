@@ -15,6 +15,7 @@ func (service *Service) reviewCurrentMetadata(
 	job domain.ReviewJob,
 	pullRequest githubapp.PullRequest,
 	settings reviewSettings,
+	prior []domain.Finding,
 ) (metadataReviewRecord, error) {
 	var empty metadataReviewRecord
 	input, err := service.collector.CollectRange(ctx, job.PullRequestRef, pullRequest, "")
@@ -77,6 +78,18 @@ func (service *Service) reviewCurrentMetadata(
 				record.Findings = append(record.Findings, finding)
 			}
 		}
+	}
+	retained, err := service.reassessMetadataFindings(ctx, job, prior, input.Metadata, pullRequest, settings)
+	if err != nil {
+		return empty, err
+	}
+	for _, finding := range retained {
+		key := metadataFindingKey(finding)
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		record.Findings = append(record.Findings, finding)
 	}
 	return record, nil
 }

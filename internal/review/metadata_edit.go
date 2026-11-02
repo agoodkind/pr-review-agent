@@ -20,7 +20,7 @@ func (service *Service) reviewMetadataEdit(ctx context.Context, job domain.Revie
 		gklog.L(ctx).WarnContext(ctx, "read metadata edit coverage", slog.String("err", err.Error()))
 		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
 	}
-	if found && state.Status == marker.StateDone && state.LastReviewed == job.Head && len(state.Pending) == 0 {
+	if found && (state.Status == marker.StateDone || state.Status == marker.StateFailed) && completedHeadState(state, job.Head) {
 		return service.refreshReviewedCheck(ctx, job, nil, settings)
 	}
 	// Missing file coverage requires normal review, including unfinished chunks.

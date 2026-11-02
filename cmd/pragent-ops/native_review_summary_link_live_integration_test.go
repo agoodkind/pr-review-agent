@@ -120,9 +120,9 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 		t.Fatal("The refresh did not create exactly one native rejection.")
 	}
 	rejection := after[len(after)-1]
-	visible, err := cfg.ReviewPolicy.Render("native.request_changes", reviewrules.PromptData{Input: "The fixture title does not identify the changed behavior."})
-	if err != nil || rejection.State != "CHANGES_REQUESTED" || rejection.Body != visible+"\n\n"+review.RenderVerdictBody(summary) || !strings.Contains(visible, "The fixture title does not identify the changed behavior.") {
-		t.Fatal("The native rejection must explain the actual metadata finding in one sentence and retain its recovery metadata.")
+	visible, _, _ := strings.Cut(rejection.Body, "<!--")
+	if rejection.State != "CHANGES_REQUESTED" || !strings.Contains(visible, summary.Metadata[0].Title) || !strings.Contains(visible, summary.Metadata[0].Body) || !strings.Contains(rejection.Body, review.RenderVerdictBody(summary)) {
+		t.Fatal("The native rejection must contain the complete metadata finding and retain its recovery metadata.")
 	}
 	if _, _, err := liveApprovalRun(t, ctx, service, reference, nil); err != nil {
 		t.Fatal(err)

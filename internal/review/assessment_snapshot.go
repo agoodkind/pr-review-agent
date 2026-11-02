@@ -72,7 +72,7 @@ func (service *Service) completedSummaryAssessment(
 		return empty, false, nil
 	}
 	state, hasState := marker.DecodeState(comment.Body)
-	completed := hasState && state.Status == marker.StateDone && state.LastReviewed == job.Head && len(state.Pending) == 0
+	completed := hasState && (state.Status == marker.StateDone || state.Status == marker.StateFailed) && completedHeadState(state, job.Head)
 	snapshot := parseAssessmentSnapshot(comment.Body)
 	if !completed && !snapshot.approvalWithheld {
 		return empty, false, nil
