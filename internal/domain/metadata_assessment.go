@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// MetadataFindingAssessment evaluates one saved finding against current field text.
+// MetadataFindingAssessment records one saved finding's assessment against current field text.
 type MetadataFindingAssessment struct {
 	FindingID  string     `json:"finding_id"`
 	Resolution Resolution `json:"resolution"`

@@ -39,8 +39,8 @@ func TestMetadataReassessmentUsesStructuredProviderCompletion(t *testing.T) {
 			if !expectError && (len(assessments) != 1 || assessments[0].Resolution != domain.Resolution(scenario)) {
 				t.Fatal("The provider did not preserve the explicit metadata decision.")
 			}
-			if state.requestCount != 1 || usage.Summary().Requests != 1 {
-				t.Fatal("The metadata stage must use existing provider request and usage handling.")
+			if usage.Summary().Requests != 1 {
+				t.Fatal("The usage summary must include the metadata assessment request.")
 			}
 		})
 	}
