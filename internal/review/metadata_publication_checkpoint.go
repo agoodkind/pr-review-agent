@@ -15,19 +15,21 @@ func (service *Service) checkpointRefreshedMetadata(ctx context.Context, job dom
 	if encoded == "" {
 		return errors.New("cannot persist the current metadata assessment")
 	}
-	return service.upsertSummaryCommentFrom(ctx, job, func(state marker.State, body string) summaryCommentContent {
+	return service.upsertSummaryCommentFromChecked(ctx, job, func(state marker.State, body string) (summaryCommentContent, error) {
 		prose := stripDurableStateMarker(body)
 		if start := strings.LastIndex(prose, metadataRecordPrefix); start >= 0 {
-			if end := strings.Index(prose[start:], " -->"); end >= 0 {
-				prose = prose[:start] + encoded + prose[start+end+len(" -->"):]
+			end := strings.Index(prose[start:], " -->")
+			if end < 0 {
+				return summaryCommentContent{}, errors.New("cannot replace an incomplete metadata review state")
 			}
+			prose = prose[:start] + encoded + prose[start+end+len(" -->"):]
 		} else {
 			prose += "\n\n" + encoded
 		}
 		if state.Status != marker.StateReviewing {
 			state.Status = marker.StateFailed
 		}
-		return summaryCommentContent{Prose: prose, State: state}
+		return summaryCommentContent{Prose: prose, State: state}, nil
 	})
 }
 
