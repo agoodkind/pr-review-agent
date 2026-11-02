@@ -2,7 +2,6 @@ package domain_test
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -79,18 +78,12 @@ func TestMetadataFeedbackWithoutAnExactCorrectionRequestsChanges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if len(result.Findings) != 1 || result.Findings[0].Body != finding.Body || result.Findings[0].CorrectionAction != domain.CorrectionNone || result.Findings[0].Suggestion != "" {
+				t.Fatal("The decoded metadata finding must preserve its explanation without an exact correction.")
+			}
 			decision := review.DecisionFor(result.Findings, 10)
 			if decision != domain.ReviewDecisionRequestChanges {
 				t.Fatalf("metadata feedback produced %s instead of requested changes", decision)
-			}
-			body := review.RenderBody(review.Summary{
-				Decision: decision, Metadata: result.Findings,
-			})
-			if !strings.Contains(body, finding.Body) || !strings.Contains(body, "Correct the prose findings below.") {
-				t.Fatalf("the published summary omitted metadata feedback: %s", body)
-			}
-			if strings.Contains(body, "Replace those lines with:") || strings.Contains(body, "Delete lines") {
-				t.Fatalf("the published summary invented an unavailable correction: %s", body)
 			}
 		})
 	}

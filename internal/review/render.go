@@ -75,10 +75,7 @@ func (summary Summary) Verdict() string {
 		return "This review did not identify findings at or above the minimum importance."
 	}
 	if len(unpublishedSummaryFindings(summary, summary.Metadata)) > 0 {
-		if summary.MetadataFindingsDisplay == reviewrules.FindingsHidden {
-			return "Correct the pull-request prose findings."
-		}
-		return "Correct the prose findings below."
+		return "Resolve the findings in the rejection review."
 	}
 	return "Resolve the open inline findings."
 }

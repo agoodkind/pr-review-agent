@@ -34,11 +34,14 @@ const (
 // Extend the existing GitHub fixture with real content collection endpoints.
 // Review publication still uses the same mutable HTTP state as every service run.
 type contentCollectionOptions struct {
-	description  string
-	onlyMetadata bool
+	description           string
+	onlyMetadata          bool
+	currentDescription    func() string
+	commits               []githubapp.PullRequestCommit
+	advertisedCommitCount *int
 }
 
-func newContentCollectionFixture(t *testing.T, model *sequenceModel, options ...contentCollectionOptions) (*serviceFixture, *atomic.Int32) {
+func newContentCollectionFixture(t *testing.T, model review.Model, options ...contentCollectionOptions) (*serviceFixture, *atomic.Int32) {
 	t.Helper()
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 	contentStatus := &atomic.Int32{}
@@ -56,11 +59,26 @@ func newContentCollectionFixture(t *testing.T, model *sequenceModel, options ...
 		if request.Method == http.MethodGet {
 			switch {
 			case len(options) > 0 && isPullRequestRead(request):
+				description := options[0].description
+				if options[0].currentDescription != nil {
+					description = options[0].currentDescription()
+				}
+				commitCount := len(options[0].commits)
+				if options[0].advertisedCommitCount != nil {
+					commitCount = *options[0].advertisedCommitCount
+				}
 				serviceWriteJSON(writer, http.StatusOK, map[string]any{
 					"number": testPRNumber, "state": "open", "merged": false, "draft": false,
-					"title": title, "body": options[0].description,
+					"title": title, "body": description, "commits": commitCount,
 					"head": map[string]any{"sha": testHeadSHA}, "base": map[string]any{"sha": testBaseSHA},
 				})
+				return
+			case len(options) > 0 && strings.HasSuffix(request.URL.Path, "/commits"):
+				commits := make([]map[string]any, 0, len(options[0].commits))
+				for _, commit := range options[0].commits {
+					commits = append(commits, map[string]any{"sha": commit.SHA, "commit": map[string]any{"message": commit.Message}})
+				}
+				serviceWriteJSON(writer, http.StatusOK, commits)
 				return
 			case strings.HasSuffix(request.URL.Path, "/files"):
 				serviceWriteJSON(writer, http.StatusOK, files)

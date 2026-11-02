@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 		t.Fatal("The review must report the failed thread reconciliation.")
 	}
 	body := failureSummaryComment(t, fixture)
-	if strings.Count(body, summary.Metadata[0].Body) != 1 || strings.Count(body, summary.Fallback[0].Body) != 1 || !review.MetadataMatches(body, job.Head, summary.MetadataRevision) {
+	if retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 || strings.Count(body, summary.Fallback[0].Body) != 1 || !review.MetadataMatches(body, job.Head, summary.MetadataRevision) {
 		t.Fatal("The reconciliation failure erased saved metadata or refused findings.")
 	}
 	if _, complete := marker.FindReview(body); complete || len(fixture.state.submittedReviews) != 0 || len(fixture.state.issueComments) != 1 {
@@ -53,7 +54,7 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 		t.Fatalf("The recovered reconciliation did not review the source with an interrupted response: %+v, %v.", outcome, err)
 	}
 	body = failureSummaryComment(t, fixture)
-	if strings.Count(body, summary.Metadata[0].Body) != 1 || strings.Count(body, summary.Fallback[0].Body) != 1 || !review.MetadataMatches(body, job.Head, summary.MetadataRevision) {
+	if retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 || strings.Count(body, summary.Fallback[0].Body) != 1 || !review.MetadataMatches(body, job.Head, summary.MetadataRevision) {
 		t.Fatal("The interrupted reassessment lost the saved metadata or refused finding after recovery.")
 	}
 	state := decodedSummaryState(t, fixture)
@@ -159,10 +160,10 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 			if len(state.Completed) != 1 || len(state.Pending) == 0 || scenario != "refused inline finding" && len(state.Pending) != 1 {
 				t.Fatalf("The first attempt must finish A and leave B pending: %+v.", state)
 			}
-			if body := failureSummaryComment(t, fixture); priorBody != "" && !strings.Contains(body, priorBody) {
+			if body := failureSummaryComment(t, fixture); priorBody != "" && retainedMetadataCount(t, body, priorBody) != 1 {
 				t.Fatal("The partial field assessment lost its prior finding before B completed.")
 			}
-			if strings.Contains(scenario, "metadata finding") && !strings.Contains(failureSummaryComment(t, fixture), firstResult.Findings[0].Body) {
+			if strings.Contains(scenario, "metadata finding") && retainedMetadataCount(t, failureSummaryComment(t, fixture), firstResult.Findings[0].Body) != 1 {
 				t.Fatalf("The first attempt did not publish A's finding: %+v.", retainedMetadataFindings(t, failureSummaryComment(t, fixture)))
 			}
 			if scenario == "legacy metadata finding" {
@@ -172,6 +173,15 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 			}
 			firstCalls := len(model.prompts)
 			model.err = nil
+			for index, finding := range retainedMetadataFindings(t, failureSummaryComment(t, fixture)) {
+				resolution := domain.ResolutionOpen
+				if finding.Body == priorBody {
+					resolution = domain.ResolutionResolved
+				}
+				decision := metadataDecision(strconv.Itoa(index+1), resolution, firstLine)
+				decision[0].Reason = finding.Body
+				model.metadataAssessments = append(model.metadataAssessments, decision)
+			}
 			for range state.Pending {
 				model.results = append(model.results, domain.ReviewResult{})
 			}
@@ -194,7 +204,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 				}
 			}
 			body := failureSummaryComment(t, fixture)
-			if priorBody != "" && strings.Contains(body, priorBody) {
+			if priorBody != "" && retainedMetadataCount(t, body, priorBody) != 0 {
 				t.Fatal("The completed field retained a finding from the prior assessment.")
 			}
 			findings := retainedMetadataFindings(t, body)
@@ -226,7 +236,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 	}
 }
 
-func TestForcedIncompleteReviewRetainsOnlyCurrentMetadataUntilReassessment(t *testing.T) {
+func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testing.T) {
 	for _, scenario := range []string{"clear after reassessment", "replace after reassessment", "stale head", "stale revision"} {
 		t.Run(scenario, func(t *testing.T) {
 			model := &sequenceModel{err: &openai.TruncatedError{Model: testReviewModel}}
@@ -286,18 +296,19 @@ func TestForcedIncompleteReviewRetainsOnlyCurrentMetadataUntilReassessment(t *te
 			}
 			stored := retainedMetadataFindings(t, body)
 			if strings.HasPrefix(scenario, "stale") {
-				if len(stored) != 0 || strings.Contains(body, saved.Body) || strings.Contains(body, fallbackBody) {
-					t.Fatal("The incomplete review published stale findings as current metadata.")
+				if len(stored) != 1 || stored[0].Body != saved.Body || strings.Contains(body, fallbackBody) {
+					t.Fatal("The incomplete review must preserve previous metadata findings for explicit reassessment.")
 				}
 				return
 			}
-			if len(stored) != 1 || stored[0].Body != saved.Body || strings.Count(body, saved.Body) != 1 || !review.MetadataMatches(body, job.Head, diff.PullRequestRevision(pr)) {
+			if len(stored) != 1 || stored[0].Body != saved.Body || !review.MetadataMatches(body, job.Head, diff.PullRequestRevision(pr)) {
 				t.Fatal("The incomplete review lost the complete saved finding or its current context.")
 			}
 			if strings.Count(body, fallbackBody) != 1 {
 				t.Fatal("The incomplete review lost its saved refused inline finding.")
 			}
 			model.err = nil
+			model.metadataAssessments = [][]domain.MetadataFindingAssessment{metadataDecision("1", domain.ResolutionResolved, pr.Title)}
 			result := domain.ReviewResult{}
 			if scenario == "replace after reassessment" {
 				replacement := saved
@@ -317,7 +328,7 @@ func TestForcedIncompleteReviewRetainsOnlyCurrentMetadataUntilReassessment(t *te
 			}
 			body = failureSummaryComment(t, fixture)
 			stored = retainedMetadataFindings(t, body)
-			if strings.Contains(body, saved.Body) || strings.Contains(body, fallbackBody) || len(stored) != len(result.Findings) {
+			if retainedMetadataCount(t, body, saved.Body) != 0 || strings.Contains(body, fallbackBody) || len(stored) != len(result.Findings) {
 				t.Fatal("The successful reassessment retained an old finding instead of its current result.")
 			}
 			if len(stored) > 0 && stored[0].Body != result.Findings[0].Body {
@@ -354,6 +365,17 @@ func retainedMetadataFindings(t *testing.T, body string) []domain.Finding {
 	return record.Findings
 }
 
+func retainedMetadataCount(t *testing.T, body, explanation string) int {
+	t.Helper()
+	count := 0
+	for _, finding := range retainedMetadataFindings(t, body) {
+		if finding.Body == explanation {
+			count++
+		}
+	}
+	return count
+}
+
 func TestUnreadableSummaryPreservesFindingCheckpointsWithoutCompletingTheReview(t *testing.T) {
 	summary := findingDetailsSummary()
 	summary.Fallback = []domain.Finding{{
@@ -365,8 +387,8 @@ func TestUnreadableSummaryPreservesFindingCheckpointsWithoutCompletingTheReview(
 		t.Fatal("The unreadable summary must not claim that the head completed review.")
 	}
 	stored := retainedMetadataFindings(t, body)
-	if len(stored) != 1 || stored[0].Body != summary.Metadata[0].Body || strings.Count(body, stored[0].Body) != 1 {
-		t.Fatal("The unreadable summary must display and persist its metadata finding.")
+	if len(stored) != 1 || stored[0].Body != summary.Metadata[0].Body {
+		t.Fatal("The unreadable summary must persist its metadata finding.")
 	}
 	const prefix = "<!-- pr-review-agent:fallback-record:v1 "
 	_, checkpoint, found := strings.Cut(body, prefix)

@@ -38,10 +38,11 @@ func TestFindingDetailsExcludePublishedInlineFindings(t *testing.T) {
 	if strings.Contains(body, inline.Body) || strings.Contains(body, duplicate.Title) {
 		t.Fatal("The summary repeats an already published inline finding.")
 	}
-	for _, finding := range []domain.Finding{summary.Metadata[0], refused} {
-		if strings.Count(body, finding.Body) != 1 {
-			t.Fatalf("The summary must display the unique finding %q once.", finding.Title)
-		}
+	if strings.Contains(body, summary.Metadata[0].Body) {
+		t.Fatal("The summary must not repeat metadata findings from the rejection review.")
+	}
+	if strings.Count(body, refused.Body) != 1 {
+		t.Fatal("The summary must display the refused file finding once.")
 	}
 }
 
@@ -54,22 +55,12 @@ func TestFindingDetailsUseLoadedDisplayWithoutChangingCheckpoints(t *testing.T) 
 			summary.MetadataFindingsDisplay = loadFindingDisplay(t, display)
 			body := review.RenderBody(summary)
 			finding := summary.Metadata[0]
-			position := strings.Index(body, finding.Body)
-			switch display {
-			case reviewrules.FindingsExpanded:
-				if position < 0 || position > strings.Index(body, "<details>") {
-					t.Fatal("Expanded findings must appear outside the collapsed sections.")
-				}
-			case reviewrules.FindingsCollapsed:
-				start := strings.Index(body, "<details>")
-				end := strings.Index(body, "</details>")
-				if position < 0 || start < 0 || position < start || end < position {
-					t.Fatal("Collapsed findings must appear inside a closed details section.")
-				}
-			case reviewrules.FindingsHidden:
-				if position >= 0 || strings.Contains(body, finding.Title) {
-					t.Fatal("Hidden findings must not appear in the visible comment text.")
-				}
+			if strings.Contains(body, finding.Body) || strings.Contains(body, finding.Title) {
+				t.Fatal("The summary must keep metadata findings in its hidden checkpoint for every display mode.")
+			}
+			stored := retainedMetadataFindings(t, body)
+			if len(stored) != 1 || stored[0].Body != finding.Body {
+				t.Fatal("The summary must retain its recoverable metadata finding.")
 			}
 			if summary.Decision != decision || review.RenderVerdictBody(summary) != checkpoint || !strings.Contains(body, checkpoint) {
 				t.Fatal("The display setting changed the decision or metadata checkpoint.")
@@ -78,13 +69,17 @@ func TestFindingDetailsUseLoadedDisplayWithoutChangingCheckpoints(t *testing.T) 
 	}
 }
 
-func TestFailureFindingDetailsAppearOnce(t *testing.T) {
+func TestFailureMetadataFindingsRemainOnlyInTheCheckpoint(t *testing.T) {
 	summary := findingDetailsSummary()
 	summary.MetadataFindingsDisplay = loadFindingDisplay(t, reviewrules.FindingsExpanded)
 	summary.ApprovalWithheld = true
 	body := review.RenderFailureBody(summary, "The review could not finish.", "The provider request failed.")
-	if strings.Count(body, summary.Metadata[0].Body) != 1 {
-		t.Fatal("The failure summary must display each metadata finding once.")
+	if strings.Contains(body, summary.Metadata[0].Body) {
+		t.Fatal("The failure summary must not repeat the metadata finding.")
+	}
+	stored := retainedMetadataFindings(t, body)
+	if len(stored) != 1 || stored[0].Body != summary.Metadata[0].Body {
+		t.Fatal("The failure summary must retain its metadata finding for recovery.")
 	}
 }
 
@@ -144,6 +139,11 @@ func findingDetailsSummary() review.Summary {
 
 func loadFindingDisplay(t *testing.T, display reviewrules.FindingDisplay) reviewrules.FindingDisplay {
 	t.Helper()
+	return loadFindingPolicy(t, display).MetadataFindingsDisplay()
+}
+
+func loadFindingPolicy(t *testing.T, display reviewrules.FindingDisplay) reviewrules.Policy {
+	t.Helper()
 	catalogPath := filepath.Join("..", "..", "config", "review-rules.json")
 	promptsPath := filepath.Join("..", "..", "config", "review-prompts.json")
 	data, err := os.ReadFile(promptsPath)
@@ -171,5 +171,5 @@ func loadFindingDisplay(t *testing.T, display reviewrules.FindingDisplay) review
 	if err != nil {
 		t.Fatal(err)
 	}
-	return policy.MetadataFindingsDisplay()
+	return policy
 }

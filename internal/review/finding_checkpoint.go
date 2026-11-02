@@ -41,7 +41,7 @@ func (checkpoint *findingCheckpoint) restore(findings []domain.Finding, reassess
 }
 
 func (pass *chunkPass) restoreFindings(metadata metadataReviewRecord, fallback fallbackReviewRecord, reassess bool, completed []string) {
-	pass.metadata, pass.retainedMetadata = metadata.Checkpoint.restore(metadata.Findings, reassess, completed)
+	pass.metadata, pass.retainedMetadata = metadata.Checkpoint.restore(metadata.Findings, true, completed)
 	for _, finding := range pass.metadata {
 		pass.metadataSeen[metadataFindingKey(finding)] = struct{}{}
 	}

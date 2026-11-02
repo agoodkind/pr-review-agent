@@ -111,7 +111,6 @@ func (service *Service) readMetadataRecord(ctx context.Context, job domain.Revie
 }
 
 func (service *Service) restoreFindingCheckpoints(ctx context.Context, job domain.ReviewJob, pullRequest githubapp.PullRequest, chunks []diff.Chunk, completed []string) (metadataReviewRecord, fallbackReviewRecord, []string, error) {
-	var empty metadataReviewRecord
 	var record metadataReviewRecord
 	var fallback fallbackReviewRecord
 	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
@@ -129,7 +128,8 @@ func (service *Service) restoreFindingCheckpoints(ctx context.Context, job domai
 	}
 	revision := diff.PullRequestRevision(pullRequest)
 	if !found || record.Head != job.Head || record.Revision != revision {
-		record = empty
+		// Retain historical findings until explicit current-source assessment.
+		record.Checkpoint = nil
 		for _, chunk := range chunks {
 			if len(chunk.Metadata) > 0 {
 				completed = removeChunkID(completed, chunkID(chunk))

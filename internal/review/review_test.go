@@ -941,13 +941,17 @@ func TestAnInvalidModelResultLeavesItsChunkPending(t *testing.T) {
 // sequenceModel answers a fixed sequence of results, one per chunk, in the
 // order the chunk loop asks for them.
 type sequenceModel struct {
-	mu            sync.Mutex
-	results       []domain.ReviewResult
-	models        []string
-	prompts       []string
-	callCount     int
-	err           error
-	healthyPrompt string
+	metadataAssessments [][]domain.MetadataFindingAssessment
+	metadataPrompts     []string
+	metadataError       error
+	metadataHook        func()
+	mu                  sync.Mutex
+	results             []domain.ReviewResult
+	models              []string
+	prompts             []string
+	callCount           int
+	err                 error
+	healthyPrompt       string
 	// consolidations are the groupings this double answers consolidation calls
 	// with, in arrival order. A call past the end of the list is answered with
 	// no groups, which is a model saying the findings it was shown are several
