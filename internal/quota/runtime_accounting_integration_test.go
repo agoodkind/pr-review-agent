@@ -57,7 +57,7 @@ func TestUncappedProductionRuntimeRetainsAccounting(t *testing.T) {
 	summary.Usage.ProviderAttempts = []review.ProviderAttempt{{Status: review.ProviderStatus{ProviderID: provider.ID, Model: provider.Model}, Count: 1}}
 	summary.Usage.PeriodUsage = periods
 	body := review.RenderDetails(summary)
-	if !strings.Contains(body, "Recorded usage<br>22 tokens /") || strings.Contains(body, "Recorded usage<br>unavailable") {
+	if !strings.Contains(body, "Recorded usage<br>**22 tokens**") || strings.Contains(body, "Recorded usage<br>unavailable") {
 		t.Fatalf("The review must display the stored uncapped usage: %s", body)
 	}
 }

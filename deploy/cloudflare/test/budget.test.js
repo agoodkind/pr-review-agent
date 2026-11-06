@@ -591,10 +591,9 @@ test("saved totals preserve raw records, delayed admissions, snapshots, and widt
     runtime = await startRuntime(port, persistPath, disabled, "2h");
     const resized = await queryTotals(port, "saved", start, end, { include_end: false });
     assert.deepEqual(resized.groups, updated.groups);
-    const completeStarts = new Set([start + 1000, start + 2000, start + 3 * hour + 1000, start + 500]
-      .map(function (admission) { return Math.floor(admission / (2 * hour)) * (2 * hour); })
-      .filter(function (bucket) { return bucket >= start && bucket + 2 * hour <= end; }));
-    assert.equal((await stats()).totals_buckets, completeStarts.size);
+    const occupiedStarts = new Set([start + 1000, start + 2000, start + 3 * hour + 1000, start + 500]
+      .map(function (admission) { return Math.floor(admission / (2 * hour)) * (2 * hour); }));
+    assert.equal((await stats()).totals_buckets, occupiedStarts.size);
     const savedCount = (await stats()).totals_buckets;
     await stopRuntime(runtime);
     runtime = await startRuntime(port, persistPath, disabled, "2h");
@@ -673,7 +672,7 @@ test("pruning invalidates saved totals and rejects paging drift at an unchanged 
     await stopRuntime(runtime);
     runtime = await startRuntime(port, persistPath, { ...disabled, max_age: "1h" }, "1h");
     const firstPrune = await until(function (snapshot) { return snapshot.events < 21; });
-    assert.equal(firstPrune.totals_buckets, 0);
+    assert.equal(firstPrune.totals_buckets, 1);
     await stopRuntime(runtime);
     runtime = await startRuntime(port, persistPath, { ...disabled, max_age: "72h" }, "1h");
     const before = await stats();

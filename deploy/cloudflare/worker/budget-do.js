@@ -1,8 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import runtime from "../../../runtime.json" with { type: "json" };
 import usageSchema from "./budget-schema.sql";
-import totalsSchema from "./budget-totals-schema.sql";
-import usageHistory from "./budget-history.sql";
+import { usageHistoryStart } from "./budget-history.js";
 import usageReport from "./budget-report.sql";
 import usageSnapshot from "./budget-snapshot.sql";
 import usageQuery from "./budget-query.sql";
@@ -12,7 +11,7 @@ import storageStats from "./budget-storage-stats.sql";
 import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
 import { dayMilliseconds, maintainUsageStorage, normalizeSDKFingerprint, sdkFingerprint } from "./budget-retention.js";
 import { queryUsageTotals } from "./budget-totals.js";
-import { updateUsageTotals } from "./budget-totals-cache.js";
+import { initializeUsageTotals, beginUsageTotalsUpdate, finishUsageTotalsUpdate } from "./budget-totals-cache.js";
 import { durationMilliseconds } from "./budget-duration.js";
 
 const MAXIMUM_PAGE_SIZE = 500;
@@ -107,10 +106,10 @@ export class ProviderBudget extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
     this.ctx.storage.sql.exec(usageSchema);
-    this.ctx.storage.sql.exec(totalsSchema);
     this.retention = usageRetentionSettings(env.PROVIDER_USAGE_RETENTION);
     this.totalsBucketWidth = durationMilliseconds(env.PROVIDER_USAGE_TOTAL_BUCKET_WIDTH ??
       runtime.PROVIDER_USAGE_TOTAL_BUCKET_WIDTH ?? "24h", "PROVIDER_USAGE_TOTAL_BUCKET_WIDTH");
+    initializeUsageTotals(this.ctx.storage, this.totalsBucketWidth);
     this.ctx.blockConcurrencyWhile(() => this.ensureMaintenance());
   }
 
@@ -157,8 +156,7 @@ export class ProviderBudget extends DurableObject {
       return new Response("invalid usage snapshot", { status: 400 });
     }
     const snapshot = requestedSnapshot === 0 ? latest : requestedSnapshot;
-    const initialHistoryStart = this.ctx.storage.sql.exec(usageHistory, providerId, Date.now())
-      .one().history_start_ms;
+    const initialHistoryStart = usageHistoryStart(this.ctx.storage, providerId, Date.now());
     const historyStart = Math.max(initialHistoryStart, (await this.ctx.storage.get("usage_retention_cutoff_ms")) ?? 0);
     const rows = this.ctx.storage.sql.exec(usageQuery, providerId, model, after, snapshot,
       start, Number(includeStart), start, end, Number(includeEnd), end, pageSize + 1)
@@ -250,7 +248,7 @@ export class ProviderBudget extends DurableObject {
             return;
           }
         }
-        this.ctx.storage.sql.exec(usageHistory, providerId, Date.now()).toArray();
+        usageHistoryStart(this.ctx.storage, providerId, Date.now());
         if (hasLegacyDay) {
           await migrateLegacyUsage(transaction, legacyDay, providerId, model);
           const key = budgetKey("reported_tokens", legacyDay, providerId, model);
@@ -260,6 +258,7 @@ export class ProviderBudget extends DurableObject {
           }
           await transaction.put(key, used + legacyTokens);
         }
+        const totalsUpdate = beginUsageTotalsUpdate(this.ctx.storage, providerId, model, this.totalsBucketWidth);
         const inserted = this.ctx.storage.sql.exec(usageReport, providerId, model, admittedAt,
           inputTokens, outputTokens, totalTokens).one();
         this.ctx.storage.sql.exec(usageDetails, inserted.sequence,
@@ -267,7 +266,7 @@ export class ProviderBudget extends DurableObject {
         if (sdkUsage !== undefined && sdkUsage !== null) {
           this.ctx.storage.sql.exec(usageSDK, inserted.sequence, serializedSDK);
         }
-        updateUsageTotals(this.ctx.storage, providerId, model, admittedAt, inserted.sequence, this.totalsBucketWidth);
+        finishUsageTotalsUpdate(this.ctx.storage, totalsUpdate, admittedAt, inserted.sequence);
         if (reportId !== undefined) {
           await transaction.put(reportKey, fingerprint);
           await transaction.put(detailsKey, detailsFingerprint);
