@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS usage_total_cache_event_insert;
+DROP TRIGGER IF EXISTS usage_total_cache_event_update;
+DROP TRIGGER IF EXISTS usage_total_cache_event_delete;
+DROP TRIGGER IF EXISTS usage_total_cache_details_insert;
+DROP TRIGGER IF EXISTS usage_total_cache_details_delete;
+DROP TRIGGER IF EXISTS usage_total_cache_sdk_insert;
+DROP TRIGGER IF EXISTS usage_total_cache_sdk_delete;
+DROP TABLE IF EXISTS usage_total_cache_state;
+DROP TABLE IF EXISTS usage_total_buckets;
+DROP TABLE IF EXISTS usage_total_groups;

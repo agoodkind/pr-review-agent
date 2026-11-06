@@ -1,4 +1,4 @@
-import usageHistory from "./budget-history.sql";
+import { usageHistoryStart } from "./budget-history.js";
 import usageSnapshot from "./budget-snapshot.sql";
 import usageTotals from "./budget-totals.sql";
 import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
@@ -53,11 +53,16 @@ export async function queryUsageTotals(storage, payload, width) {
       return new Response("invalid usage snapshot", { status: 400 });
     }
     const snapshot = requestedSnapshot === 0 ? latest : requestedSnapshot;
-    const initialHistoryStart = storage.sql.exec(usageHistory, providerId, Date.now()).one().history_start_ms;
+    const initialHistoryStart = usageHistoryStart(storage, providerId, Date.now());
     const historyStart = Math.max(initialHistoryStart, cutoff);
-    backfillUsageTotals(storage, payload, width);
+    const first = start + Number(!includeStart);
+    const last = end - Number(!includeEnd);
+    if (first > last) {
+      return renderTotalsPage([], pageSize, after, snapshot, historyStart, generation);
+    }
+    const complete = backfillUsageTotals(storage, payload, width);
     const rows = storage.sql.exec(usageTotals, providerId, model, width, snapshot,
-      start, Number(includeStart), end, Number(includeEnd), pageSize + 1, after).toArray();
+      first, last, Number(complete), pageSize + 1, after).toArray();
     return renderTotalsPage(rows, pageSize, after, snapshot, historyStart, generation);
   });
 }

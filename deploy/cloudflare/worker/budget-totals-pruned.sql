@@ -1,6 +1,4 @@
-SELECT buckets.provider_id, buckets.model, buckets.bucket_width_ms, buckets.bucket_start_ms
-FROM usage_events AS events JOIN usage_total_buckets AS buckets
-  ON buckets.provider_id = events.provider_id AND buckets.model = events.model
-    AND events.admitted_at_ms >= buckets.bucket_start_ms
-    AND events.admitted_at_ms - buckets.bucket_start_ms < buckets.bucket_width_ms
-WHERE events.sequence = ?;
+SELECT events.provider_id, events.model, version.bucket_width_ms,
+  CAST(events.admitted_at_ms / version.bucket_width_ms AS INTEGER) * version.bucket_width_ms AS bucket_start_ms
+FROM usage_events AS events CROSS JOIN usage_total_cache_version AS version
+WHERE events.sequence = ? AND version.id = 1;

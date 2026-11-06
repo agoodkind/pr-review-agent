@@ -1,1 +1,2 @@
-DELETE FROM usage_total_groups WHERE bucket_width_ms != ?;
+DELETE FROM usage_total_groups
+WHERE provider_id = ? AND model = ? AND bucket_width_ms = ?;

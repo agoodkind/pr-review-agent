@@ -5,7 +5,15 @@ CREATE TABLE IF NOT EXISTS usage_total_buckets (
   bucket_start_ms INTEGER NOT NULL,
   max_sequence INTEGER NOT NULL,
   event_count INTEGER NOT NULL,
+  first_admitted_at_ms INTEGER NOT NULL,
+  last_admitted_at_ms INTEGER NOT NULL,
   PRIMARY KEY (provider_id, model, bucket_width_ms, bucket_start_ms)
+);
+CREATE TABLE IF NOT EXISTS usage_total_cache_state (
+  provider_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  bucket_width_ms INTEGER NOT NULL,
+  PRIMARY KEY (provider_id, model, bucket_width_ms)
 );
 CREATE TABLE IF NOT EXISTS usage_total_groups (
   provider_id TEXT NOT NULL,
