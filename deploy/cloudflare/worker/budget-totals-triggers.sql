@@ -1,3 +1,5 @@
+-- These triggers invalidate completeness markers for writes from current and older Worker versions.
+-- Insert the marker only after all source and derived writes succeed in the transaction.
 CREATE TRIGGER usage_total_cache_event_insert AFTER INSERT ON usage_events
 BEGIN
   DELETE FROM usage_total_cache_state
