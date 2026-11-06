@@ -11,7 +11,7 @@ import storageStats from "./budget-storage-stats.sql";
 import { MAXIMUM_USAGE_PAGE_BYTES } from "./budget.js";
 import { dayMilliseconds, maintainUsageStorage, normalizeSDKFingerprint, sdkFingerprint } from "./budget-retention.js";
 import { queryUsageTotals } from "./budget-totals.js";
-import { initializeUsageTotals, prepareUsageTotals, updateUsageTotals } from "./budget-totals-cache.js";
+import { initializeUsageTotals, beginUsageTotalsUpdate, finishUsageTotalsUpdate } from "./budget-totals-cache.js";
 import { durationMilliseconds } from "./budget-duration.js";
 
 const MAXIMUM_PAGE_SIZE = 500;
@@ -258,7 +258,7 @@ export class ProviderBudget extends DurableObject {
           }
           await transaction.put(key, used + legacyTokens);
         }
-        const totalsComplete = prepareUsageTotals(this.ctx.storage, providerId, model, this.totalsBucketWidth);
+        const totalsUpdate = beginUsageTotalsUpdate(this.ctx.storage, providerId, model, this.totalsBucketWidth);
         const inserted = this.ctx.storage.sql.exec(usageReport, providerId, model, admittedAt,
           inputTokens, outputTokens, totalTokens).one();
         this.ctx.storage.sql.exec(usageDetails, inserted.sequence,
@@ -266,8 +266,7 @@ export class ProviderBudget extends DurableObject {
         if (sdkUsage !== undefined && sdkUsage !== null) {
           this.ctx.storage.sql.exec(usageSDK, inserted.sequence, serializedSDK);
         }
-        updateUsageTotals(this.ctx.storage, providerId, model, admittedAt, inserted.sequence,
-          this.totalsBucketWidth, totalsComplete);
+        finishUsageTotalsUpdate(this.ctx.storage, totalsUpdate, admittedAt, inserted.sequence);
         if (reportId !== undefined) {
           await transaction.put(reportKey, fingerprint);
           await transaction.put(detailsKey, detailsFingerprint);

@@ -61,14 +61,16 @@ export function backfillUsageTotals(storage, payload, width) {
   }
 }
 
-export function prepareUsageTotals(storage, provider, model, width) {
-  const complete = storage.sql.exec(cacheState, provider, model, width).toArray().length > 0;
+// Begin before inserting raw usage, then finish with the returned cache state.
+export function beginUsageTotalsUpdate(storage, provider, model, width) {
+  const reusable = storage.sql.exec(cacheState, provider, model, width).toArray().length > 0;
   storage.sql.exec(deleteState, provider, model, width);
-  return complete;
+  return { provider, model, width, reusable };
 }
 
-export function updateUsageTotals(storage, provider, model, admittedAt, sequence, width, complete) {
-  if (!complete) {
+export function finishUsageTotalsUpdate(storage, update, admittedAt, sequence) {
+  const { provider, model, width, reusable } = update;
+  if (!reusable) {
     return;
   }
   try {
