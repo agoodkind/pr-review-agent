@@ -124,6 +124,24 @@ func TestServiceInspectionCancelsPublicationAfterTheHeadChanges(t *testing.T) {
 	}
 }
 
+func TestServiceInspectionSetupFailureSkipsModelReview(t *testing.T) {
+	fixture, job, capture := newInspectionServiceFixture(t, "unavailable")
+	_ = fixture.run(t.Context(), job)
+	assertInspectionSnapshotRemoved(t, capture)
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if len(capture.reviewRequests) != 0 {
+		t.Fatal("The service requested model review after inspection setup failed.")
+	}
+	if fixture.state.lastUpdateCheckRun["conclusion"] == "success" {
+		t.Fatal("Inspection setup failure satisfied the review check.")
+	}
+	state := decodedSummaryState(t, fixture)
+	if state.LastReviewed == job.Head || len(state.Pending) == 0 {
+		t.Fatal("Inspection setup failure completed unread source work.")
+	}
+}
+
 func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture, domain.ReviewJob, *inspectionServiceCapture) {
 	t.Helper()
 	snapshotDirectory := t.TempDir()
@@ -233,7 +251,11 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 	model := openai.NewClient(config.Config{ReviewPolicy: policy, MinimumImportance: 5, Providers: []config.ProviderConfig{{ID: "inspection", API: config.ResponsesAPI, Model: "inspection-service-model", APIKey: "example-credential", BaseURL: providerAddress}}}, providerServer.Client())
 	fixture.github = github
 	fixture.model = model
-	fixture.service = review.NewService(github, diff.NewCollector(github), model, fixture.reconciler, queue.NewKeyedLocker(), testBotLogin, 5, config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks, config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, 1, config.MaximumPromptBytes, policy)
+	var serviceGitHub review.GitHub = github
+	if scenario == "unavailable" {
+		serviceGitHub = struct{ review.GitHub }{GitHub: github}
+	}
+	fixture.service = review.NewService(serviceGitHub, diff.NewCollector(github), model, fixture.reconciler, queue.NewKeyedLocker(), testBotLogin, 5, config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks, config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, 1, config.MaximumPromptBytes, policy)
 	job := fixture.job()
 	job.Head = domain.HeadSHA(head)
 	return fixture, job, capture

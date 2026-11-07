@@ -16,7 +16,6 @@ type inspectionContextKey struct{}
 
 type inspectionState struct {
 	inspector Inspector
-	failure   error
 	requests  int
 	bytes     int
 	completed map[InspectionRequest]struct{}
@@ -24,29 +23,31 @@ type inspectionState struct {
 	support   string
 }
 
-func withInspection(ctx context.Context, github GitHub, ref domain.PullRequestRef, files []diff.FileContext, policy reviewrules.Policy, maximumBytes int) context.Context {
+func withInspection(ctx context.Context, github GitHub, ref domain.PullRequestRef, files []diff.FileContext, policy reviewrules.Policy, maximumBytes int) (context.Context, error) {
 	if policy.Limits().InspectionRequests == 0 {
-		return ctx
+		return ctx, nil
 	}
-	state := new(inspectionState)
-	state.completed = make(map[InspectionRequest]struct{})
 	source, available := github.(InspectionSource)
 	if !available {
-		state.failure = errors.New("this review cannot retrieve required supporting evidence")
-	} else {
-		state.inspector, state.failure = NewInspector(source, ref, files, policy,
-			min(policy.Limits().InspectionBytes, maximumBytes), policy.Limits().InspectionRequests)
+		return ctx, errors.New("this review cannot retrieve required supporting evidence")
 	}
-	return context.WithValue(ctx, inspectionContextKey{}, state)
+	inspector, err := NewInspector(source, ref, files, policy,
+		min(policy.Limits().InspectionBytes, maximumBytes), policy.Limits().InspectionRequests)
+	if err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(ctx, "Create required evidence inspector failed", "err", err)
+		return ctx, fmt.Errorf("create required evidence inspector: %w", err)
+	}
+	state := new(inspectionState)
+	state.inspector = inspector
+	state.completed = make(map[InspectionRequest]struct{})
+	return context.WithValue(ctx, inspectionContextKey{}, state), nil
 }
 
 func inspectReviewEvidence(ctx context.Context, requests []InspectionRequest, required string, policy reviewrules.Policy) (string, error) {
 	state, available := ctx.Value(inspectionContextKey{}).(*inspectionState)
 	if !available {
 		return "", errors.New("required evidence inspection is unavailable for this review")
-	}
-	if state.failure != nil {
-		return "", state.failure
 	}
 	if len(requests) > policy.Limits().InspectionRequests-state.requests {
 		return "", errors.New("required evidence exceeds the configured inspection request limit")

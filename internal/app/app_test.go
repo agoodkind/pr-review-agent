@@ -1,9 +1,7 @@
 package app
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -31,6 +29,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/policytest"
+	"goodkind.io/pr-review-agent/internal/testarchive"
 )
 
 const (
@@ -2949,45 +2948,19 @@ func (state *githubServerState) handleRepositoryArchive(writer http.ResponseWrit
 		}
 	}
 	state.mu.Unlock()
-	contents := make(map[string][]byte, len(encoded))
+	contents := make(map[string]string, len(encoded))
 	for name, source := range encoded {
 		content, err := base64.StdEncoding.DecodeString(source)
 		if err != nil {
 			http.Error(writer, "The fixture source has invalid encoding.", http.StatusInternalServerError)
 			return
 		}
-		contents[name] = content
+		contents[name] = string(content)
 	}
-	if err := writeAppRepositoryArchive(writer, revision, contents); err != nil {
+	writer.Header().Set("Content-Type", "application/gzip")
+	if err := testarchive.Write(writer, "fixture-"+revision+"/", contents); err != nil {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 	}
-}
-
-func writeAppRepositoryArchive(writer http.ResponseWriter, revision string, contents map[string][]byte) (writeErr error) {
-	writer.Header().Set("Content-Type", "application/gzip")
-	compressed := gzip.NewWriter(writer)
-	defer func() { writeErr = errors.Join(writeErr, compressed.Close()) }()
-	archive := tar.NewWriter(compressed)
-	defer func() { writeErr = errors.Join(writeErr, archive.Close()) }()
-	root := "fixture-" + revision + "/"
-	if err := archive.WriteHeader(&tar.Header{Name: root, Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
-		return err
-	}
-	names := make([]string, 0, len(contents))
-	for name := range contents {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		content := contents[name]
-		if err := archive.WriteHeader(&tar.Header{Name: root + name, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
-			return err
-		}
-		if _, err := io.Copy(archive, strings.NewReader(string(content))); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (state *githubServerState) handleListCheckRuns(writer http.ResponseWriter, request *http.Request) {

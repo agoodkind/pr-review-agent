@@ -1,8 +1,6 @@
 package review_test
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -32,6 +30,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/testarchive"
 )
 
 const (
@@ -7481,36 +7480,9 @@ func serviceWriteJSON(writer http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(writer).Encode(payload)
 }
 
-func writeServiceRepositoryArchive(writer http.ResponseWriter, sources map[string]string) (writeErr error) {
+func writeServiceRepositoryArchive(writer http.ResponseWriter, sources map[string]string) error {
 	writer.Header().Set("Content-Type", "application/gzip")
-	compressed := gzip.NewWriter(writer)
-	defer func() { writeErr = errors.Join(writeErr, compressed.Close()) }()
-	archive := tar.NewWriter(compressed)
-	defer func() { writeErr = errors.Join(writeErr, archive.Close()) }()
-	if err := archive.WriteHeader(&tar.Header{Name: "fixture/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
-		return err
-	}
-	paths := make([]string, 0, len(sources))
-	for filePath := range sources {
-		paths = append(paths, filePath)
-	}
-	slices.Sort(paths)
-	for _, filePath := range paths {
-		content := sources[filePath]
-		header := &tar.Header{Name: "fixture/" + filePath, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}
-		if strings.HasSuffix(filePath, "/") {
-			header.Mode = 0o755
-			header.Size = 0
-			header.Typeflag = tar.TypeDir
-		}
-		if err := archive.WriteHeader(header); err != nil {
-			return err
-		}
-		if _, err := io.WriteString(archive, content); err != nil {
-			return err
-		}
-	}
-	return nil
+	return testarchive.Write(writer, "fixture/", sources)
 }
 
 func serviceReadJSONBody(request *http.Request) (map[string]any, error) {
