@@ -381,6 +381,10 @@ func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCas
 		result.RawFindings = append(result.RawFindings, completion.Result.Findings...)
 		grounded := review.GroundedFindings(ctx, completion.Result.Findings, fileIndex, metadataIndex, chunk.Text)
 		result.Findings = append(result.Findings, review.EligibleFindings(grounded, fileIndex, metadataIndex, cfg.MinimumImportance)...)
+		if len(completion.InspectionRequests) > 0 {
+			result.Completed = false
+			result.Errors = append(result.Errors, "the review requires supporting evidence from the review service")
+		}
 	}
 	result.Usage = recorder.Summary()
 	if result.Usage.ReportedRequests == 0 || result.Usage.TotalTokens <= 0 {

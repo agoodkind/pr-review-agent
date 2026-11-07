@@ -36,7 +36,8 @@ func MarshalReviewSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.RawMessage(fmt.Sprintf(reviewSchemaTemplate, reason, policy.FileAssessmentMaximumEvidenceReferences(), ids, surfaces,
+	inspections := fmt.Sprintf(inspectionRequestSchemaTemplate, policy.Limits().InspectionRequests)
+	return json.RawMessage(fmt.Sprintf(reviewSchemaTemplate, inspections, reason, policy.FileAssessmentMaximumEvidenceReferences(), ids, surfaces,
 		descriptions["surface"], descriptions["commit_sha"], actions, descriptions["correction_action"],
 		descriptions["path"], descriptions["start_line"], descriptions["end_line"])), nil
 }
@@ -60,6 +61,7 @@ func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, er
 		return nil, requestEncodingError(err)
 	}
 	findings["maxItems"] = json.RawMessage("0")
+	properties["inspection_requests"] = json.RawMessage(fmt.Sprintf(inspectionRequestSchemaTemplate, 0))
 	properties["findings"], err = json.Marshal(findings)
 	if err != nil {
 		return nil, requestEncodingError(err)
@@ -125,10 +127,12 @@ const (
 	consolidateSchemaName    = "finding_consolidation"
 )
 
+const inspectionRequestSchemaTemplate = `{"type":"array","maxItems":%d,"items":{"type":"object","additionalProperties":false,"properties":{"operation":{"type":"string","enum":["read_file","search_repository","read_url"]},"target":{"type":"string"},"query":{"type":"string"},"start_line":{"type":"integer","minimum":0},"end_line":{"type":"integer","minimum":0},"reason":{"type":"string"}},"required":["operation","target","query","start_line","end_line","reason"]}}`
+
 // The review schema asks for findings, whether supplied omission metadata is
 // sufficient to judge the rest of the change, and a plain explanation.
 var (
-	reviewSchemaTemplate = `{"type":"object","additionalProperties":false,"properties":{"overview":{"type":"string"},"omissions_acceptable":{"type":"boolean"},"decision_reason":{"type":"string"},"file_assessments":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string"},"identity":{"type":"string"},"content_review_requirement":{"type":"string","enum":["required","unnecessary","uncertain"]},"content_kind":{"type":"string","enum":["source","generated","encrypted","binary","dependency","data","external","unknown"]},"action":{"type":"string","enum":["review","inspect_related","exclude","gap"]},"reason":%s,"evidence":{"type":"array","minItems":1,"maxItems":%d,"items":{"type":"string"}}},"required":["path","identity","content_review_requirement","content_kind","action","reason","evidence"]}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"rule_id":{"type":"string","enum":%s},"surface":{"type":"string","enum":%s,"description":%s},"commit_sha":{"type":"string","description":%s},"correction_action":{"type":"string","enum":%s,"description":%s},"path":{"type":"string","description":%s},"start_line":{"type":"integer","minimum":1,"description":%s},"end_line":{"type":"integer","minimum":1,"description":%s},"title":{"type":"string"},"body":{"type":"string"},"evidence":{"type":"string"},"claim":{"type":"string"},"suggestion":{"type":"string"},"importance":{"type":"integer","minimum":1,"maximum":10}},"required":["rule_id","surface","commit_sha","correction_action","path","start_line","end_line","title","body","evidence","claim","suggestion","importance"]}}},"required":["overview","omissions_acceptable","decision_reason","findings","file_assessments"]}`
+	reviewSchemaTemplate = `{"type":"object","additionalProperties":false,"properties":{"inspection_requests":%s,"overview":{"type":"string"},"omissions_acceptable":{"type":"boolean"},"decision_reason":{"type":"string"},"file_assessments":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string"},"identity":{"type":"string"},"content_review_requirement":{"type":"string","enum":["required","unnecessary","uncertain"]},"content_kind":{"type":"string","enum":["source","generated","encrypted","binary","dependency","data","external","unknown"]},"action":{"type":"string","enum":["review","inspect_related","exclude","gap"]},"reason":%s,"evidence":{"type":"array","minItems":1,"maxItems":%d,"items":{"type":"string"}}},"required":["path","identity","content_review_requirement","content_kind","action","reason","evidence"]}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"rule_id":{"type":"string","enum":%s},"surface":{"type":"string","enum":%s,"description":%s},"commit_sha":{"type":"string","description":%s},"correction_action":{"type":"string","enum":%s,"description":%s},"path":{"type":"string","description":%s},"start_line":{"type":"integer","minimum":1,"description":%s},"end_line":{"type":"integer","minimum":1,"description":%s},"title":{"type":"string"},"body":{"type":"string"},"evidence":{"type":"string"},"claim":{"type":"string"},"suggestion":{"type":"string"},"importance":{"type":"integer","minimum":1,"maximum":10}},"required":["rule_id","surface","commit_sha","correction_action","path","start_line","end_line","title","body","evidence","claim","suggestion","importance"]}}},"required":["inspection_requests","overview","omissions_acceptable","decision_reason","findings","file_assessments"]}`
 	reportSchemaTemplate = `{"type":"object","additionalProperties":false,"properties":{"summary":{"type":"string"},"walkthrough":{"type":"array","maxItems":%d,"items":{"type":"string"}}},"required":["summary","walkthrough"]}`
 	reconcileSchemaJSON  = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"resolutions":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"thread_node_id":{"type":"string"},"resolution":{"type":"string","enum":["resolved","open","uncertain"]},"reason":{"type":"string"}},"required":["thread_node_id","resolution","reason"]}}},"required":["resolutions"]}`)
 	// consolidateSchemaJSON groups a chunk's own findings. The candidate numbers

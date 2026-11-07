@@ -32,7 +32,17 @@ func PolicyHeader(policy reviewrules.Policy, minimumImportance int, importance r
 	if err != nil {
 		return "", err
 	}
-	return header + "\n" + policy.FileReviewInstructions(), nil
+	header += "\n" + policy.FileReviewInstructions()
+	if policy.Limits().InspectionRequests > 0 {
+		data.Total = policy.Limits().InspectionRequests
+		data.ContentBytes = policy.Limits().InspectionBytes
+		inspection, err := renderPrompt(policy, "inspection.instructions", data)
+		if err != nil {
+			return "", err
+		}
+		header += "\n" + inspection
+	}
+	return header, nil
 }
 
 // ClassificationPolicy renders scope instructions without the finding catalog.
@@ -206,8 +216,56 @@ func truncateReply(line string, budget int) string {
 
 // Completion is one model answer and the model that produced it.
 type Completion struct {
-	Result domain.ReviewResult
-	Model  string
+	Result             domain.ReviewResult
+	Model              string
+	InspectionRequests []InspectionRequest
+}
+
+// InspectionRequest selects supporting evidence without adding a finding target.
+type InspectionRequest struct {
+	Operation InspectionOperation `json:"operation"`
+	Target    string              `json:"target"`
+	Query     string              `json:"query"`
+	StartLine int                 `json:"start_line"`
+	EndLine   int                 `json:"end_line"`
+	Reason    string              `json:"reason"`
+}
+
+// InspectionOperation selects one read-only evidence operation.
+type InspectionOperation string
+
+const (
+	// InspectionReadFile reads source at the reviewed repository head.
+	InspectionReadFile InspectionOperation = "read_file"
+	// InspectionSearchRepository discovers and verifies repository references.
+	InspectionSearchRepository InspectionOperation = "search_repository"
+	// InspectionReadURL reads public documentation or dependency source.
+	InspectionReadURL InspectionOperation = "read_url"
+)
+
+// Validate rejects unsupported operations and malformed evidence requests.
+func (request InspectionRequest) Validate() error {
+	if strings.TrimSpace(request.Reason) == "" || request.StartLine < 0 || request.EndLine < 0 ||
+		(request.EndLine > 0 && request.EndLine < request.StartLine) {
+		return fmt.Errorf("inspection requires a reason and a valid line range")
+	}
+	switch request.Operation {
+	case InspectionReadFile:
+		if err := inspectionPath(request.Target, false); err != nil {
+			return err
+		}
+	case InspectionSearchRepository:
+		if strings.TrimSpace(request.Query) == "" || strings.ContainsAny(request.Query, "\r\n\x00") {
+			return fmt.Errorf("repository inspection requires a literal search query")
+		}
+	case InspectionReadURL:
+		if request.Target == "" || strings.ContainsAny(request.Target, "\r\n\x00") {
+			return fmt.Errorf("URL inspection requires a public source URL")
+		}
+	default:
+		return fmt.Errorf("unsupported inspection operation")
+	}
+	return nil
 }
 
 // Report is the model-written explanation of one completed review.

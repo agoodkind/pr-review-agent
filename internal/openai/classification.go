@@ -30,11 +30,18 @@ func (client *Client) ClassifyFileContent(ctx context.Context, prompt string) (r
 			logger.WarnContext(ctx, "Model classification result validation failed")
 			return fmt.Errorf("decode model classification result: %w", err)
 		}
+		requests, err := inspectionRequests([]byte(content))
+		if err != nil {
+			return err
+		}
+		if len(requests) > 0 {
+			return &domain.FileAssessmentValidationError{Field: "inspection_requests"}
+		}
 		result = candidate
 		return nil
 	})
 	if err != nil {
 		return review.Completion{}, err
 	}
-	return review.Completion{Result: result, Model: model}, nil
+	return review.Completion{Result: result, Model: model, InspectionRequests: nil}, nil
 }

@@ -3,6 +3,8 @@
 
 The service reviews changed repository content, pull request titles and descriptions, and commit messages. It reports a verdict for the current head and current metadata revision.
 
+During content review, the model can request repository reference searches, supporting files at the reviewed commit, and public documentation or dependency source. The service returns bounded, untrusted evidence and continues the review. The usage report includes each continuation. Supporting files do not create finding targets. A failed required inspection preserves earlier findings and leaves the chunk pending. Indexed searches provide candidate paths; the service verifies matches at the reviewed commit and does not treat an empty search as proof of absence.
+
 ## Review lifecycle
 
 The service accepts `opened`, `reopened`, `ready_for_review`, `synchronize`, and `edited` pull request events. Draft pull requests require a `ready_for_review` event. Each admitted review receives a `PR-Agent Review` check.
