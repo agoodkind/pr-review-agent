@@ -86,7 +86,7 @@ func validateFileAssessmentsDetailed(result domain.ReviewResult, shortfall struc
 		seen[assessment.Path] = true
 		assessment.Reason = sanitizeDecisionReason(assessment.Reason)
 		reviewed := assessment.Action == domain.FileActionReview && assessment.Reviewed
-		excluded := assessment.PermitsContentExclusion() && !assessment.Reviewed && policy.AllowsContentExclusion(assessment.ContentKind)
+		excluded := !assessment.Reviewed && permittedContentExclusion(assessment, file, policy)
 		if !reviewed && !excluded {
 			accepted = false
 		}
@@ -188,9 +188,9 @@ func (pass *chunkPass) fileAssessments() []domain.FileAssessment {
 	return assessments
 }
 
-func preflightExclusion(assessments []domain.FileAssessment, path string) (domain.FileAssessment, bool) {
+func preflightExclusion(assessments []domain.FileAssessment, file diff.FileContext, policy reviewrules.Policy) (domain.FileAssessment, bool) {
 	for _, assessment := range assessments {
-		if assessment.Path == path && assessment.PermitsContentExclusion() {
+		if assessment.Path == file.Path && permittedContentExclusion(assessment, file, policy) {
 			return assessment, true
 		}
 	}
@@ -206,8 +206,9 @@ func (pass *chunkPass) seedFileAssessments(policy reviewrules.Policy) {
 	pass.requests += pass.work.AssessmentRequests
 	pass.mu.Unlock()
 	var excluded []domain.FileAssessment
+	files := BuildFileIndex(pass.work.Files)
 	for _, assessment := range pass.work.FileAssessments {
-		if assessment.PermitsContentExclusion() {
+		if permittedContentExclusion(assessment, files[assessment.Path], policy) {
 			excluded = append(excluded, assessment)
 		}
 	}

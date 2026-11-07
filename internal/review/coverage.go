@@ -332,7 +332,7 @@ func excludedPromptContent(file diff.FileContext, policy reviewrules.Policy, dec
 		return true
 	}
 	for _, assessments := range decisions {
-		if _, excluded := preflightExclusion(assessments, file.Path); excluded {
+		if _, excluded := preflightExclusion(assessments, file, policy); excluded {
 			return true
 		}
 	}
@@ -364,8 +364,9 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 		return nil
 	}
 	var fileDecisions []domain.FileAssessment
+	files := BuildFileIndex(pass.work.Files)
 	for _, path := range assessmentPaths(shortfall) {
-		if assessment, exists := preflightExclusion(pass.work.FileAssessments, path); exists {
+		if assessment, exists := preflightExclusion(pass.work.FileAssessments, files[path], service.reviewPolicy); exists {
 			fileDecisions = append(fileDecisions, assessment)
 			continue
 		}

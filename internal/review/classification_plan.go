@@ -30,8 +30,7 @@ func normalizeFileAssessments(input diff.ReviewInput, assessments []domain.FileA
 		}
 		assessment.Reviewed = false
 		file := files[assessment.Path]
-		if assessment.Action == domain.FileActionExclude && (policy.RequiresFileContentReview(assessment.Path) ||
-			(file.Attributes["linguist-generated"] == "false" && assessment.ContentKind == reviewrules.ContentGenerated)) {
+		if assessment.Action == domain.FileActionExclude && exclusionRequiresContentReview(*assessment, file, policy) {
 			var data reviewrules.PromptData
 			reason, err := renderPrompt(policy, "classification.required", data)
 			if err != nil {
@@ -61,11 +60,20 @@ func selectFileContentReview(input diff.ReviewInput, validated []domain.FileAsse
 	planned := input
 	planned.Files = make([]diff.FileContext, 0, len(input.Files))
 	for _, file := range input.Files {
-		assessment, excluded := preflightExclusion(validated, file.Path)
-		if excluded && policy.AllowsContentExclusion(assessment.ContentKind) {
+		_, excluded := preflightExclusion(validated, file, policy)
+		if excluded {
 			continue
 		}
 		planned.Files = append(planned.Files, file)
 	}
 	return planned
+}
+
+func exclusionRequiresContentReview(assessment domain.FileAssessment, file diff.FileContext, policy reviewrules.Policy) bool {
+	return !policy.AllowsContentExclusion(assessment.ContentKind) || policy.RequiresFileContentReview(assessment.Path) ||
+		(file.Attributes["linguist-generated"] == "false" && assessment.ContentKind == reviewrules.ContentGenerated)
+}
+
+func permittedContentExclusion(assessment domain.FileAssessment, file diff.FileContext, policy reviewrules.Policy) bool {
+	return assessment.PermitsContentExclusion() && !exclusionRequiresContentReview(assessment, file, policy)
 }
