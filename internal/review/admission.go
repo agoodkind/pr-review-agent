@@ -210,8 +210,9 @@ func (service *Service) admitFileInput(input diff.ReviewInput, settings reviewSe
 		return empty, nil, nil, err
 	}
 	reviewableFiles := len(input.Files)
+	files := BuildFileIndex(input.Files)
 	for _, assessment := range deterministic {
-		if assessment.PermitsContentExclusion() && service.reviewPolicy.AllowsContentExclusion(assessment.ContentKind) {
+		if permittedContentExclusion(assessment, files[assessment.Path], service.reviewPolicy) {
 			reviewableFiles--
 		}
 	}

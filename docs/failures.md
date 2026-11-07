@@ -1,10 +1,8 @@
 # Behavioral failure record
 
-Every way the deployed service ran and still did the wrong thing. Program
-faults appear only where a user saw a wrong behavior. Evidence spans
-2026-08-17 through 2026-08-29, drawn from live GitHub state on four
-repositories and from the retained Workers Logs (1387 events, 2026-08-22 to
-2026-08-29, pulled per [logs.md](logs.md)).
+This record preserves observed service failures and their causes. The initial
+investigation used live GitHub state on four repositories and 1,387 retained
+Workers log events from August 22 through August 29, 2026.
 
 ## 1. A block outlives its justification
 
@@ -130,9 +128,53 @@ merge, and that pull request merged. A branch whose last commit is the one the
 author wants has neither escape, and the check exposes no run identifier an
 operator could use to re-trigger it.
 
+## 10. Readable configuration becomes an unresolved exclusion
+
+On November 7, 2026, [Configs pull request 982](https://github.com/agoodkind/configs/pull/982)
+renamed a private network and its upstream bridge. Check `128476660938`
+reviewed commit `6a8377e31ed7544def575cceda7ada7bcbb5c7f5`. The check log
+reports these measurements for its completed main review call:
+
+| Measurement | Value |
+| --- | --- |
+| Changed paths | 9 |
+| Call duration | 4.70 seconds |
+| Prompt size | 92,848 bytes |
+| Returned findings | 0 |
+| Failed chunks | 0 |
+
+The final check required action because the service treated a readable
+three-line configuration file as unfinished scope.
+
+The classifier assigned `source`, `unnecessary`, and `exclude` to the forwarding
+configuration. Its explanation said that the preview contained the complete
+file. The configured exclusion categories did not permit source exclusions.
+The planner retained the changed bytes for ordinary review but retained the
+contradictory exclusion in the assessment. Later scope evaluation trusted the
+action without checking the category permission. The file remained a reported
+omission after its changed content entered the main review chunk.
+
+The correction applies one exclusion decision to planning, evidence selection,
+admission counts, and scope completion. A forbidden exclusion becomes required
+content review. The regression uses an actual Git configuration change and the
+production planner, chunker, provider serializers, and summary renderer. A
+separate check preserves explicit category configuration and valid artifact
+exclusions. A preview does not establish that ordinary content review occurred.
+
+This incident also exposed a separate context limitation. The collector reads
+changed files, and the model cannot request unchanged supporting source.
+The changed host resource referenced an activation script that the review did
+not receive. The exclusion-policy correction does not change repository
+retrieval. Defect detection that requires that script remains unverified.
+
+The check log does not preserve the full original provider request or explain why the
+model omitted a particular defect. Scope completion and defect detection require
+separate verification.
+
 ## The common cause
 
-Failures 8 and 9 have their own causes, named above. The rest share one.
+Failures 1 through 7 share the cause below. Later entries establish separate
+causes.
 
 Runs are stateless and all or nothing. Every run starts from zero against
 the whole diff, must finish inside one fixed deadline, keeps its progress
