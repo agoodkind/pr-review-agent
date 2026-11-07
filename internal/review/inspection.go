@@ -28,7 +28,7 @@ type Inspector interface {
 	Inspect(context.Context, InspectionRequest) (string, error)
 }
 
-// InspectionSource supplies immutable repository reads and indexed path discovery.
+// InspectionSource supplies immutable repository reads and local literal search.
 type InspectionSource interface {
 	diff.Source
 	GetFileContent(context.Context, int64, domain.Repository, string, domain.HeadSHA) (githubapp.FileContent, error)
@@ -167,7 +167,7 @@ func (inspector *repositoryInspector) search(ctx context.Context, request Inspec
 	}
 	candidates := inspectionCandidatePaths(inspector.files, paths, request, inspector.maximumResults)
 	var output strings.Builder
-	output.WriteString("Repository search uses indexed discovery and original changed files. Results do not establish exhaustive absence.\n")
+	output.WriteString("Repository search checks the private snapshot at the reviewed head. Content policy and result limits restrict the returned evidence.\n")
 	fmt.Fprintf(&output, "Literal query: %s\nVerified head: %s\n", request.Query, inspector.ref.Head)
 	if output.Len() > inspector.maximumBytes {
 		return "", errors.New("inspection search metadata exceeds the configured byte limit")
@@ -188,7 +188,7 @@ func (inspector *repositoryInspector) search(ctx context.Context, request Inspec
 		matched++
 	}
 	if matched == 0 {
-		output.WriteString("The bounded candidate checks did not establish a match. Unindexed or unchecked paths may still match.\n")
+		output.WriteString("The bounded candidate checks did not establish a reviewable match. Excluded or unchecked candidates may still match.\n")
 	}
 	if output.Len() > inspector.maximumBytes {
 		return "", errors.New("inspection search metadata exceeds the configured byte limit")

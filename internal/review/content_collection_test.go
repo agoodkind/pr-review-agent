@@ -86,6 +86,28 @@ func newContentCollectionFixture(t *testing.T, model review.Model, options ...co
 			case strings.Contains(request.URL.Path, "/compare/"):
 				serviceWriteJSON(writer, http.StatusOK, map[string]any{"status": "ahead", "files": files, "merge_base_commit": map[string]any{"sha": coveragePriorHead}})
 				return
+			case strings.Contains(request.URL.Path, "/tarball/"):
+				if contentStatus.Load() != http.StatusOK {
+					http.Error(writer, "content service unavailable", int(contentStatus.Load()))
+					return
+				}
+				content := "package main\nadded\n"
+				if strings.HasSuffix(request.URL.Path, "/"+testBaseSHA) || strings.HasSuffix(request.URL.Path, "/"+coveragePriorHead) {
+					content = "package main\n"
+				}
+				modules := "[submodule \"zinit\"]\n\tpath = " + collectionSubmodulePath + "\n\turl = " + collectionSubmoduleURL + "\n"
+				if err := writeServiceRepositoryArchive(writer, map[string]string{"main.go": content, ".gitmodules": modules, collectionSubmodulePath + "/": ""}); err != nil {
+					http.Error(writer, err.Error(), http.StatusInternalServerError)
+				}
+				return
+			case strings.Contains(request.URL.Path, "/git/trees/"):
+				_, revision, _ := strings.Cut(request.URL.Path, "/git/trees/")
+				commit := collectionSubmoduleNew
+				if revision == testBaseSHA || revision == coveragePriorHead {
+					commit = collectionSubmoduleOld
+				}
+				serviceWriteJSON(writer, http.StatusOK, map[string]any{"sha": revision, "truncated": false, "tree": []map[string]string{{"path": collectionSubmodulePath, "mode": "160000", "type": "commit", "sha": commit}}})
+				return
 			case strings.Contains(request.URL.Path, "/contents/"):
 				if contentStatus.Load() != http.StatusOK {
 					http.Error(writer, "content service unavailable", int(contentStatus.Load()))

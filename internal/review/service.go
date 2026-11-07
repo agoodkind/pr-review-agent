@@ -313,6 +313,11 @@ func (service *Service) runLocked(
 	}()
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
+	ctx, closeSnapshot, err := withRepositorySnapshot(ctx, service.github, job.PullRequestRef)
+	if err != nil {
+		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureDiff, err)
+	}
+	defer closeSnapshot()
 
 	// A forced run must never stop on a conclusion an earlier run reached, since
 	// redoing that run is the whole point. Admission gives it its own check run,

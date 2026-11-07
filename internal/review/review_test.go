@@ -1,6 +1,8 @@
 package review_test
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -6957,6 +6959,16 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		})
 		return
 	}
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/tarball/") {
+		content := "package main\nadded\nsecond\nthird\n"
+		if strings.HasSuffix(request.URL.Path, "/"+testBaseSHA) || strings.HasSuffix(request.URL.Path, "/"+coveragePriorHead) {
+			content = "package main\n"
+		}
+		if err := writeServiceRepositoryArchive(writer, map[string]string{"main.go": content}); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
 
 	if request.Method == http.MethodPost && request.URL.Path == "/graphql" {
 		writeServiceThreadPage(writer, state)
@@ -7467,6 +7479,38 @@ func serviceWriteJSON(writer http.ResponseWriter, status int, payload any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+func writeServiceRepositoryArchive(writer http.ResponseWriter, sources map[string]string) (writeErr error) {
+	writer.Header().Set("Content-Type", "application/gzip")
+	compressed := gzip.NewWriter(writer)
+	defer func() { writeErr = errors.Join(writeErr, compressed.Close()) }()
+	archive := tar.NewWriter(compressed)
+	defer func() { writeErr = errors.Join(writeErr, archive.Close()) }()
+	if err := archive.WriteHeader(&tar.Header{Name: "fixture/", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		return err
+	}
+	paths := make([]string, 0, len(sources))
+	for filePath := range sources {
+		paths = append(paths, filePath)
+	}
+	slices.Sort(paths)
+	for _, filePath := range paths {
+		content := sources[filePath]
+		header := &tar.Header{Name: "fixture/" + filePath, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}
+		if strings.HasSuffix(filePath, "/") {
+			header.Mode = 0o755
+			header.Size = 0
+			header.Typeflag = tar.TypeDir
+		}
+		if err := archive.WriteHeader(header); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(archive, content); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func serviceReadJSONBody(request *http.Request) (map[string]any, error) {

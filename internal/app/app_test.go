@@ -1,7 +1,9 @@
 package app
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -2429,6 +2431,7 @@ type githubServerState struct {
 	changedFilePages     [][]map[string]any
 	changedFilePageIndex int
 	fileContent          string
+	archiveContentByHead map[string]map[string]string
 	compareFiles         []map[string]any
 	checkRuns            []map[string]any
 	nextCheckRunID       int64
@@ -2734,6 +2737,10 @@ func (state *githubServerState) listedThreadPages() int32 {
 func (state *githubServerState) setHead(head string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if state.archiveContentByHead == nil {
+		state.archiveContentByHead = make(map[string]map[string]string)
+	}
+	state.archiveContentByHead[state.currentHead] = state.repositoryArchiveContent()
 	state.currentHead = head
 }
 
@@ -2873,6 +2880,10 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		})
 		return
 	}
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/tarball/") {
+		state.handleRepositoryArchive(writer, request)
+		return
+	}
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/compare/") {
 		atomic.AddInt32(&state.comparePageFetches, 1)
@@ -2909,6 +2920,74 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	}
 
 	writer.WriteHeader(http.StatusNotFound)
+}
+
+func (state *githubServerState) repositoryArchiveContent() map[string]string {
+	contents := map[string]string{testFindingPath: state.fileContent}
+	for _, files := range [][]map[string]any{state.changedFiles, state.compareFiles} {
+		for _, file := range files {
+			name, ok := file["filename"].(string)
+			if ok && name != "" {
+				contents[name] = state.fileContent
+			}
+		}
+	}
+	return contents
+}
+
+func (state *githubServerState) handleRepositoryArchive(writer http.ResponseWriter, request *http.Request) {
+	_, revision, _ := strings.Cut(request.URL.Path, "/tarball/")
+	if _, err := domain.ParseHeadSHA(revision); err != nil {
+		http.Error(writer, "The archive requires an exact commit.", http.StatusBadRequest)
+		return
+	}
+	state.mu.Lock()
+	encoded := state.repositoryArchiveContent()
+	if revision != state.currentHead {
+		if historical, found := state.archiveContentByHead[revision]; found {
+			encoded = historical
+		}
+	}
+	state.mu.Unlock()
+	contents := make(map[string][]byte, len(encoded))
+	for name, source := range encoded {
+		content, err := base64.StdEncoding.DecodeString(source)
+		if err != nil {
+			http.Error(writer, "The fixture source has invalid encoding.", http.StatusInternalServerError)
+			return
+		}
+		contents[name] = content
+	}
+	if err := writeAppRepositoryArchive(writer, revision, contents); err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func writeAppRepositoryArchive(writer http.ResponseWriter, revision string, contents map[string][]byte) (writeErr error) {
+	writer.Header().Set("Content-Type", "application/gzip")
+	compressed := gzip.NewWriter(writer)
+	defer func() { writeErr = errors.Join(writeErr, compressed.Close()) }()
+	archive := tar.NewWriter(compressed)
+	defer func() { writeErr = errors.Join(writeErr, archive.Close()) }()
+	root := "fixture-" + revision + "/"
+	if err := archive.WriteHeader(&tar.Header{Name: root, Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		return err
+	}
+	names := make([]string, 0, len(contents))
+	for name := range contents {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		content := contents[name]
+		if err := archive.WriteHeader(&tar.Header{Name: root + name, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+			return err
+		}
+		if _, err := io.Copy(archive, strings.NewReader(string(content))); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (state *githubServerState) handleListCheckRuns(writer http.ResponseWriter, request *http.Request) {

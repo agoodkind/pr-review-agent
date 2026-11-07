@@ -23,7 +23,6 @@ func TestDiagnosticCommandsRejectReviewsWithPendingInspection(t *testing.T) {
 	binary := filepath.Join(directory, "pragent-ops")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, "./cmd/pragent-ops")
 	build.Dir = root
-	build.Env = append(os.Environ(), "GOCACHE=/private/tmp/pragent-investigation-go-cache")
 	if output, buildErr := build.CombinedOutput(); buildErr != nil {
 		t.Fatalf("Build pragent-ops: %v\n%s", buildErr, output)
 	}
