@@ -244,6 +244,9 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	ctx, cancel := modelrequest.WithTimeout(ctx, client, cfg.ReviewChunkTimeout)
 	defer cancel()
 	completion, reviewErr := client.Review(ctx, prompt)
+	if reviewErr == nil && len(completion.InspectionRequests) > 0 {
+		reviewErr = errors.New("the review requires supporting evidence from the review service")
+	}
 	result := struct {
 		Provider        string                 `json:"provider"`
 		ConfiguredModel string                 `json:"configured_model"`

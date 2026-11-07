@@ -70,10 +70,12 @@ type promptsFile struct {
 	FailureCodes            []FailureCode            `json:"failure_codes"`
 }
 
-// FormattingLimits bounds generated reports using the loaded configuration.
+// FormattingLimits bounds generated reports and supporting evidence.
 type FormattingLimits struct {
-	SummarySentences int `json:"summary_sentences"`
-	WalkthroughItems int `json:"walkthrough_items"`
+	SummarySentences   int `json:"summary_sentences"`
+	WalkthroughItems   int `json:"walkthrough_items"`
+	InspectionRequests int `json:"inspection_requests"`
+	InspectionBytes    int `json:"inspection_bytes"`
 }
 
 // PromptData is the concrete interpolation contract for configured templates.
@@ -176,6 +178,13 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	if err := validateRelationshipTemplates(prompts.RelationshipReview, compiled); err != nil {
 		return Policy{}, err
 	}
+	if prompts.Limits.InspectionRequests > 0 {
+		for _, name := range []string{"inspection.instructions", "inspection.input"} {
+			if _, exists := compiled[name]; !exists {
+				return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
+			}
+		}
+	}
 	for _, name := range []string{"report.context_omitted", "consolidate.context_omitted", "review.context_omitted", "review.path_instructions", "omissions.deferred", "coverage.requirement_conflict", "coverage.accepted", "coverage.pending", "coverage.check_title", "coverage.verdict_pending", "coverage.persistence_limit", "inline.footer", "failure.class.other", "failure.class.deadline", "failure.class.provider_unavailable", "failure.class.panic", "failure.class.daily_budget", "failure.class.usage_exceeded", "failure.class.rate_limited", "failure.dismiss", "failure.provider", "failure.service", "failure.details", "failure.row", "catalog.review", "catalog.output", "catalog.rule", "review.system", "review.input", "report.system", "report.input", "reconcile.system", "reconcile.input", "consolidate.system", "consolidate.input", "consolidate.across.input", "disputes.input", "omissions.none", "omissions.input", "omissions.decision", "pull_request.input", "structured.output", "untrusted.policy", "probe.user", "schema.finding.surface", "schema.finding.commit_sha", "schema.finding.correction_action", "schema.finding.path", "schema.finding.start_line", "schema.finding.end_line"} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
@@ -227,6 +236,10 @@ func validatePromptSettings(prompts promptsFile) error {
 	}
 	if prompts.Limits.SummarySentences <= 0 || prompts.Limits.WalkthroughItems <= 0 {
 		return fmt.Errorf("prompt formatting limits must be positive")
+	}
+	if prompts.Limits.InspectionRequests < 0 || prompts.Limits.InspectionBytes < 0 ||
+		(prompts.Limits.InspectionRequests == 0) != (prompts.Limits.InspectionBytes == 0) {
+		return fmt.Errorf("inspection request and byte limits must both be positive or both be zero")
 	}
 	if err := validateProviderColumns(prompts.ProviderDetails); err != nil {
 		return err

@@ -30,6 +30,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/testarchive"
 )
 
 const (
@@ -6957,6 +6958,16 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 		})
 		return
 	}
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/tarball/") {
+		content := "package main\nadded\nsecond\nthird\n"
+		if strings.HasSuffix(request.URL.Path, "/"+testBaseSHA) || strings.HasSuffix(request.URL.Path, "/"+coveragePriorHead) {
+			content = "package main\n"
+		}
+		if err := writeServiceRepositoryArchive(writer, map[string]string{"main.go": content}); err != nil {
+			http.Error(writer, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
 
 	if request.Method == http.MethodPost && request.URL.Path == "/graphql" {
 		writeServiceThreadPage(writer, state)
@@ -7467,6 +7478,11 @@ func serviceWriteJSON(writer http.ResponseWriter, status int, payload any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(payload)
+}
+
+func writeServiceRepositoryArchive(writer http.ResponseWriter, sources map[string]string) error {
+	writer.Header().Set("Content-Type", "application/gzip")
+	return testarchive.Write(writer, "fixture/", sources)
 }
 
 func serviceReadJSONBody(request *http.Request) (map[string]any, error) {

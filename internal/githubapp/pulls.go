@@ -209,6 +209,13 @@ func (client *Client) GetFileContent(
 	path string,
 	ref domain.HeadSHA,
 ) (FileContent, error) {
+	scope, err := client.repositorySnapshotScope(ctx, installationID, repo)
+	if err != nil {
+		return FileContent{}, err
+	}
+	if scope != nil {
+		return scope.read(ctx, path, ref)
+	}
 	escapedPath := strings.Split(path, "/")
 	for index, segment := range escapedPath {
 		escapedPath[index] = url.PathEscape(segment)
@@ -228,15 +235,7 @@ func (client *Client) GetFileContent(
 		return FileContent{}, errors.New("decode file content")
 	}
 	if response.Type == "submodule" {
-		commit, err := domain.ParseHeadSHA(response.SHA)
-		if err != nil || strings.TrimSpace(response.SubmoduleGitURL) == "" ||
-			strings.ContainsAny(response.SubmoduleGitURL, "\r\n\x00") {
-			return FileContent{}, errors.New("invalid submodule metadata")
-		}
-		return FileContent{
-			Data:     []byte(fmt.Sprintf("Subproject commit %s\n", commit)),
-			Metadata: "Submodule repository: " + response.SubmoduleGitURL,
-		}, nil
+		return submoduleFileContent(response.SHA, response.SubmoduleGitURL)
 	}
 	if response.Encoding == "none" && response.Type == "file" {
 		content, err := client.getFileBlob(ctx, installationID, repo, response)
@@ -256,6 +255,16 @@ func (client *Client) GetFileContent(
 		return FileContent{}, errors.New("decode file content")
 	}
 	return FileContent{Data: decoded, Metadata: ""}, nil
+}
+
+func submoduleFileContent(revision, repositoryURL string) (FileContent, error) {
+	commit, err := domain.ParseHeadSHA(revision)
+	if err != nil || strings.TrimSpace(repositoryURL) == "" || strings.ContainsAny(repositoryURL, "\r\n\x00") {
+		return FileContent{}, errors.New("invalid submodule metadata")
+	}
+	return FileContent{
+		Data: []byte(fmt.Sprintf("Subproject commit %s\n", commit)), Metadata: "Submodule repository: " + repositoryURL,
+	}, nil
 }
 
 // Compare returns the files changed between two commits and the commit their

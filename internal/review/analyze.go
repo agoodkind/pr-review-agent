@@ -393,9 +393,19 @@ func reviewChunkObserved(
 			Unreadable: nil,
 		}
 		if observe != nil {
-			return analysis, observe(chunk, completion.Result)
+			err = observe(chunk, completion.Result)
 		}
-		return analysis, nil
+		if err != nil || len(completion.InspectionRequests) == 0 {
+			return analysis, err
+		}
+		support, err := inspectReviewEvidence(ctx, completion.InspectionRequests, required, policy)
+		if err != nil {
+			return analysis, err
+		}
+		continued, err := reviewChunkObserved(ctx, model, chunk, minimumImportance, policy, maximumBytes,
+			files, disputes, models, requests, now, observe, support)
+		analysis.merge(continued)
+		return analysis, err
 	}
 	// Every request that failed is timed here, before the truncation branch
 	// decides what to do about it. A truncated request still spent its duration

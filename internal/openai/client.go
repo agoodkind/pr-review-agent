@@ -214,6 +214,7 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 		return review.Completion{}, fmt.Errorf("render review policy: %w", err)
 	}
 	var result domain.ReviewResult
+	var inspections []review.InspectionRequest
 	model, err := client.complete(
 		ctx,
 		prompt,
@@ -227,13 +228,28 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 				return fmt.Errorf("decode model review result: %w", decodeErr)
 			}
 			result = candidate
+			inspections, decodeErr = inspectionRequests([]byte(content))
+			if decodeErr != nil {
+				return decodeErr
+			}
 			return nil
 		},
 	)
 	if err != nil {
 		return review.Completion{}, err
 	}
-	return review.Completion{Result: result, Model: model}, nil
+	return review.Completion{Result: result, Model: model, InspectionRequests: inspections}, nil
+}
+
+func inspectionRequests(content []byte) ([]review.InspectionRequest, error) {
+	var envelope struct {
+		Requests []review.InspectionRequest `json:"inspection_requests"`
+	}
+	if err := json.Unmarshal(content, &envelope); err != nil {
+		slog.Warn("Inspection request decoding failed", "err", err)
+		return nil, fmt.Errorf("decode inspection requests: %w", err)
+	}
+	return envelope.Requests, nil
 }
 
 // Report requests the final prose for a completed deterministic review.

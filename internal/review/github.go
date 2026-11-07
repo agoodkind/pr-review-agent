@@ -15,6 +15,11 @@ type GitHub interface {
 	checkRunGitHub
 	publicationGitHub
 	issueCommentGitHub
+	repositorySnapshotGitHub
+}
+
+type repositorySnapshotGitHub interface {
+	OpenRepositorySnapshot(context.Context, int64, domain.Repository, domain.HeadSHA) (context.Context, func() error, error)
 }
 
 // checkRunGitHub loads the pull request and runs the visible check lifecycle.

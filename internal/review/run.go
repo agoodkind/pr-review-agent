@@ -673,6 +673,14 @@ func (service *Service) reviewOneChunk(
 	requests := 0
 	nothing := chunkOutcome{unread: false, shortfall: false}
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
+	inspectionRef := job.PullRequestRef
+	inspectionRef.Head = head
+	callCtx, err := withInspection(callCtx, service.github, inspectionRef, pass.work.Files, service.reviewPolicy, pass.settings.maximumPromptBytes)
+	if err != nil {
+		cancel()
+		gklog.L(ctx).ErrorContext(ctx, "Required evidence inspector setup failed", "err", err)
+		return nothing, err
+	}
 	promptShortfall := pass.structuralShortfall()
 	pullRequestContext, err := BuildPullRequestContext(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
 	if err != nil {
