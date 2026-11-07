@@ -2,8 +2,7 @@
 
 This record preserves observed service failures and their causes. The initial
 investigation used live GitHub state on four repositories and 1,387 retained
-Workers log events from August 22 through August 29, 2026. Later entries identify
-their own source cases and observation dates.
+Workers log events from August 22 through August 29, 2026.
 
 ## 1. A block outlives its justification
 
@@ -168,8 +167,7 @@ The changed host resource referenced an activation script that the review did
 not receive. The exclusion-policy correction does not change repository
 retrieval. Defect detection that requires that script remains unverified.
 
-The check log establishes the completed main request and the false scope gap.
-It does not preserve the full original provider request or explain why the
+The check log does not preserve the full original provider request or explain why the
 model omitted a particular defect. Scope completion and defect detection require
 separate verification.
 
