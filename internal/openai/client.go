@@ -2,8 +2,10 @@
 package openai
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,19 +58,22 @@ type (
 	responseEventType         string
 	responseTerminalEventType string
 	responseErrorCode         string
+	responseOutputItemType    string
 )
 
 const (
-	responseOutputTextDelta   responseEventType         = "response.output_text.delta"
-	responseCompleted         responseEventType         = "response.completed"
-	responseIncomplete        responseEventType         = "response.incomplete"
-	responseFailed            responseEventType         = "response.failed"
-	responseError             responseEventType         = "error"
-	terminalCompleted         responseTerminalEventType = "response.completed"
-	terminalIncomplete        responseTerminalEventType = "response.incomplete"
-	terminalFailed            responseTerminalEventType = "response.failed"
-	responseRateLimitExceeded responseErrorCode         = "rate_limit_exceeded"
-	responseServerError       responseErrorCode         = "server_error"
+	responseOutputTextDelta    responseEventType         = "response.output_text.delta"
+	responseCompleted          responseEventType         = "response.completed"
+	responseIncomplete         responseEventType         = "response.incomplete"
+	responseFailed             responseEventType         = "response.failed"
+	responseError              responseEventType         = "error"
+	terminalCompleted          responseTerminalEventType = "response.completed"
+	terminalIncomplete         responseTerminalEventType = "response.incomplete"
+	terminalFailed             responseTerminalEventType = "response.failed"
+	responseRateLimitExceeded  responseErrorCode         = "rate_limit_exceeded"
+	responseServerError        responseErrorCode         = "server_error"
+	responseOutputMessage      responseOutputItemType    = "message"
+	responseOutputFunctionCall responseOutputItemType    = "function_call"
 )
 
 // Client performs structured Responses requests.
@@ -228,7 +233,7 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 				return fmt.Errorf("decode model review result: %w", decodeErr)
 			}
 			result = candidate
-			inspections, decodeErr = inspectionRequests([]byte(content))
+			inspections, decodeErr = inspectionRequests(ctx, []byte(content), reviewSchemaName)
 			if decodeErr != nil {
 				return decodeErr
 			}
@@ -241,15 +246,36 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 	return review.Completion{Result: result, Model: model, InspectionRequests: inspections}, nil
 }
 
-func inspectionRequests(content []byte) ([]review.InspectionRequest, error) {
+func inspectionRequests(ctx context.Context, content []byte, schemaName string) ([]review.InspectionRequest, error) {
+	logger := gklog.L(ctx)
 	var envelope struct {
-		Requests []review.InspectionRequest `json:"inspection_requests"`
+		Requests json.RawMessage `json:"inspection_requests"`
 	}
 	if err := json.Unmarshal(content, &envelope); err != nil {
-		slog.Warn("Inspection request decoding failed", "err", err)
+		logger.WarnContext(ctx, "The client could not decode the inspection response.", "err", err)
 		return nil, fmt.Errorf("decode inspection requests: %w", err)
 	}
-	return envelope.Requests, nil
+	present := len(envelope.Requests) > 0
+	null := bytes.Equal(bytes.TrimSpace(envelope.Requests), []byte("null"))
+	attributes := []slog.Attr{
+		slog.String("schema_name", schemaName),
+		slog.Bool("inspection_requests_present", present),
+		slog.Bool("inspection_requests_null", null),
+		slog.Int("completion_bytes", len(content)),
+		slog.String("completion_sha256", fmt.Sprintf("%x", sha256.Sum256(content))),
+	}
+	if !present || null {
+		logger.LogAttrs(ctx, slog.LevelWarn, "The model did not return the required inspection request array.", attributes...)
+		return nil, errors.New("inspection_requests must be an explicit JSON array")
+	}
+	var requests []review.InspectionRequest
+	if err := json.Unmarshal(envelope.Requests, &requests); err != nil {
+		logger.WarnContext(ctx, "The model returned an invalid inspection request array.", "err", err, "schema_name", schemaName)
+		return nil, fmt.Errorf("decode inspection requests: %w", err)
+	}
+	attributes = append(attributes, slog.Int("inspection_requests", len(requests)))
+	logger.LogAttrs(ctx, slog.LevelInfo, "The client decoded the inspection request array.", attributes...)
+	return requests, nil
 }
 
 // Report requests the final prose for a completed deterministic review.
@@ -492,10 +518,9 @@ func completeWith(
 		case responseOutputTextDelta:
 			content.WriteString(event.Delta)
 		case responseCompleted, responseIncomplete, responseFailed:
+			logResponseOutputShape(ctx, target.id, schemaName, event.Response)
 			serviceTier = string(event.Response.ServiceTier)
-			if event.Response.Model != "" {
-				responseModel = event.Response.Model
-			}
+			responseModel = cmp.Or(event.Response.Model, responseModel)
 			if event.Response.JSON.Usage.Valid() {
 				usage = event.Response.Usage
 				hasUsage = true
@@ -541,6 +566,26 @@ func completeWith(
 		completionModel = responseModel
 	}
 	return result, completionModel, nil
+}
+
+func logResponseOutputShape(ctx context.Context, providerID, schemaName string, response responses.Response) {
+	messageItems := 0
+	functionItems := 0
+	otherItems := 0
+	for _, item := range response.Output {
+		switch responseOutputItemType(item.Type) {
+		case responseOutputMessage:
+			messageItems++
+		case responseOutputFunctionCall:
+			functionItems++
+		default:
+			otherItems++
+		}
+	}
+	logger := gklog.L(ctx)
+	logger.InfoContext(ctx, "The SDK received model output.", "provider_id", providerID, "schema_name", schemaName,
+		"response_id", response.ID, "native_output_present", response.JSON.Output.Valid(),
+		"message_items", messageItems, "function_call_items", functionItems, "other_items", otherItems)
 }
 
 func providerOptions(target provider) []option.RequestOption {

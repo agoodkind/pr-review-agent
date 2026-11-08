@@ -1415,17 +1415,25 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	}
 	_ = replay.Body.Close()
 	resumed.waitForCheckConclusion(t, "success")
-	settled := resumed.postWebhook(t, webhookRequestOptions{
+	settledRequest := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown",
 		body:       openedPayload(testDefectiveHead),
-	})
-	if state := settled.Header.Get(deliveryStateHeader); state != deliveryStateSettled {
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	settled := resumed.postWebhook(t, settledRequest)
+	state := settled.Header.Get(deliveryStateHeader)
+	_ = settled.Body.Close()
+	for state == deliveryStatePending && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		settled = resumed.postWebhook(t, settledRequest)
+		state = settled.Header.Get(deliveryStateHeader)
+		_ = settled.Body.Close()
+	}
+	if state != deliveryStateSettled {
 		t.Fatalf("The completed review reported delivery state %q", state)
 	}
-	_ = settled.Body.Close()
 
-	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		replayedQueued := resumed.postWebhook(t, queuedRequest)
 		state := replayedQueued.Header.Get(deliveryStateHeader)
@@ -2280,6 +2288,8 @@ func defectiveReviewContent(finding domain.Finding) string {
 		evidence = "// missing validation"
 	}
 	payload := map[string]any{
+		"overview": "", "omissions_acceptable": false, "decision_reason": "",
+		"file_assessments": []any{}, "inspection_requests": []any{},
 		"findings": []map[string]any{{
 			"rule_id":    "ground_findings",
 			"path":       finding.Path,
@@ -2299,11 +2309,11 @@ func defectiveReviewContent(finding domain.Finding) string {
 }
 
 func approveReviewContent() string {
-	return `{"findings":[]}`
+	return `{"overview":"","omissions_acceptable":false,"decision_reason":"","file_assessments":[],"findings":[],"inspection_requests":[]}`
 }
 
 func typographicReviewContent() string {
-	return `{"summary":"Issue — details","findings":[{"rule_id":"ground_findings","path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","evidence":"// missing validation","importance":9}]}`
+	return `{"inspection_requests":[],"summary":"Issue — details","findings":[{"rule_id":"ground_findings","path":"internal/app/handler.go","start_line":3,"end_line":3,"title":"Title – note","body":"Body — impact","evidence":"// missing validation","importance":9}]}`
 }
 
 func buildChangedFiles(count int) []map[string]any {
