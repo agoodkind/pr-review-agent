@@ -1,12 +1,11 @@
 package githubapp_test
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,58 +13,183 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/testgit"
 )
 
-type snapshotArchiveEntry struct {
-	header tar.Header
-	data   string
+const (
+	gitFixtureSourcePath     = "source.go"
+	gitFixtureSourceContent  = "package fixture\nvar Value = 2\n"
+	gitFixtureRepositoryName = "repository"
+	gitFixtureTokenKey       = "token"
+	gitFixtureExpiresAtKey   = "expires_at"
+	gitFixtureNumberKey      = "number"
+	gitFixtureHeadKey        = "head"
+	gitFixtureSHAKey         = "sha"
+	gitFixtureBaseKey        = "base"
+	gitFixtureTitleKey       = "title"
+	gitFixtureBodyKey        = "body"
+	gitFixtureStateKey       = "state"
+	gitFixtureOpenState      = "open"
+	gitFixtureMergedKey      = "merged"
+	gitFixtureDraftKey       = "draft"
+)
+
+type gitFixture struct {
+	client           *githubapp.Client
+	repo             domain.Repository
+	root             domain.HeadSHA
+	base             domain.HeadSHA
+	head             domain.HeadSHA
+	directory        string
+	mutex            sync.Mutex
+	transfers        int
+	gitBytes         int64
+	haves            []int
+	contentRequests  int
+	metadataRequests int
 }
 
-func snapshotTestArchive(t *testing.T, entries []snapshotArchiveEntry) []byte {
+func gitCommand(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
-	var buffer bytes.Buffer
-	compressed := gzip.NewWriter(&buffer)
-	archive := tar.NewWriter(compressed)
-	for _, entry := range entries {
-		if err := archive.WriteHeader(&entry.header); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := io.WriteString(archive, entry.data); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := archive.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := compressed.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return buffer.Bytes()
+
+	return testgit.Command(t, directory, arguments...)
 }
 
-func snapshotTestClient(t *testing.T, handler http.HandlerFunc) *githubapp.Client {
+func writeGitFixtureFile(t *testing.T, directory, name, content string) {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/app/installations/77/access_tokens" {
-			writer.Header().Set("Content-Type", "application/json")
+
+	err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func newGitFixtureRepository(t *testing.T) *gitFixture {
+	t.Helper()
+	projectRoot := t.TempDir()
+
+	directory := filepath.Join(projectRoot, "owner", "repository.git")
+
+	err := os.MkdirAll(directory, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gitCommand(t, directory, "init", "--initial-branch=main")
+	gitCommand(t, directory, "config", "uploadpack.allowAnySHA1InWant", "true")
+	gitCommand(t, directory, "config", "commit.gpgsign", "false")
+	writeGitFixtureFile(t, directory, gitFixtureSourcePath, "package fixture\nvar Value = 1\n")
+	writeGitFixtureFile(t, directory, "old.go", "package fixture\nvar Old = true\n")
+	writeGitFixtureFile(t,
+		directory,
+		"removed.go",
+		"// This obsolete source has a distinct implementation.\nfunc Removed() { panic(\"obsolete\") }\n")
+	gitCommand(t, directory, "add", ".")
+	gitCommand(t, directory, "commit", "-m", "Add original sources")
+
+	fixture := new(gitFixture)
+	fixture.repo = domain.Repository{Owner: "owner", Name: gitFixtureRepositoryName}
+	fixture.directory = directory
+	fixture.root = domain.HeadSHA(gitCommand(t, directory, "rev-parse", "HEAD"))
+	writeGitFixtureFile(t, directory, "base-only.go", "package fixture\nvar Base = true\n")
+	gitCommand(t, directory, "add", ".")
+	gitCommand(t, directory, "commit", "-m", "Add base branch file")
+	fixture.base = domain.HeadSHA(gitCommand(t, directory, "rev-parse", "HEAD"))
+	gitCommand(t, directory, "checkout", "-b", "feature", string(fixture.root))
+	writeGitFixtureFile(t, directory, gitFixtureSourcePath, gitFixtureSourceContent)
+	writeGitFixtureFile(t, directory, "added.go", "package fixture\nvar Added = true\n")
+	writeGitFixtureFile(t, directory, ".gitattributes", "added.go linguist-generated=true\n")
+	writeGitFixtureFile(t,
+		directory,
+		".gitmodules",
+		"[submodule \"module\"]\npath = lib/module\nurl = https://example.invalid/nested.git\n")
+	gitCommand(t, directory, "mv", "old.go", "renamed.go")
+	gitCommand(t, directory, "rm", "removed.go")
+
+	symlinkErr := os.Symlink(gitFixtureSourcePath, filepath.Join(directory, "link.go"))
+	if symlinkErr != nil {
+		t.Fatal(symlinkErr)
+	}
+
+	gitCommand(t, directory, "add", ".")
+	gitCommand(t, directory, "update-index", "--add", "--cacheinfo", "160000,"+string(fixture.root)+",lib/module")
+	gitCommand(t, directory, "commit", "-m", "Change feature sources")
+	fixture.head = domain.HeadSHA(gitCommand(t, directory, "rev-parse", "HEAD"))
+
+	return fixture
+}
+
+func newGitFixture(t *testing.T) *gitFixture {
+	t.Helper()
+	fixture := newGitFixtureRepository(t)
+	directory := fixture.directory
+	backend := testgit.Handler(t, directory)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		fixture.mutex.Lock()
+		defer fixture.mutex.Unlock()
+
+		if strings.HasPrefix(request.URL.Path, "/app/installations/") {
 			writer.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(writer).Encode(map[string]string{"token": "snapshot-test-token", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
+			_ = json.NewEncoder(writer).Encode(map[string]string{
+				gitFixtureTokenKey:     "git-fixture-token",
+				gitFixtureExpiresAtKey: time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
 			return
 		}
-		if strings.Contains(request.URL.Path, "/contents/") || request.URL.Path == "/search/code" {
-			t.Errorf("Repository snapshot attempted a forbidden per-file or indexed request: %s", request.URL.Path)
-			http.Error(writer, "per-file and indexed requests are forbidden", http.StatusForbidden)
+
+		if request.URL.Path == "/repos/owner/repository/pulls/7" {
+			fixture.metadataRequests++
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				gitFixtureNumberKey: 7,
+				gitFixtureHeadKey:   map[string]string{gitFixtureSHAKey: string(fixture.head)},
+				gitFixtureBaseKey:   map[string]string{gitFixtureSHAKey: string(fixture.base)},
+				gitFixtureTitleKey:  "Change fixture sources",
+				gitFixtureBodyKey:   "",
+				gitFixtureStateKey:  gitFixtureOpenState,
+				gitFixtureMergedKey: false,
+				gitFixtureDraftKey:  false,
+			})
 			return
 		}
-		handler(writer, request)
+
+		if strings.HasPrefix(request.URL.Path, "/owner/repository.git/") {
+			username, password, ok := request.BasicAuth()
+			if !ok || username != "x-access-token" || password != "git-fixture-token" {
+				t.Error("Git HTTPS did not use installation Basic authentication")
+			}
+
+			if request.Method == http.MethodPost {
+				fixture.transfers++
+
+				payload, err := io.ReadAll(request.Body)
+				if err != nil {
+					t.Error(err)
+
+					return
+				}
+
+				fixture.haves = append(fixture.haves, bytes.Count(payload, []byte("have ")))
+				request.Body = io.NopCloser(bytes.NewReader(payload))
+			}
+
+			backend.ServeHTTP(gitCountingWriter{ResponseWriter: writer, bytes: &fixture.gitBytes}, request)
+
+			return
+		}
+
+		fixture.contentRequests++
+
+		http.Error(writer, "Repository content APIs are forbidden", http.StatusForbidden)
 	}))
 	t.Cleanup(server.Close)
 	address, err := url.Parse(server.URL)
@@ -73,159 +197,200 @@ func snapshotTestClient(t *testing.T, handler http.HandlerFunc) *githubapp.Clien
 		t.Fatal(err)
 	}
 	var cfg config.Config
-	cfg.GitHubAPIBaseURL = address
-	cfg.GitHubAppID = 12345
-	examplePrivateKey := testPrivateKey(t)
-	cfg.GitHubPrivateKey = examplePrivateKey
-	return githubapp.NewClient(cfg, server.Client(), time.Now, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	cfg.GitHubAppID, cfg.GitHubPrivateKey, cfg.GitHubAPIBaseURL = 12345, testPrivateKey(t), address
+	httpClient := testgit.Client(t, server)
+	fixture.client = githubapp.NewClient(cfg, httpClient, time.Now, slog.New(slog.DiscardHandler))
+
+	t.Cleanup(func() {
+		err := fixture.client.Close()
+		if err != nil {
+			t.Error(err)
+		}
+	})
+
+	return fixture
 }
 
-func TestRepositorySnapshotUsesOnePrivateArchivePerPinnedRevision(t *testing.T) {
-	temporary := t.TempDir()
-	t.Setenv("TMPDIR", temporary)
-	repo := domain.Repository{Owner: "owner", Name: "repository"}
-	head := domain.HeadSHA(strings.Repeat("a", 40))
-	previous := domain.HeadSHA(strings.Repeat("b", 40))
-	query := `bridge " OR repo:foreign/repository`
-	current := snapshotTestArchive(t, []snapshotArchiveEntry{
-		{header: tar.Header{Name: "fixture/source.go", Typeflag: tar.TypeReg, Size: int64(len(query)), Mode: 0o600}, data: query},
-		{header: tar.Header{Name: "fixture/link.go", Typeflag: tar.TypeSymlink, Linkname: "source.go"}, data: ""},
-	})
-	old := snapshotTestArchive(t, []snapshotArchiveEntry{{header: tar.Header{Name: "fixture/source.go", Typeflag: tar.TypeReg, Size: 3, Mode: 0o600}, data: "old"}})
-	var mutex sync.Mutex
-	counts := make(map[string]int)
-	client := snapshotTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("Authorization") != "Bearer snapshot-test-token" {
-			t.Error("The archive request did not authenticate with the installation token.")
-		}
-		mutex.Lock()
-		counts[request.URL.Path]++
-		mutex.Unlock()
-		switch request.URL.Path {
-		case "/repos/owner/repository/tarball/" + string(head):
-			_, _ = writer.Write(current)
-		case "/repos/owner/repository/tarball/" + string(previous):
-			_, _ = writer.Write(old)
-		default:
-			http.Error(writer, "unexpected repository request", http.StatusNotFound)
-		}
-	})
-	ctx, closeSnapshot, err := client.OpenRepositorySnapshot(t.Context(), 77, repo, head)
+type gitCountingWriter struct {
+	http.ResponseWriter
+
+	bytes *int64
+}
+
+func (writer gitCountingWriter) Write(data []byte) (int, error) {
+	count, err := writer.ResponseWriter.Write(data)
+	*writer.bytes += int64(count)
+
+	if err != nil {
+		return count, fmt.Errorf("count Git response bytes: %w", err)
+	}
+
+	return count, nil
+}
+
+// TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests verifies
+// local collection and cached concurrent reads.
+func TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests(t *testing.T) {
+	fixture := newGitFixture(t)
+	client := fixture.client
+
+	ctx, closeSnapshot, err := client.OpenRepositorySnapshot(t.Context(), 77, fixture.repo, fixture.head)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = closeSnapshot() })
-	if len(counts) != 0 {
-		t.Fatal("Registering an unused snapshot scope downloaded repository contents.")
-	}
-	for range 3 {
-		content, err := client.GetFileContent(ctx, 77, repo, "source.go", head)
-		if err != nil || string(content.Data) != query {
-			t.Fatalf("The pinned snapshot did not provide current file contents: %v", err)
-		}
-	}
-	paths, err := client.SearchRepository(ctx, 77, repo, query)
-	if err != nil || len(paths) != 1 || paths[0] != "source.go" {
-		t.Fatalf("Local repository search did not treat the query as literal: %v, %v", paths, err)
-	}
-	link, err := client.GetFileContent(ctx, 77, repo, "link.go", head)
-	if err != nil || string(link.Data) != "source.go" || !strings.Contains(link.Metadata, "Symbolic link target text") {
-		t.Fatalf("The snapshot did not preserve the Git symlink blob: %v", err)
-	}
-	content, err := client.GetFileContent(ctx, 77, repo, "source.go", previous)
-	if err != nil || string(content.Data) != "old" {
-		t.Fatalf("The snapshot did not provide the pinned historical file: %v", err)
-	}
-	if _, err := client.GetFileContent(ctx, 78, repo, "source.go", head); err == nil {
-		t.Fatal("The snapshot accepted another installation identity.")
-	}
-	if _, err := client.GetFileContent(ctx, 77, repo, "../source.go", head); err == nil {
-		t.Fatal("The snapshot accepted a parent-directory read.")
-	}
-	if _, err := client.GetFileContent(ctx, 77, repo, "missing.go", head); err == nil {
-		t.Fatal("The snapshot did not report a missing file.")
-	}
-	if _, err := client.SearchRepository(t.Context(), 77, repo, query); err == nil {
-		t.Fatal("Repository search accepted a request without a snapshot scope.")
-	}
-	mutex.Lock()
-	if len(counts) != 2 || counts["/repos/owner/repository/tarball/"+string(head)] != 1 || counts["/repos/owner/repository/tarball/"+string(previous)] != 1 {
-		t.Errorf("Snapshot reads did not reuse one download per immutable revision: %v", counts)
-	}
-	mutex.Unlock()
-	directories, err := filepath.Glob(filepath.Join(temporary, "pragent-repository-*"))
-	if err != nil || len(directories) != 1 {
-		t.Fatalf("The snapshot did not create its private review directory: %v", err)
-	}
-	if err := filepath.WalkDir(directories[0], func(_ string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			t.Error("The private snapshot created an actual filesystem symlink.")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := closeSnapshot(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(directories[0]); !os.IsNotExist(err) {
-		t.Fatal("Closing the review did not remove its private snapshot.")
-	}
-	if _, err := client.GetFileContent(ctx, 77, repo, "source.go", head); err == nil {
-		t.Fatal("The closed scope resumed repository reads.")
-	}
-}
 
-func TestRepositorySnapshotRejectsUnsafeArchiveEntries(t *testing.T) {
-	for _, header := range []tar.Header{
-		{Name: "fixture/../../escape", Typeflag: tar.TypeReg},
-		{Name: "/absolute/source.go", Typeflag: tar.TypeReg},
-		{Name: "fixture/link", Typeflag: tar.TypeLink, Linkname: "outside"},
-		{Name: "fixture/device", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3},
-	} {
-		t.Run(header.Name, func(t *testing.T) {
-			archive := snapshotTestArchive(t, []snapshotArchiveEntry{
-				{header: tar.Header{Name: "fixture/source.go", Typeflag: tar.TypeReg, Size: 5, Mode: 0o600}, data: "valid"},
-				{header: header, data: ""},
-			})
-			client := snapshotTestClient(t, func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write(archive) })
-			repo := domain.Repository{Owner: "owner", Name: "repository"}
-			head := domain.HeadSHA(strings.Repeat("a", 40))
-			ctx, closeSnapshot, err := client.OpenRepositorySnapshot(t.Context(), 77, repo, head)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = closeSnapshot() })
-			content, err := client.GetFileContent(ctx, 77, repo, "source.go", head)
-			var apiError githubapp.APIError
-			if err == nil || len(content.Data) != 0 || errors.As(err, &apiError) {
-				t.Fatalf("The malformed archive did not prevent reading its existing source file: %v", err)
+	pullRequest, err := client.GetPullRequest(ctx, 77, fixture.repo, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ref := domain.PullRequestRef{InstallationID: 77, Repository: fixture.repo, Number: 7, Head: fixture.head}
+
+	input, err := diff.NewCollector(client).Collect(ctx, ref, pullRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertGitCollectedFiles(t, input)
+
+	comparison, err := client.Compare(ctx, 77, fixture.repo, fixture.base, fixture.head)
+	if err != nil || comparison.MergeBase != fixture.root {
+		t.Fatalf("merge base = %s, want %s: %v", comparison.MergeBase, fixture.root, err)
+	}
+
+	assertGitSpecialFiles(t, fixture, ctx, comparison)
+
+	paths, err := client.SearchRepository(ctx, 77, fixture.repo, "var Value = 2")
+	if err != nil || !slices.Equal(paths, []string{gitFixtureSourcePath}) {
+		t.Fatalf("literal search = %v: %v", paths, err)
+	}
+
+	_, foreignError := client.GetFileContent(ctx, 78, fixture.repo, gitFixtureSourcePath, fixture.head)
+	if foreignError == nil {
+		t.Fatal("A snapshot accepted another installation")
+	}
+
+	_, unsafePathError := client.GetFileContent(ctx, 77, fixture.repo, "../source.go", fixture.head)
+	if unsafePathError == nil {
+		t.Fatal("A snapshot accepted a parent path")
+	}
+
+	closeErr := closeSnapshot()
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	_, closedScopeError := client.GetFileContent(ctx, 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+	if closedScopeError == nil {
+		t.Fatal("A closed snapshot accepted a read")
+	}
+
+	fixture.mutex.Lock()
+	before := fixture.transfers
+	fixture.mutex.Unlock()
+
+	var group sync.WaitGroup
+	for range 4 {
+		group.Go(func() {
+			content, err := client.GetFileContent(t.Context(), 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+			if err != nil || string(content.Data) != gitFixtureSourceContent {
+				t.Errorf("Repeated review = %q: %v", content.Data, err)
 			}
 		})
 	}
+
+	group.Wait()
+	fixture.mutex.Lock()
+	defer fixture.mutex.Unlock()
+
+	if fixture.contentRequests != 0 || fixture.metadataRequests != 1 || fixture.transfers != before {
+		t.Fatalf("content requests=%d, metadata requests=%d, transfers=%d, before repeated reviews=%d",
+			fixture.contentRequests,
+			fixture.metadataRequests,
+			fixture.transfers,
+			before)
+	}
+
+	t.Logf("content API requests=0; metadata requests=1; initial Git transfers=%d; repeated/concurrent Git transfers=0",
+		before)
 }
 
-func TestRepositorySnapshotPreservesCancellationAndContentBounds(t *testing.T) {
-	const maximumContentBytes = 16 * 1024 * 1024
-	large := strings.Repeat("x", maximumContentBytes+1)
-	archive := snapshotTestArchive(t, []snapshotArchiveEntry{{header: tar.Header{Name: "fixture/large.go", Typeflag: tar.TypeReg, Size: int64(len(large)), Mode: 0o600}, data: large}})
-	client := snapshotTestClient(t, func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write(archive) })
-	repo := domain.Repository{Owner: "owner", Name: "repository"}
-	head := domain.HeadSHA(strings.Repeat("a", 40))
-	ctx, closeSnapshot, err := client.OpenRepositorySnapshot(t.Context(), 77, repo, head)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = closeSnapshot() })
-	canceled, cancel := context.WithCancel(ctx)
+// TestGitTransportPreservesCancellation verifies cancellation before
+// repository acquisition.
+func TestGitTransportPreservesCancellation(t *testing.T) {
+	fixture := newGitFixture(t)
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := client.GetFileContent(canceled, 77, repo, "large.go", head); !errors.Is(err, context.Canceled) {
-		t.Fatalf("The repository snapshot did not preserve cancellation: %v", err)
+
+	_, err := fixture.client.GetFileContent(ctx, 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation = %v", err)
 	}
-	if _, err := client.GetFileContent(ctx, 77, repo, "large.go", head); err == nil || !strings.Contains(err.Error(), "content response byte limit") {
-		t.Fatalf("Snapshot reads did not preserve the existing content byte limit: %v", err)
+}
+
+func assertGitCollectedFiles(t *testing.T, input diff.ReviewInput) {
+	t.Helper()
+
+	paths := make([]string, 0, len(input.Files))
+	for _, file := range input.Files {
+		paths = append(paths, file.Path)
+		if file.Path == gitFixtureSourcePath {
+			if file.CurrentContent != gitFixtureSourceContent {
+				t.Fatalf("source content = %q", file.CurrentContent)
+			}
+
+			if _, ok := file.ChangedRightLines[2]; !ok {
+				t.Fatal("The collector did not preserve changed source line 2")
+			}
+
+			if _, ok := file.ChangedRightHunks[2]; !ok {
+				t.Fatal("The collector did not retain the source hunk anchor")
+			}
+		}
+	}
+
+	want := []string{
+		".gitattributes",
+		".gitmodules",
+		"added.go",
+		"lib/module",
+		"link.go",
+		"removed.go",
+		"renamed.go",
+		gitFixtureSourcePath,
+	}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("changed paths = %v, want %v", paths, want)
+	}
+}
+
+func assertGitSpecialFiles(t *testing.T, fixture *gitFixture, ctx context.Context, comparison githubapp.Comparison) {
+	t.Helper()
+
+	client := fixture.client
+
+	for _, file := range comparison.Files {
+		if file.Path == "renamed.go" && (file.Status != "renamed" || file.PreviousPath != "old.go") {
+			t.Fatalf("rename = %+v", file)
+		}
+
+		if file.Path == "removed.go" && (file.Status != "removed" || file.Deletions != 2) {
+			t.Fatalf("deletion = %+v", file)
+		}
+	}
+
+	link, err := client.GetFileContent(ctx, 77, fixture.repo, "link.go", fixture.head)
+	if err != nil || string(link.Data) != gitFixtureSourcePath || !strings.Contains(link.Metadata,
+		"Symbolic link target text") {
+		t.Fatalf("symlink = %+v: %v", link, err)
+	}
+
+	module, err := client.GetFileContent(ctx, 77, fixture.repo, "lib/module", fixture.head)
+	if err != nil ||
+		string(module.Data) != "Subproject commit "+string(fixture.root)+"\n" ||
+		module.Metadata != "Submodule repository: https://example.invalid/nested.git" {
+		t.Fatalf("gitlink = %+v: %v", module, err)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/testgit"
 )
 
 const inspectionActivationSource = "#!/usr/bin/env bash\nset -euo pipefail\nsysctl --load=/etc/sysctl.d/forwarding.conf\nnetworkctl reload\n"
@@ -55,7 +55,7 @@ func TestServiceInspectionLoadsUnchangedSourceWithoutAddingFindingAnchors(t *tes
 		t.Fatal("The continuation must receive the unchanged activation script from the reviewed commit.")
 	}
 	if len(capture.revisions) != 1 || capture.revisions[0] != string(job.Head) {
-		t.Fatalf("Collection and inspection did not reuse one immutable repository archive: %v", capture.revisions)
+		t.Fatalf("Collection and inspection did not reuse one cached Git acquisition: %v", capture.revisions)
 	}
 	if len(capture.archivesAtReview) != 2 || capture.archivesAtReview[0] != 1 || capture.archivesAtReview[1] != 1 || len(capture.forbiddenRequests) != 0 {
 		t.Fatalf("Review source or search used individual APIs instead of the existing snapshot: archives=%v forbidden=%v", capture.archivesAtReview, capture.forbiddenRequests)
@@ -173,7 +173,8 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 	}
 	commit("Rename the upstream bridge")
 	head := strings.TrimSpace(relationshipGitCommand(t, directory, "rev-parse", "HEAD"))
-	patch := relationshipGitCommand(t, directory, "diff", "--unified=3", base, head, "--", "network.tf")
+
+	gitHandler := testgit.Handler(t, directory)
 	if err := os.WriteFile(filepath.Join(directory, "network/activate.sh"), []byte("uncommitted activation source\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +189,17 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 		}
 	}
 	githubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if strings.Contains(request.URL.Path, ".git/") {
+			if request.Method == http.MethodPost {
+				capture.mu.Lock()
+				capture.revisions = append(capture.revisions, head)
+				capture.mu.Unlock()
+			}
+
+			gitHandler.ServeHTTP(writer, request)
+
+			return
+		}
 		if request.Method == http.MethodGet {
 			switch {
 			case isPullRequestRead(request):
@@ -195,9 +207,6 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 				currentHead := fixture.state.headSHA
 				fixture.state.mu.Unlock()
 				serviceWriteJSON(writer, http.StatusOK, map[string]any{"number": testPRNumber, "state": "open", "merged": false, "draft": false, "title": "Rename the upstream bridge", "body": "The host requires the renamed bridge during network activation.", "commits": 0, "head": map[string]string{"sha": currentHead}, "base": map[string]string{"sha": base}})
-				return
-			case strings.HasSuffix(request.URL.Path, "/files"):
-				serviceWriteJSON(writer, http.StatusOK, []map[string]string{{"filename": "network.tf", "status": "modified", "patch": patch}})
 				return
 			case strings.HasSuffix(request.URL.Path, "/commits"):
 				serviceWriteJSON(writer, http.StatusOK, []any{})
@@ -207,23 +216,9 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 				capture.forbiddenRequests = append(capture.forbiddenRequests, request.URL.RequestURI())
 				capture.mu.Unlock()
 				t.Errorf("The review requested an individual source API: %s", request.URL.RequestURI())
-				http.Error(writer, "Use the pinned repository archive.", http.StatusInternalServerError)
+				http.Error(writer, "Use pinned Git objects.", http.StatusInternalServerError)
 				return
-			case strings.Contains(request.URL.Path, "/tarball/"):
-				_, revision, _ := strings.Cut(request.URL.Path, "/tarball/")
-				capture.mu.Lock()
-				capture.revisions = append(capture.revisions, revision)
-				capture.mu.Unlock()
-				command := exec.CommandContext(request.Context(), "git", "archive", "--format=tar.gz", "--prefix=fixture-"+revision+"/", revision)
-				command.Dir = directory
-				content, err := command.Output()
-				if err != nil {
-					http.Error(writer, "source does not exist at this revision", http.StatusNotFound)
-					return
-				}
-				writer.Header().Set("Content-Type", "application/gzip")
-				_, _ = writer.Write(content)
-				return
+
 			}
 		}
 		fixture.state.mu.Lock()
@@ -232,7 +227,7 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 	}))
 	t.Cleanup(githubServer.Close)
 	providerServer := inspectionServiceProvider(t, capture, scenario)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.DiscardHandler)
 	apiAddress, err := url.Parse(githubServer.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +242,22 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 	}
 	policy := policytest.Load(t)
 	examplePrivateKey := serviceTestPrivateKey(t)
-	github := githubapp.NewClient(config.Config{GitHubAppID: testGitHubAppID, GitHubPrivateKey: examplePrivateKey, GitHubAPIBaseURL: apiAddress, GitHubGraphQLURL: graphqlAddress}, githubServer.Client(), func() time.Time { return time.Unix(1_700_000_000, 0) }, logger)
+
+	var githubConfig config.Config
+
+	githubConfig.GitHubAppID = testGitHubAppID
+	githubConfig.GitHubPrivateKey = examplePrivateKey
+	githubConfig.GitHubAPIBaseURL = apiAddress
+	githubConfig.GitHubGraphQLURL = graphqlAddress
+	github := githubapp.NewClient(githubConfig,
+		testgit.Client(t,
+			githubServer),
+		func() time.Time {
+			return time.Unix(1_700_000_000,
+				0)
+		},
+		logger)
+	t.Cleanup(func() { _ = github.Close() })
 	model := openai.NewClient(config.Config{ReviewPolicy: policy, MinimumImportance: 5, Providers: []config.ProviderConfig{{ID: "inspection", API: config.ResponsesAPI, Model: "inspection-service-model", APIKey: "example-credential", BaseURL: providerAddress}}}, providerServer.Client())
 	fixture.github = github
 	fixture.model = model
@@ -267,7 +277,16 @@ func assertInspectionSnapshotRemoved(t *testing.T, capture *inspectionServiceCap
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 0 {
+
+	var snapshots []os.DirEntry
+
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "pragent-repository-") {
+			snapshots = append(snapshots, entry)
+		}
+	}
+
+	if len(snapshots) != 0 {
 		t.Fatalf("The completed service run retained repository snapshot files: %v", entries)
 	}
 }

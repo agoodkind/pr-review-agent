@@ -29,6 +29,7 @@ type repositorySnapshotScope struct {
 	directory      string
 	revisions      map[domain.HeadSHA]repositorySnapshotResult
 	closed         bool
+	pullRequest    *PullRequest
 }
 
 type repositorySnapshotResult struct {
@@ -134,7 +135,13 @@ func (scope *repositorySnapshotScope) load(ctx context.Context, ref domain.HeadS
 		}
 		scope.directory = directory
 	}
-	snapshot, err := scope.client.downloadRepositorySnapshot(ctx, scope.installationID, scope.repository, ref, scope.directory)
+
+	snapshot,
+		err := scope.client.materializeRepositorySnapshot(ctx,
+		scope.installationID,
+		scope.repository,
+		ref,
+		scope.directory)
 	scope.revisions[ref] = repositorySnapshotResult{snapshot: snapshot, err: err}
 	return snapshot, err
 }

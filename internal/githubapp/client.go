@@ -55,7 +55,7 @@ type ChangedFile struct {
 	PatchPresent bool
 	Additions    int
 	Deletions    int
-	// ChangeCountsKnown requires both counts in the GitHub response.
+	// ChangeCountsKnown confirms both counts from the complete local patch.
 	ChangeCountsKnown bool
 }
 
@@ -134,11 +134,12 @@ func (err APIError) Error() string {
 
 // Client performs authenticated GitHub App REST and GraphQL requests.
 type Client struct {
-	cfg        config.Config
-	httpClient *http.Client
-	now        func() time.Time
-	logger     *slog.Logger
-	tokens     *tokenCache
+	cfg          config.Config
+	httpClient   *http.Client
+	now          func() time.Time
+	logger       *slog.Logger
+	tokens       *tokenCache
+	repositories repositoryCache
 }
 
 // NewClient constructs a GitHub App client with installation token caching.

@@ -138,6 +138,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			summary := findingDetailsSummary()
+			summary.Head = job.Head
 			summary.MetadataRevision = diff.PullRequestRevision(pr)
 			summary.Metadata[0].Surface = domain.FindingPullRequestDescription
 			summary.Metadata[0].RuleID = "complete_sentences"
@@ -247,6 +248,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 				t.Fatal(err)
 			}
 			summary := findingDetailsSummary()
+			summary.Head = job.Head
 			summary.MetadataRevision = diff.PullRequestRevision(pr)
 			summary.Metadata[0].RuleID = "pr_title"
 			summary.Metadata[0].Body = strings.Repeat("The title omits the changed review behavior that distinguishes this fixture from other review tests. ", 4)
@@ -271,7 +273,10 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 				}),
 			}}
 			fixture.state.reviewPages = [][]map[string]any{{{
-				"id": float64(4100), "commit_id": testHeadSHA, "state": "DISMISSED",
+				"id":                         float64(4100),
+				collectionFixtureCommitIDKey: string(fixture.job().Head),
+				collectionFixtureStateKey:    collectionFixtureDismissedState,
+
 				"body": marker.Review(job.Head, domain.ReviewDecisionRequestChanges),
 				"user": map[string]any{"login": testBotLogin},
 			}}}

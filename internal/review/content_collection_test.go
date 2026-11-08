@@ -2,8 +2,6 @@ package review_test
 
 import (
 	"context"
-	"encoding/base64"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +20,27 @@ import (
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/testgit"
+)
+
+const (
+	collectionFixtureMainPath       = "main.go"
+	collectionFixtureNumberKey      = "number"
+	collectionFixtureStateKey       = "state"
+	collectionFixtureOpenState      = "open"
+	collectionFixtureMergedKey      = "merged"
+	collectionFixtureDraftKey       = "draft"
+	collectionFixtureTitleKey       = "title"
+	collectionFixtureBodyKey        = "body"
+	collectionFixtureHeadKey        = "head"
+	collectionFixtureSHAKey         = "sha"
+	collectionFixtureBaseKey        = "base"
+	collectionFixtureMessageKey     = "message"
+	collectionFixtureSearchPath     = "/search/code"
+	collectionFixturePriorDelivery  = "delivery-0"
+	collectionFixtureCommitIDKey    = "commit_id"
+	collectionFixtureRejectionState = "CHANGES_REQUESTED"
+	collectionFixtureDismissedState = "DISMISSED"
 )
 
 const (
@@ -46,80 +65,82 @@ func newContentCollectionFixture(t *testing.T, model review.Model, options ...co
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 	contentStatus := &atomic.Int32{}
 	contentStatus.Store(http.StatusOK)
-	files := []map[string]any{
-		{"filename": "main.go", "status": "modified", "patch": "@@ -1 +1,2 @@\n package main\n+added\n"},
-		{"filename": collectionSubmodulePath, "status": "modified", "patch": "@@ -1 +1 @@\n-Subproject commit " + collectionSubmoduleOld + "\n+Subproject commit " + collectionSubmoduleNew + "\n"},
-	}
+
+	directory := testgit.New(t)
+	modules := "[submodule \"zinit\"]\npath = " + collectionSubmodulePath + "\nurl = " + collectionSubmoduleURL + "\n"
+	files := map[string]string{collectionFixtureMainPath: "package main\n", ".gitmodules": modules}
+	pointers := map[string]string{collectionSubmodulePath: collectionSubmoduleOld}
 	title := "title"
 	if len(options) > 0 && options[0].onlyMetadata {
 		files = nil
+		pointers = nil
 		title = ""
 	}
+
+	base := testgit.Commit(t, directory, "Create collection base", files, pointers)
+	if files != nil {
+		files[collectionFixtureMainPath] = "package main\nadded\n"
+		pointers[collectionSubmodulePath] = collectionSubmoduleNew
+	}
+
+	head := testgit.Commit(t, directory, "Change collection sources", files, pointers)
+	fixture.head, fixture.gitBase, fixture.state.headSHA = domain.HeadSHA(head), base, head
+	gitHandler := testgit.Handler(t, directory)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodGet {
-			switch {
-			case len(options) > 0 && isPullRequestRead(request):
-				description := options[0].description
-				if options[0].currentDescription != nil {
-					description = options[0].currentDescription()
-				}
-				commitCount := len(options[0].commits)
-				if options[0].advertisedCommitCount != nil {
-					commitCount = *options[0].advertisedCommitCount
-				}
-				serviceWriteJSON(writer, http.StatusOK, map[string]any{
-					"number": testPRNumber, "state": "open", "merged": false, "draft": false,
-					"title": title, "body": description, "commits": commitCount,
-					"head": map[string]any{"sha": testHeadSHA}, "base": map[string]any{"sha": testBaseSHA},
-				})
-				return
-			case len(options) > 0 && strings.HasSuffix(request.URL.Path, "/commits"):
-				commits := make([]map[string]any, 0, len(options[0].commits))
-				for _, commit := range options[0].commits {
-					commits = append(commits, map[string]any{"sha": commit.SHA, "commit": map[string]any{"message": commit.Message}})
-				}
-				serviceWriteJSON(writer, http.StatusOK, commits)
-				return
-			case strings.HasSuffix(request.URL.Path, "/files"):
-				serviceWriteJSON(writer, http.StatusOK, files)
-				return
-			case strings.Contains(request.URL.Path, "/compare/"):
-				serviceWriteJSON(writer, http.StatusOK, map[string]any{"status": "ahead", "files": files, "merge_base_commit": map[string]any{"sha": coveragePriorHead}})
-				return
-			case strings.Contains(request.URL.Path, "/tarball/"):
-				if contentStatus.Load() != http.StatusOK {
-					http.Error(writer, "content service unavailable", int(contentStatus.Load()))
-					return
-				}
-				content := "package main\nadded\n"
-				if strings.HasSuffix(request.URL.Path, "/"+testBaseSHA) || strings.HasSuffix(request.URL.Path, "/"+coveragePriorHead) {
-					content = "package main\n"
-				}
-				modules := "[submodule \"zinit\"]\n\tpath = " + collectionSubmodulePath + "\n\turl = " + collectionSubmoduleURL + "\n"
-				if err := writeServiceRepositoryArchive(writer, map[string]string{"main.go": content, ".gitmodules": modules, collectionSubmodulePath + "/": ""}); err != nil {
-					http.Error(writer, err.Error(), http.StatusInternalServerError)
-				}
-				return
-			case strings.Contains(request.URL.Path, "/git/trees/"):
-				_, revision, _ := strings.Cut(request.URL.Path, "/git/trees/")
-				commit := collectionSubmoduleNew
-				if revision == testBaseSHA || revision == coveragePriorHead {
-					commit = collectionSubmoduleOld
-				}
-				serviceWriteJSON(writer, http.StatusOK, map[string]any{"sha": revision, "truncated": false, "tree": []map[string]string{{"path": collectionSubmodulePath, "mode": "160000", "type": "commit", "sha": commit}}})
-				return
-			case strings.Contains(request.URL.Path, "/contents/"):
-				if contentStatus.Load() != http.StatusOK {
-					http.Error(writer, "content service unavailable", int(contentStatus.Load()))
-					return
-				}
-				if strings.HasSuffix(request.URL.Path, "/"+collectionSubmodulePath) {
-					serviceWriteJSON(writer, http.StatusOK, map[string]any{"type": "submodule", "path": collectionSubmodulePath, "sha": collectionSubmoduleNew, "submodule_git_url": collectionSubmoduleURL})
-					return
-				}
-				serviceWriteJSON(writer, http.StatusOK, map[string]any{"type": "file", "encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte("package main\nadded\n"))})
+		if strings.Contains(request.URL.Path, ".git/") {
+			if contentStatus.Load() != http.StatusOK {
+				http.Error(writer, "Git service unavailable", int(contentStatus.Load()))
 				return
 			}
+
+			gitHandler.ServeHTTP(writer, request)
+
+			return
+		}
+
+		if request.Method == http.MethodGet && isPullRequestRead(request) {
+			description, commitCount := contentCollectionMetadata(options)
+
+			fixture.state.mu.Lock()
+			currentHead := fixture.state.headSHA
+			fixture.state.mu.Unlock()
+			serviceWriteJSON(writer,
+				http.StatusOK,
+				map[string]any{
+					collectionFixtureNumberKey: testPRNumber,
+					collectionFixtureStateKey:  collectionFixtureOpenState,
+					collectionFixtureMergedKey: false,
+					collectionFixtureDraftKey:  false,
+					collectionFixtureTitleKey:  title,
+					collectionFixtureBodyKey:   description,
+					"commits":                  commitCount,
+					collectionFixtureHeadKey:   map[string]string{collectionFixtureSHAKey: currentHead},
+					collectionFixtureBaseKey:   map[string]string{collectionFixtureSHAKey: base},
+				})
+
+			return
+		}
+
+		if request.Method == http.MethodGet && len(options) > 0 && strings.HasSuffix(request.URL.Path, "/commits") {
+			commits := make([]map[string]any, 0, len(options[0].commits))
+			for _, commit := range options[0].commits {
+				commits = append(commits,
+					map[string]any{
+						collectionFixtureSHAKey: commit.SHA,
+						"commit":                map[string]any{collectionFixtureMessageKey: commit.Message},
+					})
+			}
+
+			serviceWriteJSON(writer, http.StatusOK, commits)
+
+			return
+		}
+
+		if contentCollectionAPIRequest(request) {
+			t.Errorf("Unexpected repository-content API request: %s", request.URL.Path)
+			http.Error(writer, "Repository-content APIs are forbidden", http.StatusForbidden)
+
+			return
 		}
 		fixture.state.mu.Lock()
 		defer fixture.state.mu.Unlock()
@@ -134,14 +155,28 @@ func newContentCollectionFixture(t *testing.T, model review.Model, options ...co
 	if err != nil {
 		t.Fatal(err)
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	client := githubapp.NewClient(config.Config{
-		GitHubAppID: testGitHubAppID, GitHubPrivateKey: serviceTestPrivateKey(t),
-		GitHubBotLogin: testBotLogin, GitHubAPIBaseURL: apiURL, GitHubGraphQLURL: graphqlURL,
-	}, server.Client(), func() time.Time { return time.Unix(1_700_000_000, 0) }, logger)
+
+	logger := slog.New(slog.DiscardHandler)
+
+	var githubConfig config.Config
+
+	githubConfig.GitHubAppID = testGitHubAppID
+	examplePrivateKey := serviceTestPrivateKey(t)
+	githubConfig.GitHubPrivateKey = examplePrivateKey
+	githubConfig.GitHubBotLogin = testBotLogin
+	githubConfig.GitHubAPIBaseURL = apiURL
+	githubConfig.GitHubGraphQLURL = graphqlURL
+	client := githubapp.NewClient(githubConfig,
+		testgit.Client(t,
+			server),
+		func() time.Time {
+			return time.Unix(1_700_000_000,
+				0)
+		},
+		logger)
+	t.Cleanup(func() { _ = client.Close() })
 	fixture.github = client
 	fixture.service = review.NewService(client, diff.NewCollector(client), model, fixture.reconciler, queue.NewKeyedLocker(), testBotLogin, testMinimumImportance, config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks, config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, config.MaximumChunkConcurrency, config.MaximumPromptBytes, policytest.Load(t))
-
 	return fixture, contentStatus
 }
 
@@ -166,13 +201,27 @@ func TestContentCollectionSubmoduleCleanRunApproves(t *testing.T) {
 func TestContentCollectionFailureDismissesRejectionAndRetryRecovers(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture, contentStatus := newContentCollectionFixture(t, model)
-	prior := marker.State{LastReviewed: domain.HeadSHA(coveragePriorHead), RunID: "delivery-0", Status: marker.StateDone, Pending: []string{"pending-chunk"}, Completed: []string{"completed-chunk"}}
+	prior := marker.State{
+		PolicyRevision: "", ForcedBy: "", Unread: nil, LastReviewed: domain.HeadSHA(fixture.collectionBase()),
+		RunID:     collectionFixturePriorDelivery,
+		Status:    marker.StateDone,
+		Pending:   []string{"pending-chunk"},
+		Completed: []string{"completed-chunk"},
+	}
 	fixture.state.issueComments = []map[string]any{{"id": float64(2000), "body": "## Review\n" + marker.EncodeState(prior), "user": map[string]any{"login": testBotLogin}}}
-	fixture.state.reviewPages = [][]map[string]any{{{"id": float64(4100), "commit_id": coveragePriorHead, "state": "CHANGES_REQUESTED", "body": "Changes requested.\n" + marker.Review(domain.HeadSHA(coveragePriorHead), domain.ReviewDecisionRequestChanges), "user": map[string]any{"login": testBotLogin}}}}
+	fixture.state.reviewPages = [][]map[string]any{{{
+		"id":                         float64(4100),
+		collectionFixtureCommitIDKey: fixture.collectionBase(),
+		collectionFixtureStateKey:    collectionFixtureRejectionState,
+		collectionFixtureBodyKey: "Changes requested.\n" + marker.Review(domain.HeadSHA(fixture.collectionBase()),
+			domain.ReviewDecisionRequestChanges),
+		"user": map[string]any{"login": testBotLogin},
+	}}}
 	contentStatus.Store(http.StatusBadGateway)
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run succeeded after GitHub content fetch returned 502")
 	}
+
 	if fixture.state.lastSubmitReview != nil || fixture.state.lastUpdateReview != nil || len(fixture.state.dismissals) != 1 || fixture.state.dismissals[0]["review_id"] != "4100" {
 		t.Fatalf("failed read did not withdraw only the previous rejection: submit=%v update=%v dismissals=%v", fixture.state.lastSubmitReview, fixture.state.lastUpdateReview, fixture.state.dismissals)
 	}
@@ -193,7 +242,9 @@ func TestContentCollectionFailureDismissesRejectionAndRetryRecovers(t *testing.T
 		t.Fatalf("recovered Run: %v", err)
 	}
 	assertContentCollectionApproved(t, fixture)
-	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA || len(fixture.state.submittedReviews) != 1 {
+
+	if fixture.state.lastSubmitReview[collectionFixtureCommitIDKey] != string(fixture.job().Head) ||
+		len(fixture.state.submittedReviews) != 1 {
 		t.Fatalf("recovered review = %v, want one approval on current head", fixture.state.submittedReviews)
 	}
 	if len(fixture.state.issueComments) != 1 || fixture.state.issueCommentUpdates == 0 {
@@ -221,22 +272,32 @@ func TestContentCollectionSubmoduleFindingRequestsChanges(t *testing.T) {
 func TestContentCollectionForcedRunRecoversIncorrectlyReviewedHead(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture, _ := newContentCollectionFixture(t, model)
-	seedStateNaming(fixture, testHeadSHA)
+	seedStateNaming(fixture, string(fixture.job().Head))
 	fixture.state.reviewPages = [][]map[string]any{{{
-		"id": float64(4100), "commit_id": testHeadSHA, "state": "CHANGES_REQUESTED",
-		"body": "Changes requested.\n" + testUnreviewedHeadReason + "\n" + marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
+		"id":                         float64(4100),
+		collectionFixtureCommitIDKey: string(fixture.job().Head),
+		collectionFixtureStateKey:    collectionFixtureRejectionState,
+
+		collectionFixtureBodyKey: "Changes requested.\n" + testUnreviewedHeadReason + "\n" +
+			marker.Review(fixture.job().Head,
+				domain.ReviewDecisionRequestChanges),
+
 		"user": map[string]any{"login": testBotLogin},
 	}}}
 	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
 		t.Fatalf("forced Run: %v", err)
 	}
 	assertContentCollectionApproved(t, fixture)
+
 	if len(model.prompts) != 1 || !strings.Contains(model.prompts[0], collectionSubmoduleNew) || !strings.Contains(model.prompts[0], collectionSubmoduleURL) {
 		t.Fatalf("forced run did not analyze current submodule context: prompts=%v", model.prompts)
 	}
-	if fixture.state.lastSubmitReview["commit_id"] != testHeadSHA || len(fixture.state.submittedReviews) != 1 {
+
+	if fixture.state.lastSubmitReview[collectionFixtureCommitIDKey] != string(fixture.job().Head) ||
+		len(fixture.state.submittedReviews) != 1 {
 		t.Fatalf("forced review = %v, want one approval on the current head", fixture.state.submittedReviews)
 	}
+
 	if len(fixture.state.issueComments) != 1 || fixture.state.issueComments[0]["id"] != float64(2000) || fixture.state.issueCommentUpdates == 0 {
 		t.Fatalf("forced run replaced original summary: comments=%v", fixture.state.issueComments)
 	}
@@ -254,7 +315,40 @@ func assertContentCollectionApproved(t *testing.T, fixture *serviceFixture) {
 		t.Fatal("successful content collection reports incomplete coverage")
 	}
 	state := decodedSummaryState(t, fixture)
-	if state.LastReviewed != domain.HeadSHA(testHeadSHA) || len(state.Pending) != 0 {
+	if state.LastReviewed != domain.HeadSHA(string(fixture.job().Head)) || len(state.Pending) != 0 {
 		t.Fatalf("completed run checkpoint = %+v, want reviewed head and no pending work", state)
 	}
+}
+
+func contentCollectionAPIRequest(request *http.Request) bool {
+	endpoints := []string{
+		"/contents/", "/git/trees/", "/git/blobs/", "/compare/", "/tarball/", collectionFixtureSearchPath,
+	}
+	for _, endpoint := range endpoints {
+		if strings.Contains(request.URL.Path, endpoint) {
+			return true
+		}
+	}
+
+	return strings.HasSuffix(request.URL.Path, "/files")
+}
+
+func contentCollectionMetadata(options []contentCollectionOptions) (string, int) {
+	if len(options) == 0 {
+		return "", 0
+	}
+
+	option := options[0]
+
+	description := option.description
+	if option.currentDescription != nil {
+		description = option.currentDescription()
+	}
+
+	commitCount := len(option.commits)
+	if option.advertisedCommitCount != nil {
+		commitCount = *option.advertisedCommitCount
+	}
+
+	return description, commitCount
 }

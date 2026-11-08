@@ -24,7 +24,10 @@ func TestMetadataRefreshRejectsAnUnterminatedSummaryCheckpoint(t *testing.T) {
 	prior.Metadata = []domain.Finding{reassessmentFinding()}
 	prior.MetadataRevision = "previous-metadata-revision"
 	fixture.state.reviewPages = [][]map[string]any{{{
-		"id": float64(4100), "commit_id": testHeadSHA, "state": "CHANGES_REQUESTED",
+		"id":                         float64(4100),
+		collectionFixtureCommitIDKey: string(fixture.job().Head),
+		collectionFixtureStateKey:    collectionFixtureRejectionState,
+
 		"body": review.RenderVerdictBody(prior), "user": map[string]any{"login": testBotLogin},
 	}}}
 	state := marker.State{LastReviewed: job.Head, RunID: "previous-review", Status: marker.StateDone}

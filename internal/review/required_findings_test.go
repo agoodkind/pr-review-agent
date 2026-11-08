@@ -267,7 +267,10 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 					body = ""
 				}
 				fixture.state.reviewPages = [][]map[string]any{{{
-					"id": float64(4100), "commit_id": testHeadSHA, "state": "CHANGES_REQUESTED",
+					"id":                         float64(4100),
+					collectionFixtureCommitIDKey: string(fixture.job().Head),
+					collectionFixtureStateKey:    collectionFixtureRejectionState,
+
 					"body": body,
 					"user": map[string]any{"login": testBotLogin},
 				}}}
@@ -289,6 +292,7 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+
 			if !review.MetadataMatches(body, job.Head, diff.PullRequestRevision(pullRequest)) || len(fixture.state.issueComments) != 1 || fixture.state.issueComments[0]["id"] != summaryID || fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
 				t.Fatal("The failed publication must preserve the current assessment in the original summary and fail its check.")
 			}
@@ -298,6 +302,7 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 			if err := fixture.run(t.Context(), job); err != nil {
 				t.Fatal(err)
 			}
+
 			if len(model.prompts) != 1 || len(model.metadataPrompts) != 1 || len(fixture.state.issueComments) != 1 || fixture.state.issueComments[0]["id"] != summaryID {
 				t.Fatal("The publication retry must reuse the saved assessment and original summary without another model request.")
 			}
@@ -316,6 +321,7 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 			if metadataReviewCount != 1 {
 				t.Fatal("The publication retry must publish the newly assessed finding and exact correction in one metadata rejection.")
 			}
+
 			if operation == "empty rejection submit" && (len(reviews) != 2 || fixture.state.reviewPages[0][0]["id"] != float64(4100) || fixture.state.reviewPages[0][0]["body"] != "") {
 				t.Fatal("The publication retry must retain the original empty rejection alongside one metadata rejection.")
 			}
@@ -423,13 +429,19 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 				if original["id"] != originalID || original["commit_id"] != testStaleHeadSHA || original["body"] != originalBody {
 					t.Fatal("The current-head projection must not overwrite the historical review or its old-head checkpoint.")
 				}
+
 				if len(fixture.state.submittedReviews) != expectedReviews || len(fixture.state.issueComments) != 1 || fixture.state.issueComments[0]["id"] != summaryID {
 					t.Fatal("The projection must preserve one summary and publish a current-head rejection only when its visible content changes.")
 				}
 				if scenario != "unchanged" {
 					native := fixture.state.submittedReviews[1]
 					body, ok := native["body"].(string)
-					if !ok || native["commit_id"] != testHeadSHA || native["state"] != "CHANGES_REQUESTED" || strings.Count(body, finding.Body) != 1 || strings.Count(body, finding.Suggestion) != 1 {
+					if !ok ||
+						native[collectionFixtureCommitIDKey] != string(fixture.job().Head) ||
+						native[collectionFixtureStateKey] != collectionFixtureRejectionState ||
+						strings.Count(body,
+							finding.Body) != 1 || strings.Count(body,
+						finding.Suggestion) != 1 {
 						t.Fatalf("The current-head rejection must contain the complete current metadata finding and correction: %v.", native)
 					}
 					head, found := marker.FindReview(body)
@@ -449,6 +461,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertPublished(t)
+
 			if len(model.prompts) != freshCalls || len(model.metadataPrompts) != reassessmentCalls || scenario != "unchanged" && fixture.state.submittedReviews[1]["id"] != currentReviewID {
 				t.Fatal("The next refresh must preserve the rejection and reuse the completed model assessment.")
 			}

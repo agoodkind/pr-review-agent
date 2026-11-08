@@ -6286,6 +6286,8 @@ type serviceFixtureOptions struct {
 }
 
 type serviceFixture struct {
+	head       domain.HeadSHA
+	gitBase    string
 	service    *review.Service
 	github     *githubapp.Client
 	state      *serviceServerState
@@ -6925,13 +6927,17 @@ func (fixture *serviceFixture) run(ctx context.Context, job domain.ReviewJob) er
 }
 
 func (fixture *serviceFixture) job() domain.ReviewJob {
+	head := fixture.head
+	if head == "" {
+		head = domain.HeadSHA(testHeadSHA)
+	}
 	return domain.ReviewJob{
 		DeliveryID: "delivery-1",
 		PullRequestRef: domain.PullRequestRef{
 			Repository:     domain.Repository{Owner: "owner", Name: "repo"},
 			Number:         testPRNumber,
 			InstallationID: 99,
-			Head:           domain.HeadSHA(testHeadSHA),
+			Head:           head,
 		},
 	}
 }
@@ -6943,6 +6949,14 @@ func (fixture *serviceFixture) forcedJob() domain.ReviewJob {
 	job.DeliveryID = "delivery-forced"
 	job.Forced = true
 	return job
+}
+
+func (fixture *serviceFixture) collectionBase() string {
+	if fixture.gitBase != "" {
+		return fixture.gitBase
+	}
+
+	return coveragePriorHead
 }
 
 func handleServiceRequest(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {

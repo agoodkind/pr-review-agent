@@ -1,13 +1,11 @@
 package review_test
 
 import (
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,6 +18,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/policytest"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/testgit"
 )
 
 type inspectionGitFixture struct {
@@ -52,12 +51,8 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 	relationshipGitCommand(t, directory, "add", "--all")
 	relationshipGitCommand(t, directory, "-c", "user.name=Integration Test", "-c", "user.email=integration@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "Create inspection sources\n\nCo-authored-by: Codex <noreply@openai.com>")
 	head := strings.TrimSpace(relationshipGitCommand(t, directory, "rev-parse", "HEAD"))
-	archiveCommand := exec.CommandContext(t.Context(), "git", "archive", "--format=tar.gz", "--prefix=fixture-"+head+"/", head)
-	archiveCommand.Dir = directory
-	archive, err := archiveCommand.Output()
-	if err != nil {
-		t.Fatal(err)
-	}
+
+	gitHandler := testgit.Handler(t, directory)
 	if err := os.WriteFile(filepath.Join(directory, "activate.sh"), []byte("uncommitted source must not appear\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -66,11 +61,14 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 		switch {
 		case request.URL.Path == "/app/installations/99/access_tokens":
 			serviceWriteJSON(writer, http.StatusCreated, map[string]string{"token": "inspection-test-token", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
-		case request.URL.Path == "/repos/owner/repo/tarball/"+head:
-			fixture.mu.Lock()
-			fixture.revisions = append(fixture.revisions, head)
-			fixture.mu.Unlock()
-			_, _ = writer.Write(archive)
+		case strings.Contains(request.URL.Path, ".git/"):
+			if request.Method == http.MethodPost {
+				fixture.mu.Lock()
+				fixture.revisions = append(fixture.revisions, head)
+				fixture.mu.Unlock()
+			}
+
+			gitHandler.ServeHTTP(writer, request)
 		case strings.Contains(request.URL.Path, "/contents/") || request.URL.Path == "/search/code":
 			t.Errorf("Repository inspection attempted a per-file or indexed API request: %s", request.URL.Path)
 			http.Error(writer, "per-file and indexed reads are forbidden", http.StatusForbidden)
@@ -84,7 +82,18 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 		t.Fatal(err)
 	}
 	examplePrivateKey := serviceTestPrivateKey(t)
-	fixture.source = githubapp.NewClient(config.Config{GitHubAppID: testGitHubAppID, GitHubPrivateKey: examplePrivateKey, GitHubAPIBaseURL: address}, server.Client(), time.Now, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	var githubConfig config.Config
+
+	githubConfig.GitHubAppID = testGitHubAppID
+	githubConfig.GitHubPrivateKey = examplePrivateKey
+	githubConfig.GitHubAPIBaseURL = address
+	fixture.source = githubapp.NewClient(githubConfig,
+		testgit.Client(t,
+			server),
+		time.Now,
+		slog.New(slog.DiscardHandler))
+	t.Cleanup(func() { _ = fixture.source.Close() })
 	fixture.ref = domain.PullRequestRef{Repository: domain.Repository{Owner: "owner", Name: "repo"}, Number: 982, InstallationID: 99, Head: domain.HeadSHA(head)}
 	fixture.files = []diff.FileContext{{Path: "network.tf", CurrentContent: sources["network.tf"], Status: "modified", CoverageComplete: true}, {Path: "new_ref.go", CurrentContent: sources["new_ref.go"], Status: "added", CoverageComplete: true}}
 	return fixture
@@ -125,7 +134,7 @@ func TestInspectorVerifiesRepositoryEvidenceAtTheReviewedGitHead(t *testing.T) {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	if len(fixture.revisions) != 1 {
-		t.Fatalf("Collection and inspection must reuse one archive, got %d downloads.", len(fixture.revisions))
+		t.Fatalf("Collection and inspection must reuse one Git transfer, got %d downloads.", len(fixture.revisions))
 	}
 	for _, revision := range fixture.revisions {
 		if revision != head {
