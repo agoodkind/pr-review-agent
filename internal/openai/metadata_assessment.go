@@ -34,7 +34,7 @@ func (client *Client) MetadataReassessmentRequestBytes(prompt string) (int, erro
 }
 
 // ReassessMetadata requests explicit decisions about saved metadata findings.
-func (client *Client) ReassessMetadata(ctx context.Context, prompt string) ([]domain.MetadataFindingAssessment, error) {
+func (client *Client) ReassessMetadata(ctx context.Context, request review.MetadataReassessmentRequest) ([]domain.MetadataFindingAssessment, error) {
 	logger := gklog.L(ctx)
 	policy, err := review.MetadataReassessmentPolicy(client.reviewPolicy)
 	if err != nil {
@@ -42,10 +42,14 @@ func (client *Client) ReassessMetadata(ctx context.Context, prompt string) ([]do
 		return nil, fmt.Errorf("render metadata reassessment policy: %w", err)
 	}
 	var assessments []domain.MetadataFindingAssessment
-	_, err = client.complete(ctx, prompt, policy, metadataAssessmentSchemaName, metadataAssessmentSchema, func(content string) error {
+	_, err = client.complete(ctx, request.Prompt, policy, metadataAssessmentSchemaName, metadataAssessmentSchema, func(content string) error {
 		candidate, err := UnmarshalMetadataAssessments([]byte(content))
 		if err != nil {
 			return err
+		}
+		if _, err := request.ValidateAssessments(candidate); err != nil {
+			logger.WarnContext(ctx, "The provider returned an invalid metadata assessment.", "schema_name", metadataAssessmentSchemaName, "finding_id", request.FindingID, "surface", request.Source.Surface, "err", err)
+			return fmt.Errorf("validate metadata assessment against current field: %w", err)
 		}
 		assessments = candidate
 		return nil

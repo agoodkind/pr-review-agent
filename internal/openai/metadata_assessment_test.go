@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/review"
 )
@@ -32,7 +33,10 @@ func TestMetadataReassessmentUsesStructuredProviderCompletion(t *testing.T) {
 				state.statusSequence = []int{http.StatusBadGateway}
 			}
 			ctx, usage := review.WithUsageRecorder(context.Background())
-			assessments, err := client.ReassessMetadata(ctx, "Current metadata assessment input.")
+			assessments, err := client.ReassessMetadata(ctx, review.MetadataReassessmentRequest{
+				Prompt: "Current metadata assessment input.", FindingID: "1",
+				Source: diff.MetadataSource{Surface: domain.FindingPullRequestDescription, Text: "Current field.", StartLine: 1, EndLine: 1},
+			})
 			if (err != nil) != expectError {
 				t.Fatalf("The provider error was %v; expected failure is %t.", err, expectError)
 			}

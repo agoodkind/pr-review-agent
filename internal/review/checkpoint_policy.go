@@ -44,6 +44,7 @@ func (service *Service) reassessChangedContext(ctx context.Context, job domain.R
 	check.Conclusion = job.CheckRunConclusion
 	startedAt := service.now()
 	progress := service.newProgress(job, settings, startedAt)
+	progress.usage, _ = ctx.Value(usageRecorderContextKey{}).(*UsageRecorder)
 	return service.reviewOwedWork(ctx, job, check, current, reviews, startedAt, progress, settings)
 }
 

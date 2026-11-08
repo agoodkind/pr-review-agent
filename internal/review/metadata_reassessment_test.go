@@ -12,10 +12,10 @@ import (
 	"goodkind.io/pr-review-agent/internal/review"
 )
 
-func (model *sequenceModel) ReassessMetadata(_ context.Context, prompt string) ([]domain.MetadataFindingAssessment, error) {
+func (model *sequenceModel) ReassessMetadata(_ context.Context, request review.MetadataReassessmentRequest) ([]domain.MetadataFindingAssessment, error) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
-	model.metadataPrompts = append(model.metadataPrompts, prompt)
+	model.metadataPrompts = append(model.metadataPrompts, request.Prompt)
 	if model.metadataHook != nil {
 		model.metadataHook()
 	}
