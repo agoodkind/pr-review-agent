@@ -303,7 +303,7 @@ func inspectionServiceProvider(t *testing.T, capture *inspectionServiceCapture, 
 			finding := domain.Finding{RuleID: "functional_correctness", Surface: domain.FindingFile, Path: "network.tf", StartLine: 3, EndLine: 3, Title: "Create the renamed bridge before activation", Body: "The activation script loads settings before creating the renamed bridge. Create the bridge before loading its settings.", Claim: "The activation script requires the renamed bridge before it exists.", Evidence: "bridge = \"uplink\"", Importance: 9}
 			var result domain.ReviewResult
 			result.OmissionsAcceptable = true
-			var inspections []review.InspectionRequest
+			inspections := []review.InspectionRequest{}
 			if iteration == 1 {
 				inspections = []review.InspectionRequest{{Operation: "search_repository", Query: "sysctl --load", Reason: "Find activation settings in the reviewed repository."}, {Operation: "read_file", Target: "network/activate.sh", Reason: "Check whether activation creates the renamed bridge before loading its settings."}}
 				if scenario == "missing" {

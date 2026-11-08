@@ -28,11 +28,11 @@ func TestRouterRequestsRequireCapabilitiesAcrossProviderAPIs(t *testing.T) {
 				content string
 				call    func(*testing.T, *openai.Client) error
 			}{
-				{name: "review", content: `{"findings":[]}`, call: func(t *testing.T, client *openai.Client) error {
+				{name: "review", content: validReviewContent(), call: func(t *testing.T, client *openai.Client) error {
 					_, err := client.Review(t.Context(), "Review the supplied source.")
 					return err
 				}},
-				{name: "classification", content: `{"findings":[]}`, call: func(t *testing.T, client *openai.Client) error {
+				{name: "classification", content: validReviewContent(), call: func(t *testing.T, client *openai.Client) error {
 					_, err := client.ClassifyFileContent(t.Context(), "Assess the supplied source.")
 					return err
 				}},

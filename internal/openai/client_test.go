@@ -284,14 +284,14 @@ func TestReviewDecodesTheClaimAndAcceptsAnAnswerWithoutOne(t *testing.T) {
 	}{
 		{
 			name: "answer carrying a claim",
-			content: `{"coverage_complete":true,"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
+			content: `{"coverage_complete":true,"inspection_requests":[],"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
 				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
 				`"evidence":"cache[key] = value","claim":"` + claim + `","suggestion":"","importance":8}]}`,
 			want: claim,
 		},
 		{
 			name: "answer from the older schema",
-			content: `{"coverage_complete":true,"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
+			content: `{"coverage_complete":true,"inspection_requests":[],"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
 				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
 				`"evidence":"cache[key] = value","suggestion":"","importance":8}]}`,
 			want: "",
@@ -1410,7 +1410,7 @@ func gatewayUsageExceededPayload() map[string]any {
 }
 
 func validReviewContent() string {
-	return `{"findings":[]}`
+	return `{"overview":"","omissions_acceptable":false,"decision_reason":"","file_assessments":[],"findings":[],"inspection_requests":[]}`
 }
 
 func writeJSON(writer http.ResponseWriter, status int, payload any) {
