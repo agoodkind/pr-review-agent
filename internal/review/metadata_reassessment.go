@@ -18,14 +18,17 @@ import (
 
 // MetadataReassessor evaluates saved metadata findings independently of discovery.
 type MetadataReassessor interface {
-	ReassessMetadata(context.Context, MetadataReassessmentRequest) ([]domain.MetadataFindingAssessment, error)
+	ReassessMetadata(
+		ctx context.Context,
+		request MetadataReassessmentRequest,
+	) ([]domain.MetadataFindingAssessment, error)
 }
 
-// MetadataReassessmentRequest supplies the prompt and current field for one saved finding.
+// MetadataReassessmentRequest supplies a saved finding's prompt and current field.
 //
 // FindingID identifies the single assessment that the response must contain.
 // Source provides the complete current text for coordinate and evidence checks.
-// For example, a response cannot quote text that appears only in an earlier description.
+// For example, a response cannot quote text from an earlier description.
 type MetadataReassessmentRequest struct {
 	Prompt    string
 	FindingID string
@@ -178,7 +181,7 @@ func (service *Service) checkMetadataReassessmentSize(ctx context.Context, promp
 	return nil
 }
 
-// ValidateAssessments checks one response against the requested finding and current field.
+// ValidateAssessments checks a response against the requested finding.
 //
 // The SDK checks each provider response before accepting its result. A rejected
 // response can trigger the configured fallback policy.
@@ -186,10 +189,13 @@ func (service *Service) checkMetadataReassessmentSize(ctx context.Context, promp
 // A valid response meets these conditions:
 //   - The response contains one assessment for the requested finding ID.
 //   - Its coordinates identify lines within the complete current field.
-//   - Its evidence appears in the selected passage or stays empty for an empty field.
+//   - Its evidence matches the selected passage.
+//   - Its evidence stays empty for an empty field.
 //
-// For example, a response cannot quote a deleted sentence that the current passage omits.
-func (request MetadataReassessmentRequest) ValidateAssessments(assessments []domain.MetadataFindingAssessment) (domain.MetadataFindingAssessment, error) {
+// For example, a response cannot quote a deleted sentence.
+func (request MetadataReassessmentRequest) ValidateAssessments(
+	assessments []domain.MetadataFindingAssessment,
+) (domain.MetadataFindingAssessment, error) {
 	var empty domain.MetadataFindingAssessment
 	if err := domain.ValidateMetadataAssessments(assessments); err != nil {
 		slog.Warn("Metadata reassessment validation failed", "err", err)
@@ -204,7 +210,8 @@ func (request MetadataReassessmentRequest) ValidateAssessments(assessments []dom
 		return empty, errors.New("metadata assessment coordinates exceed the current field")
 	}
 	passage := strings.Join(lines[assessment.StartLine-1:assessment.EndLine], "\n")
-	if request.Source.Text != "" && (strings.TrimSpace(assessment.Evidence) == "" || !strings.Contains(passage, assessment.Evidence)) {
+	if request.Source.Text != "" &&
+		(strings.TrimSpace(assessment.Evidence) == "" || !strings.Contains(passage, assessment.Evidence)) {
 		return empty, errors.New("metadata reassessment evidence does not match the current field")
 	}
 	if request.Source.Text == "" && assessment.Evidence != "" {
