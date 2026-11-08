@@ -6286,6 +6286,8 @@ type serviceFixtureOptions struct {
 }
 
 type serviceFixture struct {
+	head       domain.HeadSHA
+	gitBase    string
 	service    *review.Service
 	github     *githubapp.Client
 	state      *serviceServerState
@@ -6901,13 +6903,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		testClock(8*time.Second),
 		slog.New(slog.NewTextHandler(logWriter, nil)), config.MaximumChunkConcurrency, testChunkPromptBytes, policytest.Load(t))
 
-	return &serviceFixture{
-		service:    service,
-		github:     client,
-		state:      state,
-		reconciler: reconciler,
-		model:      model,
-	}
+	return newGitServiceFixture(service, client, state, reconciler, model)
 }
 
 // run admits the job and reviews it, the way one webhook delivery does. A job
@@ -6924,26 +6920,7 @@ func (fixture *serviceFixture) run(ctx context.Context, job domain.ReviewJob) er
 	return fixture.service.Run(ctx, admitted)
 }
 
-func (fixture *serviceFixture) job() domain.ReviewJob {
-	return domain.ReviewJob{
-		DeliveryID: "delivery-1",
-		PullRequestRef: domain.PullRequestRef{
-			Repository:     domain.Repository{Owner: "owner", Name: "repo"},
-			Number:         testPRNumber,
-			InstallationID: 99,
-			Head:           domain.HeadSHA(testHeadSHA),
-		},
-	}
-}
-
-// forcedJob is the same job a ForceReviewLabelPrefix label produces, which is
 // the one delivery that reviews a pull request from scratch.
-func (fixture *serviceFixture) forcedJob() domain.ReviewJob {
-	job := fixture.job()
-	job.DeliveryID = "delivery-forced"
-	job.Forced = true
-	return job
-}
 
 func handleServiceRequest(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {
 	route := fmt.Sprintf("%s %s", request.Method, request.URL.Path)

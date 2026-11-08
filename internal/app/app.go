@@ -37,6 +37,7 @@ type App struct {
 	server     *http.Server
 	dispatcher *queue.Dispatcher
 	runCancel  context.CancelFunc
+	github     *githubapp.Client
 }
 
 // New wires the review runtime and returns a ready application.
@@ -100,6 +101,7 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 
 	return &App{
 		cfg:        cfg,
+		github:     githubClient,
 		logger:     logger,
 		dispatcher: dispatcher,
 		runCancel:  nil,
@@ -153,6 +155,11 @@ func (application *App) Shutdown(ctx context.Context) error {
 	}
 	if application.runCancel != nil {
 		application.runCancel()
+	}
+
+	err := application.github.Close()
+	if err != nil {
+		shutdownErr = errors.Join(shutdownErr, err)
 	}
 	return shutdownErr
 }

@@ -37,7 +37,7 @@ func TestCommitMetadataReassessmentUsesTheCompleteCurrentCommitSet(t *testing.T)
 					commits = append(commits, commits[0])
 				}
 				options.commits = commits
-				fixture, _ := newContentCollectionFixture(t, model, options)
+				fixture := newCommitCollectionFixture(t, model, options)
 				seedMetadataReassessment(t, fixture, []domain.Finding{prior}, mode == "metadata edit")
 				job := fixture.job()
 				job.MetadataOnly = mode == "metadata edit"

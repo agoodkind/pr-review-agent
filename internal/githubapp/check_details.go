@@ -47,7 +47,7 @@ func (details *checkRunDetailsResponse) UnmarshalJSON(data []byte) error {
 func (client *Client) GetCheckRunDetails(ctx context.Context, installationID int64, repo domain.Repository, checkRunID int64) (CheckRunDetails, error) {
 	var details CheckRunDetails
 	path := client.repoPath(repo, fmt.Sprintf("/check-runs/%d", checkRunID))
-	body, err := client.doREST(ctx, installationID, http.MethodGet, path, nil, nil)
+	body, err := client.doREST(ctx, installationID, http.MethodGet, path, nil)
 	if err != nil {
 		return details, err
 	}

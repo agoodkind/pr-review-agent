@@ -257,7 +257,7 @@ func (client *Client) CreateCheckRun(
 		return CheckRun{}, errors.New("marshal create check run body")
 	}
 
-	body, err := client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	body, err := client.doREST(ctx, installationID, "POST", path, encoded)
 	if err != nil {
 		return CheckRun{}, err
 	}
@@ -285,7 +285,7 @@ func (client *Client) StartCheckRun(
 		client.logger.ErrorContext(ctx, "marshal start check run body", slog.String("err", err.Error()))
 		return errors.New("marshal start check run body")
 	}
-	_, err = client.doREST(ctx, installationID, "PATCH", path, nil, encoded)
+	_, err = client.doREST(ctx, installationID, "PATCH", path, encoded)
 	return err
 }
 
@@ -317,7 +317,7 @@ func (client *Client) CompleteCheckRun(
 		client.logger.ErrorContext(ctx, "marshal complete check run body", slog.String("err", err.Error()))
 		return errors.New("marshal complete check run body")
 	}
-	_, err = client.doREST(ctx, installationID, "PATCH", path, nil, encoded)
+	_, err = client.doREST(ctx, installationID, "PATCH", path, encoded)
 	return err
 }
 

@@ -96,7 +96,7 @@ func (client *Client) SubmitReview(
 		return Review{}, errors.New("marshal submit review body")
 	}
 
-	body, err := client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	body, err := client.doREST(ctx, installationID, "POST", path, encoded)
 	if err != nil {
 		return Review{}, err
 	}
@@ -120,7 +120,7 @@ func (client *Client) UpdateReview(
 		return Review{}, errors.New("marshal update review body")
 	}
 
-	body, err := client.doREST(ctx, installationID, "PUT", path, nil, encoded)
+	body, err := client.doREST(ctx, installationID, "PUT", path, encoded)
 	if err != nil {
 		return Review{}, err
 	}
@@ -154,7 +154,7 @@ func (client *Client) CreateReviewComment(
 		return errors.New("marshal review comment body")
 	}
 
-	_, err = client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	_, err = client.doREST(ctx, installationID, "POST", path, encoded)
 	return err
 }
 

@@ -29,7 +29,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/policytest"
-	"goodkind.io/pr-review-agent/internal/testarchive"
+	"goodkind.io/pr-review-agent/internal/testgit"
 )
 
 const (
@@ -153,7 +153,7 @@ func TestInvalidSignatureReturns401(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-invalid",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 		signature:  "sha256=00",
 	})
 	if response.StatusCode != http.StatusUnauthorized {
@@ -179,7 +179,7 @@ func TestMissingHeadersReturns400(t *testing.T) {
 	fixture := newAppFixture(t, appFixtureOptions{})
 	defer fixture.close()
 
-	body := openedPayload(testDefectiveHead)
+	body := openedPayload(fixture.githubState.defectiveHead)
 	request, err := http.NewRequest(http.MethodPost, fixture.baseURL+"/api/v1/github_webhooks", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
@@ -239,7 +239,7 @@ func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
 	request := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-replay-completion",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	}
 
 	accepted := fixture.postWebhook(t, request)
@@ -290,7 +290,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	opened := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-opened",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if opened.StatusCode != http.StatusAccepted {
 		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
@@ -308,7 +308,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	resolved := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request_review_thread",
 		deliveryID: "delivery-thread-resolved",
-		body:       reviewThreadPayload("resolved", testDefectiveHead),
+		body:       reviewThreadPayload("resolved", fixture.githubState.defectiveHead),
 	})
 	if resolved.StatusCode != http.StatusAccepted {
 		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
@@ -322,7 +322,8 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	if approval["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("refreshed event = %v, want APPROVE", approval["event"])
 	}
-	if commit := approval["commit_id"]; commit != testDefectiveHead {
+
+	if commit := approval["commit_id"]; commit != fixture.githubState.defectiveHead {
 		t.Fatalf("refreshed commit = %v, want the reviewed head", commit)
 	}
 	fixture.waitForCheckCompletions(t, 2)
@@ -343,7 +344,7 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 	opened := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-opened-pending",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if opened.StatusCode != http.StatusAccepted {
 		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
@@ -355,7 +356,7 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 	resolved := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request_review_thread",
 		deliveryID: "delivery-thread-pending",
-		body:       reviewThreadPayload("resolved", testDefectiveHead),
+		body:       reviewThreadPayload("resolved", fixture.githubState.defectiveHead),
 	})
 	if resolved.StatusCode != http.StatusAccepted {
 		t.Fatalf("resolved status = %d, want 202", resolved.StatusCode)
@@ -389,7 +390,7 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 	opened := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-label-opened",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if opened.StatusCode != http.StatusAccepted {
 		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
@@ -399,12 +400,12 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 	fixture.waitForCheckCompletions(t, 1)
 	// This head now carries both gates a redelivery is stopped by: the review
 	// marker on the submitted review, and a durable state naming it reviewed.
-	fixture.waitForSummaryHead(t, testDefectiveHead)
+	fixture.waitForSummaryHead(t, fixture.githubState.defectiveHead)
 
 	labeled := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-label-forced",
-		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+		body:       labeledPayload(fixture.githubState.defectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
 	})
 	if labeled.StatusCode != http.StatusAccepted {
 		t.Fatalf("labeled status = %d, want 202", labeled.StatusCode)
@@ -442,7 +443,7 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	opened := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-other-label-opened",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if opened.StatusCode != http.StatusAccepted {
 		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
@@ -456,7 +457,7 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	labeled := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-other-label",
-		body:       labeledPayload(testDefectiveHead, "needs-review"),
+		body:       labeledPayload(fixture.githubState.defectiveHead, "needs-review"),
 	})
 	if labeled.StatusCode != http.StatusAccepted {
 		t.Fatalf("labeled status = %d, want 202", labeled.StatusCode)
@@ -495,7 +496,7 @@ func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 	carried := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-carried",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 		settings:   `{"minimum_importance":3,"max_files":7,"max_chunks":5,"chunk_timeout":"9s"}`,
 	})
 	if carried.StatusCode != http.StatusAccepted {
@@ -507,7 +508,7 @@ func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 	absent := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-absent",
-		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+		body:       labeledPayload(fixture.githubState.defectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
 	})
 	if absent.StatusCode != http.StatusAccepted {
 		t.Fatalf("absent status = %d, want 202", absent.StatusCode)
@@ -561,7 +562,7 @@ func TestSettingsAlteredBesideAVerifiedBodyAreRefused(t *testing.T) {
 	})
 	defer fixture.close()
 
-	body := openedPayload(testDefectiveHead)
+	body := openedPayload(fixture.githubState.defectiveHead)
 	honest := `{"chunk_timeout":"9s","minimum_importance":3}`
 	altered := `{"chunk_timeout":"1ms","minimum_importance":11}`
 
@@ -610,12 +611,12 @@ func TestSettingsLiftedFromAnotherDeliveryAreRefused(t *testing.T) {
 	defer fixture.close()
 
 	settings := `{"chunk_timeout":"9s"}`
-	otherBody := labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"other")
+	otherBody := labeledPayload(fixture.githubState.defectiveHead, domain.ForceReviewLabelPrefix+"other")
 
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-lifted",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 		settings:   settings,
 		// Valid, for the same values, against a different delivery's body.
 		settingsSignature: signReviewSettings(settings, otherBody),
@@ -654,7 +655,7 @@ func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
 	partial := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-partial",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 		// A timeout and a refused budget: one is taken, the other falls back. The
 		// refused one is negative rather than zero, so a resolution that honored
 		// anything the delivery merely mentioned would take it and be caught.
@@ -669,7 +670,7 @@ func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
 	none := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-none",
-		body:       labeledPayload(testDefectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
+		body:       labeledPayload(fixture.githubState.defectiveHead, domain.ForceReviewLabelPrefix+"rerun"),
 	})
 	if none.StatusCode != http.StatusAccepted {
 		t.Fatalf("none status = %d, want 202", none.StatusCode)
@@ -713,7 +714,7 @@ func TestAnUnverifiedDeliveryAppliesNothingItCarried(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-forged",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 		signature:  "sha256=" + strings.Repeat("0", 64),
 		settings:   `{"minimum_importance":1,"max_files":1,"max_chunks":1,"chunk_timeout":"1ms"}`,
 	})
@@ -741,7 +742,7 @@ func TestANonPositiveCarriedSettingFallsBackToTheProcessValue(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-zero",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 		settings:   `{"minimum_importance":0,"max_files":0,"max_chunks":-1,"chunk_timeout":"0s"}`,
 	})
 	if response.StatusCode != http.StatusAccepted {
@@ -780,7 +781,7 @@ func TestAnImportanceFloorAboveTheScaleFallsBackToTheProcessValue(t *testing.T) 
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-settings-above-scale",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 		settings:   `{"minimum_importance":11}`,
 	})
 	if response.StatusCode != http.StatusAccepted {
@@ -834,7 +835,7 @@ func TestAConfigurationShapedLabelChangesNoTimeoutAndNoBudget(t *testing.T) {
 		response := fixture.postWebhook(t, webhookRequestOptions{
 			eventType:  "pull_request",
 			deliveryID: fmt.Sprintf("delivery-config-label-%d", index),
-			body:       labeledPayload(testDefectiveHead, label),
+			body:       labeledPayload(fixture.githubState.defectiveHead, label),
 		})
 		if response.StatusCode != http.StatusAccepted {
 			t.Fatalf("%s status = %d, want 202", label, response.StatusCode)
@@ -891,7 +892,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	})
 	defer fixture.close()
 
-	body := openedPayload(testDefectiveHead)
+	body := openedPayload(fixture.githubState.defectiveHead)
 	first := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-dup",
@@ -927,7 +928,7 @@ func TestWebhookStartsReviewCheckBeforeReturningAccepted(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-immediate-check",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	defer func() {
 		_ = response.Body.Close()
@@ -952,7 +953,7 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-approve",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1009,7 +1010,7 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-one-box",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1065,7 +1066,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-blocking-body",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1073,7 +1074,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
-	fixture.waitForSummaryHead(t, testDefectiveHead)
+	fixture.waitForSummaryHead(t, fixture.githubState.defectiveHead)
 	review := fixture.githubState.lastSubmitReview()
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
@@ -1089,7 +1090,8 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	if strings.Contains(visible, testFindingPath) {
 		t.Fatalf("the visible verdict duplicates the inline finding location: %q", comment)
 	}
-	assertVerdictBody(t, fixture, review["body"], testDefectiveHead, true, explanation)
+
+	assertVerdictBody(t, fixture, review["body"], fixture.githubState.defectiveHead, true, explanation)
 }
 
 func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
@@ -1111,7 +1113,7 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-blocking",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1149,7 +1151,7 @@ func TestEndToEndChangedDocumentationWritingFindingBlocks(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-writing-doc",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1194,7 +1196,7 @@ func TestEndToEndChangedSourceCommentWritingFindingBlocks(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-writing-comment",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1232,7 +1234,7 @@ func TestEndToEndClearWritingHasNoWritingFinding(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-writing-clear",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1257,6 +1259,7 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 		EndLine:    3,
 		Title:      "Broken range",
 		Body:       "Both added lines form one defective block.",
+		Evidence:   "one",
 		Importance: testMinimumImportance,
 	}
 
@@ -1280,7 +1283,7 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-file-hunks",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1308,7 +1311,7 @@ func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-stale",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1339,7 +1342,7 @@ func TestEndToEndGitHubFailurePreservesPendingReview(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-github-fail",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1370,14 +1373,14 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	_ = response.Body.Close()
 	fixture.waitForClydeCalls(t, 1)
 	queuedRequest := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown-queued",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	}
 	queued := fixture.postWebhook(t, queuedRequest)
 	if state := queued.Header.Get(deliveryStateHeader); state != deliveryStatePending {
@@ -1408,7 +1411,7 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	replay := resumed.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if state := replay.Header.Get(deliveryStateHeader); state != deliveryStatePending {
 		t.Fatalf("The replayed delivery reported state %q before the review completed", state)
@@ -1418,7 +1421,7 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	settledRequest := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	settled := resumed.postWebhook(t, settledRequest)
@@ -1450,6 +1453,9 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	withIntegrationLock(t)
 	githubState := newGitHubServerState(testDefectiveHead)
 	githubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if githubState.serveGit(writer, request) {
+			return
+		}
 		if failForbiddenEndpoint(writer, request) {
 			githubState.recordForbiddenEndpointHit()
 			return
@@ -1472,7 +1478,7 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 		response := fixture.postWebhook(t, webhookRequestOptions{
 			eventType:  "pull_request",
 			deliveryID: deliveryID,
-			body:       openedPayload(testDefectiveHead),
+			body:       openedPayload(fixture.githubState.defectiveHead),
 		})
 		if response.StatusCode != http.StatusAccepted {
 			t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1509,7 +1515,7 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-large",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1517,8 +1523,11 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForCheckConclusion(t, "success")
-	if fixture.githubState.listedFilePages() < 2 {
-		t.Fatalf("file page fetches = %d, want at least 2", fixture.githubState.listedFilePages())
+
+	if fixture.githubState.listedFilePages() != 0 || fixture.githubState.gitTransfers.Load() == 0 {
+		t.Fatalf("Repository data must use Git: content pages=%d, Git transfers=%d",
+			fixture.githubState.listedFilePages(),
+			fixture.githubState.gitTransfers.Load())
 	}
 }
 
@@ -1554,21 +1563,21 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	opened := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-no-comments",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	_ = opened.Body.Close()
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckCompletions(t, 1)
-	fixture.waitForSummaryHead(t, testDefectiveHead)
+	fixture.waitForSummaryHead(t, fixture.githubState.defectiveHead)
 
-	fixture.githubState.setHead(testCorrectedHead)
+	fixture.githubState.setHead(fixture.githubState.correctedHead)
 	fixture.githubState.setChangedFiles(correctedChangedFiles())
 	fixture.githubState.setFileContent(correctedFileContent())
 
 	sync := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-no-comments-sync",
-		body:       synchronizePayload(testCorrectedHead),
+		body:       synchronizePayload(fixture.githubState.correctedHead),
 	})
 	_ = sync.Body.Close()
 
@@ -1580,16 +1589,23 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	// The comment is rewritten after the review is submitted, and again at every
 	// chunk checkpoint before it, so waiting on the review or on an update count
 	// races the rewrite this test reads. Wait for the state it asserts.
-	fixture.waitForSummaryHead(t, testCorrectedHead)
+	fixture.waitForSummaryHead(t, fixture.githubState.correctedHead)
 	// Every new head reads the current pull request rather than narrowing its
 	// view to the commit range after the previous review.
 	if fixture.githubState.comparedRanges() != 0 {
 		t.Fatalf("compare range fetches = %d, want 0", fixture.githubState.comparedRanges())
 	}
-	if fixture.githubState.listedFilePages() == 0 {
-		t.Fatal("full file list page fetches = 0, want the current pull request")
+
+	if fixture.githubState.listedFilePages() != 0 || fixture.githubState.gitTransfers.Load() == 0 {
+		t.Fatal("The complete current pull request must use local Git objects")
 	}
-	assertVerdictBody(t, fixture, fixture.githubState.lastSubmitReview()["body"], testCorrectedHead, true, explanation)
+
+	assertVerdictBody(t,
+		fixture,
+		fixture.githubState.lastSubmitReview()["body"],
+		fixture.githubState.correctedHead,
+		true,
+		explanation)
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf("forbidden endpoint hits = %d, want 0", fixture.githubState.forbiddenEndpointHits())
 	}
@@ -1606,8 +1622,9 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	if !ok {
 		t.Fatalf("summary comment body = %q, want a decodable state marker", summaryBody)
 	}
-	if state.LastReviewed != domain.HeadSHA(testCorrectedHead) {
-		t.Fatalf("last reviewed = %q, want %q", state.LastReviewed, testCorrectedHead)
+
+	if state.LastReviewed != domain.HeadSHA(fixture.githubState.correctedHead) {
+		t.Fatalf("last reviewed = %q, want %q", state.LastReviewed, fixture.githubState.correctedHead)
 	}
 	if state.Status != marker.StateDone {
 		t.Fatalf("status = %q, want %q", state.Status, marker.StateDone)
@@ -1626,7 +1643,7 @@ func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-reconcile-fail",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1646,7 +1663,7 @@ func TestEndToEndPublishedProseHasNoTypographicDashes(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-typographic",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
@@ -1695,7 +1712,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	opened := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-opened",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if opened.StatusCode != http.StatusAccepted {
 		t.Fatalf("opened status = %d, want 202", opened.StatusCode)
@@ -1721,7 +1738,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	duplicate := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-opened",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	if duplicate.StatusCode != http.StatusAccepted {
 		t.Fatalf("duplicate status = %d, want 202", duplicate.StatusCode)
@@ -1731,14 +1748,14 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 		t.Fatalf("submit review count after duplicate = %d, want 1", fixture.githubState.submitReviewCount())
 	}
 
-	fixture.githubState.setHead(testCorrectedHead)
+	fixture.githubState.setHead(fixture.githubState.correctedHead)
 	fixture.githubState.setChangedFiles(correctedChangedFiles())
 	fixture.githubState.setFileContent(correctedFileContent())
 
 	synchronize := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-sync",
-		body:       synchronizePayload(testCorrectedHead),
+		body:       synchronizePayload(fixture.githubState.correctedHead),
 	})
 	if synchronize.StatusCode != http.StatusAccepted {
 		t.Fatalf("synchronize status = %d, want 202", synchronize.StatusCode)
@@ -1772,7 +1789,7 @@ func TestWebhookAdmissionMintsOneRunIdentifierPerDelivery(t *testing.T) {
 	response := fixture.postWebhook(t, webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-run-id",
-		body:       openedPayload(testDefectiveHead),
+		body:       openedPayload(fixture.githubState.defectiveHead),
 	})
 	defer func() {
 		_ = response.Body.Close()
@@ -1844,6 +1861,7 @@ func newAppFixture(t *testing.T, options appFixtureOptions) *appFixture {
 
 	githubState := newGitHubServerState(testDefectiveHead)
 	applyGitHubFixtureOptions(githubState, options)
+	githubState.initializeGit(t)
 
 	githubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if failForbiddenEndpoint(writer, request) {
@@ -1929,7 +1947,12 @@ func wireAppFixture(
 		slog.NewJSONHandler(logs, nil),
 		correlation.HandlerOptions{},
 	))
-	application := New(cfg, githubServer.Client(), clydeServer.Client(), logger)
+
+	if githubState.gitDirectory == "" {
+		githubState.initializeGit(t)
+	}
+
+	application := New(cfg, testgit.Client(t, githubServer), clydeServer.Client(), logger)
 
 	httpServer := httptest.NewServer(application.server.Handler)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2432,7 +2455,15 @@ func correctedFileContent() string {
 }
 
 type githubServerState struct {
-	mu sync.Mutex
+	gitTest       *testing.T
+	gitDirectory  string
+	gitHandler    http.Handler
+	gitGeneration int
+	gitTransfers  atomic.Int32
+	defectiveHead string
+	correctedHead string
+	baseSHA       string
+	mu            sync.Mutex
 
 	currentHead          string
 	headAfterAnalysis    string
@@ -2440,8 +2471,6 @@ type githubServerState struct {
 	changedFilePages     [][]map[string]any
 	changedFilePageIndex int
 	fileContent          string
-	archiveContentByHead map[string]map[string]string
-	compareFiles         []map[string]any
 	checkRuns            []map[string]any
 	nextCheckRunID       int64
 	submitReviews        []map[string]any
@@ -2474,22 +2503,13 @@ type githubServerState struct {
 
 func newGitHubServerState(head string) *githubServerState {
 	return &githubServerState{
+		gitTest: nil, gitDirectory: "", gitHandler: nil, gitGeneration: 0,
+		gitTransfers: atomic.Int32{}, defectiveHead: "", correctedHead: "", baseSHA: "",
 		currentHead:     head,
 		changedFiles:    defectiveChangedFiles(),
 		fileContent:     defectiveFileContent(),
 		nextCheckRunID:  77,
 		listReviewPages: [][]map[string]any{{}},
-		compareFiles: []map[string]any{{
-			"filename": testFindingPath,
-			"status":   "modified",
-			"patch": strings.Join([]string{
-				"@@ -1,3 +1,4 @@",
-				" package app",
-				" ",
-				" // missing validation",
-				"+if payload == nil { return }",
-			}, "\n"),
-		}},
 	}
 }
 
@@ -2746,10 +2766,6 @@ func (state *githubServerState) listedThreadPages() int32 {
 func (state *githubServerState) setHead(head string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.archiveContentByHead == nil {
-		state.archiveContentByHead = make(map[string]map[string]string)
-	}
-	state.archiveContentByHead[state.currentHead] = state.repositoryArchiveContent()
 	state.currentHead = head
 }
 
@@ -2759,18 +2775,15 @@ func (state *githubServerState) setChangedFiles(files []map[string]any) {
 	state.changedFiles = files
 	state.changedFilePages = paginateMapPages(files, 100)
 	state.changedFilePageIndex = 0
+	if state.currentHead != state.correctedHead {
+		state.rebuildGit()
+	}
 }
 
 func (state *githubServerState) setFileContent(content string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.fileContent = content
-}
-
-func (state *githubServerState) setCompareFiles(files []map[string]any) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.compareFiles = files
 }
 
 // markAllThreadsResolved is a person resolving every open thread in the GitHub
@@ -2792,6 +2805,9 @@ func (state *githubServerState) setThreads(threads []map[string]any) {
 }
 
 func (state *githubServerState) handle(writer http.ResponseWriter, request *http.Request) {
+	if state.serveGit(writer, request) {
+		return
+	}
 	atomic.AddInt32(&state.requests, 1)
 
 	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
@@ -2870,45 +2886,6 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		return
 	}
 
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/files") {
-		state.handleListChangedFiles(writer, request)
-		return
-	}
-
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/contents/") {
-		if strings.HasSuffix(request.URL.Path, "/.gitattributes") {
-			writeJSON(writer, http.StatusNotFound, map[string]any{"message": "attribute file does not exist"})
-			return
-		}
-		state.mu.Lock()
-		content := state.fileContent
-		state.mu.Unlock()
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"content":  content,
-			"encoding": "base64",
-		})
-		return
-	}
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/tarball/") {
-		state.handleRepositoryArchive(writer, request)
-		return
-	}
-
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/compare/") {
-		atomic.AddInt32(&state.comparePageFetches, 1)
-		state.mu.Lock()
-		files := state.compareFiles
-		state.mu.Unlock()
-		// GitHub always names the commit it measured the patches from. Here the
-		// requested base is an ancestor of the head, so it is that base, which is
-		// the case callers may map coordinates through.
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"merge_base_commit": map[string]any{"sha": compareBaseFromPath(request.URL.Path)},
-			"files":             files,
-		})
-		return
-	}
-
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
 		readCount := atomic.AddInt32(&state.pullRequestReads, 1)
 		state.mu.Lock()
@@ -2923,54 +2900,12 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 			"title":  "title",
 			"body":   "body",
 			"head":   map[string]any{"sha": head},
-			"base":   map[string]any{"sha": testBaseSHA},
+			"base":   map[string]any{"sha": state.baseSHA},
 		})
 		return
 	}
 
 	writer.WriteHeader(http.StatusNotFound)
-}
-
-func (state *githubServerState) repositoryArchiveContent() map[string]string {
-	contents := map[string]string{testFindingPath: state.fileContent}
-	for _, files := range [][]map[string]any{state.changedFiles, state.compareFiles} {
-		for _, file := range files {
-			name, ok := file["filename"].(string)
-			if ok && name != "" {
-				contents[name] = state.fileContent
-			}
-		}
-	}
-	return contents
-}
-
-func (state *githubServerState) handleRepositoryArchive(writer http.ResponseWriter, request *http.Request) {
-	_, revision, _ := strings.Cut(request.URL.Path, "/tarball/")
-	if _, err := domain.ParseHeadSHA(revision); err != nil {
-		http.Error(writer, "The archive requires an exact commit.", http.StatusBadRequest)
-		return
-	}
-	state.mu.Lock()
-	encoded := state.repositoryArchiveContent()
-	if revision != state.currentHead {
-		if historical, found := state.archiveContentByHead[revision]; found {
-			encoded = historical
-		}
-	}
-	state.mu.Unlock()
-	contents := make(map[string]string, len(encoded))
-	for name, source := range encoded {
-		content, err := base64.StdEncoding.DecodeString(source)
-		if err != nil {
-			http.Error(writer, "The fixture source has invalid encoding.", http.StatusInternalServerError)
-			return
-		}
-		contents[name] = string(content)
-	}
-	writer.Header().Set("Content-Type", "application/gzip")
-	if err := testarchive.Write(writer, "fixture-"+revision+"/", contents); err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
-	}
 }
 
 func (state *githubServerState) handleListCheckRuns(writer http.ResponseWriter, request *http.Request) {
@@ -3277,54 +3212,6 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 	})
 }
 
-func (state *githubServerState) handleListChangedFiles(writer http.ResponseWriter, request *http.Request) {
-	state.mu.Lock()
-	pages := state.changedFilePages
-	pageIndex := state.changedFilePageIndex
-	files := state.changedFiles
-	state.mu.Unlock()
-
-	if len(pages) > 0 {
-		atomic.AddInt32(&state.filePageFetches, 1)
-		if pageIndex >= len(pages) {
-			writeJSON(writer, http.StatusOK, []map[string]any{})
-			return
-		}
-		page := pages[pageIndex]
-		state.mu.Lock()
-		state.changedFilePageIndex++
-		hasNext := state.changedFilePageIndex < len(pages)
-		state.mu.Unlock()
-		if hasNext {
-			next := fmt.Sprintf("http://%s%s", request.Host, request.URL.Path)
-			if request.URL.RawQuery != "" {
-				next += "?" + request.URL.RawQuery + "&page=2"
-			} else {
-				next += "?page=2"
-			}
-			writer.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
-		}
-		writeJSON(writer, http.StatusOK, page)
-		return
-	}
-
-	writeJSON(writer, http.StatusOK, files)
-}
-
-// compareBaseFromPath reads the base commit out of a compare request path,
-// which looks like /repos/owner/repo/compare/{base}...{head}.
-func compareBaseFromPath(path string) string {
-	_, after, found := strings.Cut(path, "/compare/")
-	if !found {
-		return ""
-	}
-	base, _, found := strings.Cut(after, "...")
-	if !found {
-		return ""
-	}
-	return base
-}
-
 func paginateMapPages(items []map[string]any, pageSize int) [][]map[string]any {
 	if len(items) == 0 {
 		return nil
@@ -3607,11 +3494,72 @@ func TestMentionedPullRequestCommentReviewsTheCurrentHead(t *testing.T) {
 	}
 	_ = response.Body.Close()
 	fixture.waitForCheckCompletions(t, 1)
-	fixture.waitForSummaryHead(t, testDefectiveHead)
+	fixture.waitForSummaryHead(t, fixture.githubState.defectiveHead)
 	if fixture.githubState.lastCheckConclusion() != "success" {
 		t.Fatalf("check conclusion = %q, want success", fixture.githubState.lastCheckConclusion())
 	}
 	if summary := fixture.githubState.summaryCommentBody(); !strings.Contains(summary, "| Forced run | yes |") {
 		t.Fatalf("summary omits forced review: %q", summary)
 	}
+}
+
+func (state *githubServerState) initializeGit(t *testing.T) {
+	t.Helper()
+	state.gitTest = t
+	state.gitDirectory = testgit.New(t)
+	state.rebuildGit()
+	state.gitHandler = testgit.Handler(t, state.gitDirectory)
+}
+
+func (state *githubServerState) rebuildGit() {
+	if state.gitDirectory == "" {
+		return
+	}
+
+	t := state.gitTest
+	before, after := make(map[string]string), make(map[string]string)
+
+	for _, file := range state.changedFiles {
+		name, validName := file["filename"].(string)
+		if !validName {
+			t.Fatal("The changed-file fixture requires a filename")
+		}
+
+		patch, validPatch := file["patch"].(string)
+		if !validPatch {
+			t.Fatal("The changed-file fixture requires a patch")
+		}
+
+		before[name], after[name] = testgit.PatchContents(patch)
+	}
+
+	state.baseSHA, state.defectiveHead, state.correctedHead = testgit.CommitReview(
+		t, state.gitDirectory, state.gitGeneration, before, after,
+		map[string]string{testFindingPath: "if payload == nil { return }\n"},
+	)
+	state.gitGeneration++
+
+	state.currentHead = state.defectiveHead
+	if state.headAfterAnalysis == testCorrectedHead {
+		state.headAfterAnalysis = state.correctedHead
+	}
+}
+
+func (state *githubServerState) serveGit(writer http.ResponseWriter, request *http.Request) bool {
+	if strings.Contains(request.URL.Path, ".git/") {
+		if request.Method == http.MethodPost {
+			state.gitTransfers.Add(1)
+		}
+
+		state.gitHandler.ServeHTTP(writer, request)
+
+		return true
+	}
+
+	if testgit.ContentAPIRequest(request) {
+		state.recordForbiddenEndpointHit()
+		http.Error(writer, "Repository-content APIs are forbidden", http.StatusForbidden)
+		return true
+	}
+	return false
 }
