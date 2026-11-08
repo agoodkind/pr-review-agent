@@ -84,6 +84,11 @@ func (client *Client) compareRepositoryCommits(
 		return Comparison{}, repositoryAccessError("compareRepositoryCommits", err)
 	}
 
+	err = boundRepositoryTrees(ctx, baseTree, headTree)
+	if err != nil {
+		return Comparison{}, err
+	}
+
 	changes, err := object.DiffTreeWithOptions(ctx, baseTree, headTree, object.DefaultDiffTreeOptions)
 	if err != nil {
 		return Comparison{}, repositoryAccessError("compareRepositoryCommits", err)

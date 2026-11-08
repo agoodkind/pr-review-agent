@@ -57,6 +57,11 @@ func (client *Client) materializeRepositorySnapshot(
 		return nil, repositoryAccessError("materializeRepositorySnapshot", err)
 	}
 
+	err = boundRepositoryTrees(ctx, tree)
+	if err != nil {
+		return nil, err
+	}
+
 	directory := filepath.Join(parent, string(ref))
 
 	err = os.Mkdir(directory, 0o700)

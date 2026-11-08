@@ -50,6 +50,7 @@ type cachedRepository struct {
 	directory  string
 	size       int64
 	used       uint64
+	failed     bool
 }
 
 type repositoryCache struct {
@@ -97,6 +98,15 @@ func (cache *repositoryCache) unlock() { cache.gate <- struct{}{} }
 func (cache *repositoryCache) open(key repositoryCacheKey) (*cachedRepository, error) {
 	var err error
 
+	for failedKey, entry := range cache.entries {
+		if entry.failed {
+			err = cache.discard(failedKey, entry)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	cache.sequence++
 	if entry := cache.entries[key]; entry != nil {
 		entry.used = cache.sequence
@@ -135,10 +145,30 @@ func (cache *repositoryCache) open(key repositoryCacheKey) (*cachedRepository, e
 		return nil, repositoryAccessError("open", err)
 	}
 
-	entry := &cachedRepository{repository: repository, directory: directory, used: cache.sequence, size: 0}
+	entry := &cachedRepository{repository: repository, directory: directory, used: cache.sequence, size: 0, failed: false}
 	cache.entries[key] = entry
 
 	return entry, nil
+}
+
+func (cache *repositoryCache) discard(key repositoryCacheKey, entry *cachedRepository) error {
+	entry.failed = true
+
+	slog.Debug("Discard failed repository Git objects")
+
+	removeError := os.RemoveAll(entry.directory)
+	if removeError == nil {
+		delete(cache.entries, key)
+
+		return nil
+	}
+
+	size, accountingError := repositoryDiskBytes(entry.directory)
+	if accountingError == nil {
+		entry.size = size
+	}
+
+	return repositoryAccessError("discard failed Git cache entry", errors.Join(removeError, accountingError))
 }
 
 func (cache *repositoryCache) evict(active *cachedRepository) error {

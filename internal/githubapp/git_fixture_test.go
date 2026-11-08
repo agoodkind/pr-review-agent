@@ -61,6 +61,10 @@ type gitFixture struct {
 	gitStatus        int
 	contentRequests  int
 	metadataRequests int
+	tokenRequests    int
+	tokenStatuses    []int
+	tokenLifetime    time.Duration
+	responsePack     []byte
 }
 
 func gitCommand(t *testing.T, directory string, arguments ...string) string {
@@ -136,6 +140,7 @@ func newGitFixtureRepository(t *testing.T) *gitFixture {
 func newGitFixture(t *testing.T) *gitFixture {
 	t.Helper()
 	fixture := newGitFixtureRepository(t)
+	fixture.tokenLifetime = time.Hour
 	directory := fixture.directory
 	backend := testgit.Handler(t, directory)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -143,10 +148,22 @@ func newGitFixture(t *testing.T) *gitFixture {
 		defer fixture.mutex.Unlock()
 
 		if strings.HasPrefix(request.URL.Path, "/app/installations/") {
+			fixture.tokenRequests++
+			if len(fixture.tokenStatuses) > 0 {
+				status := fixture.tokenStatuses[0]
+				fixture.tokenStatuses = fixture.tokenStatuses[1:]
+
+				if status != http.StatusCreated {
+					http.Error(writer, "The installation token fixture refused acquisition", status)
+
+					return
+				}
+			}
+
 			writer.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(writer).Encode(map[string]string{
 				gitFixtureTokenKey:     "git-fixture-token",
-				gitFixtureExpiresAtKey: time.Now().Add(time.Hour).Format(time.RFC3339),
+				gitFixtureExpiresAtKey: time.Now().Add(fixture.tokenLifetime).Format(time.RFC3339),
 			})
 
 			return
@@ -314,9 +331,9 @@ func serveGitFixture(
 		}
 
 		fixture.haves = append(fixture.haves, bytes.Count(payload, []byte("have ")))
-		upload := packp.NewUploadRequest()
+		upload := packp.NewUploadPackRequest()
 
-		decodeError := upload.Decode(bytes.NewReader(payload))
+		decodeError := upload.UploadRequest.Decode(bytes.NewReader(payload))
 		if decodeError != nil {
 			t.Error(decodeError)
 			http.Error(writer, "The Git request cannot be decoded", http.StatusBadRequest)
@@ -326,6 +343,19 @@ func serveGitFixture(
 
 		fixture.wants = append(fixture.wants, upload.Wants...)
 		request.Body = io.NopCloser(bytes.NewReader(payload))
+
+		if len(fixture.responsePack) > 0 {
+			response := packp.NewUploadPackResponseWithPackfile(
+				upload, io.NopCloser(bytes.NewReader(fixture.responsePack)),
+			)
+
+			encodeError := response.Encode(writer)
+			if encodeError != nil {
+				t.Error(encodeError)
+			}
+
+			return
+		}
 	}
 
 	backend.ServeHTTP(gitCountingWriter{ResponseWriter: writer, bytes: &fixture.gitBytes}, request)

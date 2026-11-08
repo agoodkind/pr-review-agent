@@ -205,14 +205,7 @@ func (client *Client) storeRepositoryPack(
 		return repositoryAccessError("fetchRepositoryAncestry", err)
 	}
 
-	observer := &repositoryPackBounds{checkContext: ctx.Err, bytes: 0}
-
-	parser, err := packfile.NewParser(packfile.NewScanner(staging), observer)
-	if err != nil {
-		return repositoryAccessError("fetchRepositoryAncestry", err)
-	}
-
-	_, err = parser.Parse()
+	err = inspectRepositoryPack(ctx, staging)
 	if err != nil {
 		return repositoryAccessError("validate bounded Git pack", err)
 	}
@@ -220,6 +213,35 @@ func (client *Client) storeRepositoryPack(
 	_, err = staging.Seek(0, io.SeekStart)
 	if err != nil {
 		return repositoryAccessError("fetchRepositoryAncestry", err)
+	}
+
+	entry.failed = true
+
+	writeError := client.writeRepositoryPackState(ctx, entry, request, response, hashes, staging)
+	if writeError != nil {
+		rollbackError := client.repositories.discard(key, entry)
+
+		return repositoryAccessError("roll back failed Git pack storage", errors.Join(writeError, rollbackError))
+	}
+
+	entry.failed = false
+
+	return nil
+}
+
+func (client *Client) writeRepositoryPackState(
+	ctx context.Context,
+	entry *cachedRepository,
+	request *packp.UploadPackRequest,
+	response *packp.UploadPackResponse,
+	hashes []plumbing.Hash,
+	staging *os.File,
+) error {
+	client.logger.DebugContext(ctx, "Update private Git pack state", "revision_count", len(hashes))
+
+	err := ctx.Err()
+	if err != nil {
+		return repositoryAccessError("cancel Git pack storage", err)
 	}
 
 	err = packfile.UpdateObjectStorage(entry.repository, staging)
@@ -232,7 +254,9 @@ func (client *Client) storeRepositoryPack(
 		if err != nil {
 			return repositoryAccessError("Git server did not provide the exact requested commit", err)
 		}
+	}
 
+	for _, hash := range hashes {
 		reference := plumbing.NewHashReference(plumbing.ReferenceName("refs/pragent/"+hash.String()), hash)
 
 		err = entry.repository.SetReference(reference)
@@ -259,43 +283,16 @@ func (client *Client) storeRepositoryPack(
 
 	err = client.repositories.bound(entry)
 	if err != nil {
-		delete(client.repositories.entries, key)
+		return repositoryAccessError("enforce Git cache size", err)
+	}
 
-		cleanupErr := os.RemoveAll(entry.directory)
-
-		return repositoryAccessError("enforce Git cache size", errors.Join(err, cleanupErr))
+	err = ctx.Err()
+	if err != nil {
+		return repositoryAccessError("cancel Git pack publication", err)
 	}
 
 	return nil
 }
-
-type repositoryPackBounds struct {
-	checkContext func() error
-	bytes        int64
-}
-
-func (bounds *repositoryPackBounds) OnHeader(count uint32) error {
-	if count > maximumSnapshotEntries {
-		return errRepositoryPackEntries
-	}
-
-	return bounds.checkContext()
-}
-
-func (bounds *repositoryPackBounds) OnInflatedObjectHeader(_ plumbing.ObjectType, size int64, _ int64) error {
-	if size < 0 || size > maximumSnapshotExtractedBytes-bounds.bytes {
-		return errRepositoryPackBytes
-	}
-
-	bounds.bytes += size
-
-	return bounds.checkContext()
-}
-
-func (bounds *repositoryPackBounds) OnInflatedObjectContent(_ plumbing.Hash, _ int64, _ uint32, _ []byte) error {
-	return bounds.checkContext()
-}
-func (bounds *repositoryPackBounds) OnFooter(_ plumbing.Hash) error { return bounds.checkContext() }
 
 func immutableGitHash(ref domain.HeadSHA) (plumbing.Hash, error) {
 	var err error

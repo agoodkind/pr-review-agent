@@ -3,6 +3,7 @@ package githubapp
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"strings"
 
 	gitconfig "github.com/go-git/go-git/v5/plumbing/format/config"
@@ -15,6 +16,10 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 		return nil
 	}
 	data, err := snapshot.root.ReadFile(".gitmodules")
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
 	if err != nil {
 		return repositoryAccessError("read submodule metadata", err)
 	}
@@ -29,7 +34,10 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 	}
 
 	for name, pointer := range snapshot.gitlinks {
-		address := urls[name]
+		address, mapped := urls[name]
+		if !mapped {
+			continue
+		}
 		if strings.TrimSpace(address) == "" || strings.ContainsAny(address, "\r\n\x00") {
 			return errSubmoduleRepositoryMetadata
 		}
