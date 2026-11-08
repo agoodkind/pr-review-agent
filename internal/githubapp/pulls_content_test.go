@@ -93,6 +93,11 @@ func TestGetFilePreservesTheExistingContentLimit(t *testing.T) {
 	if err == nil || len(content) != 0 || !strings.Contains(err.Error(), "content response byte limit") {
 		t.Fatalf("oversized content = %d bytes: %v", len(content), err)
 	}
+
+	_, comparisonError := fixture.client.Compare(t.Context(), 77, fixture.repo, fixture.head, head)
+	if comparisonError == nil || !strings.Contains(comparisonError.Error(), "content response byte limit") {
+		t.Fatalf("oversized text comparison must preserve the content limit: %v", comparisonError)
+	}
 }
 
 // TestGitCacheSeparatesInstallationsAndEvictsInactiveRepositories verifies

@@ -372,8 +372,10 @@ func (collector *Collector) compareIncremental(
 	pullRequest githubapp.PullRequest,
 	base domain.HeadSHA,
 ) (githubapp.Comparison, error) {
-	var comparison githubapp.Comparison
-	var err error
+	var (
+		comparison githubapp.Comparison
+		err        error
+	)
 
 	if source, available := collector.source.(interface {
 		CompareIncremental(

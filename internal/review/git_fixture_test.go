@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/testgit"
@@ -164,5 +165,18 @@ func assertGitReviewProjection(t *testing.T, native map[string]any, head domain.
 	markerHead, found := marker.FindReview(body)
 	if !found || markerHead != head {
 		t.Fatal("The new rejection must retain a checkpoint for the current head.")
+	}
+}
+
+func newGitServiceFixture(
+	service *review.Service,
+	client *githubapp.Client,
+	state *serviceServerState,
+	reconciler *recordingReconciler,
+	model review.Model,
+) *serviceFixture {
+	return &serviceFixture{
+		head: domain.HeadSHA(testHeadSHA), gitBase: coveragePriorHead,
+		service: service, github: client, state: state, reconciler: reconciler, model: model,
 	}
 }

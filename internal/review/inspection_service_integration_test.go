@@ -188,7 +188,6 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 				t.Errorf("The review requested an individual source API: %s", request.URL.RequestURI())
 				http.Error(writer, "Use pinned Git objects.", http.StatusInternalServerError)
 				return
-
 			}
 		}
 		fixture.state.mu.Lock()

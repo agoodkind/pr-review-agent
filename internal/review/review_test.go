@@ -6903,14 +6903,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		testClock(8*time.Second),
 		slog.New(slog.NewTextHandler(logWriter, nil)), config.MaximumChunkConcurrency, testChunkPromptBytes, policytest.Load(t))
 
-	return &serviceFixture{
-		head: domain.HeadSHA(testHeadSHA), gitBase: coveragePriorHead,
-		service:    service,
-		github:     client,
-		state:      state,
-		reconciler: reconciler,
-		model:      model,
-	}
+	return newGitServiceFixture(service, client, state, reconciler, model)
 }
 
 // run admits the job and reviews it, the way one webhook delivery does. A job

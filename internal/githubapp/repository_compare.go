@@ -16,6 +16,12 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
+const (
+	repositoryPatchBaseLabel = "base"
+	repositoryPatchHeadLabel = "head"
+	repositoryBinaryPatch    = "Binary files base and head differ\n"
+)
+
 func (client *Client) compareRepositoryCommits(
 	ctx context.Context,
 	installationID int64,
@@ -220,6 +226,19 @@ func localChangedFile(change *object.Change) (ChangedFile, error) {
 		return ChangedFile{}, repositoryAccessError("localChangedFile", err)
 	}
 
+	for _, entry := range []object.ChangeEntry{change.From, change.To} {
+		binary, probeError := localChangeIsBinary(entry)
+		if probeError != nil {
+			return ChangedFile{}, probeError
+		}
+
+		if binary {
+			file.Status, file.Patch = "binary", repositoryBinaryPatch
+
+			return file, nil
+		}
+	}
+
 	previous, err := localChangeContent(change.From)
 	if err != nil {
 		return ChangedFile{}, repositoryAccessError("localChangedFile", err)
@@ -234,12 +253,15 @@ func localChangedFile(change *object.Change) (ChangedFile, error) {
 
 	currentIsText := utf8.ValidString(current) && !strings.ContainsRune(current, '\x00')
 	if !previousIsText || !currentIsText {
-		file.Status, file.Patch = "binary", "Binary files base and head differ\n"
+		file.Status, file.Patch = "binary", repositoryBinaryPatch
 
 		return file, nil
 	}
 
-	patch, err := udiff.ToUnified("base", "head", previous, udiff.Lines(previous, current), udiff.DefaultContextLines)
+	patch, err := udiff.ToUnified(
+		repositoryPatchBaseLabel, repositoryPatchHeadLabel,
+		previous, udiff.Lines(previous, current), udiff.DefaultContextLines,
+	)
 	if err != nil {
 		return ChangedFile{}, repositoryAccessError("localChangedFile", err)
 	}
