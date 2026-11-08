@@ -435,19 +435,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 				}
 				if scenario != "unchanged" {
 					native := fixture.state.submittedReviews[1]
-					body, ok := native["body"].(string)
-					if !ok ||
-						native[collectionFixtureCommitIDKey] != string(fixture.job().Head) ||
-						native[collectionFixtureStateKey] != collectionFixtureRejectionState ||
-						strings.Count(body,
-							finding.Body) != 1 || strings.Count(body,
-						finding.Suggestion) != 1 {
-						t.Fatalf("The current-head rejection must contain the complete current metadata finding and correction: %v.", native)
-					}
-					head, found := marker.FindReview(body)
-					if !found || head != job.Head {
-						t.Fatal("The new rejection must retain a checkpoint for the current head.")
-					}
+					assertGitReviewProjection(t, native, job.Head, finding)
 				}
 			}
 			assertPublished(t)

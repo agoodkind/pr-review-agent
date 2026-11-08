@@ -139,7 +139,7 @@ type Client struct {
 	now          func() time.Time
 	logger       *slog.Logger
 	tokens       *tokenCache
-	repositories repositoryCache
+	repositories *repositoryCache
 }
 
 // NewClient constructs a GitHub App client with installation token caching.
@@ -150,11 +150,12 @@ func NewClient(
 	logger *slog.Logger,
 ) *Client {
 	return &Client{
-		cfg:        cfg,
-		httpClient: httpClient,
-		now:        now,
-		logger:     logger,
-		tokens:     newTokenCache(now),
+		cfg:          cfg,
+		httpClient:   httpClient,
+		now:          now,
+		logger:       logger,
+		tokens:       newTokenCache(now),
+		repositories: new(repositoryCache),
 	}
 }
 
@@ -176,25 +177,9 @@ func (client *Client) doREST(
 	installationID int64,
 	method string,
 	path string,
-	query url.Values,
 	body json.RawMessage,
-) ([]byte, error) {
-	return client.doRESTWithAccept(ctx, installationID, method, path, query, body, githubAcceptHeader)
-}
-
-func (client *Client) doRESTWithAccept(
-	ctx context.Context,
-	installationID int64,
-	method string,
-	path string,
-	query url.Values,
-	body json.RawMessage,
-	accept string,
 ) ([]byte, error) {
 	target := client.restURL(path)
-	if len(query) > 0 {
-		target += "?" + query.Encode()
-	}
 
 	var payload io.Reader
 	if len(body) > 0 {
@@ -212,7 +197,7 @@ func (client *Client) doRESTWithAccept(
 		return nil, errors.New("create github request")
 	}
 	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", accept)
+	request.Header.Set("Accept", githubAcceptHeader)
 	request.Header.Set(githubAPIVersionHeader, githubAPIVersionValue)
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")

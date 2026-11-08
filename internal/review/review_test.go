@@ -6904,6 +6904,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		slog.New(slog.NewTextHandler(logWriter, nil)), config.MaximumChunkConcurrency, testChunkPromptBytes, policytest.Load(t))
 
 	return &serviceFixture{
+		head: domain.HeadSHA(testHeadSHA), gitBase: coveragePriorHead,
 		service:    service,
 		github:     client,
 		state:      state,
@@ -6926,38 +6927,7 @@ func (fixture *serviceFixture) run(ctx context.Context, job domain.ReviewJob) er
 	return fixture.service.Run(ctx, admitted)
 }
 
-func (fixture *serviceFixture) job() domain.ReviewJob {
-	head := fixture.head
-	if head == "" {
-		head = domain.HeadSHA(testHeadSHA)
-	}
-	return domain.ReviewJob{
-		DeliveryID: "delivery-1",
-		PullRequestRef: domain.PullRequestRef{
-			Repository:     domain.Repository{Owner: "owner", Name: "repo"},
-			Number:         testPRNumber,
-			InstallationID: 99,
-			Head:           head,
-		},
-	}
-}
-
-// forcedJob is the same job a ForceReviewLabelPrefix label produces, which is
 // the one delivery that reviews a pull request from scratch.
-func (fixture *serviceFixture) forcedJob() domain.ReviewJob {
-	job := fixture.job()
-	job.DeliveryID = "delivery-forced"
-	job.Forced = true
-	return job
-}
-
-func (fixture *serviceFixture) collectionBase() string {
-	if fixture.gitBase != "" {
-		return fixture.gitBase
-	}
-
-	return coveragePriorHead
-}
 
 func handleServiceRequest(writer http.ResponseWriter, request *http.Request, state *serviceServerState) {
 	route := fmt.Sprintf("%s %s", request.Method, request.URL.Path)

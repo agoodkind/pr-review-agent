@@ -37,17 +37,7 @@ func TestCommitMetadataReassessmentUsesTheCompleteCurrentCommitSet(t *testing.T)
 					commits = append(commits, commits[0])
 				}
 				options.commits = commits
-				fixture, _ := newContentCollectionFixture(t, model, options)
-
-				for index := range commits {
-					if commits[index].SHA == domain.HeadSHA(testHeadSHA) {
-						commits[index].SHA = fixture.job().Head
-					}
-				}
-
-				if scenario == "replacement finding" {
-					model.results[0].Findings[0].CommitSHA = fixture.job().Head
-				}
+				fixture := newCommitCollectionFixture(t, model, options)
 				seedMetadataReassessment(t, fixture, []domain.Finding{prior}, mode == "metadata edit")
 				job := fixture.job()
 				job.MetadataOnly = mode == "metadata edit"

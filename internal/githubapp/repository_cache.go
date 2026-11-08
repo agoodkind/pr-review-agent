@@ -26,7 +26,6 @@ var (
 	errRepositoryPackEntries        = errors.New("repository Git pack exceeds its object entry limit")
 	errRepositoryPackBytes          = errors.New("repository Git pack exceeds its extracted byte limit")
 	errRepositoryAncestryLimit      = errors.New("repository Git comparison exceeds its ancestry entry limit")
-	errRepositoryMultipleMergeBases = errors.New("repository Git comparison has multiple merge bases")
 	errRepositoryContentLimit       = errors.New("repository file exceeds the existing content response byte limit")
 	errRepositoryTreeDepth          = errors.New("repository tree exceeds its depth limit")
 	errRepositoryTreeEntries        = errors.New("repository tree exceeds its entry limit")
@@ -231,7 +230,7 @@ func repositoryDiskBytes(directory string) (int64, error) {
 //
 //	defer client.Close()
 func (client *Client) Close() error {
-	cache := &client.repositories
+	cache := client.repositories
 	cache.initialize()
 
 	<-cache.gate

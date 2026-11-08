@@ -42,7 +42,7 @@ func (client *Client) GetPullRequest(
 	number int,
 ) (PullRequest, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d", number))
-	body, err := client.doREST(ctx, installationID, "GET", path, nil, nil)
+	body, err := client.doREST(ctx, installationID, "GET", path, nil)
 	if err != nil {
 		return PullRequest{}, err
 	}
@@ -267,5 +267,5 @@ func (client *Client) Compare(
 		return Comparison{}, scopeError
 	}
 
-	return client.compareRepositoryCommits(ctx, installationID, repo, base, head)
+	return client.compareRepositoryCommits(ctx, installationID, repo, base, head, "")
 }

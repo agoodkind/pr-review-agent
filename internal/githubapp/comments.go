@@ -97,7 +97,7 @@ func (client *Client) writeIssueComment(
 		client.logger.ErrorContext(ctx, "marshal "+operation+" issue comment", slog.String("err", err.Error()))
 		return IssueComment{ID: 0, Author: "", Body: ""}, errors.New("marshal " + operation + " issue comment")
 	}
-	responseBody, err := client.doREST(ctx, installationID, method, path, nil, encoded)
+	responseBody, err := client.doREST(ctx, installationID, method, path, encoded)
 	if err != nil {
 		return IssueComment{ID: 0, Author: "", Body: ""}, err
 	}

@@ -59,6 +59,7 @@ func (client *Client) OpenRepositorySnapshot(ctx context.Context, installationID
 	scope := &repositorySnapshotScope{
 		client: client, installationID: installationID, repository: repo, head: head,
 		gate: make(chan struct{}, 1), directory: "", revisions: make(map[domain.HeadSHA]repositorySnapshotResult), closed: false,
+		pullRequest: nil,
 	}
 	scope.gate <- struct{}{}
 	return context.WithValue(ctx, repositorySnapshotKey{}, scope), scope.close, nil

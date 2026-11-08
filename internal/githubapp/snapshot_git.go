@@ -32,7 +32,7 @@ func (client *Client) materializeRepositorySnapshot(
 		return nil, repositoryAccessError("materializeRepositorySnapshot", err)
 	}
 
-	cache := &client.repositories
+	cache := client.repositories
 
 	err = cache.lock(ctx)
 	if err != nil {

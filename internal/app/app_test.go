@@ -17,9 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -2473,8 +2471,6 @@ type githubServerState struct {
 	changedFilePages     [][]map[string]any
 	changedFilePageIndex int
 	fileContent          string
-	archiveContentByHead map[string]map[string]string
-	compareFiles         []map[string]any
 	checkRuns            []map[string]any
 	nextCheckRunID       int64
 	submitReviews        []map[string]any
@@ -2507,22 +2503,13 @@ type githubServerState struct {
 
 func newGitHubServerState(head string) *githubServerState {
 	return &githubServerState{
+		gitTest: nil, gitDirectory: "", gitHandler: nil, gitGeneration: 0,
+		gitTransfers: atomic.Int32{}, defectiveHead: "", correctedHead: "", baseSHA: "",
 		currentHead:     head,
 		changedFiles:    defectiveChangedFiles(),
 		fileContent:     defectiveFileContent(),
 		nextCheckRunID:  77,
 		listReviewPages: [][]map[string]any{{}},
-		compareFiles: []map[string]any{{
-			"filename": testFindingPath,
-			"status":   "modified",
-			"patch": strings.Join([]string{
-				"@@ -1,3 +1,4 @@",
-				" package app",
-				" ",
-				" // missing validation",
-				"+if payload == nil { return }",
-			}, "\n"),
-		}},
 	}
 }
 
@@ -2779,10 +2766,6 @@ func (state *githubServerState) listedThreadPages() int32 {
 func (state *githubServerState) setHead(head string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.archiveContentByHead == nil {
-		state.archiveContentByHead = make(map[string]map[string]string)
-	}
-	state.archiveContentByHead[state.currentHead] = state.repositoryArchiveContent()
 	state.currentHead = head
 }
 
@@ -2801,12 +2784,6 @@ func (state *githubServerState) setFileContent(content string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	state.fileContent = content
-}
-
-func (state *githubServerState) setCompareFiles(files []map[string]any) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.compareFiles = files
 }
 
 // markAllThreadsResolved is a person resolving every open thread in the GitHub
@@ -2909,41 +2886,6 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 		return
 	}
 
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/files") {
-		state.handleListChangedFiles(writer, request)
-		return
-	}
-
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/contents/") {
-		if strings.HasSuffix(request.URL.Path, "/.gitattributes") {
-			writeJSON(writer, http.StatusNotFound, map[string]any{"message": "attribute file does not exist"})
-			return
-		}
-		state.mu.Lock()
-		content := state.fileContent
-		state.mu.Unlock()
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"content":  content,
-			"encoding": "base64",
-		})
-		return
-	}
-
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/compare/") {
-		atomic.AddInt32(&state.comparePageFetches, 1)
-		state.mu.Lock()
-		files := state.compareFiles
-		state.mu.Unlock()
-		// GitHub always names the commit it measured the patches from. Here the
-		// requested base is an ancestor of the head, so it is that base, which is
-		// the case callers may map coordinates through.
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"merge_base_commit": map[string]any{"sha": compareBaseFromPath(request.URL.Path)},
-			"files":             files,
-		})
-		return
-	}
-
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
 		readCount := atomic.AddInt32(&state.pullRequestReads, 1)
 		state.mu.Lock()
@@ -2964,19 +2906,6 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	}
 
 	writer.WriteHeader(http.StatusNotFound)
-}
-
-func (state *githubServerState) repositoryArchiveContent() map[string]string {
-	contents := map[string]string{testFindingPath: state.fileContent}
-	for _, files := range [][]map[string]any{state.changedFiles, state.compareFiles} {
-		for _, file := range files {
-			name, ok := file["filename"].(string)
-			if ok && name != "" {
-				contents[name] = state.fileContent
-			}
-		}
-	}
-	return contents
 }
 
 func (state *githubServerState) handleListCheckRuns(writer http.ResponseWriter, request *http.Request) {
@@ -3283,54 +3212,6 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 	})
 }
 
-func (state *githubServerState) handleListChangedFiles(writer http.ResponseWriter, request *http.Request) {
-	state.mu.Lock()
-	pages := state.changedFilePages
-	pageIndex := state.changedFilePageIndex
-	files := state.changedFiles
-	state.mu.Unlock()
-
-	if len(pages) > 0 {
-		atomic.AddInt32(&state.filePageFetches, 1)
-		if pageIndex >= len(pages) {
-			writeJSON(writer, http.StatusOK, []map[string]any{})
-			return
-		}
-		page := pages[pageIndex]
-		state.mu.Lock()
-		state.changedFilePageIndex++
-		hasNext := state.changedFilePageIndex < len(pages)
-		state.mu.Unlock()
-		if hasNext {
-			next := fmt.Sprintf("http://%s%s", request.Host, request.URL.Path)
-			if request.URL.RawQuery != "" {
-				next += "?" + request.URL.RawQuery + "&page=2"
-			} else {
-				next += "?page=2"
-			}
-			writer.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
-		}
-		writeJSON(writer, http.StatusOK, page)
-		return
-	}
-
-	writeJSON(writer, http.StatusOK, files)
-}
-
-// compareBaseFromPath reads the base commit out of a compare request path,
-// which looks like /repos/owner/repo/compare/{base}...{head}.
-func compareBaseFromPath(path string) string {
-	_, after, found := strings.Cut(path, "/compare/")
-	if !found {
-		return ""
-	}
-	base, _, found := strings.Cut(after, "...")
-	if !found {
-		return ""
-	}
-	return base
-}
-
 func paginateMapPages(items []map[string]any, pageSize int) [][]map[string]any {
 	if len(items) == 0 {
 		return nil
@@ -3622,56 +3503,6 @@ func TestMentionedPullRequestCommentReviewsTheCurrentHead(t *testing.T) {
 	}
 }
 
-var fixtureHunkCoordinates = regexp.MustCompile(`^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
-
-func fixturePatchTrees(patch string) (string, string) {
-	before, after := make(map[int]string), make(map[int]string)
-	oldLine, newLine := 0, 0
-
-	for row := range strings.SplitSeq(patch, "\n") {
-		if coordinates := fixtureHunkCoordinates.FindStringSubmatch(row); coordinates != nil {
-			oldLine, _ = strconv.Atoi(coordinates[1])
-			newLine, _ = strconv.Atoi(coordinates[2])
-
-			continue
-		}
-
-		if row == "" {
-			continue
-		}
-
-		switch row[0] {
-		case ' ':
-			before[oldLine], after[newLine] = row[1:], row[1:]
-			oldLine++
-			newLine++
-		case '-':
-			before[oldLine] = row[1:]
-			oldLine++
-		case '+':
-			after[newLine] = row[1:]
-			newLine++
-		}
-	}
-
-	render := func(lines map[int]string) string {
-		maximum := 0
-		for line := range lines {
-			maximum = max(maximum, line)
-		}
-
-		var content strings.Builder
-		for line := 1; line <= maximum; line++ {
-			content.WriteString(lines[line])
-			content.WriteByte('\n')
-		}
-
-		return content.String()
-	}
-
-	return render(before), render(after)
-}
-
 func (state *githubServerState) initializeGit(t *testing.T) {
 	t.Helper()
 	state.gitTest = t
@@ -3699,23 +3530,14 @@ func (state *githubServerState) rebuildGit() {
 			t.Fatal("The changed-file fixture requires a patch")
 		}
 
-		before[name], after[name] = fixturePatchTrees(patch)
+		before[name], after[name] = testgit.PatchContents(patch)
 	}
 
-	if state.baseSHA != "" {
-		testgit.Command(t, state.gitDirectory, "checkout", "--orphan", "fixture-update-"+strconv.Itoa(state.gitGeneration))
-		testgit.Command(t, state.gitDirectory, "rm", "-r", "-f", "--ignore-unmatch", ".")
-	}
-
+	state.baseSHA, state.defectiveHead, state.correctedHead = testgit.CommitReview(
+		t, state.gitDirectory, state.gitGeneration, before, after,
+		map[string]string{testFindingPath: "if payload == nil { return }\n"},
+	)
 	state.gitGeneration++
-	state.baseSHA = testgit.Commit(t, state.gitDirectory, "Create review base", before, nil)
-
-	state.defectiveHead = testgit.Commit(t, state.gitDirectory, "Change review sources", after, nil)
-	if _, exists := after[testFindingPath]; exists {
-		after[testFindingPath] += "if payload == nil { return }\n"
-	}
-
-	state.correctedHead = testgit.Commit(t, state.gitDirectory, "Correct review sources", after, nil)
 
 	state.currentHead = state.defectiveHead
 	if state.headAfterAnalysis == testCorrectedHead {
@@ -3734,28 +3556,10 @@ func (state *githubServerState) serveGit(writer http.ResponseWriter, request *ht
 		return true
 	}
 
-	for _, endpoint := range []string{
-		"/contents/",
-		"/git/blobs/",
-		"/git/trees/",
-		"/tarball/",
-		"/compare/",
-		"/search/code",
-	} {
-		if strings.Contains(request.URL.Path, endpoint) {
-			state.recordForbiddenEndpointHit()
-			http.Error(writer, "Repository-content APIs are forbidden", http.StatusForbidden)
-
-			return true
-		}
-	}
-
-	if strings.HasSuffix(request.URL.Path, "/files") {
+	if testgit.ContentAPIRequest(request) {
 		state.recordForbiddenEndpointHit()
 		http.Error(writer, "Repository-content APIs are forbidden", http.StatusForbidden)
-
 		return true
 	}
-
 	return false
 }

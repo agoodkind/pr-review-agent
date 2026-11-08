@@ -66,24 +66,8 @@ func newContentCollectionFixture(t *testing.T, model review.Model, options ...co
 	contentStatus := &atomic.Int32{}
 	contentStatus.Store(http.StatusOK)
 
-	directory := testgit.New(t)
-	modules := "[submodule \"zinit\"]\npath = " + collectionSubmodulePath + "\nurl = " + collectionSubmoduleURL + "\n"
-	files := map[string]string{collectionFixtureMainPath: "package main\n", ".gitmodules": modules}
-	pointers := map[string]string{collectionSubmodulePath: collectionSubmoduleOld}
-	title := "title"
-	if len(options) > 0 && options[0].onlyMetadata {
-		files = nil
-		pointers = nil
-		title = ""
-	}
+	directory, base, head, title := contentCollectionRepository(t, options)
 
-	base := testgit.Commit(t, directory, "Create collection base", files, pointers)
-	if files != nil {
-		files[collectionFixtureMainPath] = "package main\nadded\n"
-		pointers[collectionSubmodulePath] = collectionSubmoduleNew
-	}
-
-	head := testgit.Commit(t, directory, "Change collection sources", files, pointers)
 	fixture.head, fixture.gitBase, fixture.state.headSHA = domain.HeadSHA(head), base, head
 	gitHandler := testgit.Handler(t, directory)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

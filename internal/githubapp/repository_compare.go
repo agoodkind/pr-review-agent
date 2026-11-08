@@ -22,6 +22,7 @@ func (client *Client) compareRepositoryCommits(
 	repo domain.Repository,
 	base domain.HeadSHA,
 	head domain.HeadSHA,
+	previous domain.HeadSHA,
 ) (Comparison, error) {
 	var err error
 
@@ -37,7 +38,7 @@ func (client *Client) compareRepositoryCommits(
 
 	key := repositoryCacheKey{installationID: installationID, repository: repo}
 
-	cache := &client.repositories
+	cache := client.repositories
 
 	err = cache.lock(ctx)
 	if err != nil {
@@ -53,6 +54,13 @@ func (client *Client) compareRepositoryCommits(
 	mergeBase, err := client.repositoryMergeBase(ctx, key, entry, baseHash, headHash)
 	if err != nil {
 		return Comparison{}, repositoryAccessError("compareRepositoryCommits", err)
+	}
+
+	if previous != "" {
+		mergeBase, err = client.incrementalRepositoryBase(ctx, key, entry, previous, headHash)
+		if err != nil {
+			return Comparison{}, err
+		}
 	}
 
 	baseTree, err := mergeBase.Tree()
@@ -170,25 +178,25 @@ func (client *Client) repositoryMergeBase(
 		}
 	}
 
-	var selected plumbing.Hash
+	candidates := make([]plumbing.Hash, 0, len(states))
 
 	for hash, state := range states {
 		if state.colors != bothColors || state.stale {
 			continue
 		}
 
-		if selected != plumbing.ZeroHash {
-			return nil, errRepositoryMultipleMergeBases
-		}
-
-		selected = hash
+		candidates = append(candidates, hash)
 	}
 
-	if selected == plumbing.ZeroHash {
+	if len(candidates) == 0 {
 		return nil, newAPIError(http.StatusUnprocessableEntity, "Git revisions do not share an ancestor")
 	}
 
-	return client.fetchRepositoryCommit(ctx, key, entry, selected)
+	if len(candidates) == 1 {
+		return client.fetchRepositoryCommit(ctx, key, entry, candidates[0])
+	}
+
+	return client.selectRepositoryMergeBase(ctx, key, entry, base, head)
 }
 
 func localChangedFile(change *object.Change) (ChangedFile, error) {

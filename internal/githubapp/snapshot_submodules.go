@@ -19,8 +19,9 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 		return repositoryAccessError("read submodule metadata", err)
 	}
 	modules := gitconfig.New()
-	if err := gitconfig.NewDecoder(bytes.NewReader(data)).Decode(modules); err != nil {
-		return err
+	err = gitconfig.NewDecoder(bytes.NewReader(data)).Decode(modules)
+	if err != nil {
+		return repositoryAccessError("decode submodule metadata", err)
 	}
 	urls := make(map[string]string)
 	for _, module := range modules.Section("submodule").Subsections {

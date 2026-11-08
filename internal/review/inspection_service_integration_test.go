@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,38 +145,9 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 	t.Helper()
 	snapshotDirectory := t.TempDir()
 	t.Setenv("TMPDIR", snapshotDirectory)
-	directory := t.TempDir()
-	relationshipGitCommand(t, directory, "init", "--quiet")
-	if err := os.Mkdir(filepath.Join(directory, "network"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	before := "resource \"terraform_data\" \"network\" {\n  input = {\n    bridge = \"vmbr1\"\n  }\n  provisioner \"remote-exec\" {\n    script = \"${path.module}/network/activate.sh\"\n  }\n}\n"
-	for path, content := range map[string]string{"network.tf": before, "network/activate.sh": inspectionActivationSource} {
-		if scenario == "missing" && path == "network/activate.sh" {
-			continue
-		}
-		if err := os.WriteFile(filepath.Join(directory, path), []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	commit := func(subject string) {
-		t.Helper()
-		relationshipGitCommand(t, directory, "add", "--all")
-		relationshipGitCommand(t, directory, "-c", "user.name=Integration Test", "-c", "user.email=integration@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", subject+"\n\nCo-authored-by: Codex <noreply@openai.com>")
-	}
-	commit("Create host network source")
-	base := strings.TrimSpace(relationshipGitCommand(t, directory, "rev-parse", "HEAD"))
-	after := strings.Replace(before, "vmbr1", "uplink", 1)
-	if err := os.WriteFile(filepath.Join(directory, "network.tf"), []byte(after), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	commit("Rename the upstream bridge")
-	head := strings.TrimSpace(relationshipGitCommand(t, directory, "rev-parse", "HEAD"))
-
+	directory, base, head := inspectionServiceRepository(t, scenario)
 	gitHandler := testgit.Handler(t, directory)
-	if err := os.WriteFile(filepath.Join(directory, "network/activate.sh"), []byte("uncommitted activation source\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 	fixture.state.headSHA = head
 	capture := &inspectionServiceCapture{snapshotDirectory: snapshotDirectory}
