@@ -263,6 +263,16 @@ type Source interface {
 	) (githubapp.Comparison, error)
 }
 
+type incrementalSource interface {
+	CompareIncremental(
+		ctx context.Context,
+		installationID int64,
+		repo domain.Repository,
+		previous domain.HeadSHA,
+		current githubapp.PullRequest,
+	) (githubapp.Comparison, error)
+}
+
 // Collector gathers pull request patches and file content for review.
 type Collector struct {
 	source Source
@@ -323,13 +333,7 @@ func (collector *Collector) CollectRange(
 		return collector.Collect(ctx, ref, pullRequest)
 	}
 
-	changedFiles, err := collector.source.Compare(
-		ctx,
-		ref.InstallationID,
-		ref.Repository,
-		base,
-		pullRequest.Head,
-	)
+	changedFiles, err := collector.compareIncremental(ctx, ref, pullRequest, base)
 	if err != nil {
 		// A force push or a history rewrite can leave the recorded base
 		// unreachable, and GitHub then refuses the comparison outright. Failing
@@ -337,7 +341,7 @@ func (collector *Collector) CollectRange(
 		// dead base from the marker and aborts the same way, so the review
 		// never recovers on its own. Reviewing the whole pull request instead
 		// costs one larger run and leaves nothing unread.
-		if baseUnreachable(err) {
+		if collector.baseUnreachable(err) {
 			slog.WarnContext(
 				ctx,
 				"recorded base is no longer comparable, reviewing the whole pull request",
@@ -428,7 +432,15 @@ func (collector *Collector) collectMetadata(
 // failure, including rate limits and outages, is transient and must keep
 // failing so a later run retries it rather than silently reviewing more than
 // it was asked to.
-func baseUnreachable(err error) bool {
+func (collector *Collector) baseUnreachable(err error) bool {
+	if _, unavailable := errors.AsType[*githubapp.IncrementalHistoryUnavailableError](err); unavailable {
+		return true
+	}
+
+	if _, native := collector.source.(incrementalSource); native {
+		return false
+	}
+
 	var apiErr githubapp.APIError
 	if !errors.As(err, &apiErr) {
 		return false
@@ -436,6 +448,32 @@ func baseUnreachable(err error) bool {
 
 	return apiErr.StatusCode == http.StatusNotFound ||
 		apiErr.StatusCode == http.StatusUnprocessableEntity
+}
+
+func (collector *Collector) compareIncremental(
+	ctx context.Context,
+	ref domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+	base domain.HeadSHA,
+) (githubapp.Comparison, error) {
+	var (
+		comparison githubapp.Comparison
+		err        error
+	)
+
+	if source, available := collector.source.(incrementalSource); available {
+		comparison, err = source.CompareIncremental(ctx, ref.InstallationID, ref.Repository, base, pullRequest)
+	} else {
+		comparison, err = collector.source.Compare(ctx, ref.InstallationID, ref.Repository, base, pullRequest.Head)
+	}
+
+	if err != nil {
+		slog.WarnContext(ctx, "Compare incremental repository history failed", "err", err)
+
+		return githubapp.Comparison{}, fmt.Errorf("compare incremental repository history: %w", err)
+	}
+
+	return comparison, nil
 }
 
 // collectFiles orders changed files deterministically and collects each one's

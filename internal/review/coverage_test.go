@@ -177,7 +177,7 @@ func (readableOnlyCollector) CollectRange(
 // seedReviewedBaseline puts a completed earlier run's checkpoint on the pull
 // request, so a test can tell a baseline that was held from one never set.
 func seedReviewedBaseline(fixture *serviceFixture) {
-	seedStateNaming(fixture, coveragePriorHead)
+	seedStateNaming(fixture, fixture.collectionBase())
 }
 
 // seedStateNaming puts a completed run's checkpoint on the pull request, naming

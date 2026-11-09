@@ -55,7 +55,7 @@ type ChangedFile struct {
 	PatchPresent bool
 	Additions    int
 	Deletions    int
-	// ChangeCountsKnown requires both counts in the GitHub response.
+	// ChangeCountsKnown confirms both counts from the complete local patch.
 	ChangeCountsKnown bool
 }
 
@@ -134,11 +134,12 @@ func (err APIError) Error() string {
 
 // Client performs authenticated GitHub App REST and GraphQL requests.
 type Client struct {
-	cfg        config.Config
-	httpClient *http.Client
-	now        func() time.Time
-	logger     *slog.Logger
-	tokens     *tokenCache
+	cfg          config.Config
+	httpClient   *http.Client
+	now          func() time.Time
+	logger       *slog.Logger
+	tokens       *tokenCache
+	repositories *repositoryCache
 }
 
 // NewClient constructs a GitHub App client with installation token caching.
@@ -149,11 +150,12 @@ func NewClient(
 	logger *slog.Logger,
 ) *Client {
 	return &Client{
-		cfg:        cfg,
-		httpClient: httpClient,
-		now:        now,
-		logger:     logger,
-		tokens:     newTokenCache(now),
+		cfg:          cfg,
+		httpClient:   httpClient,
+		now:          now,
+		logger:       logger,
+		tokens:       newTokenCache(now),
+		repositories: new(repositoryCache),
 	}
 }
 
@@ -175,33 +177,9 @@ func (client *Client) doREST(
 	installationID int64,
 	method string,
 	path string,
-	query url.Values,
 	body json.RawMessage,
-) ([]byte, error) {
-	return client.doRESTWithAccept(
-		ctx,
-		installationID,
-		method,
-		path,
-		query,
-		body,
-		githubAcceptHeader,
-	)
-}
-
-func (client *Client) doRESTWithAccept(
-	ctx context.Context,
-	installationID int64,
-	method string,
-	path string,
-	query url.Values,
-	body json.RawMessage,
-	accept string,
 ) ([]byte, error) {
 	target := client.restURL(path)
-	if len(query) > 0 {
-		target += "?" + query.Encode()
-	}
 
 	var payload io.Reader
 	if len(body) > 0 {
@@ -218,9 +196,8 @@ func (client *Client) doRESTWithAccept(
 		client.logger.ErrorContext(ctx, "create github request", slog.String("err", err.Error()))
 		return nil, errors.New("create github request")
 	}
-
 	request.Header.Set("Authorization", "Bearer "+token)
-	request.Header.Set("Accept", accept)
+	request.Header.Set("Accept", githubAcceptHeader)
 	request.Header.Set(githubAPIVersionHeader, githubAPIVersionValue)
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
@@ -231,7 +208,6 @@ func (client *Client) doRESTWithAccept(
 		client.logger.ErrorContext(ctx, "github request failed", slog.String("err", err.Error()))
 		return nil, fmt.Errorf("github request failed: %w", err)
 	}
-
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
 		_ = response.Body.Close()
@@ -242,11 +218,9 @@ func (client *Client) doRESTWithAccept(
 		client.logger.ErrorContext(ctx, "read github response", slog.String("err", err.Error()))
 		return nil, fmt.Errorf("read github response: %w", err)
 	}
-
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, newAPIError(response.StatusCode, sanitizeErrorBody(responseBody))
 	}
-
 	return responseBody, nil
 }
 
@@ -266,50 +240,30 @@ func (client *Client) doRESTPaginated(
 
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, nextURL, http.NoBody)
 		if err != nil {
-			client.logger.ErrorContext(
-				ctx,
-				"create github request",
-				slog.String("err", err.Error()),
-			)
+			client.logger.ErrorContext(ctx, "create github request", slog.String("err", err.Error()))
 			return errors.New("create github request")
 		}
-
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Set("Accept", githubAcceptHeader)
 		request.Header.Set(githubAPIVersionHeader, githubAPIVersionValue)
 
 		response, err := client.httpClient.Do(request)
 		if err != nil {
-			client.logger.ErrorContext(
-				ctx,
-				"github request failed",
-				slog.String("err", err.Error()),
-			)
+			client.logger.ErrorContext(ctx, "github request failed", slog.String("err", err.Error()))
 			return fmt.Errorf("github request failed: %w", err)
 		}
 
 		responseBody, readErr := readLimitedBody(response.Body)
 		closeErr := response.Body.Close()
 		if readErr != nil {
-			client.logger.ErrorContext(
-				ctx,
-				"read github response",
-				slog.String("err", readErr.Error()),
-			)
+			client.logger.ErrorContext(ctx, "read github response", slog.String("err", readErr.Error()))
 			return errors.New("read github response")
 		}
-
 		if closeErr != nil {
-			client.logger.ErrorContext(
-				ctx,
-				"close github response",
-				slog.String("err", closeErr.Error()),
-			)
+			client.logger.ErrorContext(ctx, "close github response", slog.String("err", closeErr.Error()))
 			return errors.New("close github response")
 		}
-
-		if response.StatusCode < http.StatusOK ||
-			response.StatusCode >= http.StatusMultipleChoices {
+		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 			return newAPIError(response.StatusCode, sanitizeErrorBody(responseBody))
 		}
 
@@ -322,10 +276,8 @@ func (client *Client) doRESTPaginated(
 			nextURL = ""
 			continue
 		}
-
 		nextURL = next
 	}
-
 	return nil
 }
 
@@ -360,7 +312,6 @@ func (client *Client) doGraphQL(
 		client.logger.ErrorContext(ctx, "create graphql request", slog.String("err", err.Error()))
 		return nil, errors.New("create graphql request")
 	}
-
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", githubAcceptHeader)
 	request.Header.Set("Content-Type", "application/json")
@@ -371,7 +322,6 @@ func (client *Client) doGraphQL(
 		client.logger.ErrorContext(ctx, "graphql request failed", slog.String("err", err.Error()))
 		return nil, fmt.Errorf("graphql request failed: %w", err)
 	}
-
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
 		_ = response.Body.Close()
@@ -382,7 +332,6 @@ func (client *Client) doGraphQL(
 		client.logger.ErrorContext(ctx, "read graphql response", slog.String("err", err.Error()))
 		return nil, errors.New("read graphql response")
 	}
-
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, newAPIError(response.StatusCode, sanitizeErrorBody(responseBody))
 	}
@@ -392,11 +341,9 @@ func (client *Client) doGraphQL(
 		client.logger.ErrorContext(ctx, "decode graphql response", slog.String("err", err.Error()))
 		return nil, errors.New("decode graphql response")
 	}
-
 	if len(envelope.Errors) > 0 {
 		return nil, errors.New(formatGraphQLErrors(envelope.Errors))
 	}
-
 	return responseBody, nil
 }
 
@@ -423,19 +370,15 @@ func formatGraphQLErrors(errorsList []graphQLError) string {
 		if item.Type != "" {
 			details = append(details, "type="+item.Type)
 		}
-
 		if path := strings.TrimSpace(string(item.Path)); path != "" && path != "null" {
 			details = append(details, "path="+path)
 		}
-
 		message := item.Message
 		if len(details) > 0 {
 			message += " (" + strings.Join(details, ", ") + ")"
 		}
-
 		messages = append(messages, message)
 	}
-
 	return strings.Join(messages, "; ")
 }
 
@@ -445,11 +388,9 @@ func readLimitedBody(reader io.Reader) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("read response body")
 	}
-
 	if int64(len(body)) > maxResponseBytes {
 		return nil, errors.New("response body exceeds limit")
 	}
-
 	return body, nil
 }
 
@@ -465,16 +406,13 @@ func sanitizeErrorBody(body []byte) string {
 	if text == "" {
 		return "request failed"
 	}
-
 	text = strings.ReplaceAll(text, "\n", " ")
 	text = strings.ReplaceAll(text, "\r", " ")
-
 	for _, marker := range []string{"Bearer ", "ghs_", "ghp_", "github_pat_"} {
 		if index := strings.Index(text, marker); index >= 0 {
 			text = text[:index] + marker + "[redacted]"
 		}
 	}
-
 	return text
 }
 
@@ -482,22 +420,18 @@ func parseNextLink(linkHeader string) (string, bool) {
 	if strings.TrimSpace(linkHeader) == "" {
 		return "", false
 	}
-
 	for part := range strings.SplitSeq(linkHeader, ",") {
 		part = strings.TrimSpace(part)
 		if !strings.Contains(part, `rel="next"`) {
 			continue
 		}
-
 		start := strings.Index(part, "<")
 		end := strings.Index(part, ">")
 		if start < 0 || end <= start {
 			continue
 		}
-
 		return part[start+1 : end], true
 	}
-
 	return "", false
 }
 
@@ -506,6 +440,5 @@ func parseHeadSHA(value string) (domain.HeadSHA, error) {
 	if err != nil {
 		return "", errors.New("invalid head sha")
 	}
-
 	return head, nil
 }

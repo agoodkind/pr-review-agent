@@ -29,7 +29,7 @@ func (client *Client) DismissReview(
 		client.logger.ErrorContext(ctx, "marshal review dismissal", slog.String("err", err.Error()))
 		return Review{}, errors.New("marshal review dismissal")
 	}
-	body, err := client.doREST(ctx, installationID, "PUT", path, nil, encoded)
+	body, err := client.doREST(ctx, installationID, "PUT", path, encoded)
 	if err != nil {
 		return Review{}, err
 	}

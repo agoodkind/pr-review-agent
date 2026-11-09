@@ -55,7 +55,7 @@ func (client *Client) GetCheckRunDetails(
 ) (CheckRunDetails, error) {
 	var details CheckRunDetails
 	path := client.repoPath(repo, fmt.Sprintf("/check-runs/%d", checkRunID))
-	body, err := client.doREST(ctx, installationID, http.MethodGet, path, nil, nil)
+	body, err := client.doREST(ctx, installationID, http.MethodGet, path, nil)
 	if err != nil {
 		return details, err
 	}

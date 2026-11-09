@@ -16,7 +16,7 @@ func (client *Client) GetReview(
 	reviewID int64,
 ) (Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews/%d", number, reviewID))
-	body, err := client.doREST(ctx, installationID, "GET", path, nil, nil)
+	body, err := client.doREST(ctx, installationID, "GET", path, nil)
 	if err != nil {
 		return Review{}, err
 	}
