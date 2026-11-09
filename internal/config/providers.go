@@ -145,6 +145,13 @@ type providerDefinition struct {
 
 var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+var (
+	errInvalidProviderPriority = errors.New(
+		"PROVIDER_PRIORITY must list each provider exactly once",
+	)
+	errNoEnabledProvider = errors.New("at least one provider must be enabled")
+)
+
 // LoadProviders requires normalized PROVIDER_<ID> credential variables.
 func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 	raw, _ := lookup("PROVIDERS")
@@ -231,29 +238,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		}
 	}
 
-	providers := make([]ProviderConfig, 0, len(priority))
-	seen := make(map[string]bool, len(priority))
-	enabled := 0
-
-	for _, id := range priority {
-		provider, exists := configured[id]
-		if !exists || seen[id] {
-			return nil, errors.New("PROVIDER_PRIORITY must list each provider exactly once")
-		}
-
-		seen[id] = true
-		if !provider.Disabled {
-			enabled++
-		}
-
-		providers = append(providers, provider)
-	}
-
-	if enabled == 0 {
-		return nil, errors.New("at least one provider must be enabled")
-	}
-
-	return providers, nil
+	return orderProviders(configured, priority)
 }
 
 func (definition providerDefinition) dailyLimit() int64 {
@@ -481,4 +466,33 @@ func rejectTrailingProviderJSON(decoder *json.Decoder) error {
 	}
 
 	return nil
+}
+
+func orderProviders(
+	configured map[string]ProviderConfig,
+	priority []string,
+) ([]ProviderConfig, error) {
+	providers := make([]ProviderConfig, 0, len(priority))
+	seen := make(map[string]bool, len(priority))
+	enabled := 0
+
+	for _, providerID := range priority {
+		provider, exists := configured[providerID]
+		if !exists || seen[providerID] {
+			return nil, errInvalidProviderPriority
+		}
+
+		seen[providerID] = true
+		if !provider.Disabled {
+			enabled++
+		}
+
+		providers = append(providers, provider)
+	}
+
+	if enabled == 0 {
+		return nil, errNoEnabledProvider
+	}
+
+	return providers, nil
 }

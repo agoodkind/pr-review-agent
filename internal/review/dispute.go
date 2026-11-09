@@ -108,13 +108,13 @@ func collectDisputes(
 			}
 
 			section := formatDiscussionSection(thread, normalizedPath, botLogin)
-			if owned, ok := ownedDisputeSection(
+			if owned, hasOwnedSection := ownedDisputeSection(
 				thread,
 				normalizedPath,
 				botLogin,
 				currentHead,
 				disputes.known,
-			); ok {
+			); hasOwnedSection {
 				section = owned
 			}
 
