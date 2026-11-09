@@ -99,12 +99,32 @@ func PrepareRelationshipChunks(
 		result = append(result, joint)
 	}
 
+	return finalizeRelationshipChunks(
+		model,
+		result,
+		len(chunks),
+		minimumImportance,
+		support,
+		policy,
+		maximumBytes,
+	)
+}
+
+func finalizeRelationshipChunks(
+	model Model,
+	result []diff.Chunk,
+	sourceCount int,
+	minimumImportance int,
+	support relationshipPromptContext,
+	policy reviewrules.Policy,
+	maximumBytes int,
+) ([]diff.Chunk, error) {
 	for index := range result {
 		result[index].Index, result[index].Total = index+1, len(result)
 	}
 
 	// Final indices can change the rendered size across decimal boundaries.
-	for index := len(chunks); index < len(result); index++ {
+	for index := sourceCount; index < len(result); index++ {
 		if !result[index].CoverageComplete {
 			continue
 		}

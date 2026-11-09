@@ -160,19 +160,27 @@ func AssessFileContent(
 		return completion, err
 	}
 
-	for _, reference := range validated[0].Evidence {
-		marker := reference
-		if reference == "pull_request" || reference == "changed_files" {
-			marker = "Evidence ID: " + reference + "\n"
-		}
-
-		if !strings.Contains(prompt, marker) {
-			return completion, assessmentValidationFailure(AssessmentUnsuppliedEvidence, 1, 0)
-		}
+	if err := verifyFileAssessmentEvidence(prompt, validated[0]); err != nil {
+		return completion, err
 	}
 
 	completion.Result.FileAssessments = validated
 	completion.Result.OmissionsAcceptable = accepted
 
 	return completion, nil
+}
+
+func verifyFileAssessmentEvidence(prompt string, assessment domain.FileAssessment) error {
+	for _, reference := range assessment.Evidence {
+		marker := reference
+		if reference == "pull_request" || reference == "changed_files" {
+			marker = "Evidence ID: " + reference + "\n"
+		}
+
+		if !strings.Contains(prompt, marker) {
+			return assessmentValidationFailure(AssessmentUnsuppliedEvidence, 1, 0)
+		}
+	}
+
+	return nil
 }

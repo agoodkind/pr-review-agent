@@ -43,6 +43,12 @@ type budgetSnapshot struct {
 	accounting   quota.Snapshot
 }
 
+type dailyBudgetRequest struct {
+	ProviderID string `json:"provider_id"`
+	Model      string `json:"model"`
+	Limit      int64  `json:"limit"`
+}
+
 func (budgetError *budgetAdmissionError) Error() string {
 	return fmt.Sprintf(
 		"provider %s model %s token admission failed: %v",
@@ -126,17 +132,11 @@ func (client *Client) checkDailyBudget(
 		)
 	}
 
-	body, err := json.Marshal(
-		struct {
-			ProviderID string `json:"provider_id"`
-			Model      string `json:"model"`
-			Limit      int64  `json:"limit"`
-		}{
-			ProviderID: target.id,
-			Model:      target.model,
-			Limit:      target.dailyTokenLimit,
-		},
-	)
+	body, err := json.Marshal(dailyBudgetRequest{
+		ProviderID: target.id,
+		Model:      target.model,
+		Limit:      target.dailyTokenLimit,
+	})
 	if err != nil {
 		return snapshot, budgetFailure(target, snapshot, err)
 	}
