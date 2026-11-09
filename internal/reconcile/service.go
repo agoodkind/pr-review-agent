@@ -150,55 +150,29 @@ func (service *Service) Reconcile(
 	maximumBytes := service.maximumPromptBytes
 	maximumBytes = deliveryMaximumBytes(job, maximumBytes)
 	ctx = modelrequest.WithMaximumBytes(ctx, maximumBytes)
-	removed := make([]domain.OwnedThread, 0)
-
-	for _, thread := range owned {
-		contextText, state := service.loadThreadContext(
-			ctx,
-			job,
-			thread,
-			currentHead,
-			changedFiles,
-			maximumBytes,
-		)
-		switch state {
-		case threadContextRemoved:
-			removed = append(removed, thread)
-			continue
-		case threadContextUnavailable:
-			continue
-		case threadContextPresent:
-		}
-
-		prepared = append(
-			prepared,
-			preparedThread{
-				thread: thread,
-				text:   formatThreadSection(thread, currentHead, contextText, service.botLogin),
-			},
-		)
-	}
-
-	batches, budgetErr := boundPreparedThreads(
-		service.model,
-		prepared,
+	plan, budgetErr := service.prepareReconciliation(
+		ctx,
+		job,
 		pullRequest,
-		service.policy,
+		currentHead,
+		owned,
+		changedFiles,
 		maximumBytes,
+		prepared,
 	)
 	logger.InfoContext(
 		ctx,
 		"review reconciliation analysis started",
-		slog.Int("batches", len(batches)),
-		slog.Any("thread_node_ids", preparedThreadIDs(prepared)),
+		slog.Int("batches", len(plan.batches)),
+		slog.Any("thread_node_ids", preparedThreadIDs(plan.prepared)),
 	)
 	currentThreads, reconcileErr := service.reconcilePrepared(
 		ctx,
 		job,
 		pullRequest,
 		threads,
-		removed,
-		batches,
+		plan.removed,
+		plan.batches,
 		logger,
 	)
 
@@ -223,54 +197,27 @@ func (service *Service) reconcilePrepared(
 	logger *slog.Logger,
 ) ([]githubapp.ReviewThread, error) {
 	currentHead := pullRequest.Head
-	var reconcileErrors []error
-	allResolutions := make([]domain.ThreadResolution, 0)
-	resolvedThreads := make([]resolvedThreadTrace, 0)
-
-	for _, thread := range removed {
-		resolution := domain.ThreadResolution{
-			ThreadNodeID: thread.NodeID,
-			Resolution:   domain.ResolutionResolved,
-			Reason:       "finding anchor no longer exists",
-		}
-		allResolutions = append(allResolutions, resolution)
-		if err := service.resolveAtHead(
-			ctx,
-			job,
-			currentHead,
-			thread,
-			threads,
-			logger,
-		); err != nil {
-			reconcileErrors = append(reconcileErrors, err)
-			if errors.Is(err, errHeadChanged) {
-				return threads, errors.Join(reconcileErrors...)
-			}
-
-			continue
-		}
-
-		resolvedThreads = append(
-			resolvedThreads,
-			resolvedThreadTrace{
-				NodeID:    thread.NodeID,
-				CommentID: thread.RootComment.DatabaseID,
-			},
-		)
+	progress := resolutionProgress{
+		errors:          nil,
+		resolutions:     make([]domain.ThreadResolution, 0),
+		resolvedThreads: make([]resolvedThreadTrace, 0),
+	}
+	if service.resolveRemoved(ctx, job, currentHead, threads, removed, logger, &progress) {
+		return threads, errors.Join(progress.errors...)
 	}
 
 	for batchIndex, batch := range batches {
 		resolutions, err := service.model.Reconcile(ctx, batch.prompt)
 		if err != nil {
-			reconcileErrors = append(
-				reconcileErrors,
+			progress.errors = append(
+				progress.errors,
 				fmt.Errorf("reconcile batch %d/%d: %w", batchIndex+1, len(batches), err),
 			)
 			continue
 		}
 
 		resolutionIndex := indexResolutions(resolutions)
-		allResolutions = append(allResolutions, resolutions...)
+		progress.resolutions = append(progress.resolutions, resolutions...)
 
 		for _, item := range batch.threads {
 			resolution, ok := resolutionIndex[item.thread.NodeID]
@@ -290,16 +237,16 @@ func (service *Service) reconcilePrepared(
 				threads,
 				logger,
 			); err != nil {
-				reconcileErrors = append(reconcileErrors, err)
+				progress.errors = append(progress.errors, err)
 				if errors.Is(err, errHeadChanged) {
-					return threads, errors.Join(reconcileErrors...)
+					return threads, errors.Join(progress.errors...)
 				}
 
 				continue
 			}
 
-			resolvedThreads = append(
-				resolvedThreads,
+			progress.resolvedThreads = append(
+				progress.resolvedThreads,
 				resolvedThreadTrace{
 					NodeID:    item.thread.NodeID,
 					CommentID: item.thread.RootComment.DatabaseID,
@@ -312,19 +259,19 @@ func (service *Service) reconcilePrepared(
 		ctx,
 		"review reconciliation analysis completed",
 		slog.Int("batches", len(batches)),
-		slog.Any("resolutions", allResolutions),
-		slog.Any("resolved_threads", resolvedThreads),
+		slog.Any("resolutions", progress.resolutions),
+		slog.Any("resolved_threads", progress.resolvedThreads),
 	)
 
-	if len(reconcileErrors) > 0 {
+	if len(progress.errors) > 0 {
 		logger.ErrorContext(
 			ctx,
 			"reconcile review threads",
-			slog.String("err", errors.Join(reconcileErrors...).Error()),
+			slog.String("err", errors.Join(progress.errors...).Error()),
 		)
 	}
 
-	return threads, errors.Join(reconcileErrors...)
+	return threads, errors.Join(progress.errors...)
 }
 
 func (service *Service) resolveAtHead(
