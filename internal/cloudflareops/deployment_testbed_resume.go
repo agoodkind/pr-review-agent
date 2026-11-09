@@ -99,73 +99,7 @@ func (operation *deployment) deployWithInterruptedHandoff(
 		)
 	}
 
-	_, before, err := operation.testWorkerVersionNamed(ctx, observation.handoff.Service)
-	if err != nil {
-		return result, err
-	}
-
-	configurationPath, readiness, err := prepareUnavailableTestResumeOrigin(
-		ctx,
-		operation,
-		observation.handoff.Service,
-		observation.handoff.Revision,
-	)
-	if err != nil {
-		return result, err
-	}
-
-	settings, _, err = operation.client.workerSettings(
-		ctx,
-		operation.account,
-		operation.name,
-		false,
-	)
-	if err != nil {
-		return result, err
-	}
-
-	retained, err := settings.handoff(operation.configuration)
-	if err != nil {
-		return result, err
-	}
-
-	if retained != observation.handoff {
-		return result, errors.New(
-			"saved candidate service binding or revision changed before handoff resume",
-		)
-	}
-
-	receipt := readiness
-	receipt.Candidate, receipt.Revision, receipt.VersionBefore, receipt.Interrupted = observation.handoff.Service, observation.handoff.Revision, before, true
-	if err := WriteJSON(
-		filepath.Join(operation.directory, "handoff-resume-readiness.json"),
-		receipt,
-	); err != nil {
-		return result, err
-	}
-
-	options.Directory += "-resumed"
-	options.Configuration = configurationPath
-	result, err = Deploy(ctx, options)
-	if err != nil {
-		return result, err
-	}
-
-	_, after, err := operation.testWorkerVersionNamed(ctx, observation.handoff.Service)
-	if err != nil {
-		return result, err
-	}
-
-	if before != after || !result.Promoted ||
-		result.PendingHandoffRevision != observation.handoff.Revision {
-		return result, errors.New(
-			"resumed deployment replaced its candidate or did not finish its recorded handoff",
-		)
-	}
-
-	receipt.VersionAfter, receipt.ResumedPromoted = after, result.Promoted
-
-	return result, WriteJSON(filepath.Join(operation.directory, "handoff-resume.json"), receipt)
+	return operation.resumeTestHandoff(ctx, options, result, observation.handoff)
 }
 
 func prepareUnavailableTestResumeOrigin(

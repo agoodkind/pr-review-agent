@@ -776,20 +776,6 @@ func (operation *deployment) sampleTestGateway(
 	}
 }
 
-func testRevisionAllowed(actual string, revisions []string) bool {
-	if !reportedRevisionPattern.MatchString(actual) {
-		return false
-	}
-
-	for _, revision := range revisions {
-		if strings.HasPrefix(revision, actual) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (operation *deployment) readTestGateway(ctx context.Context) testReadinessSample {
 	var sample testReadinessSample
 	sample.Timestamp = clock.System().UTC()
