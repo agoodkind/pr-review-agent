@@ -2037,6 +2037,16 @@ func TestReassessmentAfterPublicationFailureReusesCompletedChunks(t *testing.T) 
 		t.Fatalf("assessment outcome = %s, want failed after final publication failed", outcome.Disposition)
 	}
 
+	reviews, err := fixture.github.ListReviews(t.Context(), job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalReview := githubapp.LatestDecisionReview(reviews, testBotLogin)
+	if originalReview.ID == 0 || originalReview.State != "CHANGES_REQUESTED" {
+		t.Fatalf("The first delivery did not persist its rejection: %+v.", originalReview)
+	}
+
 	job.DeliveryID = "reassessment-after-publication-failure"
 	job.AutomaticReassessment = true
 	job.Forced = false
@@ -2059,6 +2069,17 @@ func TestReassessmentAfterPublicationFailureReusesCompletedChunks(t *testing.T) 
 		len(fixture.state.dismissals) != 0 {
 		t.Fatalf("The retry changed the standing rejection: %v.", fixture.state.submittedReviews)
 	}
+
+	reviews, err = fixture.github.ListReviews(t.Context(), job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	standing := githubapp.LatestDecisionReview(reviews, testBotLogin)
+	if standing.ID != originalReview.ID || standing.State != "CHANGES_REQUESTED" {
+		t.Fatalf("The retry did not preserve the persisted rejection: %+v.", standing)
+	}
+
 	if len(fixture.state.checkRuns) != 2 {
 		t.Fatalf("check runs = %d, want a dedicated reassessment check",
 			len(fixture.state.checkRuns))

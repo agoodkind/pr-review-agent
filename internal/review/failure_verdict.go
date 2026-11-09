@@ -82,8 +82,6 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 
 	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		logger.WarnContext(ctx, "verify file findings before failure dismissal", "err", err)
-
 		return fmt.Errorf("verify file findings before failure dismissal: %w", err)
 	}
 
@@ -95,8 +93,6 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 
 	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		logger.WarnContext(ctx, "verify saved findings before failure dismissal", "err", err)
-
 		return fmt.Errorf("verify saved findings before failure dismissal: %w", err)
 	}
 
