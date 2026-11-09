@@ -2054,9 +2054,10 @@ func TestReassessmentAfterPublicationFailureReusesCompletedChunks(t *testing.T) 
 		t.Fatalf("comments = %d, want one per finding: the resumed delivery reposted what was already there",
 			len(fixture.state.streamedComments))
 	}
-	if len(fixture.state.submittedReviews) != 2 {
-		t.Fatalf("submitted reviews = %d, want the dismissed rejection replaced after reassessment",
-			len(fixture.state.submittedReviews))
+	if len(fixture.state.submittedReviews) != 1 ||
+		fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
+		len(fixture.state.dismissals) != 0 {
+		t.Fatalf("The retry changed the standing rejection: %v.", fixture.state.submittedReviews)
 	}
 	if len(fixture.state.checkRuns) != 2 {
 		t.Fatalf("check runs = %d, want a dedicated reassessment check",
@@ -2200,9 +2201,10 @@ func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing
 	if len(owed.Completed) != 2 {
 		t.Fatalf("completed = %v, want both chunks recorded as read", owed.Completed)
 	}
-	if len(fixture.state.submittedReviews) != 1 || fixture.state.submittedReviews[0]["state"] != "DISMISSED" {
-		t.Fatalf("submitted reviews = %d, want the early inline rejection dismissed after the failure",
-			len(fixture.state.submittedReviews))
+	if len(fixture.state.submittedReviews) != 1 ||
+		fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
+		len(fixture.state.dismissals) != 0 {
+		t.Fatalf("The failure withdrew the inline rejection: %v.", fixture.state.submittedReviews)
 	}
 	if fixture.state.checkRuns[0]["status"] != "completed" || fixture.state.checkRuns[0]["conclusion"] != "failure" {
 		t.Fatalf("check status = %v, want completed failure", fixture.state.checkRuns[0]["status"])
@@ -2216,9 +2218,10 @@ func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing
 		t.Fatalf("redelivered Run: %v", err)
 	}
 
-	if len(fixture.state.submittedReviews) != 2 {
-		t.Fatalf("submitted reviews = %d, want the verdict the dead run owed",
-			len(fixture.state.submittedReviews))
+	if len(fixture.state.submittedReviews) != 1 ||
+		fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
+		len(fixture.state.dismissals) != 0 {
+		t.Fatalf("The retry changed the preserved inline rejection: %v.", fixture.state.submittedReviews)
 	}
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want the open findings to block",
@@ -5199,8 +5202,12 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 			}
 			if submitted := fixture.state.lastSubmitReview; submitted != nil {
 				comments, _ := submitted["comments"].([]any)
-				if submitted["event"] != string(domain.ReviewDecisionRequestChanges) || len(comments) != 1 || len(fixture.state.streamedComments) != 1 || len(fixture.state.submittedReviews) != 1 || fixture.state.submittedReviews[0]["state"] != "DISMISSED" {
-					t.Fatalf("The failed run retained a verdict without a published inline finding: %v", submitted)
+				if submitted["event"] != string(domain.ReviewDecisionRequestChanges) ||
+					len(comments) != 1 || len(fixture.state.streamedComments) != 1 ||
+					len(fixture.state.submittedReviews) != 1 ||
+					fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
+					len(fixture.state.dismissals) != 0 {
+					t.Fatalf("The failed run changed its actionable inline rejection: %v.", submitted)
 				}
 			}
 			if body := failureSummaryComment(t, fixture); !strings.Contains(body, stage.title) {

@@ -79,12 +79,36 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 	if latest.State != reviewStateChangesRequested {
 		return nil
 	}
+
+	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
+	if err != nil {
+		logger.WarnContext(ctx, "verify file findings before failure dismissal", "err", err)
+
+		return fmt.Errorf("verify file findings before failure dismissal: %w", err)
+	}
+
+	if hasUnresolvedBotThread(threads, service.botLogin) {
+		logger.InfoContext(ctx, "preserve unresolved file rejection after failure", "review_id", latest.ID)
+
+		return nil
+	}
+
 	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
-	if validNativeMetadataBlock(latest) {
-		if err != nil {
-			logger.WarnContext(ctx, "preserve metadata rejection after summary read failure", "review_id", latest.ID, "err", err)
-			return nil
-		}
+	if err != nil {
+		logger.WarnContext(ctx, "verify saved findings before failure dismissal", "err", err)
+
+		return fmt.Errorf("verify saved findings before failure dismissal: %w", err)
+	}
+
+	comment, found := findSummaryComment(comments, service.botLogin)
+	saved, recorded, err := decodeMetadataRecord(comment.Body)
+	if err != nil {
+		logger.WarnContext(ctx, "read saved findings before failure dismissal", "err", err)
+
+		return fmt.Errorf("read saved findings before failure dismissal: %w", err)
+	}
+
+	if validNativeMetadataBlock(latest) || recorded && len(saved.Findings) > 0 {
 		blocked, verificationErr := service.savedMetadataStillBlocks(ctx, job, comments)
 		if verificationErr != nil {
 			return verificationErr
@@ -96,15 +120,10 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 	}
 	var data reviewrules.PromptData
 	data.Input = service.terminalFailureLead(ctx, cause)
-	if err != nil {
-		logger.WarnContext(ctx, "read failure dismissal summary", slog.String("err", err.Error()))
+	if found && comment.ID > 0 {
+		data.SummaryURL = nativeSummaryURL(job.Repository, job.Number, comment.ID)
 	} else {
-		comment, found := findSummaryComment(comments, service.botLogin)
-		if found && comment.ID > 0 {
-			data.SummaryURL = nativeSummaryURL(job.Repository, job.Number, comment.ID)
-		} else {
-			logger.WarnContext(ctx, "failure dismissal summary is unavailable")
-		}
+		logger.WarnContext(ctx, "failure dismissal summary is unavailable")
 	}
 	message, err := service.reviewPolicy.Render("failure.dismiss", data)
 	if err != nil {

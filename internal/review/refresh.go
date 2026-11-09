@@ -64,8 +64,6 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	threads []githubapp.ReviewThread,
 	settings reviewSettings,
 ) (bool, error) {
-	ctx, cancel := service.publicationContext(ctx)
-	defer cancel()
 	logger := gklog.L(ctx)
 
 	inputs, err := service.loadVerdictRefreshInputs(ctx, job, reviews, threads)
@@ -119,6 +117,10 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		}
 		metadataReassessed = true
 	}
+
+	ctx, cancel := service.publicationContext(ctx)
+	defer cancel()
+
 	// How much of the head was reviewed is recovered from the review that named
 	// this head, because that is the run that knew. What the pull request
 	// currently shows is a separate question, answered by the newest verdict
@@ -201,10 +203,38 @@ func (service *Service) refreshReviewedCheck(
 		}
 		return errors.Join(err, completionErr, dismissErr)
 	}
+	usage := UsageFromContext(ctx)
+	details := ""
+	if usage.Requests > 0 {
+		now := service.now()
+		progress := service.newProgress(job, settings, now).summary(now)
+		progress.Usage = usage
+		service.enrichProviderPeriodUsage(ctx, &progress)
+
+		details = "\n\n" + RenderDetails(progress)
+	}
+
 	if withheld {
 		recordAssessment(ctx, domain.AssessmentDeclined, nil, nil, 0)
-		return service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
-			checkConclusionDeclined, "Review needs attention", "Approval remains withheld. The review summary explains what needs attention.")
+		return service.completeCheckRun(
+			ctx,
+			job.InstallationID,
+			job.Repository,
+			job.CheckRunID,
+			checkConclusionDeclined,
+			"Review needs attention",
+			"Approval remains withheld. The review summary explains what needs attention."+details,
+		)
+	}
+
+	if usage.Requests > 0 {
+		return service.succeed(
+			ctx,
+			job,
+			job.CheckRunID,
+			"Review refreshed",
+			"This run reassessed the standing review."+details,
+		)
 	}
 	return service.succeed(ctx, job, job.CheckRunID, checkTitleAlreadyReviewed,
 		"This head already has a PR-Agent review. No duplicate review was published.")

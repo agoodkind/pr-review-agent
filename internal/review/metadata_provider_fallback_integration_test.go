@@ -51,6 +51,7 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 		policy            config.ProviderFailurePolicy
 		resolution        domain.Resolution
 		invalidSecondary  bool
+		emptyNativeBody   bool
 		expectFailure     bool
 		expectApproval    bool
 		expectSecondCalls int
@@ -58,6 +59,7 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 		{name: "grounded resolution", policy: config.ProviderAnyFailure, resolution: domain.ResolutionResolved, expectApproval: true, expectSecondCalls: 1},
 		{name: "grounded open finding", policy: config.ProviderAnyFailure, resolution: domain.ResolutionOpen, expectSecondCalls: 1},
 		{name: "every provider returns stale evidence", policy: config.ProviderAnyFailure, resolution: domain.ResolutionResolved, invalidSecondary: true, expectFailure: true, expectSecondCalls: 1},
+		{name: "saved finding with empty native body", policy: config.ProviderAnyFailure, resolution: domain.ResolutionResolved, invalidSecondary: true, emptyNativeBody: true, expectFailure: true, expectSecondCalls: 1},
 		{name: "recoverable policy stops at invalid evidence", policy: config.ProviderRecoverableFailure, resolution: domain.ResolutionResolved, expectFailure: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -185,6 +187,9 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 			assertMetadataRejectionStillStands(t, fixture)
 			initialSummaryID := fixture.state.issueComments[0]["id"]
 			originalRejection := fixture.state.submittedReviews[0]
+			if scenario.emptyNativeBody {
+				originalRejection["body"] = ""
+			}
 
 			capture.mu.Lock()
 			initialRequests := capture.requests
