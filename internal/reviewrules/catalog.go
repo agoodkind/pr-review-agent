@@ -163,28 +163,9 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		return Policy{}, err
 	}
 
-	compiled := make(map[string]*template.Template, len(prompts.Templates))
-	for name, body := range prompts.Templates {
-		if strings.TrimSpace(name) == "" || strings.TrimSpace(body) == "" {
-			return Policy{}, fmt.Errorf("prompt template requires a name and nonempty body")
-		}
-
-		parsed, err := compileTemplate(name, body)
-		if err != nil {
-			return Policy{}, err
-		}
-
-		compiled[name] = parsed
-	}
-
-	for _, entry := range rules.Rules {
-		name := "rule." + string(entry.ID)
-		parsed, err := compileTemplate(name, entry.Instructions)
-		if err != nil {
-			return Policy{}, err
-		}
-
-		compiled[name] = parsed
+	compiled, err := compilePolicyTemplates(rules, prompts)
+	if err != nil {
+		return Policy{}, err
 	}
 
 	for _, name := range []string{
@@ -216,61 +197,8 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 	}
 
-	for _, name := range []string{
-		"report.context_omitted",
-		"consolidate.context_omitted",
-		"review.context_omitted",
-		"review.path_instructions",
-		"omissions.deferred",
-		"coverage.requirement_conflict",
-		"coverage.accepted",
-		"coverage.pending",
-		"coverage.check_title",
-		"coverage.verdict_pending",
-		"coverage.persistence_limit",
-		"inline.footer",
-		"failure.class.other",
-		"failure.class.deadline",
-		"failure.class.provider_unavailable",
-		"failure.class.panic",
-		"failure.class.daily_budget",
-		"failure.class.usage_exceeded",
-		"failure.class.rate_limited",
-		"failure.dismiss",
-		"failure.provider",
-		"failure.service",
-		"failure.details",
-		"failure.row",
-		"catalog.review",
-		"catalog.output",
-		"catalog.rule",
-		"review.system",
-		"review.input",
-		"report.system",
-		"report.input",
-		"reconcile.system",
-		"reconcile.input",
-		"consolidate.system",
-		"consolidate.input",
-		"consolidate.across.input",
-		"disputes.input",
-		"omissions.none",
-		"omissions.input",
-		"omissions.decision",
-		"pull_request.input",
-		"structured.output",
-		"untrusted.policy",
-		"probe.user",
-		"schema.finding.surface",
-		"schema.finding.commit_sha",
-		"schema.finding.correction_action",
-		"schema.finding.path",
-		"schema.finding.start_line",
-		"schema.finding.end_line",
-	} {
-		if _, exists := compiled[name]; !exists {
-			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
-		}
+	if err := requirePolicyTemplates(compiled); err != nil {
+		return Policy{}, err
 	}
 
 	encoded, err := json.Marshal(
