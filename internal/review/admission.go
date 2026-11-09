@@ -131,81 +131,34 @@ func (service *Service) collectAndAdmit(
 ) (deltaWork, bool, error) {
 	logger := gklog.L(ctx)
 	var empty deltaWork
-	input, err := service.collector.CollectRange(ctx, job.PullRequestRef, pullRequest, base)
-	if err != nil {
-		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
-
-		return empty, true, service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureDiff,
-			fmt.Errorf("collect pull request diff: %w", err),
-		)
-	}
-
-	progress.reached("the diff")
-
-	fileAdmission, deterministic, unresolvedFiles, err := service.admitFileInput(input, settings)
-	if err != nil {
-		return empty, true, service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureAnalysis,
-			err,
-		)
-	}
-
-	if fileAdmission.Skip {
-		if err := service.declineReview(ctx, job, checkRun.ID, fileAdmission); err != nil {
-			return empty, true, service.failCheck(
-				ctx,
-				job,
-				checkRun.ID,
-				progress.summary(service.now()),
-				checkFailureSkip,
-				err,
-			)
-		}
-
-		return empty, true, nil
-	}
-
-	contentInput, assessments, assessmentModels, assessmentRequests, err := service.classifyInput(
+	admitted, stop, err := service.collectAdmissionInput(
 		ctx,
-		input,
-		deterministic,
-		unresolvedFiles,
+		job,
+		pullRequest,
+		checkRun,
+		base,
+		progress,
 		settings,
+		logger,
 	)
-	if err != nil {
-		return empty, true, service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureAnalysis,
-			err,
-		)
+	if stop {
+		return empty, true, err
 	}
 
-	shortfall := classifyStructuralShortfall(deltaWork{
-		AssessmentRequests: assessmentRequests,
-		FileAssessments:    assessments,
-		AssessmentModels:   assessmentModels,
-		PullRequest:        input.PullRequest,
-		Files:              input.Files,
-		Metadata:           input.Metadata,
-		Chunks:             nil,
-	})
-	promptContext, err := BuildPullRequestContext(
-		input.PullRequest,
-		input.Files,
-		service.reviewPolicy,
+	plan, stop, err := service.prepareAdmissionPlan(
+		ctx,
+		job,
+		checkRun,
+		progress,
+		settings,
+		logger,
+		admitted,
 	)
+	if stop {
+		return empty, true, err
+	}
+
+	work, err := service.boundAdmissionChunks(plan, settings)
 	if err != nil {
 		return empty, true, service.failCheck(
 			ctx,
@@ -217,122 +170,9 @@ func (service *Service) collectAndAdmit(
 		)
 	}
 
-	required, err := sourceScopePrompt(shortfall, service.reviewPolicy)
-	if err != nil {
-		return empty, true, service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureAnalysis,
-			err,
-		)
-	}
-
-	chunks, err := diff.ChunkInput(contentInput, settings.maximumPromptBytes)
-	if err != nil {
-		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
-
-		return empty, true, service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureDiff,
-			fmt.Errorf("chunk input: %w", err),
-		)
-	}
-
-	work := deltaWork{
-		AssessmentRequests: assessmentRequests,
-		FileAssessments:    assessments,
-		AssessmentModels:   assessmentModels,
-		PullRequest:        input.PullRequest,
-		Files:              input.Files,
-		Metadata:           input.Metadata,
-		Chunks:             chunks,
-	}
-	work.Chunks, err = BoundModelReviewChunksWithContext(
-		service.model,
-		work.Chunks,
-		work.Files,
-		settings.minimumImportance,
-		required,
-		promptContext,
-		service.reviewPolicy,
-		settings.maximumPromptBytes,
-	)
-	if err != nil {
-		return empty, true, service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureAnalysis,
-			err,
-		)
-	}
-
-	shortfall = classifyStructuralShortfall(work)
-	if shortfall.present() {
-		required, err = sourceScopePrompt(shortfall, service.reviewPolicy)
-		if err != nil {
-			return empty, true, service.failCheck(
-				ctx,
-				job,
-				checkRun.ID,
-				progress.summary(service.now()),
-				checkFailureAnalysis,
-				err,
-			)
-		}
-
-		work.Chunks, err = BoundModelReviewChunksWithContext(
-			service.model,
-			work.Chunks,
-			work.Files,
-			settings.minimumImportance,
-			required,
-			promptContext,
-			service.reviewPolicy,
-			settings.maximumPromptBytes,
-		)
-		if err != nil {
-			return empty, true, service.failCheck(
-				ctx,
-				job,
-				checkRun.ID,
-				progress.summary(service.now()),
-				checkFailureAnalysis,
-				err,
-			)
-		}
-	}
-
-	work.Chunks, err = PrepareRelationshipChunks(
-		service.model,
-		work.Chunks,
-		work.Files,
-		settings.minimumImportance,
-		required,
-		promptContext,
-		service.reviewPolicy,
-		settings.maximumPromptBytes,
-	)
-	if err != nil {
-		return empty, true, service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureAnalysis,
-			err,
-		)
-	}
-
-	chunks = work.Chunks
+	chunks := work.Chunks
 	verdict := CheckReviewBudget(
-		len(contentInput.Files),
+		len(plan.contentInput.Files),
 		chunks,
 		settings.maxFiles,
 		settings.maxChunks,
@@ -345,7 +185,7 @@ func (service *Service) collectAndAdmit(
 		ctx,
 		"review job skipped",
 		slog.String("reason", verdict.Reason),
-		slog.Int("files", len(input.Files)),
+		slog.Int("files", len(admitted.input.Files)),
 		slog.Int("chunks", len(chunks)),
 		slog.Int("reviewable_chunks", verdict.ReviewableChunks),
 	)
