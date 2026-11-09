@@ -366,96 +366,7 @@ func (service *Service) runLocked(
 	}
 	defer closeSnapshot()
 
-	// A forced run must never stop on a conclusion an earlier run reached, since
-	// redoing that run is the whole point. Admission gives it its own check run,
-	// so this is normally not a completed check at all; the guard keeps that
-	// true if a forced job ever reaches here carrying one.
-	if !job.Forced && !job.AutomaticReassessment && service.checkAlreadySucceeded(ctx, checkRun) {
-		// A prior successful check does not override a refreshed withheld verdict.
-		return service.refreshReviewedCheck(ctx, job, nil, settings)
-	}
-
-	pullRequest, err := service.github.GetPullRequest(
-		ctx,
-		job.InstallationID,
-		job.Repository,
-		job.Number,
-	)
-	if err != nil {
-		return service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailurePullRequest,
-			err,
-		)
-	}
-
-	if pullRequest.Head != head {
-		return service.cancelCheck(ctx, job, checkRun.ID)
-	}
-
-	if job.AutomaticReassessment && (!pullRequest.EligibilityKnown || !pullRequest.MetadataKnown) {
-		return service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureRefresh,
-			errors.New("current pull request response is incomplete"),
-		)
-	}
-
-	if job.AutomaticReassessment &&
-		(pullRequest.State != "open" || pullRequest.Merged || pullRequest.Draft) {
-		return service.cancelCheck(ctx, job, checkRun.ID)
-	}
-
-	progress.reached("the pull request")
-
-	if job.MetadataOnly {
-		return service.reviewMetadataEdit(
-			ctx,
-			job,
-			checkRun,
-			pullRequest,
-			startedAt,
-			progress,
-			settings,
-		)
-	}
-
-	if job.AutomaticReassessment && job.RefreshVerdict {
-		return service.refreshReviewedCheck(ctx, job, nil, settings)
-	}
-
-	reviews, reviewed, err := service.loadReviewHistory(ctx, job, head, progress)
-	if err != nil {
-		return service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureReviews,
-			err,
-		)
-	}
-
-	if reviewed {
-		return service.refreshReviewedCheck(ctx, job, reviews, settings)
-	}
-
-	return service.reviewOwedWork(
-		ctx,
-		job,
-		checkRun,
-		pullRequest,
-		reviews,
-		startedAt,
-		progress,
-		settings,
-	)
+	return service.reviewSnapshot(ctx, job, checkRun, head, startedAt, progress, settings)
 }
 
 // reviewOwedWork reviews the current pull request as GitHub presents it now,
@@ -554,66 +465,27 @@ func (service *Service) reviewOwedWork(
 	// writes its own account of why. One of them announcing a start first would
 	// leave the comment saying a review is under way that nobody is having, and
 	// a declined delta would say it twice and contradict itself.
-	var metadataRecord metadataReviewRecord
-	var fallbackRecord fallbackReviewRecord
-	if hasState {
-		metadataRecord, fallbackRecord, state.Completed, err = service.restoreFindingCheckpoints(
-			ctx,
-			job,
-			pullRequest,
-			work.Chunks,
-			state.Completed,
-		)
-		if err != nil {
-			return service.failCheck(
-				ctx,
-				job,
-				checkRun.ID,
-				progress.summary(service.now()),
-				checkFailureSummary,
-				err,
-			)
-		}
-	}
-
-	progress.restoreFindings(metadataRecord, fallbackRecord)
-	progress.fileAssessments = work.FileAssessments
-	progress.models = work.AssessmentModels
-	started := progress.summary(service.now())
-	started.Failed = false
-	started.InProgress = true
-	service.announceStart(ctx, job, started)
-
-	threads, err := service.reconcileThreads(ctx, job, checkRun.ID, progress)
+	pass, err := service.prepareOwedPass(
+		ctx,
+		job,
+		checkRun,
+		pullRequest,
+		reviews,
+		work,
+		startedAt,
+		progress,
+		settings,
+		owedPreparation{
+			state:         &state,
+			hasState:      hasState,
+			fromScratch:   fromScratch,
+			policyChanged: policyChanged,
+		},
+	)
 	if err != nil {
 		return err
 	}
 
-	// Both are built from the threads reconciliation already loaded, so raising
-	// an answered claim again costs the run no extra read and no extra model
-	// call.
-	selection := collectPublicationState(reviews, threads, service.botLogin)
-	disputes := collectDisputes(threads, service.botLogin, head)
-	disputePrompt, err := disputes.promptSection(service.reviewPolicy)
-	if err != nil {
-		return service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureAnalysis,
-			err,
-		)
-	}
-
-	pass := newChunkPass(work, settings, &selection, disputes, disputePrompt, startedAt)
-	pass.seedFileAssessments(service.reviewPolicy)
-	pass.restoreFindings(
-		metadataRecord,
-		fallbackRecord,
-		fromScratch || policyChanged,
-		state.Completed,
-	)
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {
@@ -985,100 +857,36 @@ func (service *Service) publishReassessed(
 
 	progress.reached("the head refresh")
 
-	// Findings either reached the diff or were retained for the summary, so the
-	// review submitted here carries the verdict alone.
-	analysis := pass.analysis()
-	published := pass.publishedFindings()
-	metadata, metadataCheckpoint := pass.metadataSnapshot()
-	_, fallbackCheckpoint := pass.fallbackSnapshot()
-	posted, failed, fallback := pass.delivery()
-	logPublishedFindings(ctx, analysis.Anchored, published, posted, failed)
-	progress.reached("finding selection")
-
-	threads, err := service.openThreads(ctx, job, progress)
+	inputs, err := service.loadPublicationInputs(ctx, job, checkRun, pass, progress)
 	if err != nil {
-		return service.failCheck(
-			ctx,
-			job,
-			checkRun.ID,
-			progress.summary(service.now()),
-			checkFailureThreads,
-			err,
-		)
+		return err
 	}
 
-	shortfall := pass.structuralShortfall()
-	omissionsDecided := shortfall.present() && len(state.Pending) == 0 && len(state.Unread) == 0 &&
-		pass.decidedOmissions()
-	omissionsAccepted := omissionsDecided && pass.acceptsOmissions()
-	// Completing the read does not establish approval when omissions were
-	// refused or a finding could not reach the diff.
-	headFullyReviewed := len(state.Pending) == 0 && len(state.Unread) == 0 &&
-		(analysis.CoverageComplete || omissionsDecided) && failed == len(fallback)
-	approvalAllowed := headFullyReviewed && (!omissionsDecided || omissionsAccepted) &&
-		len(fallback) == 0
-	decision := reviewerDecision(threads, service.botLogin, approvalAllowed)
-	if len(metadata) > 0 {
-		decision = domain.ReviewDecisionRequestChanges
-	}
-
-	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef)
-	summary := Summary{
-		FileAssessmentNote: "",
-		Head:               head,
-		Decision:           decision,
-		DecisionReason:     pass.decisionReason(),
-		ApprovalWithheld:   !approvalAllowed,
-		Report: Report{
-			Summary:     "",
-			Walkthrough: nil,
-		},
-		Blocking:                   blocking,
-		Models:                     analysis.Models,
-		Usage:                      UsageFromContext(ctx),
-		Duration:                   service.now().Sub(startedAt),
-		FilesReviewed:              analysis.FilesReviewed,
-		Chunks:                     analysis.Chunks,
-		CoverageComplete:           analysis.CoverageComplete,
-		MinimumImportance:          settings.minimumImportance,
-		Observed:                   analysis.Observed,
-		Eligible:                   analysis.Anchored,
-		Published:                  published,
-		Fallback:                   fallback,
-		Metadata:                   metadata,
-		metadataCheckpoint:         metadataCheckpoint,
-		fallbackCheckpoint:         fallbackCheckpoint,
-		MetadataRevision:           diff.PullRequestRevision(pass.work.PullRequest),
-		MetadataFindingsDisplay:    service.reviewPolicy.MetadataFindingsDisplay(),
-		PriorReviews:               traceReviews(reviews, service.botLogin),
-		Threads:                    traceThreads(threads, service.botLogin),
-		Reached:                    "",
-		Failed:                     false,
-		InProgress:                 false,
-		Forced:                     job.Forced,
-		Omissions:                  nil,
-		OmissionsAccepted:          omissionsAccepted,
-		FileAssessments:            pass.fileAssessments(),
-		FileAssessmentsDisplay:     service.reviewPolicy.FileAssessmentsDisplay(),
-		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
-	}
-	if omissionsDecided {
-		summary.Omissions = shortfall.Hunks
-	}
+	decision := service.decidePublication(
+		ctx,
+		job,
+		head,
+		reviews,
+		pass,
+		state,
+		startedAt,
+		settings,
+		inputs,
+	)
 
 	// A head holding something no run can read is settled first. Its shortfall
 	// outlives every later push, so the pending path's promise that the next
 	// push covers it would be false even when chunks are pending too.
-	if shortfall.present() && !omissionsDecided || len(state.Pending) > 0 {
-		if shortfall.present() && !omissionsDecided {
+	if decision.shortfall.present() && !decision.omissionsDecided || len(state.Pending) > 0 {
+		if decision.shortfall.present() && !decision.omissionsDecided {
 			return service.concludeStructurallyIncomplete(
 				ctx,
 				job,
 				checkRun,
 				currentPullRequest,
 				state,
-				shortfall,
-				summary,
+				decision.shortfall,
+				decision.summary,
 				progress,
 				pass,
 			)
@@ -1093,7 +901,7 @@ func (service *Service) publishReassessed(
 			checkRun,
 			state,
 			pass,
-			summary,
+			decision.summary,
 			progress,
 		)
 	}
@@ -1104,7 +912,7 @@ func (service *Service) publishReassessed(
 		checkRun,
 		currentPullRequest,
 		head,
-		summary,
+		decision.summary,
 		state,
 		progress,
 		pass,
@@ -1187,51 +995,15 @@ func (service *Service) publishVerdict(
 		return service.failCheck(ctx, job, checkRun.ID, summary, checkFailureReviews, err)
 	}
 
-	standing := service.standingVerdict(job, reviews, summary)
-	withdrawnByHuman := false
-	if summary.Decision == domain.ReviewDecisionRequestChanges {
-		withdrawnByHuman, err = service.preserveDismissedRejection(ctx, job, reviews)
-		if err != nil {
-			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
-		}
-	}
-
-	decisionState := reviewStateFor(summary.Decision)
-	unchanged := standing.found && !standing.withdrawn &&
-		standing.review.State == decisionState &&
-		latestBotVerdictState(reviews, service.botLogin) == decisionState
-	switch {
-	case summary.Decision == domain.ReviewDecisionComment:
-		if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
-			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
-		}
-	case withdrawnByHuman:
-		logger.InfoContext(ctx, "review verdict withheld", "reason", "block_withdrawn_by_hand")
-	case unchanged:
-		if err := service.updateStandingVerdict(ctx, job, standing.review, summary); err != nil {
-			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
-		}
-
-		logger.InfoContext(
-			ctx,
-			"review verdict unchanged",
-			slog.Int64("review_id", standing.review.ID),
-			slog.String("event", string(summary.Decision)),
-		)
-	default:
-		publishedReview, err := service.submitInlineBackedVerdict(ctx, job, summary)
-		if err != nil {
-			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
-		}
-
-		logger.InfoContext(
-			ctx,
-			"review published",
-			slog.Int64("review_id", publishedReview.ID),
-			slog.String("event", string(summary.Decision)),
-			slog.Int("streamed_comments", len(summary.Published)),
-			slog.Any("blocking", summary.Blocking),
-		)
+	if err := service.publishStandingVerdict(
+		ctx,
+		job,
+		checkRun,
+		summary,
+		reviews,
+		logger,
+	); err != nil {
+		return err
 	}
 
 	// The one top level comment carries the same body plus the durable state
