@@ -377,6 +377,7 @@ func (service *Service) loadVerdictRefreshInputs(
 				"list reviews for verdict refresh",
 				slog.String("err", err.Error()),
 			)
+
 			return missing, fmt.Errorf("list reviews for verdict refresh: %w", err)
 		}
 
@@ -418,6 +419,7 @@ func (service *Service) loadVerdictRefreshInputs(
 				"list threads for verdict refresh",
 				slog.String("err", err.Error()),
 			)
+
 			return missing, fmt.Errorf("list threads for verdict refresh: %w", err)
 		}
 
@@ -681,6 +683,7 @@ func (service *Service) saveRefreshedSummary(
 			"update summary after verdict refresh",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("update summary after verdict refresh: %w", err)
 	}
 

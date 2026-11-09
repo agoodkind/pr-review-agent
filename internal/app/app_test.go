@@ -3823,6 +3823,7 @@ func (state *githubServerState) handleSubmitReview(
 				http.StatusUnprocessableEntity,
 				map[string]any{"message": "invalid review comment"},
 			)
+
 			return
 		}
 

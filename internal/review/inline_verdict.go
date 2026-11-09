@@ -50,6 +50,7 @@ func (service *Service) validateInlineVerdict(
 			"read inline findings before verdict",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("read inline findings before verdict: %w", err)
 	}
 
@@ -85,6 +86,7 @@ func (service *Service) withdrawUnsupportedVerdicts(
 			"read reviews before withholding verdict",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("read reviews before withholding verdict: %w", err)
 	}
 
@@ -110,6 +112,7 @@ func (service *Service) withdrawUnsupportedVerdicts(
 			slog.Int64("review_id", latest.ID),
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("withdraw unsupported verdict %d: %w", latest.ID, err)
 	}
 

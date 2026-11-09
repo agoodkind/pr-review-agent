@@ -327,6 +327,7 @@ func validateProviderQuota(definition providerDefinition) error {
 				slog.String("provider_id", definition.ID),
 				slog.String("err", err.Error()),
 			)
+
 			return fmt.Errorf("provider %q token_window: %w", definition.ID, err)
 		}
 	}

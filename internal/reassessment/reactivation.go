@@ -97,6 +97,7 @@ func (coordinator *Coordinator) Reevaluate(
 			"read reactivated pull request",
 			slog.String("err", err.Error()),
 		)
+
 		return false, fmt.Errorf("read reactivated pull request: %w", err)
 	}
 

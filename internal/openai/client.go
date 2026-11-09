@@ -352,6 +352,7 @@ func inspectionRequests(
 			"The model did not return the required inspection request array.",
 			attributes...,
 		)
+
 		return nil, errors.New("inspection_requests must be an explicit JSON array")
 	}
 
@@ -365,6 +366,7 @@ func inspectionRequests(
 			"schema_name",
 			schemaName,
 		)
+
 		return nil, fmt.Errorf("decode inspection requests: %w", err)
 	}
 

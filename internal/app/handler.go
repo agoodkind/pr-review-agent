@@ -452,6 +452,7 @@ func (handler *handler) parseReviewEvent(
 			"load tagged pull request",
 			slog.String("err", err.Error()),
 		)
+
 		return webhook.PullRequestEvent{}, false, errTaggedPullRequestUnavailable
 	}
 

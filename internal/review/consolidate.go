@@ -206,6 +206,7 @@ func (service *Service) consolidateAcrossChunks(
 			"err",
 			err,
 		)
+
 		return candidates
 	}
 

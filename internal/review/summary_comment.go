@@ -223,6 +223,7 @@ func (service *Service) readState(
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "list issue comments", slog.String("err", err.Error()))
+
 		return marker.State{
 			PolicyRevision: "",
 			LastReviewed:   "",

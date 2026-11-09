@@ -27,6 +27,7 @@ func (service *Service) reviewMetadataEdit(
 			"read metadata edit coverage",
 			slog.String("err", err.Error()),
 		)
+
 		return service.failCheck(
 			ctx,
 			job,

@@ -551,6 +551,7 @@ func (policy Policy) EscapeUntrusted(input string) string {
 		policy.untrustedMarkers.Begin,
 		policy.untrustedMarkers.EscapedBegin,
 	)
+
 	return strings.ReplaceAll(
 		input,
 		policy.untrustedMarkers.End,

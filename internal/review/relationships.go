@@ -526,6 +526,7 @@ func linkGoRelationships(
 			"err",
 			err,
 		)
+
 		return
 	}
 

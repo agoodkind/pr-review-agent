@@ -37,6 +37,7 @@ func (client *Client) MetadataReassessmentRequestBytes(prompt string) (int, erro
 		metadataAssessmentSchemaName,
 		metadataAssessmentSchema,
 	)
+
 	return maximumPayloadBytes(payloads, err)
 }
 

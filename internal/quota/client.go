@@ -327,6 +327,7 @@ func post[Request QueryRequest | totalsRequest | ReportRequest | dailyRequest | 
 			"quota storage request encoding failed",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("encode quota storage request: %w", err)
 	}
 
@@ -342,6 +343,7 @@ func post[Request QueryRequest | totalsRequest | ReportRequest | dailyRequest | 
 			"quota storage request creation failed",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("create quota storage request: %w", err)
 	}
 
@@ -371,6 +373,7 @@ func post[Request QueryRequest | totalsRequest | ReportRequest | dailyRequest | 
 			"quota storage response read failed",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("read quota storage response: %w", err)
 	}
 
@@ -384,6 +387,7 @@ func post[Request QueryRequest | totalsRequest | ReportRequest | dailyRequest | 
 			"quota storage response decoding failed",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("decode quota storage response: %w", err)
 	}
 

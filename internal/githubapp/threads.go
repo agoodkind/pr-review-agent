@@ -201,6 +201,7 @@ func (client *Client) ListReviewThreads(
 				"marshal review threads variables",
 				slog.String("err", err.Error()),
 			)
+
 			return nil, errors.New("marshal review threads variables")
 		}
 
@@ -218,6 +219,7 @@ func (client *Client) ListReviewThreads(
 				"decode review threads",
 				slog.String("err", err.Error()),
 			)
+
 			return nil, errors.New("decode review threads")
 		}
 
@@ -278,6 +280,7 @@ func (client *Client) listRemainingThreadComments(
 				"marshal thread comments variables",
 				slog.String("err", err.Error()),
 			)
+
 			return nil, errors.New("marshal thread comments variables")
 		}
 
@@ -295,6 +298,7 @@ func (client *Client) listRemainingThreadComments(
 				"decode thread comments",
 				slog.String("err", err.Error()),
 			)
+
 			return nil, errors.New("decode thread comments")
 		}
 
@@ -331,6 +335,7 @@ func (client *Client) ResolveReviewThread(
 			"marshal resolve review thread variables",
 			slog.String("err", err.Error()),
 		)
+
 		return errors.New("marshal resolve review thread variables")
 	}
 
@@ -348,6 +353,7 @@ func (client *Client) ResolveReviewThread(
 			"decode resolve review thread",
 			slog.String("err", err.Error()),
 		)
+
 		return errors.New("decode resolve review thread")
 	}
 

@@ -43,6 +43,7 @@ func (collector *Collector) CollectInspectionFile(
 			"err",
 			err,
 		)
+
 		return file, fmt.Errorf("read pinned inspection source %s: %w", filePath, err)
 	}
 
@@ -67,6 +68,7 @@ func (collector *Collector) CollectInspectionFile(
 			"err",
 			err,
 		)
+
 		return file, fmt.Errorf("read pinned inspection attributes %s: %w", filePath, err)
 	}
 

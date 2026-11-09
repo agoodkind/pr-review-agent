@@ -69,6 +69,7 @@ func (service *Service) nativeVerdictBody(
 				"read recovered native review summary",
 				slog.String("err", err.Error()),
 			)
+
 			return "", fmt.Errorf("read recovered native review summary: %w", err)
 		}
 
@@ -262,6 +263,7 @@ func (service *Service) preserveDismissedRejection(
 			"err",
 			err,
 		)
+
 		return false, fmt.Errorf("read dismissed rejection before publishing: %w", err)
 	}
 
@@ -279,6 +281,7 @@ func (service *Service) preserveDismissedRejection(
 			"err",
 			err,
 		)
+
 		return false, err
 	}
 

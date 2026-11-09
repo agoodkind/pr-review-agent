@@ -133,6 +133,7 @@ func (client *Client) registryRequest(
 			"read target registry response",
 			slog.String("err", readErr.Error()),
 		)
+
 		return result, fmt.Errorf("read target registry response: %w", readErr)
 	}
 
@@ -235,6 +236,7 @@ func (client *Client) ReadTarget(ctx context.Context, key string) (*Target, erro
 			Sweep:                   nil,
 		},
 	)
+
 	return response.Target, err
 }
 
@@ -252,6 +254,7 @@ func (client *Client) RegisterTarget(ctx context.Context, target Target) error {
 			Sweep:                   nil,
 		},
 	)
+
 	return err
 }
 
@@ -275,5 +278,6 @@ func (client *Client) WriteTarget(
 			Sweep:                   nil,
 		},
 	)
+
 	return response.Applied, err
 }

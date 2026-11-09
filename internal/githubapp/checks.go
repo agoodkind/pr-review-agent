@@ -149,6 +149,7 @@ func (client *Client) listCheckRuns(
 					"decode check runs page",
 					slog.String("err", err.Error()),
 				)
+
 				return 0, errors.New("decode check runs page")
 			}
 
@@ -284,6 +285,7 @@ func (client *Client) CreateCheckRun(
 			"marshal create check run body",
 			slog.String("err", err.Error()),
 		)
+
 		return CheckRun{}, errors.New("marshal create check run body")
 	}
 
@@ -317,6 +319,7 @@ func (client *Client) StartCheckRun(
 			"marshal start check run body",
 			slog.String("err", err.Error()),
 		)
+
 		return errors.New("marshal start check run body")
 	}
 
@@ -355,6 +358,7 @@ func (client *Client) CompleteCheckRun(
 			"marshal complete check run body",
 			slog.String("err", err.Error()),
 		)
+
 		return errors.New("marshal complete check run body")
 	}
 

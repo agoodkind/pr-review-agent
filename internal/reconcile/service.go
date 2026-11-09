@@ -100,6 +100,7 @@ func (service *Service) Reconcile(
 			"get pull request for reconciliation",
 			slog.String("err", err.Error()),
 		)
+
 		return nil, fmt.Errorf("get pull request: %w", err)
 	}
 
@@ -350,6 +351,7 @@ func (service *Service) resolveAtHead(
 			"head changed during reconciliation",
 			slog.String("err", errHeadChanged.Error()),
 		)
+
 		return errHeadChanged
 	}
 

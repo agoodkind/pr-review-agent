@@ -213,6 +213,7 @@ func findingGrounded(
 ) bool {
 	if finding.EffectiveSurface() != domain.FindingFile {
 		source, found := metadataIndex[finding.Target()]
+
 		return found && metadataFindingAnchored(finding, source) &&
 			matchesFileLine(chunkText, finding.Evidence)
 	}
@@ -470,6 +471,7 @@ func reviewChunkObserved(
 				"validate review result",
 				slog.String("err", validateErr.Error()),
 			)
+
 			return nothing, fmt.Errorf("validate review result: %w", validateErr)
 		}
 

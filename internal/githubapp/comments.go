@@ -51,6 +51,7 @@ func (client *Client) ListIssueComments(
 					"decode issue comments page",
 					slog.String("err", err.Error()),
 				)
+
 				return 0, errors.New("decode issue comments page")
 			}
 
@@ -114,6 +115,7 @@ func (client *Client) writeIssueComment(
 			"marshal "+operation+" issue comment",
 			slog.String("err", err.Error()),
 		)
+
 		return IssueComment{
 			ID:     0,
 			Author: "",
@@ -133,6 +135,7 @@ func (client *Client) writeIssueComment(
 			"decode "+operation+" issue comment",
 			slog.String("err", err.Error()),
 		)
+
 		return IssueComment{
 			ID:     0,
 			Author: "",

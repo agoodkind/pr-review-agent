@@ -64,6 +64,7 @@ func (attributes *repositoryAttributes) forChange(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("resolve attributes base for %s: %w", changed.Path, err)
 		}
 
@@ -159,6 +160,7 @@ func (attributes *repositoryAttributes) stack(
 			"err",
 			err,
 		)
+
 		return nil, fmt.Errorf("parse attributes %s at %s: %w", attributePath, revision, err)
 	}
 

@@ -14,6 +14,7 @@ func renderUsageDetails(usage UsageSummary) string {
 			"| Requests | `%d` |\n\nToken usage was not reported.\n",
 			usage.Requests,
 		)
+
 		return builder.String()
 	}
 

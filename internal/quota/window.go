@@ -169,6 +169,7 @@ func (window Window) cronSchedule() (cron.Schedule, error) {
 			slog.String("timezone", window.Timezone),
 			slog.String("err", err.Error()),
 		)
+
 		return nil, fmt.Errorf("invalid cron timezone: %w", err)
 	}
 

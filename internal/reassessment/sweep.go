@@ -150,6 +150,7 @@ func (coordinator *Coordinator) inventoryInstallations(
 			"read inventory installations",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("read inventory installations: %w", err)
 	}
 
@@ -199,6 +200,7 @@ func (coordinator *Coordinator) inventoryRepositories(
 			"read inventory repositories",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("read inventory repositories: %w", err)
 	}
 
@@ -248,6 +250,7 @@ func (coordinator *Coordinator) inventoryPullRequests(
 			"read inventory pull requests",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("read inventory pull requests: %w", err)
 	}
 

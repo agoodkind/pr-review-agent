@@ -42,6 +42,7 @@ func (service *Service) postInlineFinding(
 			"err",
 			err,
 		)
+
 		return fmt.Errorf("publish inline finding: %w", err)
 	}
 
@@ -105,6 +106,7 @@ func (service *Service) establishInlineRejection(
 			"err",
 			err,
 		)
+
 		return true, fmt.Errorf("publish finding with requested changes: %w", err)
 	}
 

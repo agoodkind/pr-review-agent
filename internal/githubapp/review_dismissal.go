@@ -59,6 +59,7 @@ func (client *Client) FindReviewDismissal(
 					"decode review dismissal timeline",
 					slog.String("err", err.Error()),
 				)
+
 				return 0, errors.New("decode review dismissal timeline")
 			}
 
@@ -82,6 +83,7 @@ func (client *Client) FindReviewDismissal(
 						"decode dismissed review ID",
 						slog.String("err", err.Error()),
 					)
+
 					return 0, errors.New("decode dismissed review ID")
 				}
 
@@ -93,6 +95,7 @@ func (client *Client) FindReviewDismissal(
 							"decode original dismissed decision",
 							slog.String("err", err.Error()),
 						)
+
 						return 0, err
 					}
 

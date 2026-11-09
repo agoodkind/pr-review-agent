@@ -170,6 +170,7 @@ func (inspector *repositoryInspector) loadFile(
 			"err",
 			err,
 		)
+
 		return diff.FileContext{}, fmt.Errorf(
 			"collect pinned inspection source %s: %w",
 			filePath,
@@ -193,6 +194,7 @@ func (inspector *repositoryInspector) checkContent(file diff.FileContext) error 
 			"err",
 			errInspectionExcluded,
 		)
+
 		return fmt.Errorf(
 			"%w: binary content requires another inspection method",
 			errInspectionExcluded,
@@ -214,6 +216,7 @@ func (inspector *repositoryInspector) checkContent(file diff.FileContext) error 
 					"err",
 					errInspectionExcluded,
 				)
+
 				return fmt.Errorf(
 					"%w: opaque content does not establish source behavior",
 					errInspectionExcluded,
@@ -401,6 +404,7 @@ func (inspector *repositoryInspector) searchMatch(
 			identity := "Verified repository match: " + filePath + "\nHead: " + string(
 				inspector.ref.Head,
 			)
+
 			return inspectionExcerpt(
 				identity,
 				file.CurrentContent,

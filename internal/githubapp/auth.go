@@ -146,6 +146,7 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 			"create installation token request",
 			slog.String("err", err.Error()),
 		)
+
 		return "", errors.New("create installation token request")
 	}
 
@@ -160,6 +161,7 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 			"request installation token",
 			slog.String("err", err.Error()),
 		)
+
 		return "", fmt.Errorf("request installation token: %w", err)
 	}
 
@@ -175,6 +177,7 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 			"read installation token response",
 			slog.String("err", err.Error()),
 		)
+
 		return "", errors.New("read installation token response")
 	}
 
@@ -189,6 +192,7 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 			"decode installation token response",
 			slog.String("err", err.Error()),
 		)
+
 		return "", errors.New("decode installation token response")
 	}
 

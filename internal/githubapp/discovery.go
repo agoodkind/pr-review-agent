@@ -50,6 +50,7 @@ func (client *Client) ListInstallationsPage(
 			"GitHub discovery app authentication failed",
 			slog.String("err", "app authentication could not be built"),
 		)
+
 		return nil, false, errors.New("build discovery app authentication")
 	}
 
@@ -72,6 +73,7 @@ func (client *Client) ListInstallationsPage(
 			"GitHub installation page decoding failed",
 			slog.String("err", "missing or invalid installation array"),
 		)
+
 		return nil, false, errors.New("GitHub installation page omitted a valid array")
 	}
 
@@ -121,6 +123,7 @@ func (client *Client) ListInstallationRepositoriesPage(
 			"GitHub repository page decoding failed",
 			slog.String("err", "missing or invalid repository count or array"),
 		)
+
 		return nil, false, errors.New("GitHub repository page omitted count or repositories")
 	}
 
@@ -178,6 +181,7 @@ func (client *Client) ListOpenPullRequestsPage(
 			"GitHub open pull request page decoding failed",
 			slog.String("err", "missing or invalid pull request array"),
 		)
+
 		return nil, false, errors.New("GitHub open pull request page omitted a valid array")
 	}
 
@@ -252,6 +256,7 @@ func (client *Client) discoveryPage(
 			"GitHub discovery request creation failed",
 			slog.String("err", "request could not be created"),
 		)
+
 		return nil, false, errors.New("create GitHub discovery request")
 	}
 
@@ -265,6 +270,7 @@ func (client *Client) discoveryPage(
 			"GitHub discovery request failed",
 			slog.String("err", "HTTP request could not be completed"),
 		)
+
 		return nil, false, fmt.Errorf("GitHub discovery request failed: %w", err)
 	}
 
@@ -276,6 +282,7 @@ func (client *Client) discoveryPage(
 			"GitHub discovery response read failed",
 			slog.String("err", "response could not be read within the size limit"),
 		)
+
 		return nil, false, errors.New("read GitHub discovery response")
 	}
 
@@ -285,6 +292,7 @@ func (client *Client) discoveryPage(
 			"GitHub discovery response close failed",
 			slog.String("err", "response body could not be closed"),
 		)
+
 		return nil, false, errors.New("close GitHub discovery response")
 	}
 
@@ -295,6 +303,7 @@ func (client *Client) discoveryPage(
 			slog.Int("api_status", response.StatusCode),
 			slog.String("err", "HTTP status is not 200"),
 		)
+
 		return nil, false, newAPIError(response.StatusCode, "GitHub discovery request failed")
 	}
 
@@ -305,6 +314,7 @@ func (client *Client) discoveryPage(
 			"GitHub discovery pagination metadata is invalid",
 			slog.String("err", "next-page link is invalid or does not advance"),
 		)
+
 		return nil, false, err
 	}
 

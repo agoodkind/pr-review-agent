@@ -249,6 +249,7 @@ func (client *Client) doRESTPaginated(
 				"create github request",
 				slog.String("err", err.Error()),
 			)
+
 			return errors.New("create github request")
 		}
 
@@ -263,6 +264,7 @@ func (client *Client) doRESTPaginated(
 				"github request failed",
 				slog.String("err", err.Error()),
 			)
+
 			return fmt.Errorf("github request failed: %w", err)
 		}
 
@@ -274,6 +276,7 @@ func (client *Client) doRESTPaginated(
 				"read github response",
 				slog.String("err", readErr.Error()),
 			)
+
 			return errors.New("read github response")
 		}
 
@@ -283,6 +286,7 @@ func (client *Client) doRESTPaginated(
 				"close github response",
 				slog.String("err", closeErr.Error()),
 			)
+
 			return errors.New("close github response")
 		}
 

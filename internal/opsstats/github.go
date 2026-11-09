@@ -416,6 +416,7 @@ func CaptureGitHub(
 				"pull_request",
 				target.String(),
 			)
+
 			return nil, fmt.Errorf("capture %s: %w", target.String(), captureErr)
 		}
 

@@ -164,6 +164,7 @@ func (service *Service) reassessMetadataFindings(
 				"err",
 				err,
 			)
+
 			return prior, fmt.Errorf("reassess metadata finding %s: %w", identifier, err)
 		}
 

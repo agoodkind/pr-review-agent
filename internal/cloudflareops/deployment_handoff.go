@@ -342,6 +342,7 @@ func (operation *deployment) waitHandoffControl(
 
 		if ctx.Err() != nil {
 			slog.WarnContext(ctx, "Gateway handoff exceeded its elapsed limit", "action", action)
+
 			return fmt.Errorf(
 				"gateway handoff %s did not finish before its timeout; rerun deployment to resume safely: %w",
 				action,

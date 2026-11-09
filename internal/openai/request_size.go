@@ -93,6 +93,7 @@ func (client *Client) ConsolidateRequestBytes(prompt string) (int, error) {
 		consolidateSchemaName,
 		consolidateSchemaJSON,
 	)
+
 	return maximumPayloadBytes(payloads, err)
 }
 
@@ -104,6 +105,7 @@ func (client *Client) ReportRequestBytes(prompt string) (int, error) {
 		reportSchemaName,
 		MarshalReportSchema(client.reviewPolicy),
 	)
+
 	return maximumPayloadBytes(payloads, err)
 }
 

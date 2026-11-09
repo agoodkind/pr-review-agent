@@ -94,6 +94,7 @@ func (service *Service) concludeIncomplete(
 			"incomplete review withdrawal failed",
 			slog.String("err", dismissErr.Error()),
 		)
+
 		return &reportedFailureError{cause: dismissErr}
 	}
 

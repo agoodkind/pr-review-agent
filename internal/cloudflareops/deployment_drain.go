@@ -133,6 +133,7 @@ func (operation *deployment) waitDrainControl(
 				"action",
 				action,
 			)
+
 			return nil, fmt.Errorf(
 				"candidate drain %s did not become available before its timeout: %w",
 				action,
@@ -285,6 +286,7 @@ func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlo
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+
 			return errors.New(
 				"inactive candidate still has outstanding work; refusing to replace its image",
 			)

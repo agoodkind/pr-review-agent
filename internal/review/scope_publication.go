@@ -74,6 +74,7 @@ func (service *Service) publishPendingScope(
 			"Completing the review check failed",
 			slog.String("err", err.Error()),
 		)
+
 		return err
 	}
 

@@ -49,6 +49,7 @@ func TestRouterRequestsRequireCapabilitiesAcrossProviderAPIs(t *testing.T) {
 							t.Context(),
 							"Assess the supplied source.",
 						)
+
 						return err
 					},
 				},

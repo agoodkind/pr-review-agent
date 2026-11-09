@@ -97,6 +97,7 @@ func (recovery *patchRecovery) recover(
 			slog.String("path", changed.Path),
 			slog.String("err", err.Error()),
 		)
+
 		return "", fmt.Errorf("reconstruct text patch for %s: %w", changed.Path, err)
 	}
 
@@ -162,6 +163,7 @@ func (recovery *patchRecovery) previousContent(
 			slog.String("base", string(recovery.base)),
 			slog.String("err", err.Error()),
 		)
+
 		return "", fmt.Errorf("load patch base content for %s at %s: %w", path, recovery.base, err)
 	}
 
@@ -194,6 +196,7 @@ func (recovery *patchRecovery) readFile(
 				slog.String("commit", string(commit)),
 				slog.String("err", err.Error()),
 			)
+
 			return githubapp.FileContent{}, fmt.Errorf(
 				"load typed file content for %s at %s: %w",
 				path,
@@ -220,6 +223,7 @@ func (recovery *patchRecovery) readFile(
 			slog.String("commit", string(commit)),
 			slog.String("err", err.Error()),
 		)
+
 		return githubapp.FileContent{}, fmt.Errorf(
 			"load file content bytes for %s at %s: %w",
 			path,

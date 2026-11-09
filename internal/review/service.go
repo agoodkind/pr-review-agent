@@ -1135,6 +1135,7 @@ func (service *Service) openThreads(
 			"list review threads for the verdict",
 			slog.String("err", err.Error()),
 		)
+
 		return nil, fmt.Errorf("list review threads: %w", err)
 	}
 
@@ -1249,6 +1250,7 @@ func (service *Service) publishVerdict(
 
 	if summary.Decision == domain.ReviewDecisionComment {
 		recordAssessment(ctx, domain.AssessmentDeclined, &summary, nil, 0)
+
 		return service.completeCheckRun(
 			ctx,
 			job.InstallationID,

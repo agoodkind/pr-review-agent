@@ -286,6 +286,7 @@ func (operation *deployment) observePersistedTestHandoff(
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+
 			return deploymentHandoff{}, errors.New(
 				"test controller did not observe a persisted handoff before deployment ended",
 			)

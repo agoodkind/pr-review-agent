@@ -28,6 +28,7 @@ func (service *Service) publicationPullRequest(
 			"Read pull request before publication failed",
 			slog.String("err", err.Error()),
 		)
+
 		return pullRequest, fmt.Errorf("refresh publication pull request: %w", err)
 	}
 
@@ -56,6 +57,7 @@ func (service *Service) confirmHead(
 			"confirm head before posting findings",
 			slog.String("err", ctxErr.Error()),
 		)
+
 		return fmt.Errorf("confirm head: %w", ctxErr)
 	}
 
@@ -65,6 +67,7 @@ func (service *Service) confirmHead(
 			"read head before posting findings",
 			slog.String("err", err.Error()),
 		)
+
 		return nil
 	}
 

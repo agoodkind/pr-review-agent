@@ -167,6 +167,7 @@ func (service *Service) generateReport(
 			"validate final review report",
 			slog.String("err", err.Error()),
 		)
+
 		return fallback, true
 	}
 

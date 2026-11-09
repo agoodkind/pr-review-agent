@@ -105,6 +105,7 @@ func (service *Service) dismissFailureVerdict(
 			"read standing verdict after failure",
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("read standing verdict after failure: %w", err)
 	}
 
@@ -129,6 +130,7 @@ func (service *Service) dismissFailureVerdict(
 				"err",
 				err,
 			)
+
 			return nil
 		}
 
@@ -144,6 +146,7 @@ func (service *Service) dismissFailureVerdict(
 				"review_id",
 				latest.ID,
 			)
+
 			return nil
 		}
 	}
@@ -184,6 +187,7 @@ func (service *Service) dismissFailureVerdict(
 			slog.Int64("review_id", latest.ID),
 			slog.String("err", err.Error()),
 		)
+
 		return fmt.Errorf("dismiss standing rejection after failure: %w", err)
 	}
 

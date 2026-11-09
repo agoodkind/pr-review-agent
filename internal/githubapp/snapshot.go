@@ -177,6 +177,7 @@ func (scope *repositorySnapshotScope) load(
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("create private repository snapshot directory: %w", err)
 		}
 
@@ -287,6 +288,7 @@ func (scope *repositorySnapshotScope) search(ctx context.Context, query string) 
 				"err",
 				err,
 			)
+
 			return nil, fmt.Errorf("search private repository snapshot file: %w", err)
 		}
 

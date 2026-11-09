@@ -79,6 +79,7 @@ func (service *Service) completedSummaryAssessment(
 			"read completed summary assessment",
 			slog.String("err", err.Error()),
 		)
+
 		return empty, false, fmt.Errorf("read completed summary assessment: %w", err)
 	}
 

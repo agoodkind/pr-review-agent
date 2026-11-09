@@ -66,6 +66,7 @@ func captureTestFailureReadiness(
 			"path",
 			file.Name(),
 		)
+
 		return fmt.Errorf("write readiness %s record to %s: %w", failure.Kind, file.Name(), err)
 	}
 

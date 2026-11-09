@@ -104,6 +104,7 @@ func (client *Client) readProviderPeriod(
 				"Provider period window failed",
 				slog.String("err", err.Error()),
 			)
+
 			return result, fmt.Errorf("calculate provider period window: %w", err)
 		}
 	}
@@ -121,6 +122,7 @@ func (client *Client) readProviderPeriod(
 			"Provider period history query failed",
 			slog.String("err", err.Error()),
 		)
+
 		return result, fmt.Errorf("read provider period history: %w", err)
 	}
 

@@ -398,6 +398,7 @@ func unfinishedAssessment(target Target, record *Record, snapshot LiveSnapshot) 
 
 	if snapshot.SummaryFound {
 		state := snapshot.Summary
+
 		return state.Status == marker.StateFailed || state.Status == marker.StateReviewing ||
 			len(state.Pending) > 0 ||
 			state.LastReviewed != snapshot.PullRequest.Head

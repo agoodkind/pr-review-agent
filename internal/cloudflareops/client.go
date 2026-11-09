@@ -118,6 +118,7 @@ func (client *Client) request(
 			"status",
 			response.StatusCode,
 		)
+
 		return envelope{}, response.StatusCode, fmt.Errorf(
 			"cloudflare returned an invalid response envelope with HTTP %d",
 			response.StatusCode,
@@ -499,6 +500,7 @@ func (credentials *Credentials) Close(ctx context.Context) error {
 		)
 		if err != nil {
 			slog.WarnContext(ctx, "Temporary credential revocation failed", "id", credentials.id)
+
 			return fmt.Errorf(
 				"credential %s revocation failed; credential directory %s requires recovery: %w",
 				credentials.id,
@@ -533,6 +535,7 @@ func (credentials *Credentials) Close(ctx context.Context) error {
 			"path",
 			credentials.directory,
 		)
+
 		return fmt.Errorf("remove temporary credential directory: %w", err)
 	}
 

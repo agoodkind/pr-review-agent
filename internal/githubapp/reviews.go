@@ -52,6 +52,7 @@ func (client *Client) ListReviews(
 					"decode reviews page",
 					slog.String("err", err.Error()),
 				)
+
 				return 0, errors.New("decode reviews page")
 			}
 
@@ -114,6 +115,7 @@ func (client *Client) SubmitReview(
 			"marshal submit review body",
 			slog.String("err", err.Error()),
 		)
+
 		return Review{}, errors.New("marshal submit review body")
 	}
 
@@ -142,6 +144,7 @@ func (client *Client) UpdateReview(
 			"marshal update review body",
 			slog.String("err", err.Error()),
 		)
+
 		return Review{}, errors.New("marshal update review body")
 	}
 
@@ -181,6 +184,7 @@ func (client *Client) CreateReviewComment(
 			"marshal review comment body",
 			slog.String("err", err.Error()),
 		)
+
 		return errors.New("marshal review comment body")
 	}
 
@@ -202,6 +206,7 @@ func decodeReview(
 			"decode "+operation+" review",
 			slog.String("err", err.Error()),
 		)
+
 		return Review{}, errors.New("decode " + operation + " review")
 	}
 

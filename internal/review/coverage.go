@@ -959,6 +959,7 @@ func (service *Service) concludeStructurallyIncomplete(
 			"unread-content review withdrawal failed",
 			slog.String("err", dismissErr.Error()),
 		)
+
 		return &reportedFailureError{cause: dismissErr}
 	}
 
