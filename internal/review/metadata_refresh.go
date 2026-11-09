@@ -72,62 +72,16 @@ func (service *Service) reviewCurrentMetadata(
 	}
 	seen := make(map[string]struct{})
 
-	for _, chunk := range chunks {
-		var models modelSet
-		requests := 0
-		callContext, cancel := detachFromReviewDeadline(ctx, settings.chunkTimeout)
-		analysis, reviewErr := reviewChunk(
-			callContext,
-			service.model,
-			chunk,
-			settings.minimumImportance,
-			service.reviewPolicy,
-			settings.maximumPromptBytes,
-			nil,
-			support,
-			&models,
-			&requests,
-			service.now,
-		)
-		cancel()
-		if reviewErr != nil {
-			return empty, reviewErr
-		}
-
-		if len(analysis.Unreadable) > 0 {
-			return empty, errMetadataChanged
-		}
-
-		for _, result := range analysis.Results {
-			if !chunk.CoverageComplete && !result.OmissionsAcceptable {
-				record.OmissionsAccepted = false
-				record.DecisionReason = sanitizeDecisionReason(result.DecisionReason)
-			}
-
-			grounded := GroundedFindings(
-				ctx,
-				result.Findings,
-				nil,
-				BuildMetadataIndex(chunk.Metadata),
-				chunk.Text,
-			)
-
-			eligible := EligibleFindings(
-				grounded,
-				nil,
-				BuildMetadataIndex(input.Metadata),
-				settings.minimumImportance,
-			)
-			for _, finding := range eligible {
-				key := metadataFindingKey(finding)
-				if _, found := seen[key]; found {
-					continue
-				}
-
-				seen[key] = struct{}{}
-				record.Findings = append(record.Findings, finding)
-			}
-		}
+	if err := service.reviewMetadataChunks(
+		ctx,
+		chunks,
+		support,
+		settings,
+		input,
+		&record,
+		seen,
+	); err != nil {
+		return empty, err
 	}
 
 	retained, err := service.reassessMetadataFindings(
