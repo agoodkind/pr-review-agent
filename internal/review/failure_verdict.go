@@ -120,35 +120,20 @@ func (service *Service) dismissFailureVerdict(
 		job.Repository,
 		job.Number,
 	)
-	if validNativeMetadataBlock(latest) {
-		if err != nil {
-			logger.WarnContext(
-				ctx,
-				"preserve metadata rejection after summary read failure",
-				"review_id",
-				latest.ID,
-				"err",
-				err,
-			)
+	preserve, verificationErr := service.preserveMetadataRejection(
+		ctx,
+		job,
+		latest,
+		comments,
+		err,
+		logger,
+	)
+	if verificationErr != nil {
+		return verificationErr
+	}
 
-			return nil
-		}
-
-		blocked, verificationErr := service.savedMetadataStillBlocks(ctx, job, comments)
-		if verificationErr != nil {
-			return verificationErr
-		}
-
-		if blocked {
-			logger.InfoContext(
-				ctx,
-				"preserve unresolved metadata rejection after failure",
-				"review_id",
-				latest.ID,
-			)
-
-			return nil
-		}
+	if preserve {
+		return nil
 	}
 
 	var data reviewrules.PromptData
@@ -199,6 +184,48 @@ func (service *Service) dismissFailureVerdict(
 	)
 
 	return nil
+}
+
+func (service *Service) preserveMetadataRejection(
+	ctx context.Context,
+	job domain.ReviewJob,
+	latest githubapp.Review,
+	comments []githubapp.IssueComment,
+	readErr error,
+	logger *slog.Logger,
+) (bool, error) {
+	if !validNativeMetadataBlock(latest) {
+		return false, nil
+	}
+
+	if readErr != nil {
+		logger.WarnContext(
+			ctx,
+			"preserve metadata rejection after summary read failure",
+			"review_id",
+			latest.ID,
+			"err",
+			readErr,
+		)
+
+		return true, nil
+	}
+
+	blocked, verificationErr := service.savedMetadataStillBlocks(ctx, job, comments)
+	if verificationErr != nil {
+		return false, verificationErr
+	}
+
+	if blocked {
+		logger.InfoContext(
+			ctx,
+			"preserve unresolved metadata rejection after failure",
+			"review_id",
+			latest.ID,
+		)
+	}
+
+	return blocked, nil
 }
 
 func automaticFailureDismissal(
