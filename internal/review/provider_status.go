@@ -76,7 +76,10 @@ func collectProviderStatuses(err error, statuses *[]ProviderStatus) {
 				previous.Cause == status.Cause &&
 				sameQuotaInterval(previous, status) {
 				if status.QuotaKnown &&
-					(!previous.QuotaKnown || status.Used > previous.Used || status.Used == previous.Used && status.QuotaSnapshot.Bounds.EndMS > previous.QuotaSnapshot.Bounds.EndMS) {
+					(!previous.QuotaKnown ||
+						status.Used > previous.Used ||
+						status.Used == previous.Used &&
+							status.QuotaSnapshot.Bounds.EndMS > previous.QuotaSnapshot.Bounds.EndMS) {
 					(*statuses)[index] = status
 				}
 

@@ -307,7 +307,10 @@ func (operation *deployment) gatewayHandoffControl(
 	}
 
 	if *status.Complete &&
-		(!*status.Handoff || !*status.CandidateReady || *status.PreviousContainerRunning || status.CandidateRevision != revision) {
+		(!*status.Handoff ||
+			!*status.CandidateReady ||
+			*status.PreviousContainerRunning ||
+			status.CandidateRevision != revision) {
 		return status, errors.New(
 			"gateway handoff completion does not prove candidate readiness and stopped previous process",
 		)

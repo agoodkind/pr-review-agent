@@ -17,7 +17,14 @@ import (
 const metadataAssessmentSchemaName = "metadata_finding_assessments"
 
 var metadataAssessmentSchema = json.RawMessage(
-	`{"type":"object","additionalProperties":false,"properties":{"assessments":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string"},"resolution":{"type":"string","enum":["resolved","open","uncertain"]},"reason":{"type":"string"},"evidence":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["finding_id","resolution","reason","evidence","start_line","end_line"]}}},"required":["assessments"]}`,
+	`{"type":"object","additionalProperties":false,"properties":{` +
+		`"assessments":{"type":"array","items":{"type":"object","additionalProperties":false,` +
+		`"properties":{"finding_id":{"type":"string"},"resolution":{"type":"string",` +
+		`"enum":["resolved","open","uncertain"]},"reason":{"type":"string"},` +
+		`"evidence":{"type":"string"},"start_line":{"type":"integer","minimum":1},` +
+		`"end_line":{"type":"integer","minimum":1}},` +
+		`"required":["finding_id","resolution","reason","evidence","start_line","end_line"]}}},` +
+		`"required":["assessments"]}`,
 )
 
 type metadataAssessmentJSON struct {

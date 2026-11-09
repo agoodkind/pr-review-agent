@@ -235,7 +235,9 @@ func Summarize(events []Event, manifest Manifest) (Metrics, error) {
 	)
 	metrics.Limitations = append(
 		metrics.Limitations,
-		"Execution counts use explicit job start and failure events. Run outcome counts use distinct delivery identifiers with observed outcomes and can overlap after retries.",
+		"Execution counts use explicit job start and failure events. "+
+			"Run outcome counts use distinct delivery identifiers with observed outcomes "+
+			"and can overlap after retries.",
 	)
 	metrics.Limitations = append(
 		metrics.Limitations,

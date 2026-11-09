@@ -45,13 +45,10 @@ func assessmentDecisionReason(assessments []domain.FileAssessment) string {
 }
 
 func assessmentIdentity(file diff.FileContext, policy reviewrules.Policy) string {
-	digest := sha256.Sum256(
-		[]byte(
-			policy.Fingerprint() + "\x00" + file.Path + "\x00" + file.Status + "\x00" + file.Patch + "\x00" + file.CurrentContent + "\x00" + string(
-				file.Gap,
-			) + "\x00" + classificationAttributes(file),
-		),
-	)
+	contents := policy.Fingerprint() + "\x00" + file.Path + "\x00" + file.Status +
+		"\x00" + file.Patch + "\x00" + file.CurrentContent + "\x00" +
+		string(file.Gap) + "\x00" + classificationAttributes(file)
+	digest := sha256.Sum256([]byte(contents))
 
 	return hex.EncodeToString(digest[:])
 }

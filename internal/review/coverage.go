@@ -368,7 +368,8 @@ func omissionPrompt(
 		seen[hunk.Path] = true
 		content := file.ClassificationContent()
 		header := fmt.Sprintf(
-			"Available file content excerpt for %s (%d bytes in the file; this excerpt is not a diff and cannot anchor findings):\n",
+			"Available file content excerpt for %s (%d bytes in the file; "+
+				"this excerpt is not a diff and cannot anchor findings):\n",
 			escapeOmissionPromptText(hunk.Path, policy),
 			len(content),
 		)

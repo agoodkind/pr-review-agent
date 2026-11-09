@@ -225,7 +225,8 @@ func (service *Service) metadataReassessmentPrompt(
 	}
 
 	body := fmt.Sprintf(
-		"Finding ID: %s\nCurrent head: %s\nCurrent revision: %s\nDeduplication mode: %s\nSaved finding (historical assessment):\n%s\nComplete current field %s, lines 1-%d:\n%s",
+		"Finding ID: %s\nCurrent head: %s\nCurrent revision: %s\nDeduplication mode: %s\n"+
+			"Saved finding (historical assessment):\n%s\nComplete current field %s, lines 1-%d:\n%s",
 		identifier,
 		pullRequest.Head,
 		diff.PullRequestRevision(pullRequest),

@@ -51,7 +51,8 @@ func renderProviderDetails(summary UsageSummary) string {
 
 	if slices.Contains(summary.ProviderColumns, reviewrules.ProviderPeriodUsageColumn) {
 		builder.WriteString(
-			"\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. Dollar amounts estimate cost from configured prices and do not represent account charges.\n",
+			"\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. " +
+				"Dollar amounts estimate cost from configured prices and do not represent account charges.\n",
 		)
 		builder.WriteString(renderProviderPeriodDetails(rows))
 	}

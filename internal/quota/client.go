@@ -313,7 +313,10 @@ func validUsage(usage Usage) bool {
 		usage.TotalTokens >= 0 && usage.TotalTokens <= MaximumInteger
 }
 
-func post[Request QueryRequest | totalsRequest | ReportRequest | dailyRequest | storageRequest, Response QueryResponse | totalsPage | reportResponse | DailySnapshot | StorageStats](
+func post[
+	Request QueryRequest | totalsRequest | ReportRequest | dailyRequest | storageRequest,
+	Response QueryResponse | totalsPage | reportResponse | DailySnapshot | StorageStats,
+](
 	ctx context.Context,
 	client *Client,
 	payload Request,

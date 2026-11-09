@@ -23,7 +23,10 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 	)
 	var builder strings.Builder
 	builder.WriteString(
-		"#### File assessments\n\nThe table records the assessment scope for each classified file.\n\n| File | Content | Assessment | Content review requirement | Reason | Evidence |\n| --- | --- | --- | --- | --- | --- |\n",
+		"#### File assessments\n\n" +
+			"The table records the assessment scope for each classified file.\n\n" +
+			"| File | Content | Assessment | Content review requirement | Reason | Evidence |\n" +
+			"| --- | --- | --- | --- | --- | --- |\n",
 	)
 	listed := 0
 	const noticeAllowance = 256

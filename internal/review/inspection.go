@@ -285,7 +285,8 @@ func (inspector *repositoryInspector) search(
 	)
 	var output strings.Builder
 	output.WriteString(
-		"Repository search checks the private snapshot at the reviewed head. Content policy and result limits restrict the returned evidence.\n",
+		"Repository search checks the private snapshot at the reviewed head. " +
+			"Content policy and result limits restrict the returned evidence.\n",
 	)
 	fmt.Fprintf(
 		&output,

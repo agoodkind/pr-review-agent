@@ -127,11 +127,14 @@ func reassessmentNotice(ctx context.Context) string {
 		return ""
 	}
 
-	return "\n\n<!-- pr-review-agent:reassessment:start -->\nThe queue will reassess this pull request after `" + time.UnixMilli(
+	return "\n\n<!-- pr-review-agent:reassessment:start -->\n" +
+		"The queue will reassess this pull request after `" + time.UnixMilli(
 		recorder.outcome.RetryAtMS,
 	).UTC().Format(
 		time.RFC3339,
-	) + "`. The reassessment identifier is `" + recorder.outcome.ReassessmentID + "`.\n<!-- pr-review-agent:reassessment:end -->"
+	) + "`. The reassessment identifier is `" +
+		recorder.outcome.ReassessmentID +
+		"`.\n<!-- pr-review-agent:reassessment:end -->"
 }
 
 func stripReassessmentNotice(body string) string {
