@@ -820,6 +820,16 @@ func (service *Service) reviewOneChunk(
 	pass.recordCall(models, requests)
 	pass.recordUnreadable(analysis.Unreadable)
 
+	return finishChunkReview(ctx, analysis, err, transientPublication, refusedPublication)
+}
+
+func finishChunkReview(
+	ctx context.Context,
+	analysis chunkAnalysis,
+	err error,
+	transientPublication error,
+	refusedPublication error,
+) (chunkOutcome, error) {
 	// Any unread hunk keeps its chunk owed until the final omission decision.
 	unread := len(analysis.Results) == 0 && len(analysis.Unreadable) > 0
 	shortfall := len(analysis.Unreadable) > 0 && !unread || err != nil && len(analysis.Results) > 0
