@@ -464,122 +464,27 @@ func reviewChunkObserved(
 	startedAt := now()
 	completion, err := model.Review(ctx, prompt)
 	elapsed := now().Sub(startedAt)
+	attempt := chunkReviewAttempt{
+		model:             model,
+		chunk:             chunk,
+		minimumImportance: minimumImportance,
+		policy:            policy,
+		maximumBytes:      maximumBytes,
+		files:             files,
+		disputes:          disputes,
+		models:            models,
+		requests:          requests,
+		now:               now,
+		observe:           observe,
+		required:          required,
+		prompt:            prompt,
+		elapsed:           elapsed,
+	}
 	if err == nil {
-		if validateErr := completion.Result.Validate(); validateErr != nil {
-			logger.ErrorContext(
-				ctx,
-				"validate review result",
-				slog.String("err", validateErr.Error()),
-			)
-
-			return nothing, fmt.Errorf("validate review result: %w", validateErr)
-		}
-
-		models.add(completion.Model)
-		logger.InfoContext(
-			ctx,
-			"review chunk completed",
-			slog.Int("chunk", chunk.Index),
-			slog.Int("chunks", chunk.Total),
-			slog.Duration("elapsed", elapsed),
-			slog.String("model", completion.Model),
-			slog.Int("findings", len(completion.Result.Findings)),
-			slog.Int("paths", len(chunk.Paths)),
-			slog.Int("prompt_bytes", len(prompt)),
-		)
-		analysis := chunkAnalysis{
-			Results:    []domain.ReviewResult{completion.Result},
-			Unreadable: nil,
-		}
-		if observe != nil {
-			err = observe(chunk, completion.Result)
-		}
-
-		if err != nil || len(completion.InspectionRequests) == 0 {
-			return analysis, err
-		}
-
-		support, err := inspectReviewEvidence(ctx, completion.InspectionRequests, required, policy)
-		if err != nil {
-			return analysis, err
-		}
-
-		continued, err := reviewChunkObserved(
-			ctx,
-			model,
-			chunk,
-			minimumImportance,
-			policy,
-			maximumBytes,
-			files,
-			disputes,
-			models,
-			requests,
-			now,
-			observe,
-			support,
-		)
-		analysis.merge(continued)
-
-		return analysis, err
+		return attempt.complete(ctx, completion, logger)
 	}
 
-	// Every request that failed is timed here, before the truncation branch
-	// decides what to do about it. A truncated request still spent its duration
-	// on the review budget, and the split and skip logs below carry neither the
-	// duration nor the size that caused the split.
-	logger.LogAttrs(
-		ctx,
-		requestFailureLevel(err),
-		"review chunk request failed",
-		slog.Int("chunk", chunk.Index),
-		slog.Int("chunks", chunk.Total),
-		slog.Duration("elapsed", elapsed),
-		slog.Bool("truncated", truncated(err)),
-		slog.Any("paths", chunk.Paths),
-		slog.Int("prompt_bytes", len(prompt)),
-		slog.String("err", err.Error()),
-	)
-	var sizeFailure *diff.PromptSizeError
-	if !truncated(err) && !errors.As(err, &sizeFailure) {
-		return nothing, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
-	}
-
-	first, second, canSplit := chunk.Split()
-	if !canSplit {
-		logger.WarnContext(
-			ctx,
-			"review chunk skipped after truncation",
-			slog.Int("chunk", chunk.Index),
-			slog.Any("paths", chunk.Paths),
-			slog.String("err", err.Error()),
-		)
-
-		return chunkAnalysis{Results: nil, Unreadable: unreadableHunksIn(chunk)}, nil
-	}
-
-	logger.InfoContext(
-		ctx,
-		"review chunk split after truncation",
-		slog.Int("chunk", chunk.Index),
-		slog.Int("hunks", len(chunk.Pieces)),
-	)
-
-	return reviewChunkParts(
-		ctx,
-		model,
-		[]diff.Chunk{first, second},
-		minimumImportance,
-		policy,
-		maximumBytes,
-		files,
-		disputes,
-		models,
-		requests,
-		now,
-		observe,
-		required,
-	)
+	return attempt.retry(ctx, err, logger)
 }
 
 func reviewChunkParts(
