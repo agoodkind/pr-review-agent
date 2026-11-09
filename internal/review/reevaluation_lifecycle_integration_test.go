@@ -403,6 +403,20 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					t.Fatal("The current check did not publish its summary.")
 				}
 
+				if scenario.moveHead || scenario.publicationFailure != "" {
+					for _, coverage := range []string{
+						"| All file content inspected | yes |",
+						"| Review scope assessed | yes |",
+					} {
+						if !strings.Contains(checkSummary, coverage) {
+							t.Fatalf(
+								"The current check must retain the completed assessment: %s.",
+								coverage,
+							)
+						}
+					}
+				}
+
 				expectedRequests := int32(1)
 				if scenario.unchanged {
 					expectedRequests = 0

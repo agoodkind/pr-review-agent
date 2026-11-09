@@ -201,7 +201,6 @@ func (service *Service) refreshReviewedCheck(
 
 		checkProgress = service.measuredRefreshSummary(ctx, checkProgress, startedAt)
 		progress.Usage = checkProgress.Usage
-		checkProgress.Failed = true
 		if errors.Is(err, errHeadMoved) {
 			recordAssessment(ctx, domain.AssessmentInterrupted, &checkProgress, nil, 0)
 
