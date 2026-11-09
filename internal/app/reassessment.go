@@ -120,15 +120,24 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		return
 	}
 
+	handler.logReassessmentStart(request.Context(), payload.Record, job)
+	writer.WriteHeader(http.StatusAccepted)
+}
+
+func (handler *handler) logReassessmentStart(
+	ctx context.Context,
+	record reassessment.Record,
+	job domain.ReviewJob,
+) {
 	handler.logger.InfoContext(
-		request.Context(),
+		ctx,
 		"reassessment started",
 		"reassessment_id",
-		payload.Record.ID,
+		record.ID,
 		"generation",
-		payload.Record.Generation,
+		record.Generation,
 		"origin_delivery_id",
-		payload.Record.OriginDeliveryID,
+		record.OriginDeliveryID,
 		"attempt_id",
 		job.DeliveryID,
 		"check_run_id",
@@ -140,9 +149,8 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		"head",
 		string(job.Head),
 		"attempts",
-		payload.Record.Attempts,
+		record.Attempts,
 	)
-	writer.WriteHeader(http.StatusAccepted)
 }
 
 func (handler *handler) planReassessment(

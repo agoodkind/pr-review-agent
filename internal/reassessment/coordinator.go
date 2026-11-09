@@ -328,40 +328,7 @@ func (coordinator *Coordinator) Plan(ctx context.Context, record Record) Record 
 		return record
 	}
 
-	pr := live.PullRequest
-	var snapshot Snapshot
-	snapshot.PullRequest = pr
-	snapshot.LatestCheck = live.Check
-	snapshot.LatestFound = live.CheckFound
-	if record.RebuildEvidence {
-		snapshot.LatestFound = false
-	}
-
-	if record.Phase == "running" || record.Phase == "confirming" {
-		priorCheck, priorFound, priorErr := coordinator.GitHub.FindCheckRunByExternalID(
-			ctx,
-			record.Job.InstallationID,
-			record.Job.Repository,
-			record.Head,
-			config.ReviewCheckName,
-			record.Job.DeliveryID,
-		)
-		if priorErr != nil {
-			return coordinator.deferAfterFailure(ctx, record, now, "attempt_check", priorErr)
-		}
-
-		snapshot.AttemptCheck = priorCheck
-		snapshot.AttemptFound = priorFound
-	}
-
-	available, err := coordinator.Providers.NextAvailable(ctx)
-	if err != nil {
-		return coordinator.deferAfterFailure(ctx, record, now, "provider_availability", err)
-	}
-
-	snapshot.AvailableAt = available
-
-	return coordinator.Decide(record, snapshot, now)
+	return coordinator.planConsistent(ctx, record, live, now)
 }
 
 // Snapshot separates current GitHub and quota evidence from retry decisions.
@@ -456,6 +423,48 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 	}
 
 	return coordinator.dispatchRecord(record, now)
+}
+
+func (coordinator *Coordinator) planConsistent(
+	ctx context.Context,
+	record Record,
+	live LiveSnapshot,
+	now time.Time,
+) Record {
+	pr := live.PullRequest
+	var snapshot Snapshot
+	snapshot.PullRequest = pr
+	snapshot.LatestCheck = live.Check
+	snapshot.LatestFound = live.CheckFound
+	if record.RebuildEvidence {
+		snapshot.LatestFound = false
+	}
+
+	if record.Phase == "running" || record.Phase == "confirming" {
+		priorCheck, priorFound, priorErr := coordinator.GitHub.FindCheckRunByExternalID(
+			ctx,
+			record.Job.InstallationID,
+			record.Job.Repository,
+			record.Head,
+			config.ReviewCheckName,
+			record.Job.DeliveryID,
+		)
+		if priorErr != nil {
+			return coordinator.deferAfterFailure(ctx, record, now, "attempt_check", priorErr)
+		}
+
+		snapshot.AttemptCheck = priorCheck
+		snapshot.AttemptFound = priorFound
+	}
+
+	available, err := coordinator.Providers.NextAvailable(ctx)
+	if err != nil {
+		return coordinator.deferAfterFailure(ctx, record, now, "provider_availability", err)
+	}
+
+	snapshot.AvailableAt = available
+
+	return coordinator.Decide(record, snapshot, now)
 }
 
 func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Record {
