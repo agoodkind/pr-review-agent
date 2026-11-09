@@ -45,7 +45,10 @@ const (
 // Recurs reports whether this gap would come back identically on a later run.
 func (gap CoverageGap) Recurs() bool {
 	switch gap {
-	case CoverageGapBinary, CoverageGapPatchAbsent, CoverageGapPatchUnreadable, CoverageGapContentMissing:
+	case CoverageGapBinary,
+		CoverageGapPatchAbsent,
+		CoverageGapPatchUnreadable,
+		CoverageGapContentMissing:
 		return true
 	case CoverageGapNone, CoverageGapContentUnavailable:
 		return false
@@ -67,6 +70,7 @@ func contentGapFor(err error) CoverageGap {
 	if !errors.As(err, &apiErr) {
 		return CoverageGapContentUnavailable
 	}
+
 	switch apiErr.StatusCode {
 	case http.StatusNotFound, http.StatusGone, http.StatusUnavailableForLegalReasons:
 		return CoverageGapContentMissing
@@ -109,6 +113,7 @@ func (file *FileContext) markGap(gap CoverageGap) {
 	if file.Gap.Recurs() {
 		return
 	}
+
 	file.Gap = gap
 }
 
@@ -118,8 +123,10 @@ func (file *FileContext) collectChangedLines() bool {
 		file.markGap(CoverageGapPatchUnreadable)
 		return false
 	}
+
 	file.ChangedRightLines = changedLines
 	file.ChangedRightHunks = changedHunks
+
 	return true
 }
 
@@ -171,18 +178,30 @@ func (chunk Chunk) Split() (Chunk, Chunk, bool) {
 	if chunk.RelationshipReview {
 		return emptyChunk(), emptyChunk(), false
 	}
+
 	if len(chunk.Pieces) == 1 {
 		first, second, ok := splitFilePiece(chunk.Pieces[0])
 		if ok {
-			return chunkFromPieces([]Piece{first}, chunk.Index, chunk.Total), chunkFromPieces([]Piece{second}, chunk.Index, chunk.Total), true
+			return chunkFromPieces(
+					[]Piece{first},
+					chunk.Index,
+					chunk.Total,
+				), chunkFromPieces(
+					[]Piece{second},
+					chunk.Index,
+					chunk.Total,
+				), true
 		}
 	}
+
 	if len(chunk.Pieces) < 2 {
 		return emptyChunk(), emptyChunk(), false
 	}
+
 	middle := len(chunk.Pieces) / 2
 	first := chunkFromPieces(chunk.Pieces[:middle], chunk.Index, chunk.Total)
 	second := chunkFromPieces(chunk.Pieces[middle:], chunk.Index, chunk.Total)
+
 	return first, second, true
 }
 
@@ -201,27 +220,47 @@ func emptyChunk() Chunk {
 
 func chunkFromPieces(pieces []Piece, index int, total int) Chunk {
 	builder := newChunkBuilder()
+
 	for _, piece := range pieces {
 		if builder.hasText() {
 			builder.appendSeparator()
 		}
+
 		builder.appendText(piece.Text)
 		builder.addPiece(piece)
 		builder.markIncomplete(!piece.CoverageComplete)
 		builder.addPath(piece.Path)
 	}
+
 	chunk, _ := builder.build()
 	chunk.Index = index
 	chunk.Total = total
+
 	return chunk
 }
 
 // Source loads changed files and repository content for diff collection.
 type Source interface {
-	ListChangedFiles(context.Context, int64, domain.Repository, int) ([]githubapp.ChangedFile, error)
-	ListPullRequestCommits(context.Context, int64, domain.Repository, int) ([]githubapp.PullRequestCommit, error)
+	ListChangedFiles(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+	) ([]githubapp.ChangedFile, error)
+	ListPullRequestCommits(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+	) ([]githubapp.PullRequestCommit, error)
 	GetFile(context.Context, int64, domain.Repository, string, domain.HeadSHA) ([]byte, error)
-	Compare(context.Context, int64, domain.Repository, domain.HeadSHA, domain.HeadSHA) (githubapp.Comparison, error)
+	Compare(
+		context.Context,
+		int64,
+		domain.Repository,
+		domain.HeadSHA,
+		domain.HeadSHA,
+	) (githubapp.Comparison, error)
 }
 
 // Collector gathers pull request patches and file content for review.
@@ -255,10 +294,12 @@ func (collector *Collector) Collect(
 	if err != nil {
 		return ReviewInput{}, err
 	}
+
 	metadata, err := collector.collectMetadata(ctx, ref, pullRequest)
 	if err != nil {
 		return ReviewInput{}, err
 	}
+
 	return ReviewInput{
 		PullRequest: pullRequest,
 		Files:       files,
@@ -303,9 +344,12 @@ func (collector *Collector) CollectRange(
 				slog.String("base", string(base)),
 				slog.String("err", err.Error()),
 			)
+
 			return collector.Collect(ctx, ref, pullRequest)
 		}
+
 		slog.ErrorContext(ctx, "compare commit range", slog.String("err", err.Error()))
+
 		return ReviewInput{}, fmt.Errorf("compare %s to %s: %w", base, pullRequest.Head, err)
 	}
 
@@ -319,16 +363,26 @@ func (collector *Collector) CollectRange(
 			slog.String("requested", string(base)),
 			slog.String("merge_base", string(changedFiles.MergeBase)),
 		)
+
 		return collector.Collect(ctx, ref, pullRequest)
 	}
-	files, mergeBase, err := collector.collectFiles(ctx, ref, pullRequest, changedFiles.Files, changedFiles.MergeBase)
+
+	files, mergeBase, err := collector.collectFiles(
+		ctx,
+		ref,
+		pullRequest,
+		changedFiles.Files,
+		changedFiles.MergeBase,
+	)
 	if err != nil {
 		return ReviewInput{}, err
 	}
+
 	metadata, err := collector.collectMetadata(ctx, ref, pullRequest)
 	if err != nil {
 		return ReviewInput{}, err
 	}
+
 	return ReviewInput{
 		PullRequest: pullRequest,
 		Files:       files,
@@ -337,19 +391,34 @@ func (collector *Collector) CollectRange(
 	}, nil
 }
 
-func (collector *Collector) collectMetadata(ctx context.Context, ref domain.PullRequestRef, pullRequest githubapp.PullRequest) ([]MetadataSource, error) {
+func (collector *Collector) collectMetadata(
+	ctx context.Context,
+	ref domain.PullRequestRef,
+	pullRequest githubapp.PullRequest,
+) ([]MetadataSource, error) {
 	var commits []githubapp.PullRequestCommit
 	if pullRequest.CommitCount > 0 {
 		var err error
-		commits, err = collector.source.ListPullRequestCommits(ctx, ref.InstallationID, ref.Repository, ref.Number)
+		commits, err = collector.source.ListPullRequestCommits(
+			ctx,
+			ref.InstallationID,
+			ref.Repository,
+			ref.Number,
+		)
 		if err != nil {
 			slog.WarnContext(ctx, "Load commit prose failed", "err", err)
 			return nil, fmt.Errorf("load commit prose: %w", err)
 		}
+
 		if len(commits) != pullRequest.CommitCount {
-			return nil, fmt.Errorf("GitHub returned %d of %d pull request commit messages", len(commits), pullRequest.CommitCount)
+			return nil, fmt.Errorf(
+				"GitHub returned %d of %d pull request commit messages",
+				len(commits),
+				pullRequest.CommitCount,
+			)
 		}
 	}
+
 	return PullRequestMetadata(pullRequest, commits), nil
 }
 
@@ -364,6 +433,7 @@ func baseUnreachable(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return false
 	}
+
 	return apiErr.StatusCode == http.StatusNotFound ||
 		apiErr.StatusCode == http.StatusUnprocessableEntity
 }
@@ -378,25 +448,32 @@ func (collector *Collector) collectFiles(
 	changedFiles []githubapp.ChangedFile,
 	base domain.HeadSHA,
 ) ([]FileContext, domain.HeadSHA, error) {
-	sort.Slice(changedFiles, func(left, right int) bool {
-		return changedFiles[left].Path < changedFiles[right].Path
-	})
+	sort.Slice(
+		changedFiles,
+		func(left, right int) bool {
+			return changedFiles[left].Path < changedFiles[right].Path
+		},
+	)
 
 	files := make([]FileContext, 0, len(changedFiles))
 	recovery := newPatchRecovery(collector.source, ref, pullRequest, base)
 	attributes := newRepositoryAttributes(collector.source, ref)
+
 	for _, changedFile := range changedFiles {
 		file, err := collectFile(ctx, changedFile, recovery)
 		if err != nil {
 			return nil, "", err
 		}
+
 		attributes.remember(file, pullRequest.Head)
 		file.Attributes, err = attributes.forChange(ctx, changedFile, recovery)
 		if err != nil {
 			return nil, "", err
 		}
+
 		files = append(files, file)
 	}
+
 	return files, recovery.base, nil
 }
 
@@ -422,6 +499,7 @@ func collectFile(
 		fileContext.markGap(CoverageGapBinary)
 		return fileContext, nil
 	}
+
 	needsRecovery := patchNeedsRecovery(changedFile)
 	canRecover := recovery.base != "" || recovery.pr.Base != ""
 	if !changedFile.PatchPresent {
@@ -430,11 +508,13 @@ func collectFile(
 		if !fileContext.collectChangedLines() && !canRecover {
 			return fileContext, nil
 		}
+
 		parsed, err := parsePatch(changedFile.Patch)
 		if err != nil || !parsed.complete {
 			fileContext.markGap(CoverageGapPatchUnreadable)
 		}
 	}
+
 	if needsRecovery && fileContext.Gap == CoverageGapNone {
 		fileContext.markGap(CoverageGapPatchUnreadable)
 	}
@@ -443,20 +523,30 @@ func collectFile(
 	if err != nil {
 		return FileContext{}, err
 	}
+
 	if !loaded {
 		return fileContext, nil
 	}
+
 	if needsRecovery && canRecover {
 		patch, err := recovery.recover(ctx, changedFile, fileContext.CurrentContent)
 		if errors.Is(err, ErrNonTextPatch) {
 			fileContext.Gap = CoverageGapBinary
 			fileContext.CoverageComplete = false
+
 			return fileContext, nil
 		}
+
 		if err != nil {
-			slog.ErrorContext(ctx, "recover file patch", slog.String("path", changedFile.Path), slog.String("err", err.Error()))
+			slog.ErrorContext(
+				ctx,
+				"recover file patch",
+				slog.String("path", changedFile.Path),
+				slog.String("err", err.Error()),
+			)
 			return FileContext{}, fmt.Errorf("recover patch for %s: %w", changedFile.Path, err)
 		}
+
 		fileContext.Patch = patch
 		fileContext.Gap = CoverageGapNone
 		fileContext.CoverageComplete = true
@@ -464,29 +554,50 @@ func collectFile(
 			return FileContext{}, fmt.Errorf("recovered patch for %s is invalid", changedFile.Path)
 		}
 	}
+
 	return fileContext, nil
 }
 
-func loadCurrentFile(ctx context.Context, recovery *patchRecovery, file *FileContext) (bool, error) {
+func loadCurrentFile(
+	ctx context.Context,
+	recovery *patchRecovery,
+	file *FileContext,
+) (bool, error) {
 	if file.Status == "removed" {
 		return true, nil
 	}
+
 	content, err := recovery.readFile(ctx, file.Path, recovery.pr.Head)
 	if err == nil {
 		file.CurrentContent = string(content.Data)
 		file.sourceMetadata = content.Metadata
+
 		return true, nil
 	}
+
 	if file.Gap == CoverageGapPatchAbsent && recovery.base == "" && recovery.pr.Base == "" {
-		slog.WarnContext(ctx, "load omitted file context", slog.String("path", file.Path), slog.String("err", err.Error()))
+		slog.WarnContext(
+			ctx,
+			"load omitted file context",
+			slog.String("path", file.Path),
+			slog.String("err", err.Error()),
+		)
 		return false, nil
 	}
+
 	gap := contentGapFor(err)
 	if !gap.Recurs() {
-		slog.ErrorContext(ctx, "load file content", slog.String("path", file.Path), slog.String("err", err.Error()))
+		slog.ErrorContext(
+			ctx,
+			"load file content",
+			slog.String("path", file.Path),
+			slog.String("err", err.Error()),
+		)
 		return false, fmt.Errorf("load content for %s: %w", file.Path, err)
 	}
+
 	file.markGap(gap)
+
 	return false, nil
 }
 
@@ -494,11 +605,13 @@ func fileLooksBinary(status string, patch string) bool {
 	if status == "binary" {
 		return true
 	}
+
 	for line := range strings.SplitSeq(patch, "\n") {
 		if strings.HasPrefix(line, "Binary files ") && strings.HasSuffix(line, " differ") {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -509,10 +622,12 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 	}
 
 	pieces := make([]Piece, 0)
+
 	for _, file := range input.Files {
 		if fileLooksBinary(file.Status, file.Patch) {
 			continue
 		}
+
 		if strings.TrimSpace(file.Patch) == "" {
 			continue
 		}
@@ -521,6 +636,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 		if err != nil {
 			continue
 		}
+
 		for _, hunk := range parsed.hunks {
 			pieces = append(pieces, fileHunkPieces(&file, hunk, maxSize)...)
 		}
@@ -530,6 +646,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 		fragments := metadataPieces(metadata, maxSize)
 		pieces = append(pieces, fragments...)
 	}
+
 	if len(pieces) == 0 {
 		return nil, nil
 	}
@@ -542,6 +659,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 		if chunk, ok := current.build(); ok {
 			chunks = append(chunks, chunk)
 		}
+
 		current = newChunkBuilder()
 		currentSize = 0
 	}
@@ -550,22 +668,26 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 		if current.hasText() && currentSize+1+len(piece.Text) > maxSize {
 			flush()
 		}
+
 		if current.hasText() {
 			current.appendSeparator()
 			currentSize++
 		}
+
 		current.appendText(piece.Text)
 		currentSize += len(piece.Text)
 		current.addPiece(piece)
 		current.markIncomplete(!piece.CoverageComplete)
 		current.addPath(piece.Path)
 	}
+
 	flush()
 
 	for index := range chunks {
 		chunks[index].Index = index + 1
 		chunks[index].Total = len(chunks)
 	}
+
 	return chunks, nil
 }
 
@@ -618,9 +740,11 @@ func (builder *chunkBuilder) addPath(path string) {
 	if path == "" {
 		return
 	}
+
 	if _, ok := builder.pathSeen[path]; ok {
 		return
 	}
+
 	builder.pathSeen[path] = struct{}{}
 	builder.paths = append(builder.paths, path)
 }
@@ -638,6 +762,7 @@ func (builder *chunkBuilder) build() (Chunk, bool) {
 			CoverageComplete:   true,
 		}, false
 	}
+
 	return Chunk{
 		RelationshipReview: false,
 		Index:              0,

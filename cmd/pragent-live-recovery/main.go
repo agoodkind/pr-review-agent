@@ -96,7 +96,17 @@ func run(ctx context.Context) error {
 		previousIDs[check.ID] = true
 	}
 	var available []label
-	labelOutput, err := gh(ctx, "label", "list", "--repo", cfg.Repository, "--limit", "1000", "--json", "name")
+	labelOutput, err := gh(
+		ctx,
+		"label",
+		"list",
+		"--repo",
+		cfg.Repository,
+		"--limit",
+		"1000",
+		"--json",
+		"name",
+	)
 	if err != nil {
 		return err
 	}
@@ -114,12 +124,29 @@ func run(ctx context.Context) error {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if added {
-			if _, cleanupErr := gh(cleanupCtx, "pr", "edit", strconv.Itoa(cfg.PullRequest), "--repo", cfg.Repository, "--remove-label", cfg.ForceLabel+","+cfg.InterruptLabel); cleanupErr != nil {
+			if _, cleanupErr := gh(
+				cleanupCtx,
+				"pr",
+				"edit",
+				strconv.Itoa(cfg.PullRequest),
+				"--repo",
+				cfg.Repository,
+				"--remove-label",
+				cfg.ForceLabel+","+cfg.InterruptLabel,
+			); cleanupErr != nil {
 				fmt.Fprintf(os.Stderr, "remove recovery labels: %v\n", cleanupErr)
 			}
 		}
 		for _, name := range created {
-			if _, cleanupErr := gh(cleanupCtx, "label", "delete", name, "--repo", cfg.Repository, "--yes"); cleanupErr != nil {
+			if _, cleanupErr := gh(
+				cleanupCtx,
+				"label",
+				"delete",
+				name,
+				"--repo",
+				cfg.Repository,
+				"--yes",
+			); cleanupErr != nil {
 				fmt.Fprintf(os.Stderr, "delete recovery label %s: %v\n", name, cleanupErr)
 			}
 		}
@@ -129,7 +156,16 @@ func run(ctx context.Context) error {
 		{cfg.InterruptLabel, "B60205"},
 	} {
 		if !existing[entry.name] {
-			if _, err := gh(ctx, "label", "create", entry.name, "--repo", cfg.Repository, "--color", entry.color); err != nil {
+			if _, err := gh(
+				ctx,
+				"label",
+				"create",
+				entry.name,
+				"--repo",
+				cfg.Repository,
+				"--color",
+				entry.color,
+			); err != nil {
 				return err
 			}
 			created = append(created, entry.name)
@@ -148,7 +184,16 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := gh(ctx, "pr", "edit", strconv.Itoa(cfg.PullRequest), "--repo", cfg.Repository, "--add-label", cfg.ForceLabel); err != nil {
+	if _, err := gh(
+		ctx,
+		"pr",
+		"edit",
+		strconv.Itoa(cfg.PullRequest),
+		"--repo",
+		cfg.Repository,
+		"--add-label",
+		cfg.ForceLabel,
+	); err != nil {
 		return err
 	}
 	added = true
@@ -159,7 +204,16 @@ func run(ctx context.Context) error {
 	if check.ExternalID == "" {
 		return errors.New("the new review check has no delivery identifier")
 	}
-	if _, err := gh(ctx, "pr", "edit", strconv.Itoa(cfg.PullRequest), "--repo", cfg.Repository, "--add-label", cfg.InterruptLabel); err != nil {
+	if _, err := gh(
+		ctx,
+		"pr",
+		"edit",
+		strconv.Itoa(cfg.PullRequest),
+		"--repo",
+		cfg.Repository,
+		"--add-label",
+		cfg.InterruptLabel,
+	); err != nil {
 		return err
 	}
 	completionCtx, cancel := context.WithTimeout(ctx, recoveryTimeout)
@@ -169,7 +223,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 	if completed.Conclusion != "success" || completed.ExternalID != check.ExternalID {
-		return fmt.Errorf("review check %d completed with %q or changed its delivery identifier", check.ID, completed.Conclusion)
+		return fmt.Errorf(
+			"review check %d completed with %q or changed its delivery identifier",
+			check.ID,
+			completed.Conclusion,
+		)
 	}
 	for !logs.recovered(check.ExternalID) {
 		if err := logs.failure(); err != nil {
@@ -187,7 +245,10 @@ func loadTarget(ctx context.Context) (recoveryConfig, pullRequest, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		slog.Error("read recovery test configuration", "err", err)
-		return recoveryConfig{}, pullRequest{}, fmt.Errorf("read recovery test configuration: %w", err)
+		return recoveryConfig{}, pullRequest{}, fmt.Errorf(
+			"read recovery test configuration: %w",
+			err,
+		)
 	}
 	var cfg recoveryConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -198,7 +259,16 @@ func loadTarget(ctx context.Context) (recoveryConfig, pullRequest, error) {
 	}
 
 	var pr pullRequest
-	prOutput, err := gh(ctx, "pr", "view", strconv.Itoa(cfg.PullRequest), "--repo", cfg.Repository, "--json", "state,headRefOid,labels,url")
+	prOutput, err := gh(
+		ctx,
+		"pr",
+		"view",
+		strconv.Itoa(cfg.PullRequest),
+		"--repo",
+		cfg.Repository,
+		"--json",
+		"state,headRefOid,labels,url",
+	)
 	if err != nil {
 		return cfg, pr, err
 	}
@@ -210,7 +280,9 @@ func loadTarget(ctx context.Context) (recoveryConfig, pullRequest, error) {
 	}
 	for _, current := range pr.Labels {
 		if current.Name == cfg.ForceLabel || current.Name == cfg.InterruptLabel {
-			return cfg, pr, errors.New("remove the recovery test labels from the pull request before starting")
+			return cfg, pr, errors.New(
+				"remove the recovery test labels from the pull request before starting",
+			)
 		}
 	}
 	return cfg, pr, nil
@@ -228,7 +300,11 @@ func gh(ctx context.Context, args ...string) ([]byte, error) {
 
 func checks(ctx context.Context, cfg recoveryConfig, head string) ([]checkRun, error) {
 	var response checkResponse
-	path := fmt.Sprintf("repos/%s/commits/%s/check-runs?filter=all&per_page=100", cfg.Repository, head)
+	path := fmt.Sprintf(
+		"repos/%s/commits/%s/check-runs?filter=all&per_page=100",
+		cfg.Repository,
+		head,
+	)
 	output, err := gh(ctx, "api", path)
 	if err != nil {
 		return nil, err
@@ -245,7 +321,10 @@ func checks(ctx context.Context, cfg recoveryConfig, head string) ([]checkRun, e
 	return reviewChecks, nil
 }
 
-func waitForNewCheck(ctx context.Context, cfg recoveryConfig, head string, previous map[int64]bool) (checkRun, error) {
+func waitForNewCheck(ctx context.Context, cfg recoveryConfig, head string, previous map[int64]bool) (
+	checkRun,
+	error,
+) {
 	deadline, cancel := context.WithTimeout(ctx, checkStartTimeout)
 	defer cancel()
 	for deadline.Err() == nil {
@@ -258,7 +337,9 @@ func waitForNewCheck(ctx context.Context, cfg recoveryConfig, head string, previ
 				continue
 			}
 			if check.Status == "completed" {
-				return checkRun{}, errors.New("the review completed before the container interruption")
+				return checkRun{}, errors.New(
+					"the review completed before the container interruption",
+				)
 			}
 			if check.Status == "in_progress" {
 				return check, nil
@@ -271,7 +352,10 @@ func waitForNewCheck(ctx context.Context, cfg recoveryConfig, head string, previ
 	return checkRun{}, errors.New("GitHub did not start a new review check")
 }
 
-func waitForCompletion(ctx context.Context, cfg recoveryConfig, head string, id int64) (checkRun, error) {
+func waitForCompletion(ctx context.Context, cfg recoveryConfig, head string, id int64) (
+	checkRun,
+	error,
+) {
 	for ctx.Err() == nil {
 		all, err := checks(ctx, cfg, head)
 		if err != nil {

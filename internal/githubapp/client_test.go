@@ -37,33 +37,49 @@ func TestAppJWTContainsExpectedClaimsAndValidSignature(t *testing.T) {
 	defer server.Close()
 
 	var capturedJWT string
-	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
-			capturedJWT = strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
-			writeJSON(writer, http.StatusCreated, map[string]any{
-				"token":      "ghs_installation",
-				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
-			})
-			return
-		}
-		if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
-			writeJSON(writer, http.StatusOK, map[string]any{
-				"number": float64(1),
-				"draft":  false,
-				"title":  "title",
-				"body":   "body",
-				"head":   map[string]any{"sha": testHeadSHA},
-				"base":   map[string]any{"sha": testBaseSHA},
-			})
-			return
-		}
-		writer.WriteHeader(http.StatusNotFound)
-	})
+	server.Config.Handler = http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost &&
+				strings.HasSuffix(request.URL.Path, "/access_tokens") {
+				capturedJWT = strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+				writeJSON(
+					writer,
+					http.StatusCreated,
+					map[string]any{
+						"token":      "ghs_installation",
+						"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+					},
+				)
+
+				return
+			}
+
+			if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
+				writeJSON(
+					writer,
+					http.StatusOK,
+					map[string]any{
+						"number": float64(1),
+						"draft":  false,
+						"title":  "title",
+						"body":   "body",
+						"head":   map[string]any{"sha": testHeadSHA},
+						"base":   map[string]any{"sha": testBaseSHA},
+					},
+				)
+
+				return
+			}
+
+			writer.WriteHeader(http.StatusNotFound)
+		},
+	)
 
 	_, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1)
 	if err != nil {
 		t.Fatalf("GetPullRequest: %v", err)
 	}
+
 	if capturedJWT == "" {
 		t.Fatal("installation token request missing jwt")
 	}
@@ -72,15 +88,19 @@ func TestAppJWTContainsExpectedClaimsAndValidSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseJWTClaimsForTest: %v", err)
 	}
+
 	if claims.Issuer != "12345" {
 		t.Fatalf("iss = %q, want 12345", claims.Issuer)
 	}
+
 	if claims.IssuedAt != 1_699_999_940 {
 		t.Fatalf("iat = %d, want %d", claims.IssuedAt, 1_699_999_940)
 	}
+
 	if claims.ExpiresAt != 1_700_000_540 {
 		t.Fatalf("exp = %d, want %d", claims.ExpiresAt, 1_700_000_540)
 	}
+
 	if err := verifyJWTSignatureForTest(capturedJWT, &privateKey.PublicKey); err != nil {
 		t.Fatalf("verifyJWTSignatureForTest: %v", err)
 	}
@@ -108,86 +128,126 @@ func TestListReviewThreadsFollowsEveryPageOfAThreadsComments(t *testing.T) {
 	defer server.Close()
 
 	commentPageRequests := 0
-	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
-			writeJSON(writer, http.StatusCreated, map[string]any{
-				"token":      "ghs_installation",
-				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
-			})
-			return
-		}
+	server.Config.Handler = http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost &&
+				strings.HasSuffix(request.URL.Path, "/access_tokens") {
+				writeJSON(
+					writer,
+					http.StatusCreated,
+					map[string]any{
+						"token":      "ghs_installation",
+						"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+					},
+				)
 
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var payload struct {
-			Query string `json:"query"`
-		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
+				return
+			}
 
-		// The follow-up query addresses one thread by node id; the listing walks
-		// the pull request's threads.
-		if strings.Contains(payload.Query, "PullRequestReviewThread") {
-			commentPageRequests++
-			writeJSON(writer, http.StatusOK, map[string]any{
-				"data": map[string]any{
-					"node": map[string]any{
-						"comments": map[string]any{
-							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
-							"nodes": []map[string]any{
-								threadCommentNode(3, "third comment", "other-user"),
-								threadCommentNode(4, "fourth comment", "other-user"),
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			var payload struct {
+				Query string `json:"query"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			// The follow-up query addresses one thread by node id; the listing walks
+			// the pull request's threads.
+			if strings.Contains(payload.Query, "PullRequestReviewThread") {
+				commentPageRequests++
+				writeJSON(
+					writer,
+					http.StatusOK,
+					map[string]any{
+						"data": map[string]any{
+							"node": map[string]any{
+								"comments": map[string]any{
+									"pageInfo": map[string]any{
+										"hasNextPage": false,
+										"endCursor":   "",
+									},
+									"nodes": []map[string]any{
+										threadCommentNode(3, "third comment", "other-user"),
+										threadCommentNode(4, "fourth comment", "other-user"),
+									},
+								},
+							},
+						},
+					},
+				)
+
+				return
+			}
+
+			writeJSON(
+				writer,
+				http.StatusOK,
+				map[string]any{
+					"data": map[string]any{
+						"repository": map[string]any{
+							"pullRequest": map[string]any{
+								"reviewThreads": map[string]any{
+									"pageInfo": map[string]any{
+										"hasNextPage": false,
+										"endCursor":   "",
+									},
+									"nodes": []map[string]any{
+										{
+											"id":         "thread-long",
+											"isResolved": false,
+											"isOutdated": false,
+											"comments": map[string]any{
+												"pageInfo": map[string]any{
+													"hasNextPage": true,
+													"endCursor":   "comment-cursor-1",
+												},
+												"nodes": []map[string]any{
+													threadCommentNode(
+														1,
+														"the finding",
+														testBotLogin,
+													),
+													threadCommentNode(
+														2,
+														"second comment",
+														"other-user",
+													),
+												},
+											},
+										},
+									},
+								},
 							},
 						},
 					},
 				},
-			})
-			return
-		}
-
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"data": map[string]any{
-				"repository": map[string]any{
-					"pullRequest": map[string]any{
-						"reviewThreads": map[string]any{
-							"pageInfo": map[string]any{"hasNextPage": false, "endCursor": ""},
-							"nodes": []map[string]any{{
-								"id":         "thread-long",
-								"isResolved": false,
-								"isOutdated": false,
-								"comments": map[string]any{
-									"pageInfo": map[string]any{
-										"hasNextPage": true,
-										"endCursor":   "comment-cursor-1",
-									},
-									"nodes": []map[string]any{
-										threadCommentNode(1, "the finding", testBotLogin),
-										threadCommentNode(2, "second comment", "other-user"),
-									},
-								},
-							}},
-						},
-					},
-				},
-			},
-		})
-	})
+			)
+		},
+	)
 
 	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 1)
 	if err != nil {
 		t.Fatalf("ListReviewThreads: %v", err)
 	}
+
 	if len(threads) != 1 {
 		t.Fatalf("threads = %d, want 1", len(threads))
 	}
+
 	if commentPageRequests != 1 {
-		t.Fatalf("comment page requests = %d, want the second page fetched once", commentPageRequests)
+		t.Fatalf(
+			"comment page requests = %d, want the second page fetched once",
+			commentPageRequests,
+		)
 	}
+
 	if threads[0].RootComment.Body != "the finding" {
 		t.Fatalf("root comment = %q, want the finding", threads[0].RootComment.Body)
 	}
@@ -196,10 +256,12 @@ func TestListReviewThreadsFollowsEveryPageOfAThreadsComments(t *testing.T) {
 	for _, reply := range threads[0].Replies {
 		bodies = append(bodies, reply.Body)
 	}
+
 	want := []string{"second comment", "third comment", "fourth comment"}
 	if len(bodies) != len(want) {
 		t.Fatalf("replies = %v, want every reply across both pages %v", bodies, want)
 	}
+
 	for index, body := range want {
 		if bodies[index] != body {
 			t.Fatalf("replies = %v, want %v in thread order", bodies, want)
@@ -220,10 +282,12 @@ func TestInstallationTokenIsCachedAndRefreshedBeforeExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first GetPullRequest: %v", err)
 	}
+
 	_, err = client.GetPullRequest(context.Background(), 99, testRepo(), 1)
 	if err != nil {
 		t.Fatalf("second GetPullRequest: %v", err)
 	}
+
 	if state.installationTokenCount != 1 {
 		t.Fatalf("installation token requests = %d, want 1", state.installationTokenCount)
 	}
@@ -234,8 +298,12 @@ func TestInstallationTokenIsCachedAndRefreshedBeforeExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third GetPullRequest: %v", err)
 	}
+
 	if state.installationTokenCount != 2 {
-		t.Fatalf("installation token requests after refresh = %d, want 2", state.installationTokenCount)
+		t.Fatalf(
+			"installation token requests after refresh = %d, want 2",
+			state.installationTokenCount,
+		)
 	}
 }
 
@@ -245,34 +313,51 @@ func TestClientErrorsExposeStatusWithoutCredentials(t *testing.T) {
 	defer server.Close()
 
 	secretToken := "ghs_supersecret_token_value"
-	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if strings.HasSuffix(request.URL.Path, "/access_tokens") {
-			writeJSON(writer, http.StatusCreated, map[string]any{
-				"token":      secretToken,
-				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
-			})
-			return
-		}
-		if strings.Contains(request.URL.Path, "/pulls/1") {
-			writeJSON(writer, http.StatusUnauthorized, map[string]any{
-				"message": fmt.Sprintf("bad auth Bearer %s", secretToken),
-			})
-			return
-		}
-		writer.WriteHeader(http.StatusNotFound)
-	})
+	server.Config.Handler = http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if strings.HasSuffix(request.URL.Path, "/access_tokens") {
+				writeJSON(
+					writer,
+					http.StatusCreated,
+					map[string]any{
+						"token":      secretToken,
+						"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+					},
+				)
+
+				return
+			}
+
+			if strings.Contains(request.URL.Path, "/pulls/1") {
+				writeJSON(
+					writer,
+					http.StatusUnauthorized,
+					map[string]any{
+						"message": fmt.Sprintf("bad auth Bearer %s", secretToken),
+					},
+				)
+
+				return
+			}
+
+			writer.WriteHeader(http.StatusNotFound)
+		},
+	)
 
 	_, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1)
 	if err == nil {
 		t.Fatal("GetPullRequest: want error")
 	}
+
 	var apiErr githubapp.APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("error type = %T, want APIError", err)
 	}
+
 	if apiErr.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", apiErr.StatusCode)
 	}
+
 	if strings.Contains(err.Error(), secretToken) {
 		t.Fatalf("error leaks token: %q", err.Error())
 	}
@@ -296,19 +381,27 @@ func TestATransportFailureKeepsItsCause(t *testing.T) {
 	if _, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1); err != nil {
 		t.Fatalf("priming GetPullRequest: %v", err)
 	}
+
 	server.Close()
 
 	_, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1)
 	if err == nil {
 		t.Fatal("GetPullRequest: want the transport failure reported")
 	}
+
 	var transportErr *url.Error
 	if !errors.As(err, &transportErr) {
-		t.Fatalf("error = %v (%T), want the transport cause reachable through the client boundary", err, err)
+		t.Fatalf(
+			"error = %v (%T), want the transport cause reachable through the client boundary",
+			err,
+			err,
+		)
 	}
+
 	if !strings.Contains(err.Error(), "github request failed") {
 		t.Fatalf("error = %q, want the client's own wording kept", err.Error())
 	}
+
 	// The cause has to add something. A wrapped error whose text is only the
 	// service's own sentence is the same dead end as the string it replaced.
 	if err.Error() == "github request failed" {
@@ -329,31 +422,46 @@ func TestARequestDeadlineIsStillADeadlineAfterTheClientWrapsIt(t *testing.T) {
 	defer server.Close()
 
 	var blocking atomic.Bool
-	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
-			writeJSON(writer, http.StatusCreated, map[string]any{
-				"token":      "ghs_installation",
-				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
-			})
-			return
-		}
-		if blocking.Load() {
-			<-request.Context().Done()
-			return
-		}
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"number": float64(1),
-			"draft":  false,
-			"title":  "title",
-			"body":   "body",
-			"head":   map[string]any{"sha": testHeadSHA},
-			"base":   map[string]any{"sha": testBaseSHA},
-		})
-	})
+	server.Config.Handler = http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost &&
+				strings.HasSuffix(request.URL.Path, "/access_tokens") {
+				writeJSON(
+					writer,
+					http.StatusCreated,
+					map[string]any{
+						"token":      "ghs_installation",
+						"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+					},
+				)
+
+				return
+			}
+
+			if blocking.Load() {
+				<-request.Context().Done()
+				return
+			}
+
+			writeJSON(
+				writer,
+				http.StatusOK,
+				map[string]any{
+					"number": float64(1),
+					"draft":  false,
+					"title":  "title",
+					"body":   "body",
+					"head":   map[string]any{"sha": testHeadSHA},
+					"base":   map[string]any{"sha": testBaseSHA},
+				},
+			)
+		},
+	)
 
 	if _, err := client.GetPullRequest(context.Background(), 99, testRepo(), 1); err != nil {
 		t.Fatalf("priming GetPullRequest: %v", err)
 	}
+
 	blocking.Store(true)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -363,8 +471,13 @@ func TestARequestDeadlineIsStillADeadlineAfterTheClientWrapsIt(t *testing.T) {
 	if err == nil {
 		t.Fatal("GetPullRequest: want the deadline reported")
 	}
+
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("error = %v (%T), want a deadline still recognizable to the review service", err, err)
+		t.Fatalf(
+			"error = %v (%T), want a deadline still recognizable to the review service",
+			err,
+			err,
+		)
 	}
 }
 
@@ -375,10 +488,22 @@ func TestRESTPaginationLoadsEveryPage(t *testing.T) {
 
 	state.reviewPages = [][]map[string]any{
 		{
-			{"id": float64(1), "commit_id": testHeadSHA, "state": "COMMENTED", "body": "one", "user": map[string]any{"login": "bot"}},
+			{
+				"id":        float64(1),
+				"commit_id": testHeadSHA,
+				"state":     "COMMENTED",
+				"body":      "one",
+				"user":      map[string]any{"login": "bot"},
+			},
 		},
 		{
-			{"id": float64(2), "commit_id": testHeadSHA, "state": "COMMENTED", "body": "two", "user": map[string]any{"login": "bot"}},
+			{
+				"id":        float64(2),
+				"commit_id": testHeadSHA,
+				"state":     "COMMENTED",
+				"body":      "two",
+				"user":      map[string]any{"login": "bot"},
+			},
 		},
 	}
 
@@ -386,9 +511,11 @@ func TestRESTPaginationLoadsEveryPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListReviews: %v", err)
 	}
+
 	if len(reviews) != 2 {
 		t.Fatalf("review count = %d, want 2", len(reviews))
 	}
+
 	if reviews[0].ID != 1 || reviews[1].ID != 2 {
 		t.Fatalf("reviews = %+v, want ids 1 and 2", reviews)
 	}
@@ -410,12 +537,15 @@ func TestListChangedFilesPreservesMissingPatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListChangedFiles: %v", err)
 	}
+
 	if len(files) != 2 {
 		t.Fatalf("file count = %d, want 2", len(files))
 	}
+
 	if !files[0].PatchPresent || files[0].Patch != "@@" {
 		t.Fatalf("patched file = %+v", files[0])
 	}
+
 	if files[1].PatchPresent || files[1].Patch != "" {
 		t.Fatalf("missing patch file = %+v", files[1])
 	}
@@ -441,6 +571,7 @@ func TestGetFileDecodesBase64Content(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFile: %v", err)
 	}
+
 	if string(content) != "foo" {
 		t.Fatalf("content = %q, want foo", string(content))
 	}
@@ -468,15 +599,19 @@ func TestSubmitReviewSendsOneCompletePayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitReview: %v", err)
 	}
+
 	if state.lastSubmitReview == nil {
 		t.Fatal("submit review payload missing")
 	}
+
 	if state.lastSubmitReview["commit_id"] != testHeadSHA {
 		t.Fatalf("commit_id = %v", state.lastSubmitReview["commit_id"])
 	}
+
 	if state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v", state.lastSubmitReview["event"])
 	}
+
 	comments, ok := state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 1 {
 		t.Fatalf("comments = %v", state.lastSubmitReview["comments"])
@@ -488,14 +623,21 @@ func TestSubmitReviewRejectsUnknownEvent(t *testing.T) {
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
-	_, err := client.SubmitReview(context.Background(), 99, testRepo(), 4, githubapp.SubmitReviewRequest{
-		CommitID: domain.HeadSHA(testHeadSHA),
-		Body:     "summary",
-		Event:    "SHIP_IT",
-	})
+	_, err := client.SubmitReview(
+		context.Background(),
+		99,
+		testRepo(),
+		4,
+		githubapp.SubmitReviewRequest{
+			CommitID: domain.HeadSHA(testHeadSHA),
+			Body:     "summary",
+			Event:    "SHIP_IT",
+		},
+	)
 	if err == nil {
 		t.Fatal("SubmitReview unknown event: want error")
 	}
+
 	if state.lastSubmitReview != nil {
 		t.Fatal("SubmitReview posted a review for an unknown event")
 	}
@@ -522,9 +664,11 @@ func TestListReviewsPreservesAuthorForMarkerOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListReviews: %v", err)
 	}
+
 	if len(reviews) != 1 {
 		t.Fatalf("review count = %d, want 1", len(reviews))
 	}
+
 	if reviews[0].Author != testBotLogin {
 		t.Fatalf("author = %q", reviews[0].Author)
 	}
@@ -546,18 +690,30 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCheckRun: %v", err)
 	}
+
 	if state.lastCreateCheckRun["status"] != "queued" {
 		t.Fatalf("create status = %v", state.lastCreateCheckRun["status"])
 	}
+
 	// The delivery travels to GitHub, because it is the only record of which
 	// delivery created this check run that outlives the container.
 	if state.lastCreateCheckRun["external_id"] != "delivery-check-lifecycle" {
-		t.Fatalf("create external_id = %v, want the delivery id", state.lastCreateCheckRun["external_id"])
+		t.Fatalf(
+			"create external_id = %v, want the delivery id",
+			state.lastCreateCheckRun["external_id"],
+		)
 	}
 
-	if err := client.StartCheckRun(context.Background(), 99, testRepo(), created.ID, "https://example.test/run"); err != nil {
+	if err := client.StartCheckRun(
+		context.Background(),
+		99,
+		testRepo(),
+		created.ID,
+		"https://example.test/run",
+	); err != nil {
 		t.Fatalf("StartCheckRun: %v", err)
 	}
+
 	if state.lastUpdateCheckRun["status"] != "in_progress" {
 		t.Fatalf("start status = %v", state.lastUpdateCheckRun["status"])
 	}
@@ -575,16 +731,20 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompleteCheckRun: %v", err)
 	}
+
 	if state.lastUpdateCheckRun["status"] != "completed" {
 		t.Fatalf("complete status = %v", state.lastUpdateCheckRun["status"])
 	}
+
 	if state.lastUpdateCheckRun["conclusion"] != "success" {
 		t.Fatalf("conclusion = %v", state.lastUpdateCheckRun["conclusion"])
 	}
+
 	output, ok := state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok || output["title"] != "done" || output["summary"] != "finished" {
 		t.Fatalf("output = %v, want distinct title and summary", state.lastUpdateCheckRun["output"])
 	}
+
 	text, ok := output["text"].(string)
 	if !ok || !strings.Contains(text, "review job started") {
 		t.Fatalf("output text = %v, want the run log", output["text"])
@@ -599,11 +759,17 @@ func TestCompleteCheckRunTruncatesAnOversizeLog(t *testing.T) {
 	truncated := githubapp.TruncateCheckRunText(oversize)
 
 	if len(truncated) > githubapp.MaximumCheckRunTextBytes {
-		t.Fatalf("truncated length = %d, want at most %d", len(truncated), githubapp.MaximumCheckRunTextBytes)
+		t.Fatalf(
+			"truncated length = %d, want at most %d",
+			len(truncated),
+			githubapp.MaximumCheckRunTextBytes,
+		)
 	}
+
 	if !strings.Contains(truncated, "final failing line") {
 		t.Fatal("truncated log dropped the end of the run")
 	}
+
 	if !strings.Contains(truncated, "truncated to fit the check run") {
 		t.Fatal("truncated log does not say it was truncated")
 	}
@@ -620,6 +786,7 @@ func TestEndToEndMoreThanOneHundredReviewThreads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListReviewThreads: %v", err)
 	}
+
 	if len(threads) != 101 {
 		t.Fatalf("thread count = %d, want 101", len(threads))
 	}
@@ -631,11 +798,17 @@ func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	defer server.Close()
 
 	state.submitReviewStatus = http.StatusInternalServerError
-	_, err := client.SubmitReview(context.Background(), 99, testRepo(), 6, githubapp.SubmitReviewRequest{
-		CommitID: domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32"),
-		Body:     "body",
-		Event:    domain.ReviewDecisionApprove,
-	})
+	_, err := client.SubmitReview(
+		context.Background(),
+		99,
+		testRepo(),
+		6,
+		githubapp.SubmitReviewRequest{
+			CommitID: domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32"),
+			Body:     "body",
+			Event:    domain.ReviewDecisionApprove,
+		},
+	)
 	if err == nil {
 		t.Fatal("SubmitReview: want error")
 	}
@@ -652,9 +825,11 @@ func TestListReviewThreadsPaginatesBeyondOneHundred(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListReviewThreads: %v", err)
 	}
+
 	if len(threads) != 150 {
 		t.Fatalf("thread count = %d, want 150", len(threads))
 	}
+
 	if threads[0].NodeID != "thread-0" || threads[149].NodeID != "thread-149" {
 		t.Fatalf("thread bounds = %q .. %q", threads[0].NodeID, threads[149].NodeID)
 	}
@@ -671,6 +846,7 @@ func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListReviewThreads: %v", err)
 	}
+
 	if threads[0].RootComment.Author != testBotLogin {
 		t.Fatalf("author = %q, want %q", threads[0].RootComment.Author, testBotLogin)
 	}
@@ -681,58 +857,69 @@ func TestListReviewThreadsDecodesRepliesAfterTheRootComment(t *testing.T) {
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
-	state.threadPages = []map[string]any{{
-		"repository": map[string]any{
-			"pullRequest": map[string]any{
-				"reviewThreads": map[string]any{
-					"pageInfo": map[string]any{
-						"hasNextPage": false,
-						"endCursor":   "",
-					},
-					"nodes": []map[string]any{{
-						"id":         "thread-replied",
-						"isResolved": false,
-						"comments": map[string]any{
-							"nodes": []map[string]any{
-								{
-									"databaseId": float64(1),
-									"body":       "the finding",
-									"path":       "main.go",
-									"line":       float64(3),
-									"startLine":  float64(3),
-									"author": map[string]any{
-										"__typename": "Bot",
-										"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
+	state.threadPages = []map[string]any{
+		{
+			"repository": map[string]any{
+				"pullRequest": map[string]any{
+					"reviewThreads": map[string]any{
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   "",
+						},
+						"nodes": []map[string]any{
+							{
+								"id":         "thread-replied",
+								"isResolved": false,
+								"comments": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"databaseId": float64(1),
+											"body":       "the finding",
+											"path":       "main.go",
+											"line":       float64(3),
+											"startLine":  float64(3),
+											"author": map[string]any{
+												"__typename": "Bot",
+												"login": strings.TrimSuffix(
+													testBotLogin,
+													"[bot]",
+												),
+											},
+										},
+										{
+											"databaseId": float64(2),
+											"body":       "declined: the configured stack has no authorizer",
+											"path":       "main.go",
+											"line":       float64(3),
+											"startLine":  float64(3),
+											"author":     map[string]any{"login": "author-user"},
+										},
 									},
-								},
-								{
-									"databaseId": float64(2),
-									"body":       "declined: the configured stack has no authorizer",
-									"path":       "main.go",
-									"line":       float64(3),
-									"startLine":  float64(3),
-									"author":     map[string]any{"login": "author-user"},
 								},
 							},
 						},
-					}},
+					},
 				},
 			},
 		},
-	}}
+	}
 
 	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 6)
 	if err != nil {
 		t.Fatalf("ListReviewThreads: %v", err)
 	}
+
 	if threads[0].RootComment.Body != "the finding" {
 		t.Fatalf("root body = %q, want the first comment", threads[0].RootComment.Body)
 	}
+
 	if len(threads[0].Replies) != 1 {
 		t.Fatalf("replies = %d, want the one reply after the root", len(threads[0].Replies))
 	}
+
 	reply := threads[0].Replies[0]
-	if reply.Author != "author-user" || reply.Body != "declined: the configured stack has no authorizer" {
+	if reply.Author != "author-user" ||
+		reply.Body != "declined: the configured stack has no authorizer" {
 		t.Fatalf("reply = %+v, want the author's reply decoded", reply)
 	}
 }
@@ -742,43 +929,53 @@ func TestListReviewThreadsUsesOriginalLinesForOutdatedComments(t *testing.T) {
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
-	state.threadPages = []map[string]any{{
-		"repository": map[string]any{
-			"pullRequest": map[string]any{
-				"reviewThreads": map[string]any{
-					"pageInfo": map[string]any{
-						"hasNextPage": false,
-						"endCursor":   "",
-					},
-					"nodes": []map[string]any{{
-						"id":         "thread-outdated",
-						"isResolved": false,
-						"isOutdated": true,
-						"comments": map[string]any{
-							"nodes": []map[string]any{{
-								"databaseId":        float64(1),
-								"body":              "body",
-								"path":              "main.go",
-								"line":              nil,
-								"startLine":         nil,
-								"originalLine":      float64(27),
-								"originalStartLine": float64(26),
-								"author": map[string]any{
-									"__typename": "Bot",
-									"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
-								},
-							}},
+	state.threadPages = []map[string]any{
+		{
+			"repository": map[string]any{
+				"pullRequest": map[string]any{
+					"reviewThreads": map[string]any{
+						"pageInfo": map[string]any{
+							"hasNextPage": false,
+							"endCursor":   "",
 						},
-					}},
+						"nodes": []map[string]any{
+							{
+								"id":         "thread-outdated",
+								"isResolved": false,
+								"isOutdated": true,
+								"comments": map[string]any{
+									"nodes": []map[string]any{
+										{
+											"databaseId":        float64(1),
+											"body":              "body",
+											"path":              "main.go",
+											"line":              nil,
+											"startLine":         nil,
+											"originalLine":      float64(27),
+											"originalStartLine": float64(26),
+											"author": map[string]any{
+												"__typename": "Bot",
+												"login": strings.TrimSuffix(
+													testBotLogin,
+													"[bot]",
+												),
+											},
+										},
+									},
+								},
+							},
+						},
+					},
 				},
 			},
 		},
-	}}
+	}
 
 	threads, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 6)
 	if err != nil {
 		t.Fatalf("ListReviewThreads: %v", err)
 	}
+
 	comment := threads[0].RootComment
 	if comment.StartLine != 26 || comment.EndLine != 27 {
 		t.Fatalf("lines = %d-%d, want 26-27", comment.StartLine, comment.EndLine)
@@ -794,6 +991,7 @@ func TestResolveReviewThreadVerifiesMutationResult(t *testing.T) {
 	if err := client.ResolveReviewThread(context.Background(), 99, "thread-resolve"); err != nil {
 		t.Fatalf("ResolveReviewThread: %v", err)
 	}
+
 	if state.lastResolveThreadID != "thread-resolve" {
 		t.Fatalf("resolve thread id = %q", state.lastResolveThreadID)
 	}
@@ -809,6 +1007,7 @@ func TestGraphQLErrorsRemainVisible(t *testing.T) {
 	if err == nil {
 		t.Fatal("ListReviewThreads: want error")
 	}
+
 	if !strings.Contains(err.Error(), "thread lookup failed") {
 		t.Fatalf("error = %q, want graphql message visible", err.Error())
 	}
@@ -820,26 +1019,40 @@ func TestCreateAndUpdateIssueComment(t *testing.T) {
 	defer server.Close()
 
 	var lastMethod, lastPath, lastBody string
-	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
-			writeJSON(writer, http.StatusCreated, map[string]any{
-				"token":      "ghs_installation",
-				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
-			})
-			return
-		}
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		lastMethod, lastPath, lastBody = request.Method, request.URL.Path, string(body)
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"id":   float64(4242),
-			"body": "hello",
-			"user": map[string]any{"login": "bot"},
-		})
-	})
+	server.Config.Handler = http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost &&
+				strings.HasSuffix(request.URL.Path, "/access_tokens") {
+				writeJSON(
+					writer,
+					http.StatusCreated,
+					map[string]any{
+						"token":      "ghs_installation",
+						"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+					},
+				)
+
+				return
+			}
+
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			lastMethod, lastPath, lastBody = request.Method, request.URL.Path, string(body)
+			writeJSON(
+				writer,
+				http.StatusOK,
+				map[string]any{
+					"id":   float64(4242),
+					"body": "hello",
+					"user": map[string]any{"login": "bot"},
+				},
+			)
+		},
+	)
 
 	repo := testRepo()
 
@@ -847,12 +1060,15 @@ func TestCreateAndUpdateIssueComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssueComment: %v", err)
 	}
+
 	if created.ID != 4242 {
 		t.Fatalf("id = %d, want 4242", created.ID)
 	}
+
 	if lastMethod != http.MethodPost || lastPath != "/repos/owner/repo/issues/7/comments" {
 		t.Fatalf("request = %s %s, want POST the issue comments path", lastMethod, lastPath)
 	}
+
 	// The create half asserted method and path but never the body, so a create
 	// that posted the wrong text, or none, passed. Both halves share one
 	// writer, and the update half is the only place that caught it.
@@ -860,12 +1076,20 @@ func TestCreateAndUpdateIssueComment(t *testing.T) {
 		t.Fatalf("create body = %q, want the text the caller asked to post", lastBody)
 	}
 
-	if _, err := client.UpdateIssueComment(context.Background(), 99, repo, 4242, "second"); err != nil {
+	if _, err := client.UpdateIssueComment(
+		context.Background(),
+		99,
+		repo,
+		4242,
+		"second",
+	); err != nil {
 		t.Fatalf("UpdateIssueComment: %v", err)
 	}
+
 	if lastMethod != http.MethodPatch || lastPath != "/repos/owner/repo/issues/comments/4242" {
 		t.Fatalf("request = %s %s, want PATCH the single comment path", lastMethod, lastPath)
 	}
+
 	if !strings.Contains(lastBody, "second") {
 		t.Fatalf("body = %q, want the new text", lastBody)
 	}
@@ -891,7 +1115,11 @@ type testServerState struct {
 	submitReviewStatus     int
 }
 
-func newTestClient(t *testing.T, privateKey *rsa.PrivateKey, now time.Time) (*githubapp.Client, *httptest.Server) {
+func newTestClient(
+	t *testing.T,
+	privateKey *rsa.PrivateKey,
+	now time.Time,
+) (*githubapp.Client, *httptest.Server) {
 	client, server, _ := newStatefulTestClient(t, privateKey, now)
 	return client, server
 }
@@ -915,17 +1143,21 @@ func newStatefulTestClient(
 		threadPages: []map[string]any{emptyThreadPage(false)},
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if failForbiddenEndpoint(writer, request) {
-			return
-		}
-		handleTestRequest(writer, request, state)
-	}))
+	server := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if failForbiddenEndpoint(writer, request) {
+				return
+			}
+
+			handleTestRequest(writer, request, state)
+		}),
+	)
 
 	apiURL, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatalf("Parse api URL: %v", err)
 	}
+
 	graphqlURL, err := url.Parse(server.URL + "/graphql")
 	if err != nil {
 		t.Fatalf("Parse graphql URL: %v", err)
@@ -943,17 +1175,28 @@ func newStatefulTestClient(
 	nowFn := func() time.Time {
 		return state.nowValue
 	}
-	client := githubapp.NewClient(cfg, server.Client(), nowFn, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	client := githubapp.NewClient(
+		cfg,
+		server.Client(),
+		nowFn,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+
 	return client, server, state
 }
 
 func handleTestRequest(writer http.ResponseWriter, request *http.Request, state *testServerState) {
 	if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
 		atomic.AddInt32(&state.installationTokenCount, 1)
-		writeJSON(writer, http.StatusCreated, map[string]any{
-			"token":      "ghs_installation",
-			"expires_at": state.installationExpiresAt,
-		})
+		writeJSON(
+			writer,
+			http.StatusCreated,
+			map[string]any{
+				"token":      "ghs_installation",
+				"expires_at": state.installationExpiresAt,
+			},
+		)
+
 		return
 	}
 
@@ -962,35 +1205,50 @@ func handleTestRequest(writer http.ResponseWriter, request *http.Request, state 
 		return
 	}
 
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/reviews") {
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") &&
+		strings.HasSuffix(request.URL.Path, "/reviews") {
 		writeReviewPage(writer, request, state)
 		return
 	}
 
-	if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/reviews") {
+	if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/pulls/") &&
+		strings.HasSuffix(request.URL.Path, "/reviews") {
 		body, err := readJSONBody(request)
 		if err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
+
 		if state.submitReviewStatus != 0 && state.submitReviewStatus != http.StatusOK {
-			writeJSON(writer, state.submitReviewStatus, map[string]any{
-				"message": "submit review failed",
-			})
+			writeJSON(
+				writer,
+				state.submitReviewStatus,
+				map[string]any{
+					"message": "submit review failed",
+				},
+			)
+
 			return
 		}
+
 		state.lastSubmitReview = body
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"id":        float64(42),
-			"commit_id": body["commit_id"],
-			"state":     "CHANGES_REQUESTED",
-			"body":      body["body"],
-			"user":      map[string]any{"login": testBotLogin},
-		})
+		writeJSON(
+			writer,
+			http.StatusOK,
+			map[string]any{
+				"id":        float64(42),
+				"commit_id": body["commit_id"],
+				"state":     "CHANGES_REQUESTED",
+				"body":      body["body"],
+				"user":      map[string]any{"login": testBotLogin},
+			},
+		)
+
 		return
 	}
 
-	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") && strings.HasSuffix(request.URL.Path, "/files") {
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") &&
+		strings.HasSuffix(request.URL.Path, "/files") {
 		writeChangedFilePage(writer, request, state)
 		return
 	}
@@ -1006,14 +1264,20 @@ func handleTestRequest(writer http.ResponseWriter, request *http.Request, state 
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
+
 		state.lastCreateCheckRun = body
-		writeJSON(writer, http.StatusCreated, map[string]any{
-			"id":         float64(77),
-			"name":       body["name"],
-			"head_sha":   body["head_sha"],
-			"status":     body["status"],
-			"conclusion": "",
-		})
+		writeJSON(
+			writer,
+			http.StatusCreated,
+			map[string]any{
+				"id":         float64(77),
+				"name":       body["name"],
+				"head_sha":   body["head_sha"],
+				"status":     body["status"],
+				"conclusion": "",
+			},
+		)
+
 		return
 	}
 
@@ -1023,26 +1287,37 @@ func handleTestRequest(writer http.ResponseWriter, request *http.Request, state 
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
 		}
+
 		state.lastUpdateCheckRun = body
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"id":         float64(77),
-			"name":       config.ReviewCheckName,
-			"head_sha":   testHeadSHA,
-			"status":     body["status"],
-			"conclusion": body["conclusion"],
-		})
+		writeJSON(
+			writer,
+			http.StatusOK,
+			map[string]any{
+				"id":         float64(77),
+				"name":       config.ReviewCheckName,
+				"head_sha":   testHeadSHA,
+				"status":     body["status"],
+				"conclusion": body["conclusion"],
+			},
+		)
+
 		return
 	}
 
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"number": float64(1),
-			"draft":  false,
-			"title":  "title",
-			"body":   "body",
-			"head":   map[string]any{"sha": testHeadSHA},
-			"base":   map[string]any{"sha": testBaseSHA},
-		})
+		writeJSON(
+			writer,
+			http.StatusOK,
+			map[string]any{
+				"number": float64(1),
+				"draft":  false,
+				"title":  "title",
+				"body":   "body",
+				"head":   map[string]any{"sha": testHeadSHA},
+				"base":   map[string]any{"sha": testBaseSHA},
+			},
+		)
+
 		return
 	}
 
@@ -1055,10 +1330,16 @@ func handleGraphQL(writer http.ResponseWriter, request *http.Request, state *tes
 		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
+
 	if state.graphQLError != "" {
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"errors": []map[string]any{{"message": state.graphQLError}},
-		})
+		writeJSON(
+			writer,
+			http.StatusOK,
+			map[string]any{
+				"errors": []map[string]any{{"message": state.graphQLError}},
+			},
+		)
+
 		return
 	}
 
@@ -1067,16 +1348,21 @@ func handleGraphQL(writer http.ResponseWriter, request *http.Request, state *tes
 		variables, _ := body["variables"].(map[string]any)
 		threadID, _ := variables["threadID"].(string)
 		state.lastResolveThreadID = threadID
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"data": map[string]any{
-				"resolveReviewThread": map[string]any{
-					"thread": map[string]any{
-						"id":         state.resolveThreadID,
-						"isResolved": true,
+		writeJSON(
+			writer,
+			http.StatusOK,
+			map[string]any{
+				"data": map[string]any{
+					"resolveReviewThread": map[string]any{
+						"thread": map[string]any{
+							"id":         state.resolveThreadID,
+							"isResolved": true,
+						},
 					},
 				},
 			},
-		})
+		)
+
 		return
 	}
 
@@ -1090,6 +1376,7 @@ func writeReviewPage(writer http.ResponseWriter, request *http.Request, state *t
 		writeJSON(writer, http.StatusOK, []map[string]any{})
 		return
 	}
+
 	page := state.reviewPages[state.reviewPageIndex]
 	state.reviewPageIndex++
 	if state.reviewPageIndex < len(state.reviewPages) {
@@ -1099,16 +1386,23 @@ func writeReviewPage(writer http.ResponseWriter, request *http.Request, state *t
 		} else {
 			next += "?page=2"
 		}
+
 		writer.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, next))
 	}
+
 	writeJSON(writer, http.StatusOK, page)
 }
 
-func writeChangedFilePage(writer http.ResponseWriter, request *http.Request, state *testServerState) {
+func writeChangedFilePage(
+	writer http.ResponseWriter,
+	request *http.Request,
+	state *testServerState,
+) {
 	if state.changedFilePageIndex >= len(state.changedFilePages) {
 		writeJSON(writer, http.StatusOK, []map[string]any{})
 		return
 	}
+
 	page := state.changedFilePages[state.changedFilePageIndex]
 	state.changedFilePageIndex++
 	writeJSON(writer, http.StatusOK, page)
@@ -1116,52 +1410,63 @@ func writeChangedFilePage(writer http.ResponseWriter, request *http.Request, sta
 
 func buildThreadPages(total int) []map[string]any {
 	pages := make([]map[string]any, 0)
+
 	for start := 0; start < total; start += 100 {
 		end := start + 100
 		if end > total {
 			end = total
 		}
+
 		nodes := make([]map[string]any, 0, end-start)
 		for index := start; index < end; index++ {
-			nodes = append(nodes, map[string]any{
-				"id":         fmt.Sprintf("thread-%d", index),
-				"isResolved": false,
-				"comments": map[string]any{
-					"nodes": []map[string]any{
-						{
-							"databaseId": float64(index + 1),
-							"body":       "body",
-							"path":       "main.go",
-							"line":       float64(10),
-							"startLine":  float64(10),
-							"author": map[string]any{
-								"__typename": "Bot",
-								"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
+			nodes = append(
+				nodes,
+				map[string]any{
+					"id":         fmt.Sprintf("thread-%d", index),
+					"isResolved": false,
+					"comments": map[string]any{
+						"nodes": []map[string]any{
+							{
+								"databaseId": float64(index + 1),
+								"body":       "body",
+								"path":       "main.go",
+								"line":       float64(10),
+								"startLine":  float64(10),
+								"author": map[string]any{
+									"__typename": "Bot",
+									"login":      strings.TrimSuffix(testBotLogin, "[bot]"),
+								},
 							},
 						},
 					},
 				},
-			})
+			)
 		}
+
 		hasNext := end < total
 		endCursor := ""
 		if hasNext {
 			endCursor = fmt.Sprintf("cursor-%d", end)
 		}
-		pages = append(pages, map[string]any{
-			"repository": map[string]any{
-				"pullRequest": map[string]any{
-					"reviewThreads": map[string]any{
-						"pageInfo": map[string]any{
-							"hasNextPage": hasNext,
-							"endCursor":   endCursor,
+
+		pages = append(
+			pages,
+			map[string]any{
+				"repository": map[string]any{
+					"pullRequest": map[string]any{
+						"reviewThreads": map[string]any{
+							"pageInfo": map[string]any{
+								"hasNextPage": hasNext,
+								"endCursor":   endCursor,
+							},
+							"nodes": nodes,
 						},
-						"nodes": nodes,
 					},
 				},
 			},
-		})
+		)
 	}
+
 	return pages
 }
 
@@ -1188,14 +1493,17 @@ func emptyThreadPage(hasNext bool) map[string]any {
 // mean to; the tripwire was narrowed away once and restored, because it costs
 // nothing and catches exactly that.
 func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bool {
-	if strings.Contains(request.URL.Path, "/pulls/comments/") && strings.HasSuffix(request.URL.Path, "/replies") {
+	if strings.Contains(request.URL.Path, "/pulls/comments/") &&
+		strings.HasSuffix(request.URL.Path, "/replies") {
 		http.Error(writer, "replies forbidden", http.StatusForbidden)
 		return true
 	}
+
 	if strings.Contains(request.URL.Path, "/issues/comments") {
 		http.Error(writer, "issue comment writes use their own test handler", http.StatusForbidden)
 		return true
 	}
+
 	return false
 }
 
@@ -1209,6 +1517,7 @@ func testPrivateKey(t *testing.T) *rsa.PrivateKey {
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}
+
 	return privateKey
 }
 
@@ -1226,10 +1535,12 @@ func readJSONBody(request *http.Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return nil, err
 	}
+
 	return decoded, nil
 }
 
@@ -1244,14 +1555,17 @@ func parseJWTClaimsForTest(token string) (jwtClaims, error) {
 	if len(parts) != 3 {
 		return jwtClaims{}, errors.New("jwt must have three parts")
 	}
+
 	payload, err := base64RawURLDecode(parts[1])
 	if err != nil {
 		return jwtClaims{}, err
 	}
+
 	var claims jwtClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return jwtClaims{}, err
 	}
+
 	return claims, nil
 }
 
@@ -1260,18 +1574,22 @@ func verifyJWTSignatureForTest(token string, publicKey *rsa.PublicKey) error {
 	if len(parts) != 3 {
 		return errors.New("jwt must have three parts")
 	}
+
 	signature, err := base64RawURLDecode(parts[2])
 	if err != nil {
 		return err
 	}
+
 	unsigned := parts[0] + "." + parts[1]
 	hashed := sha256.Sum256([]byte(unsigned))
+
 	return rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, hashed[:], signature)
 }
 
 func base64RawURLDecode(value string) ([]byte, error) {
 	pad := strings.Repeat("=", (4-len(value)%4)%4)
 	standard := strings.NewReplacer("-", "+", "_", "/").Replace(value + pad)
+
 	return base64.StdEncoding.DecodeString(standard)
 }
 
@@ -1288,38 +1606,55 @@ func TestListIssueCommentsReadsEveryPage(t *testing.T) {
 		{{"id": float64(1), "body": "first page", "user": map[string]any{"login": "someone"}}},
 		{{"id": float64(2), "body": "marker lives here", "user": map[string]any{"login": "bot"}}},
 	}
-	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/access_tokens") {
-			writeJSON(writer, http.StatusCreated, map[string]any{
-				"token":      "ghs_installation",
-				"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
-			})
-			return
-		}
-		// GitHub paginates through the Link header, and the client follows
-		// exactly that, so the fixture speaks it too.
-		pageIndex := 0
-		if request.URL.Query().Get("page") == "2" {
-			pageIndex = 1
-		} else {
-			writer.Header().Set(
-				"Link",
-				fmt.Sprintf("<http://%s%s?page=2>; rel=\"next\"", request.Host, request.URL.Path),
-			)
-		}
-		writeJSON(writer, http.StatusOK, pages[pageIndex])
-	})
+	server.Config.Handler = http.HandlerFunc(
+		func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost &&
+				strings.HasSuffix(request.URL.Path, "/access_tokens") {
+				writeJSON(
+					writer,
+					http.StatusCreated,
+					map[string]any{
+						"token":      "ghs_installation",
+						"expires_at": time.Unix(1_700_000_600, 0).UTC().Format(time.RFC3339),
+					},
+				)
+
+				return
+			}
+
+			// GitHub paginates through the Link header, and the client follows
+			// exactly that, so the fixture speaks it too.
+			pageIndex := 0
+			if request.URL.Query().Get("page") == "2" {
+				pageIndex = 1
+			} else {
+				writer.Header().Set(
+					"Link",
+					fmt.Sprintf(
+						"<http://%s%s?page=2>; rel=\"next\"",
+						request.Host,
+						request.URL.Path,
+					),
+				)
+			}
+
+			writeJSON(writer, http.StatusOK, pages[pageIndex])
+		},
+	)
 
 	comments, err := client.ListIssueComments(context.Background(), 99, testRepo(), 7)
 	if err != nil {
 		t.Fatalf("ListIssueComments: %v", err)
 	}
+
 	if len(comments) != 2 {
 		t.Fatalf("comments = %d, want both pages read", len(comments))
 	}
+
 	if comments[1].Body != "marker lives here" {
 		t.Fatalf("second comment = %q, want the one only page two carries", comments[1].Body)
 	}
+
 	if comments[1].Author != "bot" {
 		t.Fatalf("author = %q, want the login decoded from the page", comments[1].Author)
 	}

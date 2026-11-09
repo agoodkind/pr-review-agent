@@ -16,8 +16,18 @@ func storage(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	set := flag.NewFlagSet("storage", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&runtimePath, "runtime", "runtime.json", "Public provider runtime configuration.")
-	set.StringVar(&tokenPath, "operator-token-file", "", "File containing the registered operator token.")
-	set.StringVar(&signingKeyPath, "signing-key-file", "", "Read the provider-budget signing key from this file.")
+	set.StringVar(
+		&tokenPath,
+		"operator-token-file",
+		"",
+		"File containing the registered operator token.",
+	)
+	set.StringVar(
+		&signingKeyPath,
+		"signing-key-file",
+		"",
+		"Read the provider-budget signing key from this file.",
+	)
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -28,7 +38,9 @@ func storage(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		return errors.New("storage does not accept positional arguments")
 	}
 	if (tokenPath == "") == (signingKeyPath == "") {
-		return errors.New("storage requires exactly one --operator-token-file or --signing-key-file")
+		return errors.New(
+			"storage requires exactly one --operator-token-file or --signing-key-file",
+		)
 	}
 	data, err := os.ReadFile(runtimePath)
 	if err != nil {

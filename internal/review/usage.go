@@ -113,32 +113,43 @@ type usageModelKey struct {
 }
 
 // RecordProviderAttempt records admission refusals as well as actual API calls.
-func RecordProviderAttempt(ctx context.Context, attempt ProviderAttempt, columns []reviewrules.ProviderDetailColumn) {
+func RecordProviderAttempt(
+	ctx context.Context,
+	attempt ProviderAttempt,
+	columns []reviewrules.ProviderDetailColumn,
+) {
 	recorder, ok := ctx.Value(usageRecorderContextKey{}).(*UsageRecorder)
 	if !ok || recorder == nil {
 		return
 	}
+
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 	recorder.totals.ProviderColumns = append([]reviewrules.ProviderDetailColumn(nil), columns...)
 	recorder.sequence++
+
 	attempt.Sequence = recorder.sequence
 	for index, previous := range recorder.totals.ProviderAttempts {
 		if sameProviderAttempt(previous, attempt) {
 			attempt.Count += previous.Count
 			recorder.totals.ProviderAttempts[index] = attempt
+
 			return
 		}
 	}
+
 	recorder.totals.ProviderAttempts = append(recorder.totals.ProviderAttempts, attempt)
 }
 
 func sameProviderAttempt(left, right ProviderAttempt) bool {
 	return left.Status.ProviderID == right.Status.ProviderID && left.Status.Model == right.Status.Model &&
 		left.Status.Cause == right.Status.Cause && left.API == right.API && left.ReasoningEffort == right.ReasoningEffort &&
-		left.MaxOutputTokens == right.MaxOutputTokens && left.OutputCapOmitted == right.OutputCapOmitted &&
-		left.Completed == right.Completed && left.Fallback == right.Fallback &&
-		left.HTTPStatus == right.HTTPStatus && left.ErrorCode == right.ErrorCode
+		left.MaxOutputTokens == right.MaxOutputTokens &&
+		left.OutputCapOmitted == right.OutputCapOmitted &&
+		left.Completed == right.Completed &&
+		left.Fallback == right.Fallback &&
+		left.HTTPStatus == right.HTTPStatus &&
+		left.ErrorCode == right.ErrorCode
 }
 
 // UsageRecorder safely aggregates concurrent model requests in one review run.
@@ -160,6 +171,7 @@ func WithUsageRecorder(ctx context.Context) (context.Context, *UsageRecorder) {
 		ordered:  nil,
 		sequence: 0,
 	}
+
 	return context.WithValue(ctx, usageRecorderContextKey{}, recorder), recorder
 }
 
@@ -170,6 +182,7 @@ func RecordModelUsage(ctx context.Context, usage ModelUsage) {
 	if !ok || recorder == nil {
 		return
 	}
+
 	recorder.record(usage)
 }
 
@@ -180,6 +193,7 @@ func UsageFromContext(ctx context.Context) UsageSummary {
 		var summary UsageSummary
 		return summary
 	}
+
 	return recorder.Summary()
 }
 
@@ -190,6 +204,7 @@ func (recorder *UsageRecorder) record(usage ModelUsage) {
 	if usage.Requests == 0 {
 		usage.Requests = 1
 	}
+
 	addModelUsage(&recorder.totals, usage)
 	key := usageModelKey{
 		providerID:     usage.ProviderID,
@@ -207,6 +222,7 @@ func (recorder *UsageRecorder) record(usage ModelUsage) {
 		model.ServiceTier = usage.ServiceTier
 		recorder.ordered = append(recorder.ordered, key)
 	}
+
 	addUsage(&model, usage)
 	recorder.models[key] = model
 }
@@ -217,17 +233,23 @@ func (recorder *UsageRecorder) Summary() UsageSummary {
 		var summary UsageSummary
 		return summary
 	}
+
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
 
 	summary := recorder.totals
 	summary.ServiceTiers = append([]string(nil), recorder.totals.ServiceTiers...)
 	summary.ProviderAttempts = append([]ProviderAttempt(nil), recorder.totals.ProviderAttempts...)
-	summary.ProviderColumns = append([]reviewrules.ProviderDetailColumn(nil), recorder.totals.ProviderColumns...)
+	summary.ProviderColumns = append(
+		[]reviewrules.ProviderDetailColumn(nil),
+		recorder.totals.ProviderColumns...,
+	)
+
 	summary.Models = make([]ModelUsage, 0, len(recorder.ordered))
 	for _, key := range recorder.ordered {
 		summary.Models = append(summary.Models, recorder.models[key])
 	}
+
 	return summary
 }
 
@@ -236,6 +258,7 @@ func addModelUsage(summary *UsageSummary, usage ModelUsage) {
 	if usage.Priced {
 		summary.PricedRequests += usage.Requests
 	}
+
 	summary.ReportedRequests += usage.ReportedRequests
 	summary.InputTokens += usage.InputTokens
 	summary.CachedInputTokens += usage.CachedInputTokens
@@ -243,6 +266,7 @@ func addModelUsage(summary *UsageSummary, usage ModelUsage) {
 	if usage.ServiceTier != "" && !slices.Contains(summary.ServiceTiers, usage.ServiceTier) {
 		summary.ServiceTiers = append(summary.ServiceTiers, usage.ServiceTier)
 	}
+
 	summary.AudioInputTokens += usage.AudioInputTokens
 	summary.OutputTokens += usage.OutputTokens
 	summary.ReasoningTokens += usage.ReasoningTokens

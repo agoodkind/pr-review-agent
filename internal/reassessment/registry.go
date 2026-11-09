@@ -80,7 +80,10 @@ type registryResponse struct {
 	Sweep   *SweepCursor `json:"sweep"`
 }
 
-func (client *Client) registryRequest(ctx context.Context, mutation registryMutation) (registryResponse, error) {
+func (client *Client) registryRequest(
+	ctx context.Context,
+	mutation registryMutation,
+) (registryResponse, error) {
 	var result registryResponse
 	logger := gklog.L(ctx)
 	body, err := json.Marshal(mutation)
@@ -88,13 +91,20 @@ func (client *Client) registryRequest(ctx context.Context, mutation registryMuta
 		logger.WarnContext(ctx, "encode target registry request", slog.String("err", err.Error()))
 		return result, fmt.Errorf("encode target registry request: %w", err)
 	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.URL, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		client.URL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		logger.WarnContext(ctx, "create target registry request", slog.String("err", err.Error()))
 		return result, fmt.Errorf("create target registry request: %w", err)
 	}
+
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(SignatureHeader, telemetry.Sign(client.SigningKey, body))
 	response, err := client.HTTP.Do(request)
@@ -102,27 +112,41 @@ func (client *Client) registryRequest(ctx context.Context, mutation registryMuta
 		logger.WarnContext(ctx, "read target registry", slog.String("err", err.Error()))
 		return result, fmt.Errorf("read target registry: %w", err)
 	}
+
 	defer func() {
 		if closeErr := response.Body.Close(); closeErr != nil {
-			logger.WarnContext(ctx, "close target registry response", slog.String("err", closeErr.Error()))
+			logger.WarnContext(
+				ctx,
+				"close target registry response",
+				slog.String("err", closeErr.Error()),
+			)
 		}
 	}()
 	if response.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("target registry returned HTTP %d", response.StatusCode)
 	}
+
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
 	if readErr != nil {
-		logger.WarnContext(ctx, "read target registry response", slog.String("err", readErr.Error()))
+		logger.WarnContext(
+			ctx,
+			"read target registry response",
+			slog.String("err", readErr.Error()),
+		)
 		return result, fmt.Errorf("read target registry response: %w", readErr)
 	}
+
 	var fields map[string]json.RawMessage
-	if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil || fields == nil || len(fields["target"]) == 0 {
+	if decodeErr := json.Unmarshal(data, &fields); decodeErr != nil || fields == nil ||
+		len(fields["target"]) == 0 {
 		return result, fmt.Errorf("target registry response is incomplete")
 	}
+
 	if err := json.Unmarshal(data, &result); err != nil {
 		logger.WarnContext(ctx, "decode target registry response", slog.String("err", err.Error()))
 		return result, fmt.Errorf("decode target registry response: %w", err)
 	}
+
 	return result, nil
 }
 
@@ -133,6 +157,7 @@ func (coordinator *Coordinator) NewTarget(job domain.ReviewJob, now time.Time) T
 	target.Job = job
 	interval, _ := time.ParseDuration(coordinator.Settings.ReconcileInterval)
 	target.NotBeforeMS = now.Add(interval).UnixMilli()
+
 	return target
 }
 
@@ -141,15 +166,22 @@ func (coordinator *Coordinator) Track(ctx context.Context, job domain.ReviewJob)
 	if !coordinator.Settings.Enabled {
 		return nil
 	}
+
 	return coordinator.Store.RegisterTarget(ctx, coordinator.NewTarget(job, coordinator.Clock()))
 }
 
-func (coordinator *Coordinator) recordPrivateOutcome(ctx context.Context, job domain.ReviewJob, outcome domain.AssessmentOutcome, prior *Record) error {
+func (coordinator *Coordinator) recordPrivateOutcome(
+	ctx context.Context,
+	job domain.ReviewJob,
+	outcome domain.AssessmentOutcome,
+	prior *Record,
+) error {
 	key := coordinator.key(job)
 	target, err := coordinator.Store.ReadTarget(ctx, key)
 	if err != nil {
 		return err
 	}
+
 	var updated Target
 	version := int64(0)
 	if target == nil {
@@ -158,6 +190,7 @@ func (coordinator *Coordinator) recordPrivateOutcome(ctx context.Context, job do
 		updated = *target
 		version = target.Version
 	}
+
 	updated.PrivateOutcome = outcome
 	updated.PrivateNonce = outcome.Nonce
 	updated.PrivateDeliveryID = job.DeliveryID
@@ -169,30 +202,78 @@ func (coordinator *Coordinator) recordPrivateOutcome(ctx context.Context, job do
 		queueVersion = prior.Version
 		queueGeneration = prior.Generation
 	}
-	applied, err := coordinator.Store.WriteTarget(ctx, updated, version, queueVersion, queueGeneration)
+
+	applied, err := coordinator.Store.WriteTarget(
+		ctx,
+		updated,
+		version,
+		queueVersion,
+		queueGeneration,
+	)
 	if err != nil {
 		return err
 	}
+
 	if !applied {
 		return fmt.Errorf("private assessment registry changed before persistence")
 	}
+
 	return nil
 }
 
 // ReadTarget requires a successful structured registry response before claiming absence.
 func (client *Client) ReadTarget(ctx context.Context, key string) (*Target, error) {
-	response, err := client.registryRequest(ctx, registryMutation{ExpectedQueueVersion: 0, ExpectedQueueGeneration: "", Action: "query_target", Key: key, ExpectedVersion: 0, Target: nil, Sweep: nil})
+	response, err := client.registryRequest(
+		ctx,
+		registryMutation{
+			ExpectedQueueVersion:    0,
+			ExpectedQueueGeneration: "",
+			Action:                  "query_target",
+			Key:                     key,
+			ExpectedVersion:         0,
+			Target:                  nil,
+			Sweep:                   nil,
+		},
+	)
 	return response.Target, err
 }
 
 // RegisterTarget preserves private outcomes when inventory or webhook hints recur.
 func (client *Client) RegisterTarget(ctx context.Context, target Target) error {
-	_, err := client.registryRequest(ctx, registryMutation{ExpectedQueueVersion: 0, ExpectedQueueGeneration: "", Action: "register_target", Key: target.Key, ExpectedVersion: 0, Target: &target, Sweep: nil})
+	_, err := client.registryRequest(
+		ctx,
+		registryMutation{
+			ExpectedQueueVersion:    0,
+			ExpectedQueueGeneration: "",
+			Action:                  "register_target",
+			Key:                     target.Key,
+			ExpectedVersion:         0,
+			Target:                  &target,
+			Sweep:                   nil,
+		},
+	)
 	return err
 }
 
 // WriteTarget rejects an outcome update based on an obsolete observation.
-func (client *Client) WriteTarget(ctx context.Context, target Target, expectedVersion int64, expectedQueueVersion int64, expectedQueueGeneration string) (bool, error) {
-	response, err := client.registryRequest(ctx, registryMutation{ExpectedQueueVersion: expectedQueueVersion, ExpectedQueueGeneration: expectedQueueGeneration, Action: "write_target", Key: target.Key, ExpectedVersion: expectedVersion, Target: &target, Sweep: nil})
+func (client *Client) WriteTarget(
+	ctx context.Context,
+	target Target,
+	expectedVersion int64,
+	expectedQueueVersion int64,
+	expectedQueueGeneration string,
+) (bool, error) {
+	response, err := client.registryRequest(
+		ctx,
+		registryMutation{
+			ExpectedQueueVersion:    expectedQueueVersion,
+			ExpectedQueueGeneration: expectedQueueGeneration,
+			Action:                  "write_target",
+			Key:                     target.Key,
+			ExpectedVersion:         expectedVersion,
+			Target:                  &target,
+			Sweep:                   nil,
+		},
+	)
 	return response.Applied, err
 }

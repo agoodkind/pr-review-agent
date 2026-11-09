@@ -9,15 +9,24 @@ type TokenCost struct {
 }
 
 // Estimate rejects positive cache writes without a configured rate and excludes explicit nonstandard service tiers.
-func (pricing ModelPricing) Estimate(input, cached, writes, output int64, serviceTier string) (TokenCost, bool) {
+func (pricing ModelPricing) Estimate(
+	input int64,
+	cached int64,
+	writes int64,
+	output int64,
+	serviceTier string,
+) (TokenCost, bool) {
 	var cost TokenCost
 	if serviceTier != "" && serviceTier != "default" {
 		return cost, false
 	}
-	if input < 0 || cached < 0 || writes < 0 || output < 0 || cached > input || writes > input-cached ||
+
+	if input < 0 || cached < 0 || writes < 0 || output < 0 || cached > input ||
+		writes > input-cached ||
 		(writes > 0 && pricing.CacheWritePerMillionTokens == nil) {
 		return cost, false
 	}
+
 	cost = TokenCost{
 		InputUSD:       float64(input-cached-writes) * pricing.InputPerMillionTokens / 1_000_000,
 		CachedInputUSD: float64(cached) * pricing.CachedInputPerMillionTokens / 1_000_000,
@@ -27,6 +36,7 @@ func (pricing ModelPricing) Estimate(input, cached, writes, output int64, servic
 	if writes > 0 {
 		cost.CacheWriteUSD = float64(writes) * *pricing.CacheWritePerMillionTokens / 1_000_000
 	}
+
 	return cost, true
 }
 

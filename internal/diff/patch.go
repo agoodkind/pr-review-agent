@@ -52,6 +52,7 @@ func ChangedRightLines(patch string) (map[int]struct{}, map[int]int, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+
 	return result.changedLines, result.lineHunks, nil
 }
 
@@ -61,22 +62,28 @@ func ValidatePatchContent(patch string, content string) error {
 	if err != nil {
 		return err
 	}
+
 	if !parsed.complete || len(parsed.hunks) == 0 {
 		return errors.New("patch coverage is incomplete")
 	}
+
 	lines := strings.Split(content, "\n")
+
 	for _, hunk := range parsed.hunks {
 		lineNumber := hunk.coordinates.newStart
 		for _, row := range strings.Split(hunk.text, "\n")[1:] {
 			if !strings.HasPrefix(row, " ") && !strings.HasPrefix(row, "+") {
 				continue
 			}
+
 			if lineNumber < 1 || lineNumber > len(lines) || lines[lineNumber-1] != row[1:] {
 				return fmt.Errorf("patch right line %d does not match current content", lineNumber)
 			}
+
 			lineNumber++
 		}
 	}
+
 	return nil
 }
 
@@ -92,48 +99,70 @@ type ChangedSourceRow struct {
 // ChangedSourceRows reads original patch coordinates independently of the display format.
 func ChangedSourceRows(chunk Chunk) ([]ChangedSourceRow, error) {
 	rows := make([]ChangedSourceRow, 0)
+
 	for _, piece := range chunk.Pieces {
 		if !piece.CoverageComplete || piece.Oversized {
 			continue
 		}
+
 		if piece.Metadata != nil {
 			source := piece.Metadata
 			for index, text := range strings.Split(source.Text, "\n") {
-				rows = append(rows, ChangedSourceRow{
-					Surface: source.Surface, CommitSHA: source.CommitSHA, Path: "",
-					RightLine: source.StartLine + index, Text: text,
-				})
+				rows = append(
+					rows,
+					ChangedSourceRow{
+						Surface:   source.Surface,
+						CommitSHA: source.CommitSHA,
+						Path:      "",
+						RightLine: source.StartLine + index,
+						Text:      text,
+					},
+				)
 			}
+
 			continue
 		}
+
 		parsed, err := parsePatch(piece.Patch)
 		if err != nil {
 			return nil, err
 		}
+
 		if !parsed.complete {
 			return nil, errors.New("changed source rows require complete patch hunks")
 		}
+
 		for _, hunk := range parsed.hunks {
 			rows = append(rows, changedHunkRows(piece.Path, hunk)...)
 		}
 	}
+
 	return rows, nil
 }
 
 func changedHunkRows(path string, hunk parsedHunk) []ChangedSourceRow {
 	rows := make([]ChangedSourceRow, 0)
+
 	lineNumber := hunk.coordinates.newStart
 	for _, row := range strings.Split(hunk.text, "\n")[1:] {
 		if strings.HasPrefix(row, "+") {
-			rows = append(rows, ChangedSourceRow{
-				Surface: domain.FindingFile, CommitSHA: "", Path: path,
-				RightLine: lineNumber, Text: row[1:],
-			})
+			rows = append(
+				rows,
+				ChangedSourceRow{
+					Surface:   domain.FindingFile,
+					CommitSHA: "",
+					Path:      path,
+					RightLine: lineNumber,
+					Text:      row[1:],
+				},
+			)
 		}
+
 		if strings.HasPrefix(row, " ") || strings.HasPrefix(row, "+") {
 			lineNumber++
 		}
 	}
+
 	return rows
 }
 
@@ -143,6 +172,7 @@ func ValidRange(changed map[int]struct{}, hunks map[int]int, startLine, endLine 
 	if startLine < 1 || endLine < startLine {
 		return false
 	}
+
 	if endLine == startLine {
 		_, ok := changed[startLine]
 		return ok
@@ -156,14 +186,17 @@ func ValidRange(changed map[int]struct{}, hunks map[int]int, startLine, endLine 
 	if !ok {
 		return false
 	}
+
 	for line := startLine; line <= endLine; line++ {
 		if _, exists := changed[line]; !exists {
 			return false
 		}
+
 		if hunks[line] != firstHunk {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -195,13 +228,16 @@ func parsePatch(patch string) (parsedPatch, error) {
 			if err != nil {
 				return parsedPatch{}, err
 			}
+
 			parser.startHunk(line, header)
 			continue
 		}
+
 		parser.applyLine(line)
 	}
 
 	parser.finishHunk()
+
 	return result, nil
 }
 
@@ -215,6 +251,7 @@ func parseHunkHeader(line string) (hunkHeader, error) {
 	if err != nil {
 		return hunkHeader{}, errors.New("malformed hunk header")
 	}
+
 	oldCount := 1
 	if matches[2] != "" {
 		oldCount, err = strconv.Atoi(matches[2])
@@ -222,10 +259,12 @@ func parseHunkHeader(line string) (hunkHeader, error) {
 			return hunkHeader{}, errors.New("malformed hunk header")
 		}
 	}
+
 	newStart, err := strconv.Atoi(matches[3])
 	if err != nil {
 		return hunkHeader{}, errors.New("malformed hunk header")
 	}
+
 	newCount := 1
 	if matches[4] != "" {
 		newCount, err = strconv.Atoi(matches[4])
@@ -233,6 +272,7 @@ func parseHunkHeader(line string) (hunkHeader, error) {
 			return hunkHeader{}, errors.New("malformed hunk header")
 		}
 	}
+
 	if oldCount == 0 && newCount == 0 {
 		return hunkHeader{}, errors.New("malformed hunk header")
 	}
@@ -261,14 +301,19 @@ func (parser *hunkParser) finishHunk() {
 	if !parser.inHunk {
 		return
 	}
+
 	if parser.oldRemaining != 0 || parser.newRemaining != 0 {
 		parser.result.complete = false
 	}
-	parser.result.hunks = append(parser.result.hunks, parsedHunk{
-		header:      parser.hunkHeader,
-		text:        strings.Join(parser.hunkLines, "\n"),
-		coordinates: parser.hunkPosition,
-	})
+
+	parser.result.hunks = append(
+		parser.result.hunks,
+		parsedHunk{
+			header:      parser.hunkHeader,
+			text:        strings.Join(parser.hunkLines, "\n"),
+			coordinates: parser.hunkPosition,
+		},
+	)
 	parser.inHunk = false
 	parser.hunkLines = nil
 }
@@ -282,10 +327,12 @@ func (parser *hunkParser) applyLine(line string) {
 	if line == `\ No newline at end of file` {
 		return
 	}
+
 	if line == "" {
 		if parser.oldRemaining > 0 || parser.newRemaining > 0 {
 			parser.result.complete = false
 		}
+
 		return
 	}
 
@@ -306,6 +353,7 @@ func (parser *hunkParser) applyContextLine() {
 		parser.result.complete = false
 		return
 	}
+
 	parser.oldLine++
 	parser.newLine++
 	parser.oldRemaining--
@@ -317,6 +365,7 @@ func (parser *hunkParser) applyDeletionLine() {
 		parser.result.complete = false
 		return
 	}
+
 	parser.oldLine++
 	parser.oldRemaining--
 }
@@ -326,6 +375,7 @@ func (parser *hunkParser) applyAdditionLine() {
 		parser.result.complete = false
 		return
 	}
+
 	parser.result.changedLines[parser.newLine] = struct{}{}
 	parser.result.lineHunks[parser.newLine] = parser.hunkIndex
 	parser.newLine++
@@ -352,6 +402,7 @@ func formatHunkChunk(
 	suffix := "\n\nDiff hunk:\n" + hunk.text
 	contentBudget := maximumBytes - len(prefix) - len(suffix)
 	currentContent := boundedCurrentContent(content, hunk.coordinates, contentBudget)
+
 	return prefix + currentContent + suffix
 }
 
@@ -361,6 +412,7 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 	if content == "" || len(content) <= maximumBytes {
 		return content
 	}
+
 	if maximumBytes <= 0 {
 		return ""
 	}
@@ -369,10 +421,12 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 	if lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
+
 	start := coordinates.newStart
 	if coordinates.newCount > 0 {
 		start--
 	}
+
 	end := start + coordinates.newCount
 	if start < 0 || start > len(lines) || end < start || end > len(lines) {
 		// A mismatch means the patch and fetched source disagree. Keep the
@@ -381,9 +435,11 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 	}
 
 	selectedBytes := 0
+
 	for _, line := range lines[start:end] {
 		selectedBytes += len(line)
 	}
+
 	if selectedBytes > maximumBytes {
 		// The hunk's own current lines do not fit, so the caller marks it oversized.
 		return strings.Join(lines[start:end], "")
@@ -391,6 +447,7 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 
 	left := start
 	right := end
+
 	for {
 		added := false
 		if left > 0 && selectedBytes+len(lines[left-1]) <= maximumBytes {
@@ -398,15 +455,18 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 			selectedBytes += len(lines[left])
 			added = true
 		}
+
 		if right < len(lines) && selectedBytes+len(lines[right]) <= maximumBytes {
 			selectedBytes += len(lines[right])
 			right++
 			added = true
 		}
+
 		if !added {
 			break
 		}
 	}
+
 	return strings.Join(lines[left:right], "")
 }
 

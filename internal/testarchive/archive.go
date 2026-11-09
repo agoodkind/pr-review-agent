@@ -12,7 +12,13 @@ import (
 	"strings"
 )
 
-// Write creates a compressed tar archive with sorted fixture entries.
+// Write creates a compressed tar archive of fixture entries.
+//
+// The function sorts entry names and returns archive or compression errors.
+//
+// For example:
+//
+//	err := Write(writer, "repository", contents)
 func Write(writer io.Writer, root string, contents map[string]string) (writeErr error) {
 	defer func() {
 		if writeErr != nil {

@@ -101,10 +101,12 @@ func promptFilePath(prompt string) string {
 	if start < 0 {
 		return ""
 	}
+
 	rest := prompt[start+len(field):]
 	if end := strings.IndexByte(rest, '\n'); end >= 0 {
 		return rest[:end]
 	}
+
 	return rest
 }
 
@@ -139,8 +141,11 @@ func chunkAnswer(path string) review.Completion {
 func requireMultipleWaves(t *testing.T) {
 	t.Helper()
 	if invariantChunkCount <= config.MaximumChunkConcurrency {
-		t.Fatalf("delta of %d chunks fits one wave of %d: these tests need more than one wave",
-			invariantChunkCount, config.MaximumChunkConcurrency)
+		t.Fatalf(
+			"delta of %d chunks fits one wave of %d: these tests need more than one wave",
+			invariantChunkCount,
+			config.MaximumChunkConcurrency,
+		)
 	}
 }
 
@@ -168,6 +173,7 @@ func (model *killableModel) Review(ctx context.Context, prompt string) (review.C
 		<-ctx.Done()
 		return review.Completion{}, ctx.Err()
 	}
+
 	return chunkAnswer(path), nil
 }
 
@@ -183,11 +189,13 @@ func (model *killableModel) timesAsked(path string) int {
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	count := 0
+
 	for _, seen := range model.seen {
 		if seen == path {
 			count++
 		}
 	}
+
 	return count
 }
 
@@ -196,12 +204,14 @@ func (model *killableModel) timesAsked(path string) int {
 func (state *serviceServerState) currentSummaryBody() string {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	for _, comment := range state.issueComments {
 		body, _ := comment["body"].(string)
 		if marker.HasState(body) {
 			return body
 		}
 	}
+
 	return ""
 }
 
@@ -210,6 +220,7 @@ func (state *serviceServerState) currentSummaryBody() string {
 // happened yet and there is no surviving progress to lose.
 func awaitCompletedChunks(t *testing.T, fixture *serviceFixture, count int) {
 	t.Helper()
+
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		if state, ok := marker.DecodeState(fixture.state.currentSummaryBody()); ok {
@@ -217,21 +228,28 @@ func awaitCompletedChunks(t *testing.T, fixture *serviceFixture, count int) {
 				return
 			}
 		}
+
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("only %q was ever recorded, want %d chunks read before the kill",
-		fixture.state.currentSummaryBody(), count)
+
+	t.Fatalf(
+		"only %q was ever recorded, want %d chunks read before the kill",
+		fixture.state.currentSummaryBody(),
+		count,
+	)
 }
 
 // postedPaths returns the file each posted inline comment objects to.
 func postedPaths(fixture *serviceFixture) []string {
 	fixture.state.mu.Lock()
 	defer fixture.state.mu.Unlock()
+
 	paths := make([]string, 0, len(fixture.state.streamedComments))
 	for _, comment := range fixture.state.streamedComments {
 		path, _ := comment["path"].(string)
 		paths = append(paths, path)
 	}
+
 	return paths
 }
 
@@ -257,11 +275,14 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 	const heldPath = "file3.go"
 
 	model := &killableModel{holdPath: heldPath}
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         sixChunkCollector{},
-		minimumImportance: 9,
-		model:             model,
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         sixChunkCollector{},
+			minimumImportance: 9,
+			model:             model,
+		},
+	)
 
 	ctx, kill := context.WithCancel(context.Background())
 	killed := make(chan error, 1)
@@ -277,14 +298,26 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 
 	survived := decodedSummaryState(t, fixture)
 	if len(survived.Completed) != invariantChunkCount-1 {
-		t.Fatalf("completed after the kill = %v, want every chunk but the one in flight", survived.Completed)
+		t.Fatalf(
+			"completed after the kill = %v, want every chunk but the one in flight",
+			survived.Completed,
+		)
 	}
+
 	if len(survived.Pending) != 1 {
-		t.Fatalf("pending after the kill = %v, want the one chunk that was in flight", survived.Pending)
+		t.Fatalf(
+			"pending after the kill = %v, want the one chunk that was in flight",
+			survived.Pending,
+		)
 	}
+
 	if survived.LastReviewed != "" {
-		t.Fatalf("last reviewed = %q, want no claim on a head that was never finished", survived.LastReviewed)
+		t.Fatalf(
+			"last reviewed = %q, want no claim on a head that was never finished",
+			survived.LastReviewed,
+		)
 	}
+
 	if posted := len(postedPaths(fixture)); posted != invariantChunkCount-1 {
 		t.Fatalf("comments posted before the kill = %d, want one per checkpointed chunk", posted)
 	}
@@ -303,6 +336,7 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 		if path == heldPath {
 			want = 2
 		}
+
 		if asked := model.timesAsked(path); asked != want {
 			t.Fatalf("%s was analyzed %d times, want %d", path, asked, want)
 		}
@@ -313,10 +347,12 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 	if len(paths) != invariantChunkCount {
 		t.Fatalf("comments posted = %d, want one per chunk: %v", len(paths), paths)
 	}
+
 	seen := make(map[string]int, len(paths))
 	for _, path := range paths {
 		seen[path]++
 	}
+
 	for index := range invariantChunkCount {
 		path := "file" + string(rune('0'+index)) + ".go"
 		if seen[path] != 1 {
@@ -328,9 +364,14 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 	if finished.Status != marker.StateDone {
 		t.Fatalf("status = %q, want %q", finished.Status, marker.StateDone)
 	}
+
 	if finished.LastReviewed != domain.HeadSHA(testHeadSHA) {
-		t.Fatalf("last reviewed = %q, want the head now that every chunk answered", finished.LastReviewed)
+		t.Fatalf(
+			"last reviewed = %q, want the head now that every chunk answered",
+			finished.LastReviewed,
+		)
 	}
+
 	if len(finished.Pending) != 0 {
 		t.Fatalf("pending = %v, want none", finished.Pending)
 	}
@@ -349,7 +390,10 @@ type budgetProbeModel struct {
 	undated   int
 }
 
-func (model *budgetProbeModel) Review(ctx context.Context, prompt string) (review.Completion, error) {
+func (model *budgetProbeModel) Review(
+	ctx context.Context,
+	prompt string,
+) (review.Completion, error) {
 	started := time.Now()
 	deadline, dated := ctx.Deadline()
 
@@ -357,6 +401,7 @@ func (model *budgetProbeModel) Review(ctx context.Context, prompt string) (revie
 	if !dated {
 		model.undated++
 	}
+
 	model.budgets = append(model.budgets, deadline.Sub(started))
 	model.calls++
 	inFirstWave := model.calls <= config.MaximumChunkConcurrency
@@ -365,6 +410,7 @@ func (model *budgetProbeModel) Review(ctx context.Context, prompt string) (revie
 	if inFirstWave {
 		time.Sleep(model.firstWait)
 	}
+
 	return chunkAnswer(promptFilePath(prompt)), nil
 }
 
@@ -374,11 +420,13 @@ func (model *budgetProbeModel) shortestBudget() (time.Duration, int, int) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	shortest := time.Duration(0)
+
 	for index, budget := range model.budgets {
 		if index == 0 || budget < shortest {
 			shortest = budget
 		}
 	}
+
 	return shortest, len(model.budgets), model.undated
 }
 
@@ -394,12 +442,15 @@ func TestAnAdmittedDeltaCompletesInOneInvocation(t *testing.T) {
 	const firstWaveWork = 500 * time.Millisecond
 
 	model := &budgetProbeModel{firstWait: firstWaveWork}
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         sixChunkCollector{},
-		minimumImportance: 9,
-		model:             model,
-		chunkTimeout:      invariantChunkTimeout,
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         sixChunkCollector{},
+			minimumImportance: 9,
+			model:             model,
+			chunkTimeout:      invariantChunkTimeout,
+		},
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -410,12 +461,15 @@ func TestAnAdmittedDeltaCompletesInOneInvocation(t *testing.T) {
 	if state.Status != marker.StateDone {
 		t.Fatalf("status = %q, want %q after one invocation", state.Status, marker.StateDone)
 	}
+
 	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
 		t.Fatalf("last reviewed = %q, want the head", state.LastReviewed)
 	}
+
 	if len(state.Pending) != 0 {
 		t.Fatalf("pending = %v, want none: an admitted delta leaves no remainder", state.Pending)
 	}
+
 	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "success" {
 		t.Fatalf("conclusion = %v, want success", conclusion)
 	}
@@ -431,15 +485,20 @@ func TestAnAdmittedDeltaCompletesInOneInvocation(t *testing.T) {
 	if undated != 0 {
 		t.Fatalf("%d model calls carried no deadline, want every call bounded", undated)
 	}
+
 	if calls != invariantChunkCount {
 		t.Fatalf("model calls = %d, want one per chunk", calls)
 	}
+
 	// A single clock over the whole pass would leave the later wave short by the
 	// time the first wave spent. A clock per call leaves every call its whole
 	// budget, whenever it starts.
 	if shortest < invariantChunkTimeout-firstWaveWork/2 {
-		t.Fatalf("shortest call budget = %s, want close to %s: a later call inherited an earlier clock",
-			shortest, invariantChunkTimeout)
+		t.Fatalf(
+			"shortest call budget = %s, want close to %s: a later call inherited an earlier clock",
+			shortest,
+			invariantChunkTimeout,
+		)
 	}
 }
 
@@ -454,12 +513,14 @@ type syncBuffer struct {
 func (sink *syncBuffer) Write(payload []byte) (int, error) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
+
 	return sink.written.Write(payload)
 }
 
 func (sink *syncBuffer) String() string {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
+
 	return sink.written.String()
 }
 
@@ -469,16 +530,19 @@ func runIdentifiersIn(text string) []string {
 	const field = "delivery_id="
 	found := make([]string, 0)
 	rest := text
+
 	for {
 		start := strings.Index(rest, field)
 		if start < 0 {
 			return found
 		}
+
 		rest = rest[start+len(field):]
 		end := strings.IndexAny(rest, " \n")
 		if end < 0 {
 			return append(found, rest)
 		}
+
 		found = append(found, rest[:end])
 		rest = rest[end:]
 	}
@@ -497,18 +561,22 @@ func runIdentifiersIn(text string) []string {
 // unit, and docs/logs.md owns it.
 func TestTheRunIdentifierIsTheSameStringEverywhere(t *testing.T) {
 	logs := &syncBuffer{}
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance: 9,
-		logWriter:         logs,
-		model: &sequenceModel{
-			results: []domain.ReviewResult{{Findings: nil}},
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			minimumImportance: 9,
+			logWriter:         logs,
+			model: &sequenceModel{
+				results: []domain.ReviewResult{{Findings: nil}},
+			},
 		},
-	})
+	)
 
 	job := fixture.job()
 	if job.DeliveryID == "" {
 		t.Fatal("the job carries no delivery id, so this test could pass on an empty string")
 	}
+
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -523,8 +591,12 @@ func TestTheRunIdentifierIsTheSameStringEverywhere(t *testing.T) {
 	// every line of it carries the identifier.
 	checkText, ok := checkOutput(t, fixture)["text"].(string)
 	if !ok {
-		t.Fatalf("check output text = %v, want the published run log", checkOutput(t, fixture)["text"])
+		t.Fatalf(
+			"check output text = %v, want the published run log",
+			checkOutput(t, fixture)["text"],
+		)
 	}
+
 	assertOnlyRunIdentifier(t, "the check run", checkText, job.DeliveryID)
 
 	// The logs. This is the surface the failure causes are pulled from.
@@ -539,13 +611,16 @@ func TestTheRunIdentifierIsTheSameStringEverywhere(t *testing.T) {
 // earned by the commit before it. Removing that reload broke no test before
 // this one, so the clause was carried by a guard that a clean review skips.
 func TestARunWhoseHeadMovedUnderItSubmitsNoVerdict(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance: 9,
-		headAfterAnalysis: testStaleHeadSHA,
-		model: &sequenceModel{
-			results: []domain.ReviewResult{{Findings: nil}},
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			minimumImportance: 9,
+			headAfterAnalysis: testStaleHeadSHA,
+			model: &sequenceModel{
+				results: []domain.ReviewResult{{Findings: nil}},
+			},
 		},
-	})
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -556,13 +631,18 @@ func TestARunWhoseHeadMovedUnderItSubmitsNoVerdict(t *testing.T) {
 	if posted := len(postedPaths(fixture)); posted != 0 {
 		t.Fatalf("comments posted = %d, want none: this run found nothing", posted)
 	}
+
 	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("submitted review = %v, want none: the head moved off the commit this run analyzed",
-			fixture.state.lastSubmitReview)
+		t.Fatalf(
+			"submitted review = %v, want none: the head moved off the commit this run analyzed",
+			fixture.state.lastSubmitReview,
+		)
 	}
+
 	if fixture.state.lastUpdateReview != nil {
 		t.Fatalf("updated review = %v, want no verdict at all", fixture.state.lastUpdateReview)
 	}
+
 	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "cancelled" {
 		t.Fatalf("conclusion = %v, want cancelled", conclusion)
 	}
@@ -576,10 +656,15 @@ func assertOnlyRunIdentifier(t *testing.T, surface string, text string, want str
 	if len(found) == 0 {
 		t.Fatalf("%s names no run identifier:\n%s", surface, text)
 	}
+
 	for _, identifier := range found {
 		if identifier != want {
-			t.Fatalf("%s names run identifier %q beside %q, so filtering on one loses the rest",
-				surface, identifier, want)
+			t.Fatalf(
+				"%s names run identifier %q beside %q, so filtering on one loses the rest",
+				surface,
+				identifier,
+				want,
+			)
 		}
 	}
 }

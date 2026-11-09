@@ -7,31 +7,42 @@ func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
 	unsettled := job
 	unsettled.Settings = domain.ReviewSettings{
 		ApproveEachCommit: nil,
-		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
-		ChunkConcurrency: 0, MaxPromptBytes: 0,
+		MinimumImportance: 0,
+		MaxFiles:          0,
+		MaxChunks:         0,
+		ChunkTimeout:      0,
+		ChunkConcurrency:  0,
+		MaxPromptBytes:    0,
 	}
 	empty := service.settingsFor(unsettled)
 	resolved := service.settingsFor(job)
 	if resolved.approveEachCommit != empty.approveEachCommit {
 		carried = append(carried, "approve_each_commit")
 	}
+
 	if resolved.minimumImportance != empty.minimumImportance {
 		carried = append(carried, "minimum_importance")
 	}
+
 	if resolved.maxFiles != empty.maxFiles {
 		carried = append(carried, "max_files")
 	}
+
 	if resolved.maxChunks != empty.maxChunks {
 		carried = append(carried, "max_chunks")
 	}
+
 	if resolved.chunkTimeout != empty.chunkTimeout {
 		carried = append(carried, "chunk_timeout")
 	}
+
 	if resolved.chunkConcurrency != empty.chunkConcurrency {
 		carried = append(carried, "chunk_concurrency")
 	}
+
 	if resolved.maximumPromptBytes != empty.maximumPromptBytes {
 		carried = append(carried, "max_prompt_bytes")
 	}
+
 	return carried
 }

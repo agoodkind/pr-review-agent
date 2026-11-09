@@ -51,9 +51,11 @@ func addAttemptedModels(summary *Summary, statuses []ProviderStatus) {
 
 func providerStatuses(failures []chunkFailure) []ProviderStatus {
 	statuses := make([]ProviderStatus, 0)
+
 	for _, failure := range failures {
 		collectProviderStatuses(failure.err, &statuses)
 	}
+
 	return statuses
 }
 
@@ -62,21 +64,31 @@ func collectProviderStatuses(err error, statuses *[]ProviderStatus) {
 		for _, cause := range joined.Unwrap() {
 			collectProviderStatuses(cause, statuses)
 		}
+
 		return
 	}
+
 	if reported, ok := err.(interface{ ProviderStatus() ProviderStatus }); ok {
 		status := reported.ProviderStatus()
+
 		for index, previous := range *statuses {
-			if previous.ProviderID == status.ProviderID && previous.Model == status.Model && previous.Cause == status.Cause && sameQuotaInterval(previous, status) {
-				if status.QuotaKnown && (!previous.QuotaKnown || status.Used > previous.Used || status.Used == previous.Used && status.QuotaSnapshot.Bounds.EndMS > previous.QuotaSnapshot.Bounds.EndMS) {
+			if previous.ProviderID == status.ProviderID && previous.Model == status.Model &&
+				previous.Cause == status.Cause &&
+				sameQuotaInterval(previous, status) {
+				if status.QuotaKnown &&
+					(!previous.QuotaKnown || status.Used > previous.Used || status.Used == previous.Used && status.QuotaSnapshot.Bounds.EndMS > previous.QuotaSnapshot.Bounds.EndMS) {
 					(*statuses)[index] = status
 				}
+
 				return
 			}
 		}
+
 		*statuses = append(*statuses, status)
+
 		return
 	}
+
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		collectProviderStatuses(wrapped.Unwrap(), statuses)
 	}
@@ -86,9 +98,11 @@ func sameQuotaInterval(previous, current ProviderStatus) bool {
 	if previous.TokenWindow != current.TokenWindow {
 		return false
 	}
+
 	if current.TokenWindow.Mode == quota.Rolling {
 		return true
 	}
+
 	return previous.QuotaSnapshot.Bounds == current.QuotaSnapshot.Bounds
 }
 
@@ -96,41 +110,75 @@ func renderProviderStatuses(statuses []ProviderStatus) string {
 	if len(statuses) == 0 {
 		return ""
 	}
+
 	var builder strings.Builder
-	builder.WriteString("#### Provider attempts\n\n| Provider | Model | App quota | Result |\n| --- | --- | --- | --- |\n")
+	builder.WriteString(
+		"#### Provider attempts\n\n| Provider | Model | App quota | Result |\n| --- | --- | --- | --- |\n",
+	)
+
 	for _, status := range statuses {
 		quota := "No app limit"
 		switch {
 		case status.Limit == 0:
 		case status.QuotaKnown:
-			quota = fmt.Sprintf("%s / %s (%s left)", formatTokenCount(status.Used), formatTokenCount(status.Limit), formatTokenCount(status.Remaining))
+			quota = fmt.Sprintf(
+				"%s / %s (%s left)",
+				formatTokenCount(status.Used),
+				formatTokenCount(status.Limit),
+				formatTokenCount(status.Remaining),
+			)
 		case status.Limit > 0:
 			quota = "Unknown / " + formatTokenCount(status.Limit)
 		}
-		fmt.Fprintf(&builder, "| %s | %s | %s | %s |\n",
-			usageModelCell(status.ProviderID), usageModelCell(status.Model), quota, providerCauseLabel(status.Cause))
+
+		fmt.Fprintf(
+			&builder,
+			"| %s | %s | %s | %s |\n",
+			usageModelCell(status.ProviderID),
+			usageModelCell(status.Model),
+			quota,
+			providerCauseLabel(status.Cause),
+		)
 	}
+
 	for _, status := range statuses {
 		if status.TokenWindow.Mode == "" {
 			continue
 		}
+
 		window := status.TokenWindow
 		label := string(window.Mode) + " " + window.Duration
 		if window.Mode == quota.Cron {
 			label = "cron " + window.Schedule + " (" + window.Timezone + ")"
 		}
-		fmt.Fprintf(&builder, "\nProvider %s uses %s.\n", usageModelCell(status.ProviderID), usageModelCell(label))
+
+		fmt.Fprintf(
+			&builder,
+			"\nProvider %s uses %s.\n",
+			usageModelCell(status.ProviderID),
+			usageModelCell(label),
+		)
 		accounting := status.QuotaSnapshot
 		if accounting.HistoryStartMS > 0 {
-			fmt.Fprintf(&builder, "Measured usage starts at %s.\n", time.UnixMilli(accounting.HistoryStartMS).UTC().Format(time.RFC3339))
+			fmt.Fprintf(
+				&builder,
+				"Measured usage starts at %s.\n",
+				time.UnixMilli(accounting.HistoryStartMS).UTC().Format(time.RFC3339),
+			)
 			if !accounting.HistoryComplete {
 				builder.WriteString("The requested window includes time before measured history.\n")
 			}
 		}
+
 		if accounting.AvailableAtMS > 0 {
-			fmt.Fprintf(&builder, "Admission becomes available at %s if no additional usage is reported.\n", time.UnixMilli(accounting.AvailableAtMS).UTC().Format(time.RFC3339))
+			fmt.Fprintf(
+				&builder,
+				"Admission becomes available at %s if no additional usage is reported.\n",
+				time.UnixMilli(accounting.AvailableAtMS).UTC().Format(time.RFC3339),
+			)
 		}
 	}
+
 	return strings.TrimSuffix(builder.String(), "\n")
 }
 
@@ -158,5 +206,6 @@ func formatTokenCount(count int64) string {
 	for index := len(digits) - 3; index > 0; index -= 3 {
 		digits = digits[:index] + "," + digits[index:]
 	}
+
 	return digits
 }

@@ -40,30 +40,46 @@ func (client *Client) ListReviews(
 ) ([]Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews", number))
 	reviews := make([]Review, 0)
-	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
-		var pageReviews []reviewResponse
-		if err := json.Unmarshal(page, &pageReviews); err != nil {
-			client.logger.ErrorContext(ctx, "decode reviews page", slog.String("err", err.Error()))
-			return 0, errors.New("decode reviews page")
-		}
-		for _, item := range pageReviews {
-			head, err := parseHeadSHA(item.CommitID)
-			if err != nil {
-				return 0, err
+	err := client.doRESTPaginated(
+		ctx,
+		installationID,
+		path,
+		func(page []byte) (int, error) {
+			var pageReviews []reviewResponse
+			if err := json.Unmarshal(page, &pageReviews); err != nil {
+				client.logger.ErrorContext(
+					ctx,
+					"decode reviews page",
+					slog.String("err", err.Error()),
+				)
+				return 0, errors.New("decode reviews page")
 			}
-			reviews = append(reviews, Review{
-				ID:       item.ID,
-				CommitID: head,
-				Author:   item.User.Login,
-				Body:     item.Body,
-				State:    item.State,
-			})
-		}
-		return len(pageReviews), nil
-	})
+
+			for _, item := range pageReviews {
+				head, err := parseHeadSHA(item.CommitID)
+				if err != nil {
+					return 0, err
+				}
+
+				reviews = append(
+					reviews,
+					Review{
+						ID:       item.ID,
+						CommitID: head,
+						Author:   item.User.Login,
+						Body:     item.Body,
+						State:    item.State,
+					},
+				)
+			}
+
+			return len(pageReviews), nil
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	return reviews, nil
 }
 
@@ -90,9 +106,14 @@ func (client *Client) SubmitReview(
 	if payload.Comments == nil {
 		payload.Comments = []InlineComment{}
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal submit review body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal submit review body",
+			slog.String("err", err.Error()),
+		)
 		return Review{}, errors.New("marshal submit review body")
 	}
 
@@ -116,7 +137,11 @@ func (client *Client) UpdateReview(
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews/%d", number, reviewID))
 	encoded, err := json.Marshal(updateReviewBody{Body: bodyText})
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal update review body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal update review body",
+			slog.String("err", err.Error()),
+		)
 		return Review{}, errors.New("marshal update review body")
 	}
 
@@ -124,6 +149,7 @@ func (client *Client) UpdateReview(
 	if err != nil {
 		return Review{}, err
 	}
+
 	return decodeReview(body, "updated", ctx, client)
 }
 
@@ -150,18 +176,32 @@ func (client *Client) CreateReviewComment(
 		CommitID:      string(head),
 	})
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal review comment body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal review comment body",
+			slog.String("err", err.Error()),
+		)
 		return errors.New("marshal review comment body")
 	}
 
 	_, err = client.doREST(ctx, installationID, "POST", path, nil, encoded)
+
 	return err
 }
 
-func decodeReview(body []byte, operation string, ctx context.Context, client *Client) (Review, error) {
+func decodeReview(
+	body []byte,
+	operation string,
+	ctx context.Context,
+	client *Client,
+) (Review, error) {
 	var response reviewResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		client.logger.ErrorContext(ctx, "decode "+operation+" review", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"decode "+operation+" review",
+			slog.String("err", err.Error()),
+		)
 		return Review{}, errors.New("decode " + operation + " review")
 	}
 

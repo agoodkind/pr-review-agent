@@ -75,15 +75,26 @@ func (transport *probeTransport) RoundTrip(request *http.Request) (*http.Respons
 	}
 	// The SDK must receive the consumed prefix followed by the unread body.
 	prefix, captureErr := io.ReadAll(io.LimitReader(response.Body, probeErrorBodyLimit+1))
-	response.Body = probeResponseBody{Reader: io.MultiReader(bytes.NewReader(prefix), response.Body), Closer: response.Body}
+	response.Body = probeResponseBody{
+		Reader: io.MultiReader(bytes.NewReader(prefix), response.Body),
+		Closer: response.Body,
+	}
 	transport.captureErr = errors.Join(transport.captureErr, captureErr)
-	transport.errors = append(transport.errors, probeHTTPError{
-		Status: response.StatusCode, Body: string(prefix[:min(len(prefix), probeErrorBodyLimit)]), Truncated: len(prefix) > probeErrorBodyLimit,
-	})
+	transport.errors = append(
+		transport.errors,
+		probeHTTPError{
+			Status:    response.StatusCode,
+			Body:      string(prefix[:min(len(prefix), probeErrorBodyLimit)]),
+			Truncated: len(prefix) > probeErrorBodyLimit,
+		},
+	)
 	return response, nil
 }
 
-func probeConfig(runtime probeRuntime, providerID string, credential string, signingKeyPath string) (config.Config, error) {
+func probeConfig(runtime probeRuntime, providerID string, credential string, signingKeyPath string) (
+	config.Config,
+	error,
+) {
 	var cfg config.Config
 	var selected json.RawMessage
 	for _, definition := range runtime.Providers {
@@ -127,9 +138,11 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 		return cfg, err
 	}
 	cfg.Providers = providers
-	cfg.ProviderFailurePolicy, err = config.LoadProviderFailurePolicy(func(name string) (string, bool) {
-		return string(runtime.FailurePolicy), name == "PROVIDER_FAILURE_POLICY"
-	})
+	cfg.ProviderFailurePolicy, err = config.LoadProviderFailurePolicy(
+		func(name string) (string, bool) {
+			return string(runtime.FailurePolicy), name == "PROVIDER_FAILURE_POLICY"
+		},
+	)
 	if err != nil {
 		return cfg, err
 	}
@@ -140,10 +153,13 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	if runtime.PromptBytes != nil {
 		reviewLimitValues["REVIEW_MAX_PROMPT_BYTES"] = *runtime.PromptBytes
 	}
-	if err = config.LoadReviewLimits(func(name string) (string, bool) {
-		value, configured := reviewLimitValues[name]
-		return value, configured
-	}, &cfg); err != nil {
+	if err = config.LoadReviewLimits(
+		func(name string) (string, bool) {
+			value, configured := reviewLimitValues[name]
+			return value, configured
+		},
+		&cfg,
+	); err != nil {
 		return cfg, err
 	}
 	cfg.ReviewPolicy, err = reviewrules.LoadPolicy(runtime.RulesFile, runtime.PromptsFile)
@@ -165,7 +181,9 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	}
 	if providers[0].HasTokenLimit() {
 		if signingKeyPath == "" {
-			return cfg, errors.New("capped provider probe requires --signing-key-file; configured limits are not bypassed")
+			return cfg, errors.New(
+				"capped provider probe requires --signing-key-file; configured limits are not bypassed",
+			)
 		}
 		cfg.ProviderBudgetURL, err = url.Parse(runtime.BudgetURL)
 		if err != nil || cfg.ProviderBudgetURL.Scheme != "https" || cfg.ProviderBudgetURL.Host == "" {
@@ -184,11 +202,31 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	set := flag.NewFlagSet("probe", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&providerID, "provider", "", "Exact provider ID in the runtime configuration.")
-	set.StringVar(&credentialPath, "credential-file", "", "Private file containing the selected provider API key.")
+	set.StringVar(
+		&credentialPath,
+		"credential-file",
+		"",
+		"Private file containing the selected provider API key.",
+	)
 	set.StringVar(&runtimePath, "runtime", "runtime.json", "Public provider runtime configuration.")
-	set.StringVar(&promptPath, "prompt-file", "", "Optional review prompt file; defaults to a small source change.")
-	set.StringVar(&directoryPath, "output-dir", "", "New private diagnostic directory; defaults to a private temporary directory.")
-	set.StringVar(&signingKeyPath, "signing-key-file", "", "Production budget signing key; required for capped providers.")
+	set.StringVar(
+		&promptPath,
+		"prompt-file",
+		"",
+		"Optional review prompt file; defaults to a small source change.",
+	)
+	set.StringVar(
+		&directoryPath,
+		"output-dir",
+		"",
+		"New private diagnostic directory; defaults to a private temporary directory.",
+	)
+	set.StringVar(
+		&signingKeyPath,
+		"signing-key-file",
+		"",
+		"Production budget signing key; required for capped providers.",
+	)
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -196,13 +234,19 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 		return err
 	}
 	if set.NArg() != 0 || providerID == "" || credentialPath == "" {
-		return errors.New("probe requires --provider and --credential-file with no positional arguments")
+		return errors.New(
+			"probe requires --provider and --credential-file with no positional arguments",
+		)
 	}
 	directory, err := cloudflareops.PrivateDirectory(directoryPath)
 	if err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(filepath.Join(directory, "logs.ndjson"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	logFile, err := os.OpenFile(
+		filepath.Join(directory, "logs.ndjson"),
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
+		0600,
+	)
 	if err != nil {
 		return err
 	}
@@ -236,7 +280,9 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 		}
 	}
 	if strings.TrimSpace(prompt) == "" || len(prompt) > cfg.PromptBytes() {
-		return errors.New("probe prompt must be nonempty and within the configured maximum prompt size")
+		return errors.New(
+			"probe prompt must be nonempty and within the configured maximum prompt size",
+		)
 	}
 	ctx, recorder := review.WithUsageRecorder(ctx)
 	transport := &probeTransport{base: http.DefaultTransport, statuses: make(map[int]int)}
@@ -256,7 +302,15 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 		Usage           review.UsageSummary    `json:"usage"`
 		HTTPStatuses    map[int]int            `json:"http_statuses"`
 		Error           string                 `json:"error,omitempty"`
-	}{Provider: providerID, ConfiguredModel: cfg.Providers[0].Model, ReasoningEffort: cfg.Providers[0].ReasoningEffort, Success: reviewErr == nil, Completion: completion, Usage: recorder.Summary(), HTTPStatuses: transport.statuses}
+	}{
+		Provider:        providerID,
+		ConfiguredModel: cfg.Providers[0].Model,
+		ReasoningEffort: cfg.Providers[0].ReasoningEffort,
+		Success:         reviewErr == nil,
+		Completion:      completion,
+		Usage:           recorder.Summary(),
+		HTTPStatuses:    transport.statuses,
+	}
 	if reviewErr != nil {
 		result.Error = reviewErr.Error()
 	}
@@ -265,15 +319,35 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	if err = errors.Join(resultErr, errorErr); err != nil {
 		return errors.New("probe diagnostic encoding failed")
 	}
-	err = errors.Join(cloudflareops.WriteJSON(filepath.Join(directory, "result.json"), json.RawMessage(resultJSON)), cloudflareops.WriteJSON(filepath.Join(directory, "http-errors.json"), json.RawMessage(errorJSON)), transport.captureErr)
+	err = errors.Join(
+		cloudflareops.WriteJSON(
+			filepath.Join(directory, "result.json"),
+			json.RawMessage(resultJSON),
+		),
+		cloudflareops.WriteJSON(
+			filepath.Join(directory, "http-errors.json"),
+			json.RawMessage(errorJSON),
+		),
+		transport.captureErr,
+	)
 	if err != nil {
 		return errors.New("probe diagnostic capture failed")
 	}
-	if _, err = fmt.Fprintf(stdout, "Provider: %s. Model: %s. Review succeeded: %t. HTTP status counts: %v.\nPrivate diagnostics: %s\n", providerID, cfg.Providers[0].Model, result.Success, transport.statuses, directory); err != nil {
+	if _, err = fmt.Fprintf(
+		stdout,
+		"Provider: %s. Model: %s. Review succeeded: %t. HTTP status counts: %v.\nPrivate diagnostics: %s\n",
+		providerID,
+		cfg.Providers[0].Model,
+		result.Success,
+		transport.statuses,
+		directory,
+	); err != nil {
 		return err
 	}
 	if reviewErr != nil {
-		return errors.New("provider probe failed; the diagnostic directory contains the response details")
+		return errors.New(
+			"provider probe failed; the diagnostic directory contains the response details",
+		)
 	}
 	return nil
 }

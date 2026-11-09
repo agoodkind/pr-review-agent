@@ -34,18 +34,24 @@ func ReadQueueSnapshot(data []byte, capturedAt time.Time, status int) QueueSnaps
 		snapshot.UnavailableReason = "The queue response could not be decoded."
 		return snapshot
 	}
-	snapshot.Known = jsonArray(payload.Records) && json.Unmarshal(payload.Records, &snapshot.Records) == nil
+
+	snapshot.Known = jsonArray(payload.Records) &&
+		json.Unmarshal(payload.Records, &snapshot.Records) == nil
 	if !snapshot.Known {
 		snapshot.UnavailableReason = "The queue response does not contain a valid records array."
 	}
-	snapshot.RegistryKnown = jsonArray(payload.Targets) && json.Unmarshal(payload.Targets, &snapshot.Targets) == nil
+
+	snapshot.RegistryKnown = jsonArray(payload.Targets) &&
+		json.Unmarshal(payload.Targets, &snapshot.Targets) == nil
 	if !snapshot.RegistryKnown {
 		snapshot.UnknownFields = append(snapshot.UnknownFields, "targets")
 	}
+
 	readSweep(&snapshot, payload.Sweep)
 	readAlarm(&snapshot, payload.NextAlarmMS)
 	readTransitionCounts(&snapshot, payload.TransitionCounts)
 	snapshot.UnknownFields = append(snapshot.UnknownFields, "sweep_failure")
+
 	return snapshot
 }
 
@@ -54,25 +60,45 @@ func readSweep(snapshot *QueueSnapshot, value json.RawMessage) {
 		snapshot.SweepKnown = true
 		return
 	}
+
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(value, &fields) != nil || !sweepFieldsPresent(fields) {
 		snapshot.UnknownFields = append(snapshot.UnknownFields, "sweep")
 		return
 	}
+
 	var cursor reassessment.SweepCursor
 	if json.Unmarshal(value, &cursor) != nil {
 		snapshot.UnknownFields = append(snapshot.UnknownFields, "sweep")
 		return
 	}
+
 	snapshot.Sweep, snapshot.SweepKnown = &cursor, true
 }
 
 func sweepFieldsPresent(fields map[string]json.RawMessage) bool {
-	for _, key := range []string{"version", "stage", "not_before_ms", "installation_page", "installation_index", "installation_ids", "installations_next", "repository_page", "repository_index", "repositories", "repositories_next", "pull_request_page", "pull_request_index", "pull_requests", "pull_requests_next"} {
+	for _, key := range []string{
+		"version",
+		"stage",
+		"not_before_ms",
+		"installation_page",
+		"installation_index",
+		"installation_ids",
+		"installations_next",
+		"repository_page",
+		"repository_index",
+		"repositories",
+		"repositories_next",
+		"pull_request_page",
+		"pull_request_index",
+		"pull_requests",
+		"pull_requests_next",
+	} {
 		if len(fields[key]) == 0 {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -81,11 +107,13 @@ func readAlarm(snapshot *QueueSnapshot, value json.RawMessage) {
 		snapshot.AlarmKnown = true
 		return
 	}
+
 	var alarm int64
 	if len(value) == 0 || json.Unmarshal(value, &alarm) != nil || alarm < 0 {
 		snapshot.UnknownFields = append(snapshot.UnknownFields, "next_alarm_ms")
 		return
 	}
+
 	snapshot.NextAlarmMS, snapshot.AlarmKnown = &alarm, true
 }
 
@@ -94,22 +122,29 @@ func readTransitionCounts(snapshot *QueueSnapshot, value json.RawMessage) {
 		snapshot.TransitionMetadataKnown = true
 		return
 	}
+
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(value, &fields) != nil || fields == nil || len(fields["counts"]) == 0 || len(fields["since_ms"]) == 0 || len(fields["last_update_ms"]) == 0 {
+	if json.Unmarshal(value, &fields) != nil || fields == nil || len(fields["counts"]) == 0 ||
+		len(fields["since_ms"]) == 0 ||
+		len(fields["last_update_ms"]) == 0 {
 		snapshot.UnknownFields = append(snapshot.UnknownFields, "transition_counts")
 		return
 	}
+
 	var counts QueueTransitionCounts
-	if json.Unmarshal(value, &counts) != nil || counts.Counts == nil || counts.SinceMS < 0 || counts.LastUpdateMS < counts.SinceMS {
+	if json.Unmarshal(value, &counts) != nil || counts.Counts == nil || counts.SinceMS < 0 ||
+		counts.LastUpdateMS < counts.SinceMS {
 		snapshot.UnknownFields = append(snapshot.UnknownFields, "transition_counts")
 		return
 	}
+
 	for _, count := range counts.Counts {
 		if count < 0 {
 			snapshot.UnknownFields = append(snapshot.UnknownFields, "transition_counts")
 			return
 		}
 	}
+
 	snapshot.TransitionCounts, snapshot.TransitionMetadataKnown = &counts, true
 }
 
@@ -123,14 +158,18 @@ const (
 )
 
 func queueMatches(item Revisit, record reassessment.Record) bool {
-	if record.Job.Repository.Owner+"/"+record.Job.Repository.Name != item.Target.Repository || int64(record.Job.Number) != item.Target.Number {
+	if record.Job.Repository.Owner+"/"+record.Job.Repository.Name != item.Target.Repository ||
+		int64(record.Job.Number) != item.Target.Number {
 		return false
 	}
+
 	for _, trigger := range item.Triggers {
-		if trigger.CurrentHead && trigger.Head == string(record.Head) && trigger.RunID == record.OriginDeliveryID {
+		if trigger.CurrentHead && trigger.Head == string(record.Head) &&
+			trigger.RunID == record.OriginDeliveryID {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -138,6 +177,7 @@ func applyQueueRecord(item *Revisit, record reassessment.Record) {
 	if !queueMatches(*item, record) {
 		return
 	}
+
 	item.QueueRecordIDs = append(item.QueueRecordIDs, record.ID)
 	switch queuePhase(record.Phase) {
 	case queueWaiting:
@@ -160,17 +200,21 @@ func ApplyQueue(report *Report, snapshot QueueSnapshot) {
 	if !snapshot.Known {
 		return
 	}
+
 	for index := range report.Revisits {
 		item := &report.Revisits[index]
 		if item.Resolved || item.PullRequestState != "OPEN" || item.Draft {
 			continue
 		}
+
 		for _, record := range snapshot.Records {
 			applyQueueRecord(item, record)
 		}
 	}
+
 	report.Totals.OpenReviewsWithoutRecordedReassessment = 0
 	report.Totals.OpenThreadsWithoutRecordedDecision = 0
+
 	report.Totals.OpenItemsWithoutTerminalEvidence = 0
 	for _, item := range report.Revisits {
 		report.recordMissingItem(item)

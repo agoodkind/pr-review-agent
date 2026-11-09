@@ -75,9 +75,11 @@ func NewForwarder(endpoint string, signingKey []byte, httpClient *http.Client) *
 	if endpoint == "" || len(signingKey) == 0 {
 		return nil
 	}
+
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: shipTimeout}
 	}
+
 	pending := make([]Record, 0, bufferCapacity)
 	forwarder := &Forwarder{
 		endpoint:   endpoint,
@@ -104,6 +106,7 @@ func NewForwarder(endpoint string, signingKey []byte, httpClient *http.Client) *
 		}()
 		forwarder.run()
 	}()
+
 	return forwarder
 }
 
@@ -111,6 +114,7 @@ func (forwarder *Forwarder) run() {
 	defer close(forwarder.done)
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ticker.C:
@@ -134,10 +138,12 @@ func (forwarder *Forwarder) Handle(_ context.Context, record slog.Record) error 
 	if forwarder == nil {
 		return nil
 	}
+
 	fields := make(map[string]string, record.NumAttrs()+len(forwarder.attributes))
 	for _, attribute := range forwarder.attributes {
 		fields[attribute.Key] = attribute.Value.String()
 	}
+
 	record.Attrs(func(attribute slog.Attr) bool {
 		fields[attribute.Key] = attribute.Value.String()
 		return true
@@ -155,8 +161,10 @@ func (forwarder *Forwarder) Handle(_ context.Context, record slog.Record) error 
 	if len(buffered) >= bufferCapacity {
 		buffered = buffered[1:]
 	}
+
 	buffered = append(buffered, entry)
 	*forwarder.pending = buffered
+
 	return nil
 }
 
@@ -166,9 +174,11 @@ func (forwarder *Forwarder) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if forwarder == nil {
 		return nil
 	}
+
 	combined := make([]slog.Attr, 0, len(forwarder.attributes)+len(attrs))
 	combined = append(combined, forwarder.attributes...)
 	combined = append(combined, attrs...)
+
 	return &Forwarder{
 		endpoint:   forwarder.endpoint,
 		signingKey: forwarder.signingKey,
@@ -192,10 +202,12 @@ func (forwarder *Forwarder) Close() error {
 	if forwarder == nil {
 		return nil
 	}
+
 	forwarder.closed.Do(func() {
 		close(forwarder.stop)
 	})
 	<-forwarder.done
+
 	return nil
 }
 
@@ -205,6 +217,7 @@ func (forwarder *Forwarder) flush() {
 		if len(batch.Records) == 0 {
 			return
 		}
+
 		forwarder.send(batch)
 	}
 }
@@ -216,10 +229,12 @@ func (forwarder *Forwarder) take() Batch {
 	if len(buffered) == 0 {
 		return Batch{Records: nil}
 	}
+
 	size := min(len(buffered), batchLimit)
 	records := make([]Record, size)
 	copy(records, buffered[:size])
 	*forwarder.pending = buffered[size:]
+
 	return Batch{Records: records}
 }
 
@@ -232,12 +247,19 @@ func (forwarder *Forwarder) send(batch Batch) {
 	if err != nil {
 		return
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), shipTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, forwarder.endpoint, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		forwarder.endpoint,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return
 	}
+
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(SignatureHeader, Sign(forwarder.signingKey, body))
 
@@ -245,6 +267,7 @@ func (forwarder *Forwarder) send(batch Batch) {
 	if err != nil {
 		return
 	}
+
 	_ = response.Body.Close()
 }
 
@@ -254,5 +277,6 @@ func (forwarder *Forwarder) send(batch Batch) {
 func Sign(signingKey []byte, body []byte) string {
 	mac := hmac.New(sha256.New, signingKey)
 	_, _ = mac.Write(body)
+
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }

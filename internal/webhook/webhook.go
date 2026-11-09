@@ -46,22 +46,28 @@ type PullRequestEvent struct {
 // Job converts the webhook event into a review job.
 func (event PullRequestEvent) Job() domain.ReviewJob {
 	return domain.ReviewJob{
-		AutomaticReassessment: false, ReassessmentID: "", ReassessmentGeneration: "",
-		DeliveryID:          event.DeliveryID,
-		CheckRunID:          0,
-		CheckRunStatus:      "",
-		CheckRunConclusion:  "",
-		ThreadRootCommentID: event.ThreadRootCommentID,
-		RefreshVerdict:      event.RefreshVerdict,
-		MetadataOnly:        event.MetadataOnly,
-		Forced:              event.Forced,
+		AutomaticReassessment:  false,
+		ReassessmentID:         "",
+		ReassessmentGeneration: "",
+		DeliveryID:             event.DeliveryID,
+		CheckRunID:             0,
+		CheckRunStatus:         "",
+		CheckRunConclusion:     "",
+		ThreadRootCommentID:    event.ThreadRootCommentID,
+		RefreshVerdict:         event.RefreshVerdict,
+		MetadataOnly:           event.MetadataOnly,
+		Forced:                 event.Forced,
 		// The tuning values ride on the request rather than in the payload, and
 		// are read only once the signature has verified, so nothing decoded here
 		// can set them.
 		Settings: domain.ReviewSettings{
 			ApproveEachCommit: nil,
-			MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
-			ChunkConcurrency: 0, MaxPromptBytes: 0,
+			MinimumImportance: 0,
+			MaxFiles:          0,
+			MaxChunks:         0,
+			ChunkTimeout:      0,
+			ChunkConcurrency:  0,
+			MaxPromptBytes:    0,
 		},
 		PullRequestRef: domain.PullRequestRef{
 			Repository:     event.Repository,
@@ -77,10 +83,12 @@ func VerifySHA256(signatureHeader string, secret []byte, body []byte) error {
 	if signatureHeader == "" {
 		return ErrInvalidSignature
 	}
+
 	const prefix = "sha256="
 	if !strings.HasPrefix(signatureHeader, prefix) {
 		return ErrInvalidSignature
 	}
+
 	providedHex := strings.TrimPrefix(signatureHeader, prefix)
 	provided, err := hex.DecodeString(providedHex)
 	if err != nil {
@@ -93,6 +101,7 @@ func VerifySHA256(signatureHeader string, secret []byte, body []byte) error {
 	if !hmac.Equal(provided, expected) {
 		return ErrInvalidSignature
 	}
+
 	return nil
 }
 
@@ -118,7 +127,12 @@ const (
 
 func (action pullRequestAction) supported() bool {
 	switch action {
-	case actionOpened, actionReopened, actionReadyForReview, actionSynchronize, actionLabeled, actionEdited:
+	case actionOpened,
+		actionReopened,
+		actionReadyForReview,
+		actionSynchronize,
+		actionLabeled,
+		actionEdited:
 		return true
 	default:
 		return false
@@ -200,21 +214,28 @@ func ParseEvent(eventType string, deliveryID string, body []byte) (PullRequestEv
 
 // ParseMentionedIssueComment accepts a new pull request comment that tags the app.
 // The caller loads the current pull request before admitting the returned event.
-func ParseMentionedIssueComment(deliveryID string, body []byte, botLogin string) (PullRequestEvent, bool, error) {
+func ParseMentionedIssueComment(
+	deliveryID string,
+	body []byte,
+	botLogin string,
+) (PullRequestEvent, bool, error) {
 	payload, ok, err := decodePayload(deliveryID, body)
 	if !ok {
 		return emptyEvent(), false, err
 	}
+
 	if payload.Action != "created" || len(payload.Issue.PullRequest) == 0 ||
 		string(payload.Issue.PullRequest) == "null" ||
 		strings.EqualFold(payload.Comment.User.Login, botLogin) ||
 		!mentionsBot(payload.Comment.Body, botLogin) {
 		return emptyEvent(), false, nil
 	}
+
 	if payload.Installation.ID == 0 || payload.Repository.Owner.Login == "" ||
 		payload.Repository.Name == "" || payload.Issue.Number == 0 {
 		return emptyEvent(), false, errors.New("missing pull request comment fields")
 	}
+
 	return PullRequestEvent{
 		Action:         payload.Action,
 		DeliveryID:     deliveryID,
@@ -239,13 +260,16 @@ func mentionsBot(body string, botLogin string) bool {
 	if login == "" {
 		return false
 	}
+
 	text := strings.ToLower(body)
 	mention := "@" + login
+
 	for offset := 0; offset < len(text); {
 		index := strings.Index(text[offset:], mention)
 		if index < 0 {
 			return false
 		}
+
 		index += offset
 		end := index + len(mention)
 		beforeValid := index == 0 || !isLoginCharacter(text[index-1])
@@ -253,8 +277,10 @@ func mentionsBot(body string, botLogin string) bool {
 		if beforeValid && afterValid {
 			return true
 		}
+
 		offset = end
 	}
+
 	return false
 }
 
@@ -265,33 +291,47 @@ func isLoginCharacter(character byte) bool {
 
 // ParseReviewComment accepts a reply on an inline finding so the reviewer can
 // weigh the latest discussion without waiting for another push.
-func ParseReviewComment(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
+func ParseReviewComment(
+	eventType string,
+	deliveryID string,
+	body []byte,
+) (PullRequestEvent, bool, error) {
 	if githubEventType(eventType) != eventReviewComment {
 		return emptyEvent(), false, nil
 	}
+
 	payload, ok, err := decodePayload(deliveryID, body)
 	if !ok {
 		return emptyEvent(), false, err
 	}
+
 	if !reviewCommentAction(payload.Action).supported() {
 		return emptyEvent(), false, nil
 	}
+
 	if payload.Comment.InReplyToID == 0 || payload.PullRequest.Draft {
 		return emptyEvent(), false, nil
 	}
+
 	event, supported, err := eventFromPayload(deliveryID, payload, false)
 	if supported && err == nil {
 		event.ThreadRootCommentID = payload.Comment.InReplyToID
 		event.RefreshVerdict = true
 	}
+
 	return event, supported, err
 }
 
 // ParsePullRequest parses a supported pull request webhook payload.
-func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
+func ParsePullRequest(
+	eventType string,
+	deliveryID string,
+	body []byte,
+) (PullRequestEvent, bool, error) {
 	if githubEventType(eventType) != eventPullRequest {
 		return emptyEvent(), false, nil
 	}
+
 	payload, ok, err := decodePayload(deliveryID, body)
 	if !ok {
 		return emptyEvent(), false, err
@@ -311,6 +351,7 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 		if !domain.ForcesReview(payload.Label.Name) {
 			return emptyEvent(), false, nil
 		}
+
 		forced = true
 	}
 
@@ -319,11 +360,13 @@ func ParsePullRequest(eventType string, deliveryID string, body []byte) (PullReq
 	if action != actionReadyForReview && payload.PullRequest.Draft {
 		return emptyEvent(), false, nil
 	}
+
 	event, supported, err := eventFromPayload(deliveryID, payload, forced)
 	if supported && err == nil && metadataOnly {
 		event.MetadataOnly = true
 		event.RefreshVerdict = true
 	}
+
 	return event, supported, err
 }
 
@@ -331,11 +374,13 @@ func metadataChangesOnly(changes map[string]json.RawMessage) bool {
 	if len(changes) == 0 {
 		return false
 	}
+
 	for field := range changes {
 		if field != "title" && field != "body" {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -344,25 +389,34 @@ func metadataChangesOnly(changes map[string]json.RawMessage) bool {
 // A thread flipping at an already reviewed head is the one signal that the
 // verdict may no longer match thread state, so it carries the same job shape
 // as a pull request event and rides the same admit-and-enqueue path.
-func ParseReviewThread(eventType string, deliveryID string, body []byte) (PullRequestEvent, bool, error) {
+func ParseReviewThread(
+	eventType string,
+	deliveryID string,
+	body []byte,
+) (PullRequestEvent, bool, error) {
 	if githubEventType(eventType) != eventReviewThread {
 		return emptyEvent(), false, nil
 	}
+
 	payload, ok, err := decodePayload(deliveryID, body)
 	if !ok {
 		return emptyEvent(), false, err
 	}
+
 	if !reviewThreadAction(payload.Action).supported() {
 		return emptyEvent(), false, nil
 	}
+
 	// A draft is never reviewed, so no verdict exists for a resolution to move.
 	if payload.PullRequest.Draft {
 		return emptyEvent(), false, nil
 	}
+
 	event, supported, err := eventFromPayload(deliveryID, payload, false)
 	if supported && err == nil {
 		event.RefreshVerdict = true
 	}
+
 	return event, supported, err
 }
 
@@ -371,9 +425,11 @@ func decodePayload(deliveryID string, body []byte) (pullRequestPayload, bool, er
 	if strings.TrimSpace(deliveryID) == "" {
 		return payload, false, errors.New("missing delivery id")
 	}
+
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return payload, false, errors.New("decode payload failed")
 	}
+
 	return payload, true, nil
 }
 
@@ -385,12 +441,15 @@ func eventFromPayload(
 	if payload.Installation.ID == 0 {
 		return emptyEvent(), false, errors.New("missing installation id")
 	}
+
 	if payload.Repository.Owner.Login == "" || payload.Repository.Name == "" {
 		return emptyEvent(), false, errors.New("missing repository")
 	}
+
 	if payload.PullRequest.Number == 0 {
 		return emptyEvent(), false, errors.New("missing pull request number")
 	}
+
 	if payload.PullRequest.Head.SHA == "" {
 		return emptyEvent(), false, errors.New("missing head sha")
 	}

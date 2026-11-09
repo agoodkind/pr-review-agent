@@ -127,16 +127,21 @@ func newChunkPass(
 	startedAt time.Time,
 ) *chunkPass {
 	return &chunkPass{
-		work: work, startedAt: startedAt,
-		settings:         settings,
-		selection:        selection,
-		disputes:         disputes,
-		disputePrompt:    disputePrompt,
-		publicationMu:    sync.Mutex{},
-		nativeVerdictMu:  sync.Mutex{},
-		nativeRejection:  false,
-		mu:               sync.Mutex{},
-		collector:        newFindingCollector(work.Files, work.Metadata, settings.minimumImportance),
+		work:            work,
+		startedAt:       startedAt,
+		settings:        settings,
+		selection:       selection,
+		disputes:        disputes,
+		disputePrompt:   disputePrompt,
+		publicationMu:   sync.Mutex{},
+		nativeVerdictMu: sync.Mutex{},
+		nativeRejection: false,
+		mu:              sync.Mutex{},
+		collector: newFindingCollector(
+			work.Files,
+			work.Metadata,
+			settings.minimumImportance,
+		),
 		models:           modelSet{names: nil, seen: nil},
 		overviewByChunk:  make(map[int][]string),
 		reviewedChunks:   make(map[string]bool),
@@ -159,7 +164,11 @@ func newChunkPass(
 		omissionsOK:      true,
 		decision: omissionDecision{
 			assessments: nil,
-			chunk:       0, acceptable: false, reason: "", recorded: false, complete: false,
+			chunk:       0,
+			acceptable:  false,
+			reason:      "",
+			recorded:    false,
+			complete:    false,
 		},
 	}
 }
@@ -171,6 +180,7 @@ func chunksCoverageComplete(chunks []diff.Chunk) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -186,9 +196,11 @@ func chunksCoverageComplete(chunks []diff.Chunk) bool {
 func (pass *chunkPass) recordCall(models modelSet, requests int) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	for _, name := range models.names {
 		pass.models.add(name)
 	}
+
 	pass.requests += requests
 }
 
@@ -199,6 +211,7 @@ func (pass *chunkPass) recordUnreadable(hunks []unreadHunk) {
 	if len(hunks) == 0 {
 		return
 	}
+
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	pass.unreadable = append(pass.unreadable, hunks...)
@@ -217,11 +230,20 @@ func (pass *chunkPass) structuralShortfall() structuralShortfall {
 	defer pass.mu.Unlock()
 	shortfall := classifyStructuralShortfall(pass.work)
 	shortfall.Hunks = append(shortfall.Hunks, sortedUnreadHunks(pass.unreadable)...)
-	shortfall.Hunks = slices.DeleteFunc(shortfall.Hunks, func(hunk unreadHunk) bool {
-		return slices.ContainsFunc(pass.decision.assessments, func(assessment domain.FileAssessment) bool {
-			return assessment.Path == hunk.Path && assessment.Action == domain.FileActionReview && assessment.Reviewed
-		})
-	})
+	shortfall.Hunks = slices.DeleteFunc(
+		shortfall.Hunks,
+		func(hunk unreadHunk) bool {
+			return slices.ContainsFunc(
+				pass.decision.assessments,
+				func(assessment domain.FileAssessment) bool {
+					return assessment.Path == hunk.Path &&
+						assessment.Action == domain.FileActionReview &&
+						assessment.Reviewed
+				},
+			)
+		},
+	)
+
 	return shortfall
 }
 
@@ -260,6 +282,7 @@ func (pass *chunkPass) chunkPanic() error {
 	if pass.panicked == nil {
 		return nil
 	}
+
 	return pass.panicked
 }
 
@@ -269,9 +292,13 @@ func (pass *chunkPass) unreadChunks() []chunkFailure {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	ordered := append([]chunkFailure{}, pass.failures...)
-	sort.Slice(ordered, func(left, right int) bool {
-		return ordered[left].chunk < ordered[right].chunk
-	})
+	sort.Slice(
+		ordered,
+		func(left, right int) bool {
+			return ordered[left].chunk < ordered[right].chunk
+		},
+	)
+
 	return ordered
 }
 
@@ -282,6 +309,7 @@ func (pass *chunkPass) analysis() Analysis {
 	defer pass.mu.Unlock()
 	sortFindings(pass.collector.observed)
 	sortFindings(pass.collector.anchored)
+
 	return Analysis{
 		CoverageComplete: pass.coverage,
 		Observed:         pass.collector.observed,
@@ -298,6 +326,7 @@ func (pass *chunkPass) delivery() (posted int, failed int, fallback []domain.Fin
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
 	findings, checkpoint := pass.fallbackSnapshotLocked()
+
 	return pass.posted, pass.failed + len(checkpoint.Prior), findings
 }
 
@@ -306,6 +335,7 @@ func (pass *chunkPass) delivery() (posted int, failed int, fallback []domain.Fin
 func (pass *chunkPass) requestCount() int {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	return pass.requests
 }
 
@@ -313,6 +343,7 @@ func (pass *chunkPass) requestCount() int {
 func (pass *chunkPass) publishedFindings() []domain.Finding {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	return append([]domain.Finding{}, pass.published...)
 }
 
@@ -355,27 +386,36 @@ func (service *Service) reviewDelta(
 	if panicked := pass.chunkPanic(); panicked != nil {
 		return tracker.snapshot(), panicked
 	}
+
 	if fatal != nil {
 		return tracker.snapshot(), fatal
 	}
+
 	completed := tracker.snapshot().Completed
 	pass.mu.Lock()
 	for _, id := range completed {
 		pass.reviewedChunks[id] = true
 	}
+
 	pass.mu.Unlock()
 	if pass.structuralShortfall().present() {
 		if err := service.decideUnreadableHunks(ctx, pass); err == nil {
 			tracker.completeUnreadChunks()
 		} else {
-			logger.ErrorContext(ctx, "File scope assessment failed", slog.String("err", err.Error()))
+			logger.ErrorContext(
+				ctx,
+				"File scope assessment failed",
+				slog.String("err", err.Error()),
+			)
 			pass.recordAssessmentFailure(err)
 		}
 	}
+
 	// A completed chunk can retain an unread hunk from an earlier pass. The
 	// model may decide it only after seeing every omission.
 	unreadable := (pass.structuralShortfall().present() && !pass.decidedOmissions()) ||
 		len(tracker.unreadable()) > 0
+
 	return concludeState(tracker.snapshot(), job, head, tracker, unreadable), nil
 }
 
@@ -408,10 +448,12 @@ type deltaOwed struct {
 // admission already bounds.
 func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) deltaOwed {
 	logger := gklog.L(ctx)
+
 	done := make(map[string]struct{}, len(state.Completed))
 	for _, id := range state.Completed {
 		done[id] = struct{}{}
 	}
+
 	for _, id := range state.Unread {
 		delete(done, id)
 	}
@@ -419,6 +461,7 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 	owed := make([]string, 0, len(chunks))
 	carried := make([]string, 0, len(state.Completed))
 	remaining := make([]diff.Chunk, 0, len(chunks))
+
 	present := make(map[string]struct{}, len(chunks))
 	for _, chunk := range chunks {
 		id := chunkID(chunk)
@@ -427,9 +470,11 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 			carried = append(carried, id)
 			continue
 		}
+
 		remaining = append(remaining, chunk)
 		owed = append(owed, id)
 	}
+
 	for _, id := range state.Pending {
 		if _, found := present[id]; !found {
 			logger.WarnContext(
@@ -439,16 +484,20 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 			)
 		}
 	}
+
 	// A content change replaces the chunk id and clears its old shortfall.
 	unread := make([]string, 0, len(state.Unread))
+
 	rewritten := make([]string, 0, len(state.Unread))
 	for _, id := range state.Unread {
 		if _, found := present[id]; !found {
 			rewritten = append(rewritten, id)
 			continue
 		}
+
 		unread = append(unread, id)
 	}
+
 	if len(rewritten) > 0 {
 		logger.InfoContext(
 			ctx,
@@ -456,6 +505,7 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 			slog.Any("chunks", rewritten),
 		)
 	}
+
 	logger.InfoContext(
 		ctx,
 		"review work computed",
@@ -464,6 +514,7 @@ func pendingWork(ctx context.Context, state marker.State, chunks []diff.Chunk) d
 		slog.Int("owed", len(owed)),
 		slog.Int("unread", len(unread)),
 	)
+
 	return deltaOwed{chunks: remaining, owed: owed, completed: carried, unread: unread}
 }
 
@@ -488,6 +539,7 @@ func (tracker *pendingTracker) recordUnread(id string) {
 	if slices.Contains(tracker.unread, id) {
 		return
 	}
+
 	tracker.unread = append(tracker.unread, id)
 }
 
@@ -495,18 +547,21 @@ func (tracker *pendingTracker) recordUnread(id string) {
 func (tracker *pendingTracker) unreadable() []string {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+
 	return append([]string{}, tracker.unread...)
 }
 
 func (tracker *pendingTracker) snapshot() marker.State {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+
 	return tracker.state
 }
 
 func (tracker *pendingTracker) remaining() []string {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+
 	return append([]string{}, tracker.unfinished...)
 }
 
@@ -515,6 +570,7 @@ func (tracker *pendingTracker) remaining() []string {
 func (tracker *pendingTracker) finished() []string {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+
 	return append([]string{}, tracker.completed...)
 }
 
@@ -533,10 +589,12 @@ func (service *Service) reviewChunksConcurrently(
 	if limit < 1 {
 		return nil
 	}
+
 	slots := make(chan struct{}, limit)
 	fatal := make(chan error, len(chunks))
 
 	var waitGroup sync.WaitGroup
+
 	for _, chunk := range chunks {
 		waitGroup.Go(func() {
 			defer func() {
@@ -555,17 +613,27 @@ func (service *Service) reviewChunksConcurrently(
 			outcome, err := func() (chunkOutcome, error) {
 				slots <- struct{}{}
 				defer func() { <-slots }()
+
 				return service.reviewOneChunk(ctx, job, head, chunk, pass)
 			}()
 			settled := chunkSettlement{chunk: chunk, err: err, outcome: outcome}
-			if endsRun := service.settleChunk(ctx, job, head, settled, pass, tracker); endsRun != nil {
+			if endsRun := service.settleChunk(
+				ctx,
+				job,
+				head,
+				settled,
+				pass,
+				tracker,
+			); endsRun != nil {
 				fatal <- endsRun
 			}
 		})
 	}
+
 	waitGroup.Wait()
 
 	close(fatal)
+
 	return <-fatal
 }
 
@@ -604,6 +672,7 @@ func (service *Service) settleChunk(
 	if settled.outcome.shortfall || settled.outcome.unread {
 		tracker.recordUnread(id)
 	}
+
 	switch {
 	case err == nil && (settled.outcome.unread || settled.outcome.shortfall):
 		// The call came back and did not cover all of this chunk. Recording it as
@@ -618,6 +687,7 @@ func (service *Service) settleChunk(
 			slog.String("chunk", id),
 			slog.Int("index", chunk.Index),
 		)
+
 		return nil
 	case err == nil:
 	case errors.Is(err, errHeadMoved):
@@ -643,11 +713,14 @@ func (service *Service) settleChunk(
 			slog.String("chunk", id),
 			slog.String("err", err.Error()),
 		)
+
 		return nil
 	}
+
 	pass.mu.Lock()
 	pass.reassessedChunks[id] = true
 	pass.mu.Unlock()
+
 	return service.checkpoint(ctx, job, head, id, tracker, pass)
 }
 
@@ -675,25 +748,42 @@ func (service *Service) reviewOneChunk(
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	inspectionRef := job.PullRequestRef
 	inspectionRef.Head = head
-	callCtx, err := withInspection(callCtx, service.github, inspectionRef, pass.work.Files, service.reviewPolicy, pass.settings.maximumPromptBytes)
+	callCtx, err := withInspection(
+		callCtx,
+		service.github,
+		inspectionRef,
+		pass.work.Files,
+		service.reviewPolicy,
+		pass.settings.maximumPromptBytes,
+	)
 	if err != nil {
 		cancel()
 		gklog.L(ctx).ErrorContext(ctx, "Required evidence inspector setup failed", "err", err)
+
 		return nothing, err
 	}
+
 	promptShortfall := pass.structuralShortfall()
-	pullRequestContext, err := BuildPullRequestContext(pass.work.PullRequest, pass.work.Files, service.reviewPolicy)
+	pullRequestContext, err := BuildPullRequestContext(
+		pass.work.PullRequest,
+		pass.work.Files,
+		service.reviewPolicy,
+	)
 	if err != nil {
 		cancel()
 		gklog.L(ctx).ErrorContext(ctx, "Pull request prompt rendering failed", "err", err)
+
 		return nothing, err
 	}
+
 	omissions, err := sourceScopePrompt(promptShortfall, service.reviewPolicy)
 	if err != nil {
 		cancel()
 		gklog.L(ctx).ErrorContext(ctx, "Unread content prompt rendering failed", "err", err)
+
 		return nothing, err
 	}
+
 	var refusedPublication, transientPublication error
 	observe := func(fragment diff.Chunk, result domain.ReviewResult) error {
 		pass.recordOverview(chunk.Index, result.Overview)
@@ -702,11 +792,13 @@ func (service *Service) reviewOneChunk(
 		if errors.Is(publicationErr, errHeadMoved) || ctx.Err() != nil {
 			return publicationErr
 		}
+
 		if errors.Is(publicationErr, errCommentRefused) {
 			refusedPublication = errors.Join(refusedPublication, publicationErr)
 		} else {
 			transientPublication = errors.Join(transientPublication, publicationErr)
 		}
+
 		return nil
 	}
 	analysis, err := reviewChunkObserved(
@@ -735,10 +827,16 @@ func (service *Service) reviewOneChunk(
 	if publicationErr == nil {
 		publicationErr = refusedPublication
 	}
+
 	combined := errors.Join(err, publicationErr)
 	if combined != nil {
-		gklog.L(ctx).WarnContext(ctx, "Chunk review or finding publication remains incomplete", slog.Any("err", combined))
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"Chunk review or finding publication remains incomplete",
+			slog.Any("err", combined),
+		)
 	}
+
 	return chunkOutcome{unread: unread, shortfall: shortfall}, combined
 }
 
@@ -771,6 +869,7 @@ func (service *Service) postChunkFindings(
 	if len(posts) == 0 {
 		return nil
 	}
+
 	var footerData reviewrules.PromptData
 	footer, err := service.reviewPolicy.Render("inline.footer", footerData)
 	if err != nil {
@@ -797,6 +896,7 @@ func (service *Service) postChunkFindings(
 	refused := 0
 	var refusedErr error
 	var transientErr error
+
 	for _, post := range posts {
 		post.comment.Body += "\n\n" + footer
 		err := service.postInlineFinding(ctx, job, head, post.comment, pass)
@@ -818,11 +918,14 @@ func (service *Service) postChunkFindings(
 			} else if transientErr == nil {
 				transientErr = err
 			}
+
 			continue
 		}
+
 		pass.recordDelivered(post.finding)
 		delivered++
 	}
+
 	logger.InfoContext(
 		ctx,
 		"review findings posted",
@@ -834,9 +937,11 @@ func (service *Service) postChunkFindings(
 	if transientErr != nil {
 		return fmt.Errorf("post chunk findings: %w", transientErr)
 	}
+
 	if refusedErr != nil {
 		return fmt.Errorf("%w: %w", errCommentRefused, refusedErr)
 	}
+
 	return nil
 }
 
@@ -853,13 +958,19 @@ func commentRefusal(err error) bool {
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	if apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode == http.StatusRequestTimeout {
+
+	if apiErr.StatusCode == http.StatusTooManyRequests ||
+		apiErr.StatusCode == http.StatusRequestTimeout {
 		return false
 	}
-	if apiErr.StatusCode == http.StatusForbidden && strings.Contains(strings.ToLower(apiErr.Message), "rate limit") {
+
+	if apiErr.StatusCode == http.StatusForbidden &&
+		strings.Contains(strings.ToLower(apiErr.Message), "rate limit") {
 		return false
 	}
-	return apiErr.StatusCode >= http.StatusBadRequest && apiErr.StatusCode < http.StatusInternalServerError
+
+	return apiErr.StatusCode >= http.StatusBadRequest &&
+		apiErr.StatusCode < http.StatusInternalServerError
 }
 
 // recordDelivered records one finding whose comment reached the page.
@@ -907,8 +1018,10 @@ func (service *Service) renderChunkFindings(
 				pass.metadataSeen[key] = struct{}{}
 				pass.metadata = append(pass.metadata, finding)
 			}
+
 			continue
 		}
+
 		rendered, err := RenderInline(head, []domain.Finding{finding})
 		if err != nil {
 			// One finding that cannot be rendered says nothing about the others
@@ -923,9 +1036,11 @@ func (service *Service) renderChunkFindings(
 			pass.failed++
 			continue
 		}
+
 		pass.selection.remember(finding)
 		posts = append(posts, postCandidate{finding: finding, comment: rendered[0]})
 	}
+
 	return posts
 }
 
@@ -954,16 +1069,20 @@ func unansweredCandidates(
 			unanswered = append(unanswered, finding)
 			continue
 		}
+
 		if match, answered := pass.disputes.answered(finding); answered {
 			logSuppressed(ctx, layerOpenThreads, finding, match)
 			continue
 		}
+
 		if layer, match, carried := pass.selection.suppressed(keysFor(finding)); carried {
 			logSuppressed(ctx, layer, finding, match)
 			continue
 		}
+
 		unanswered = append(unanswered, finding)
 	}
+
 	return unanswered
 }
 

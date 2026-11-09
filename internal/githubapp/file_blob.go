@@ -23,20 +23,41 @@ func (client *Client) getFileBlob(
 	if err != nil {
 		return nil, errors.New("large file content requires a valid blob SHA")
 	}
+
 	if file.Size == nil || *file.Size < 0 {
 		return nil, errors.New("large file content requires a nonnegative byte size")
 	}
+
 	if *file.Size > maxResponseBytes {
-		return nil, fmt.Errorf("file content requires %d bytes; the GitHub response limit is %d bytes", *file.Size, maxResponseBytes)
+		return nil, fmt.Errorf(
+			"file content requires %d bytes; the GitHub response limit is %d bytes",
+			*file.Size,
+			maxResponseBytes,
+		)
 	}
+
 	path := client.repoPath(repo, "/git/blobs/"+string(sha))
-	content, err := client.doRESTWithAccept(ctx, installationID, http.MethodGet, path, nil, nil, githubRawBlobAcceptHeader)
+	content, err := client.doRESTWithAccept(
+		ctx,
+		installationID,
+		http.MethodGet,
+		path,
+		nil,
+		nil,
+		githubRawBlobAcceptHeader,
+	)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "load pinned file blob", slog.Any("err", err))
 		return nil, fmt.Errorf("load pinned file blob: %w", err)
 	}
+
 	if len(content) != *file.Size {
-		return nil, fmt.Errorf("file blob contains %d bytes; expected %d bytes", len(content), *file.Size)
+		return nil, fmt.Errorf(
+			"file blob contains %d bytes; expected %d bytes",
+			len(content),
+			*file.Size,
+		)
 	}
+
 	return content, nil
 }
