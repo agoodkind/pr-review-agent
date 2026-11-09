@@ -6342,6 +6342,7 @@ type serviceServerState struct {
 	createCommentStatus int
 	createCommentHangup bool
 	issueCommentStatus  int
+	issueUpdateStatuses []int
 	listThreadsStatus   int
 	streamedComments    []map[string]any
 	// threadNodes is the GraphQL view of the pull request's review threads. A
@@ -7023,6 +7024,16 @@ func handleServiceRequest(writer http.ResponseWriter, request *http.Request, sta
 	}
 
 	if request.Method == http.MethodPatch && strings.Contains(request.URL.Path, "/issues/comments/") {
+		if len(state.issueUpdateStatuses) > 0 {
+			status := state.issueUpdateStatuses[0]
+			state.issueUpdateStatuses = state.issueUpdateStatuses[1:]
+			if status != http.StatusOK {
+				serviceWriteJSON(writer, status, map[string]any{"message": "update issue comment failed"})
+
+				return
+			}
+		}
+
 		if state.issueCommentStatus != http.StatusOK {
 			serviceWriteJSON(writer, state.issueCommentStatus, map[string]any{"message": "update issue comment failed"})
 			return

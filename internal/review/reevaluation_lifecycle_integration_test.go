@@ -22,21 +22,28 @@ import (
 	"goodkind.io/pr-review-agent/internal/queue"
 	"goodkind.io/pr-review-agent/internal/reconcile"
 	"goodkind.io/pr-review-agent/internal/review"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T) {
 	for _, scenario := range []struct {
-		name           string
-		outdated       bool
-		failThreadRead bool
-		resolved       bool
-		modelDelay     time.Duration
-		success        bool
-		unchanged      bool
+		name               string
+		outdated           bool
+		failThreadRead     bool
+		resolved           bool
+		modelDelay         time.Duration
+		success            bool
+		unchanged          bool
+		moveHead           bool
+		publicationFailure string
 	}{
 		{name: "model exceeds publication budget", modelDelay: 65 * time.Second, success: true},
 		{name: "current reassessment usage", success: true},
 		{name: "unchanged metadata avoids provider work", success: true, unchanged: true},
+		{name: "head moves during model work", success: true, moveHead: true},
+		{name: "checkpoint publication fails", success: true, publicationFailure: "checkpoint"},
+		{name: "native publication fails", success: true, publicationFailure: "native"},
+		{name: "summary publication fails", success: true, publicationFailure: "summary"},
 		{name: "open file finding"},
 		{name: "outdated file finding", outdated: true},
 		{name: "failed thread verification", failThreadRead: true},
@@ -71,9 +78,55 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 						if refreshing.Load() {
 							if scenario.success {
 								time.Sleep(scenario.modelDelay)
+								fixture.state.mu.Lock()
+								if scenario.moveHead {
+									fixture.state.headSHA = testHeadSHA
+								}
+
+								switch scenario.publicationFailure {
+								case "checkpoint":
+									fixture.state.issueUpdateStatuses = []int{
+										http.StatusServiceUnavailable,
+									}
+								case "native":
+									fixture.state.submitReviewStatus = http.StatusServiceUnavailable
+								case "summary":
+									fixture.state.issueUpdateStatuses = []int{
+										http.StatusOK,
+										http.StatusServiceUnavailable,
+									}
+								}
+
+								fixture.state.mu.Unlock()
+								result := domain.ReviewResult{OmissionsAcceptable: true}
+								if scenario.publicationFailure != "" {
+									finding := metadataPresentationFinding()
+									finding.Claim = "The description omits a subject and verb."
+									result.Findings = []domain.Finding{finding}
+								}
+
+								response, encodeErr := json.Marshal(
+									struct {
+										domain.ReviewResult
+										InspectionRequests []review.InspectionRequest `json:"inspection_requests"`
+									}{
+										ReviewResult:       result,
+										InspectionRequests: []review.InspectionRequest{},
+									},
+								)
+								if encodeErr != nil {
+									http.Error(
+										writer,
+										encodeErr.Error(),
+										http.StatusInternalServerError,
+									)
+
+									return
+								}
+
 								writeInspectionServiceCompletion(
 									writer,
-									`{"findings":[],"omissions_acceptable":true,"inspection_requests":[]}`,
+									string(response),
 									requestIndex,
 								)
 
@@ -145,6 +198,10 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 						onlyMetadata: true,
 						currentDescription: func() string {
 							if refreshing.Load() && !scenario.unchanged {
+								if scenario.publicationFailure != "" {
+									return "Summary changes"
+								}
+
 								return "The current description still requires review."
 							}
 
@@ -195,6 +252,52 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				useLegacyMetadataCheckpoint(t, fixture)
 				summaryID := fixture.state.issueComments[0]["id"]
 				initialRequests := requests.Load()
+				if scenario.publicationFailure != "" {
+					current, readErr := fixture.github.GetPullRequest(
+						t.Context(),
+						job.InstallationID,
+						job.Repository,
+						job.Number,
+					)
+					if readErr != nil {
+						t.Fatal(readErr)
+					}
+
+					saved := testSummary()
+					saved.Head = job.Head
+					saved.Decision = domain.ReviewDecisionRequestChanges
+					saved.MetadataRevision = diff.PullRequestRevision(current)
+					saved.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
+					saved.FileAssessmentsDisplay = policy.FileAssessmentsDisplay()
+					saved.FileAssessments = []domain.FileAssessment{
+						{
+							Path:                     "main.go",
+							Identity:                 "stored-source-assessment",
+							ContentKind:              reviewrules.ContentSource,
+							ContentReviewRequirement: domain.ContentReviewRequired,
+							Action:                   domain.FileActionReview,
+							Reviewed:                 true,
+							Reason:                   "The source review inspected the changed behavior.",
+							Evidence: []string{
+								"The source review inspected main.go.",
+							},
+						},
+					}
+					saved.Usage = review.UsageSummary{
+						Requests:         int(initialRequests),
+						ReportedRequests: int(initialRequests),
+						InputTokens:      int64(initialRequests) * 11,
+						OutputTokens:     int64(initialRequests) * 5,
+						TotalTokens:      int64(initialRequests) * 16,
+					}
+					state := decodedSummaryState(t, fixture)
+					fixture.state.issueComments[0]["body"] = review.RenderBody(
+						saved,
+					) + "\n" + marker.EncodeState(state)
+				}
+
+				priorBody := failureSummaryComment(t, fixture)
+				priorUpdates := fixture.state.issueCommentUpdates
 
 				if scenario.resolved {
 					thread.Resolved = true
@@ -212,7 +315,27 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				}
 
 				outcome, err := fixture.service.RunWithOutcome(t.Context(), admitted)
-				if scenario.success {
+				if scenario.moveHead {
+					if err != nil || outcome.Disposition != domain.AssessmentInterrupted ||
+						fixture.state.lastUpdateCheckRun["conclusion"] != "cancelled" {
+						t.Fatalf("A head change must cancel the refresh: %+v, %v.", outcome, err)
+					}
+
+					if failureSummaryComment(t, fixture) != priorBody ||
+						fixture.state.issueCommentUpdates != priorUpdates ||
+						fixture.state.lastUpdateReview != nil {
+						t.Fatal("A cancelled refresh must not publish a stale verdict or summary.")
+					}
+				} else if scenario.publicationFailure != "" {
+					if err == nil || outcome.Disposition != domain.AssessmentFailed ||
+						fixture.state.lastUpdateCheckRun["conclusion"] != "failure" {
+						t.Fatalf(
+							"A publication error must fail the refresh: %+v, %v.",
+							outcome,
+							err,
+						)
+					}
+				} else if scenario.success {
 					if err != nil || outcome.Disposition != domain.AssessmentCompleted ||
 						fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
 						t.Fatalf(
@@ -243,16 +366,28 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					)
 				}
 
-				if len(fixture.state.submittedReviews) != 1 || original["body"] != "" || len(
-					fixture.state.issueComments,
-				) != 1 || fixture.state.issueComments[0]["id"] != summaryID {
+				expectedReviews := 1
+				if scenario.publicationFailure == "summary" {
+					expectedReviews = 2
+				}
+
+				if len(fixture.state.submittedReviews) != expectedReviews ||
+					original["body"] != "" ||
+					len(fixture.state.issueComments) != 1 ||
+					fixture.state.issueComments[0]["id"] != summaryID {
 					t.Fatal("The failed refresh replaced the standing review or original summary.")
 				}
 
 				body := failureSummaryComment(t, fixture)
-				if len(
-					retainedMetadataFindings(t, body),
-				) != 0 || decodedSummaryState(t, fixture).LastReviewed != job.Head {
+				stored := retainedMetadataFindings(t, body)
+				expectedMetadata := 0
+				if scenario.publicationFailure == "native" ||
+					scenario.publicationFailure == "summary" {
+					expectedMetadata = 1
+				}
+
+				if len(stored) != expectedMetadata ||
+					decodedSummaryState(t, fixture).LastReviewed != job.Head {
 					t.Fatal(
 						"The failed metadata refresh changed saved findings or completed file coverage.",
 					)
@@ -287,15 +422,29 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 						)
 					}
 
-					if scenario.success &&
+					if scenario.publicationFailure != "" &&
+						!strings.Contains(
+							checkSummary,
+							"The source review inspected the changed behavior.",
+						) {
+						t.Fatal("The failed check must retain the computed file assessment.")
+					}
+
+					if scenario.success && !scenario.moveHead &&
 						!strings.Contains(checkSummary, "| Bot threads open | `1` |") {
 						t.Fatal("The current check must reuse the computed file-thread assessment.")
 					}
 
-					if scenario.success && output["title"] != "Review refreshed" {
+					if scenario.success && !scenario.moveHead &&
+						scenario.publicationFailure == "" &&
+						output["title"] != "Review refreshed" {
 						t.Fatal(
 							"A completed model reassessment must identify its current check as refreshed.",
 						)
+					}
+
+					if scenario.moveHead && !strings.Contains(checkSummary, string(job.Head)[:7]) {
+						t.Fatal("The cancelled check must identify the attempted head.")
 					}
 				}
 

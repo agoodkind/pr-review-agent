@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -96,7 +97,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		return false, summary, fmt.Errorf("read current pull request prose: %w", err)
 	}
 	if current.Head != job.Head {
-		return true, summary, nil
+		return true, summary, errHeadMoved
 	}
 	if hasState && ((state.PolicyRevision != "" && bindCheckpointPolicy(state, current, service.reviewPolicy, settings).PolicyRevision != state.PolicyRevision) ||
 		(state.PolicyRevision == "" && len(inputs.assessment.omissions) > 0)) {
@@ -183,28 +184,43 @@ func (service *Service) refreshReviewedCheck(
 	logger := gklog.L(ctx)
 	withheld, summary, err := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
 	usage := UsageFromContext(ctx)
-	var models modelSet
-
-	for _, model := range usage.Models {
-		models.add(model.RequestedModel)
-		models.add(model.Model)
-	}
-
 	if errors.Is(err, errReviewContextChanged) {
 		return service.reassessChangedContext(ctx, job, reviews, settings)
 	}
+	if errors.Is(err, errHeadMoved) && usage.Requests == 0 {
+		return service.cancelCheck(ctx, job, job.CheckRunID)
+	}
+
 	if err != nil {
+		now := service.now()
+		progress := service.newProgress(job, settings, startedAt).summary(now)
+		checkProgress := progress
+		if summary.Head != "" {
+			checkProgress = summary
+		}
+
+		checkProgress = service.measuredRefreshSummary(ctx, checkProgress, startedAt)
+		progress.Usage = checkProgress.Usage
+		checkProgress.Failed = true
+		if errors.Is(err, errHeadMoved) {
+			recordAssessment(ctx, domain.AssessmentInterrupted, &checkProgress, nil, 0)
+
+			return service.completeCheckRun(
+				ctx,
+				job.InstallationID,
+				job.Repository,
+				job.CheckRunID,
+				checkConclusionCancelled,
+				checkSummaryCancelled,
+				checkSummaryCancelled+"\n\n"+RenderDetails(checkProgress),
+			)
+		}
+
 		logger.ErrorContext(ctx, "refresh reviewed check", slog.String("err", err.Error()))
 		var statuses []ProviderStatus
 		collectProviderStatuses(err, &statuses)
-		now := service.now()
-		progress := service.newProgress(job, settings, startedAt).summary(now)
-		progress.Usage = usage
-		service.enrichProviderPeriodUsage(ctx, &progress)
-		recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(err), quotaRecovery(statuses))
+		recordAssessment(ctx, domain.AssessmentFailed, &checkProgress, failureNames(err), quotaRecovery(statuses))
 		detail := service.terminalFailureDetail(ctx, job, err)
-		checkProgress := progress
-		checkProgress.Models = models.names
 		completionErr := service.completeCheckRun(ctx, job.InstallationID, job.Repository, job.CheckRunID,
 			"failure", "Review refresh failed", detail+"\n\n"+RenderDetails(checkProgress))
 		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
@@ -216,10 +232,7 @@ func (service *Service) refreshReviewedCheck(
 	}
 	details := ""
 	if usage.Requests > 0 {
-		summary.Duration = service.now().Sub(startedAt)
-		summary.Models = models.names
-		summary.Usage = usage
-		service.enrichProviderPeriodUsage(ctx, &summary)
+		summary = service.measuredRefreshSummary(ctx, summary, startedAt)
 
 		details = "\n\n" + RenderDetails(summary)
 	}
@@ -248,6 +261,22 @@ func (service *Service) refreshReviewedCheck(
 	}
 	return service.succeed(ctx, job, job.CheckRunID, checkTitleAlreadyReviewed,
 		"This head already has a PR-Agent review. No duplicate review was published.")
+}
+
+func (service *Service) measuredRefreshSummary(ctx context.Context, summary Summary, startedAt time.Time) Summary {
+	summary.Duration = service.now().Sub(startedAt)
+	summary.Usage = UsageFromContext(ctx)
+	var models modelSet
+
+	for _, model := range summary.Usage.Models {
+		models.add(model.RequestedModel)
+		models.add(model.Model)
+	}
+
+	summary.Models = models.names
+	service.enrichProviderPeriodUsage(ctx, &summary)
+
+	return summary
 }
 
 // headReadWhole reports whether any completed run read this whole head.
@@ -463,15 +492,6 @@ func (service *Service) applyRefreshedVerdict(
 
 		return summary, fmt.Errorf("refresh verdict head check: %w", err)
 	}
-	if currentPullRequest.Head != job.Head {
-		logger.InfoContext(ctx, "verdict refresh skipped", slog.String("reason", "head_moved"))
-
-		return summary, nil
-	}
-	if diff.PullRequestRevision(currentPullRequest) != refreshed.metadataRevision {
-		return summary, errMetadataChanged
-	}
-
 	summary = Summary{
 		FileAssessmentNote: "", Head: job.Head,
 		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
@@ -511,6 +531,17 @@ func (service *Service) applyRefreshedVerdict(
 		// is a gate a forced run never reaches.
 		Forced: false,
 	}
+
+	if currentPullRequest.Head != job.Head {
+		logger.InfoContext(ctx, "verdict refresh skipped", slog.String("reason", "head_moved"))
+
+		return summary, errHeadMoved
+	}
+
+	if diff.PullRequestRevision(currentPullRequest) != refreshed.metadataRevision {
+		return summary, errMetadataChanged
+	}
+
 	if refreshed.metadataReassessed {
 		if err := service.checkpointRefreshedMetadata(ctx, job, summary); err != nil {
 			return summary, err
