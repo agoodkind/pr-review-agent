@@ -175,7 +175,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					config.DefaultReviewMaxChunks,
 					config.DefaultReviewChunkTimeout,
 					nil,
-					testClock(8*time.Second),
+					time.Now,
 					logger,
 					1,
 					config.MaximumPromptBytes,
@@ -278,11 +278,40 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					}
 				} else {
 					assertMetadataRefreshUsage(t, checkSummary, expectedRequests)
+					if !strings.Contains(
+						checkSummary,
+						"| Model | `lifecycle`, `inspection-service-model` |",
+					) {
+						t.Fatal(
+							"The current check must identify the requested and reported models.",
+						)
+					}
+
+					if scenario.success &&
+						!strings.Contains(checkSummary, "| Bot threads open | `1` |") {
+						t.Fatal("The current check must reuse the computed file-thread assessment.")
+					}
+
 					if scenario.success && output["title"] != "Review refreshed" {
 						t.Fatal(
 							"A completed model reassessment must identify its current check as refreshed.",
 						)
 					}
+				}
+
+				if scenario.modelDelay > 0 {
+					_, duration, found := strings.Cut(checkSummary, "| Duration | `")
+					secondsText, _, complete := strings.Cut(duration, "` seconds |")
+					seconds, parseErr := strconv.Atoi(secondsText)
+					if !found || !complete || parseErr != nil ||
+						time.Duration(seconds)*time.Second < scenario.modelDelay {
+						t.Fatalf(
+							"The current check must report the measured model delay: %s.",
+							secondsText,
+						)
+					}
+
+					t.Logf("The current check reports a duration of %d seconds.", seconds)
 				}
 
 				assertMetadataRefreshUsage(t, body, initialRequests)
