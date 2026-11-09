@@ -103,8 +103,6 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 	comment, found := findSummaryComment(comments, service.botLogin)
 	saved, recorded, err := decodeMetadataRecord(comment.Body)
 	if err != nil {
-		logger.WarnContext(ctx, "read saved findings before failure dismissal", "err", err)
-
 		return fmt.Errorf("read saved findings before failure dismissal: %w", err)
 	}
 
