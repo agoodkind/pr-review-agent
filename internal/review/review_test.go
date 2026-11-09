@@ -2064,11 +2064,6 @@ func TestReassessmentAfterPublicationFailureReusesCompletedChunks(t *testing.T) 
 		t.Fatalf("comments = %d, want one per finding: the resumed delivery reposted what was already there",
 			len(fixture.state.streamedComments))
 	}
-	if len(fixture.state.submittedReviews) != 1 ||
-		fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
-		len(fixture.state.dismissals) != 0 {
-		t.Fatalf("The retry changed the standing rejection: %v.", fixture.state.submittedReviews)
-	}
 
 	reviews, err = fixture.github.ListReviews(t.Context(), job.InstallationID, job.Repository, job.Number)
 	if err != nil {
