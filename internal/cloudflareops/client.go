@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -333,53 +332,8 @@ func AcquireCredentials(
 			returnErr = errors.Join(returnErr, acquired.Close(ctx))
 		}
 	}()
-	body, err := client.tokenBody(ctx, options)
-	if err != nil {
+	if err := credentials.acquireScoped(ctx, options); err != nil {
 		return nil, err
-	}
-
-	created, err := client.createToken(ctx, body)
-	if err != nil {
-		return nil, err
-	}
-
-	var scoped tokenResult
-	if json.Unmarshal(created.Result, &scoped) != nil {
-		return nil, errors.New("cloudflare returned an invalid scoped credential")
-	}
-
-	credentials.id = scoped.ID
-	if scoped.ID == "" || scoped.Value == "" {
-		return nil, errors.New("cloudflare did not return a complete scoped credential")
-	}
-
-	credentials.Client, err = NewClient(options.APIURL, scoped.Value, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if err = os.WriteFile(
-		filepath.Join(credentials.directory, "token"),
-		[]byte(scoped.Value),
-		0o600,
-	); err != nil {
-		slog.WarnContext(ctx, "Private temporary credential write failed")
-		return nil, fmt.Errorf("write private temporary credential: %w", err)
-	}
-
-	if err = os.WriteFile(
-		filepath.Join(credentials.directory, "id"),
-		[]byte(scoped.ID),
-		0o600,
-	); err != nil {
-		slog.WarnContext(ctx, "Temporary credential identifier write failed")
-		return nil, fmt.Errorf("write temporary credential identifier: %w", err)
-	}
-
-	_, _, err = credentials.Client.request(ctx, http.MethodGet, "/user/tokens/verify", nil)
-	if err != nil {
-		slog.WarnContext(ctx, "Scoped credential verification failed")
-		return nil, fmt.Errorf("scoped credential verification failed: %w", err)
 	}
 
 	return credentials, nil
