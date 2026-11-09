@@ -18,7 +18,21 @@ import (
 
 // MetadataReassessor evaluates saved metadata findings independently of discovery.
 type MetadataReassessor interface {
-	ReassessMetadata(context.Context, string) ([]domain.MetadataFindingAssessment, error)
+	ReassessMetadata(
+		ctx context.Context,
+		request MetadataReassessmentRequest,
+	) ([]domain.MetadataFindingAssessment, error)
+}
+
+// MetadataReassessmentRequest supplies a saved finding's prompt and current field.
+//
+// FindingID identifies the single assessment that the response must contain.
+// Source provides the complete current text for coordinate and evidence checks.
+// For example, a response cannot quote text from an earlier description.
+type MetadataReassessmentRequest struct {
+	Prompt    string
+	FindingID string
+	Source    diff.MetadataSource
 }
 
 // MetadataReassessmentRequestSizer measures the complete provider request.
@@ -90,14 +104,15 @@ func (service *Service) reassessMetadataFindings(ctx context.Context, job domain
 		if err := service.checkMetadataReassessmentSize(ctx, prompt, settings.maximumPromptBytes); err != nil {
 			return prior, err
 		}
+		request := MetadataReassessmentRequest{Prompt: prompt, FindingID: identifier, Source: source}
 		callContext, cancel := modelRequestContext(ctx, service.model, settings.chunkTimeout)
-		assessments, err := model.ReassessMetadata(callContext, prompt)
+		assessments, err := model.ReassessMetadata(callContext, request)
 		cancel()
 		if err != nil {
 			logger.WarnContext(ctx, "Metadata finding reassessment failed", "finding_id", identifier, "err", err)
 			return prior, fmt.Errorf("reassess metadata finding %s: %w", identifier, err)
 		}
-		assessment, err := validateCurrentMetadataAssessment(assessments, identifier, source)
+		assessment, err := request.ValidateAssessments(assessments)
 		if err != nil {
 			return prior, err
 		}
@@ -166,25 +181,40 @@ func (service *Service) checkMetadataReassessmentSize(ctx context.Context, promp
 	return nil
 }
 
-func validateCurrentMetadataAssessment(assessments []domain.MetadataFindingAssessment, identifier string, source diff.MetadataSource) (domain.MetadataFindingAssessment, error) {
+// ValidateAssessments checks a response against the requested finding.
+//
+// The SDK checks each provider response before accepting its result. A rejected
+// response can trigger the configured fallback policy.
+//
+// A valid response meets these conditions:
+//   - The response contains one assessment for the requested finding ID.
+//   - Its coordinates identify lines within the complete current field.
+//   - Its evidence matches the selected passage.
+//   - Its evidence stays empty for an empty field.
+//
+// For example, a response cannot quote a deleted sentence.
+func (request MetadataReassessmentRequest) ValidateAssessments(
+	assessments []domain.MetadataFindingAssessment,
+) (domain.MetadataFindingAssessment, error) {
 	var empty domain.MetadataFindingAssessment
 	if err := domain.ValidateMetadataAssessments(assessments); err != nil {
 		slog.Warn("Metadata reassessment validation failed", "err", err)
 		return empty, fmt.Errorf("validate metadata reassessment: %w", err)
 	}
-	if len(assessments) != 1 || assessments[0].FindingID != identifier {
+	if len(assessments) != 1 || assessments[0].FindingID != request.FindingID {
 		return empty, errors.New("metadata reassessment did not decide the requested finding")
 	}
 	assessment := assessments[0]
-	lines := strings.Split(source.Text, "\n")
+	lines := strings.Split(request.Source.Text, "\n")
 	if assessment.EndLine > len(lines) {
 		return empty, errors.New("metadata assessment coordinates exceed the current field")
 	}
 	passage := strings.Join(lines[assessment.StartLine-1:assessment.EndLine], "\n")
-	if source.Text != "" && (strings.TrimSpace(assessment.Evidence) == "" || !strings.Contains(passage, assessment.Evidence)) {
+	if request.Source.Text != "" &&
+		(strings.TrimSpace(assessment.Evidence) == "" || !strings.Contains(passage, assessment.Evidence)) {
 		return empty, errors.New("metadata reassessment evidence does not match the current field")
 	}
-	if source.Text == "" && assessment.Evidence != "" {
+	if request.Source.Text == "" && assessment.Evidence != "" {
 		return empty, errors.New("metadata reassessment quoted evidence from an empty field")
 	}
 	return assessment, nil
