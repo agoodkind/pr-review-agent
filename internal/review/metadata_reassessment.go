@@ -89,22 +89,7 @@ func (service *Service) reassessMetadataFindings(
 		return prior, errors.New("model does not support explicit metadata reassessment")
 	}
 
-	index := BuildMetadataIndex(sources)
-	// Empty mutable fields still supply complete current evidence.
-	index[domain.FindingTarget{Surface: domain.FindingPullRequestTitle, CommitSHA: ""}] = diff.MetadataSource{
-		Surface:   domain.FindingPullRequestTitle,
-		CommitSHA: "",
-		Text:      pullRequest.Title,
-		StartLine: 1,
-		EndLine:   1,
-	}
-	index[domain.FindingTarget{Surface: domain.FindingPullRequestDescription, CommitSHA: ""}] = diff.MetadataSource{
-		Surface:   domain.FindingPullRequestDescription,
-		CommitSHA: "",
-		Text:      pullRequest.Body,
-		StartLine: 1,
-		EndLine:   len(strings.Split(pullRequest.Body, "\n")),
-	}
+	index := currentMetadataIndex(sources, pullRequest)
 	removed, err := service.restoreMissingCommitMetadata(ctx, job, prior, index, pullRequest)
 	if err != nil {
 		return prior, err
@@ -184,6 +169,30 @@ func (service *Service) reassessMetadataFindings(
 	}
 
 	return retained, nil
+}
+
+func currentMetadataIndex(
+	sources []diff.MetadataSource,
+	pullRequest githubapp.PullRequest,
+) map[domain.FindingTarget]diff.MetadataSource {
+	index := BuildMetadataIndex(sources)
+	// Empty mutable fields still supply complete current evidence.
+	index[domain.FindingTarget{Surface: domain.FindingPullRequestTitle, CommitSHA: ""}] = diff.MetadataSource{
+		Surface:   domain.FindingPullRequestTitle,
+		CommitSHA: "",
+		Text:      pullRequest.Title,
+		StartLine: 1,
+		EndLine:   1,
+	}
+	index[domain.FindingTarget{Surface: domain.FindingPullRequestDescription, CommitSHA: ""}] = diff.MetadataSource{
+		Surface:   domain.FindingPullRequestDescription,
+		CommitSHA: "",
+		Text:      pullRequest.Body,
+		StartLine: 1,
+		EndLine:   len(strings.Split(pullRequest.Body, "\n")),
+	}
+
+	return index
 }
 
 func currentMetadataFinding(
