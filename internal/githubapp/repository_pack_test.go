@@ -72,12 +72,21 @@ func TestGitRejectsDeltaTargetBeforeApplication(t *testing.T) {
 
 	baseHash := hasher.Sum()
 	deltaHeader := append([]byte{0x76}, baseHash[:]...)
-	fixture.responsePack = gitPackFixture(t, []gitPackFixtureObject{
-		{header: []byte{0x31}, payload: base},
-		{header: deltaHeader, payload: []byte{1, 0x81, 0x80, 0x80, 0x80, 0x08}},
-	})
+	fixture.responsePack = gitPackFixture(
+		t,
+		[]gitPackFixtureObject{
+			{header: []byte{0x31}, payload: base},
+			{header: deltaHeader, payload: []byte{1, 0x81, 0x80, 0x80, 0x80, 0x08}},
+		},
+	)
 
-	_, err = fixture.client.GetFile(t.Context(), 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+	_, err = fixture.client.GetFile(
+		t.Context(),
+		77,
+		fixture.repo,
+		gitFixtureSourcePath,
+		fixture.head,
+	)
 	if err == nil || !strings.Contains(err.Error(), "extracted byte limit") {
 		t.Fatalf("oversized delta target did not stop before application: %v", err)
 	}
@@ -87,11 +96,20 @@ func TestGitRejectsDeltaTargetBeforeApplication(t *testing.T) {
 // inflate beyond its smaller declared representation size.
 func TestGitBoundsActualInflation(t *testing.T) {
 	fixture := newGitFixture(t)
-	fixture.responsePack = gitPackFixture(t, []gitPackFixtureObject{
-		{header: []byte{0x31}, payload: []byte("xx")},
-	})
+	fixture.responsePack = gitPackFixture(
+		t,
+		[]gitPackFixtureObject{
+			{header: []byte{0x31}, payload: []byte("xx")},
+		},
+	)
 
-	_, err := fixture.client.GetFile(t.Context(), 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+	_, err := fixture.client.GetFile(
+		t.Context(),
+		77,
+		fixture.repo,
+		gitFixtureSourcePath,
+		fixture.head,
+	)
 	if err == nil || !strings.Contains(err.Error(), "declared size") {
 		t.Fatalf("actual inflation did not respect the declared byte bound: %v", err)
 	}

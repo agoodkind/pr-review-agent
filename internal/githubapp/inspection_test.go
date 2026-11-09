@@ -20,10 +20,16 @@ func TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests(t *testing.T)
 	fixture := newGitFixture(t)
 	client := fixture.client
 
-	ctx, closeSnapshot, err := client.OpenRepositorySnapshot(t.Context(), 77, fixture.repo, fixture.head)
+	ctx, closeSnapshot, err := client.OpenRepositorySnapshot(
+		t.Context(),
+		77,
+		fixture.repo,
+		fixture.head,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() { _ = closeSnapshot() })
 
 	pullRequest, err := client.GetPullRequest(ctx, 77, fixture.repo, 7)
@@ -31,7 +37,12 @@ func TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests(t *testing.T)
 		t.Fatal(err)
 	}
 
-	ref := domain.PullRequestRef{InstallationID: 77, Repository: fixture.repo, Number: 7, Head: fixture.head}
+	ref := domain.PullRequestRef{
+		InstallationID: 77,
+		Repository:     fixture.repo,
+		Number:         7,
+		Head:           fixture.head,
+	}
 
 	input, err := diff.NewCollector(client).Collect(ctx, ref, pullRequest)
 	if err != nil {
@@ -52,7 +63,13 @@ func TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests(t *testing.T)
 		t.Fatalf("literal search = %v: %v", paths, err)
 	}
 
-	_, foreignError := client.GetFileContent(ctx, 78, fixture.repo, gitFixtureSourcePath, fixture.head)
+	_, foreignError := client.GetFileContent(
+		ctx,
+		78,
+		fixture.repo,
+		gitFixtureSourcePath,
+		fixture.head,
+	)
 	if foreignError == nil {
 		t.Fatal("A snapshot accepted another installation")
 	}
@@ -67,7 +84,13 @@ func TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests(t *testing.T)
 		t.Fatal(closeErr)
 	}
 
-	_, closedScopeError := client.GetFileContent(ctx, 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+	_, closedScopeError := client.GetFileContent(
+		ctx,
+		77,
+		fixture.repo,
+		gitFixtureSourcePath,
+		fixture.head,
+	)
 	if closedScopeError == nil {
 		t.Fatal("A closed snapshot accepted a read")
 	}
@@ -77,9 +100,16 @@ func TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests(t *testing.T)
 	fixture.mutex.Unlock()
 
 	var group sync.WaitGroup
+
 	for range 4 {
 		group.Go(func() {
-			content, err := client.GetFileContent(t.Context(), 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+			content, err := client.GetFileContent(
+				t.Context(),
+				77,
+				fixture.repo,
+				gitFixtureSourcePath,
+				fixture.head,
+			)
 			if err != nil || string(content.Data) != gitFixtureSourceContent {
 				t.Errorf("Repeated review = %q: %v", content.Data, err)
 			}
@@ -90,16 +120,21 @@ func TestGitTransportCollectsPinnedReviewWithoutContentAPIRequests(t *testing.T)
 	fixture.mutex.Lock()
 	defer fixture.mutex.Unlock()
 
-	if fixture.contentRequests != 0 || fixture.metadataRequests != 1 || fixture.transfers != before {
-		t.Fatalf("content requests=%d, metadata requests=%d, transfers=%d, before repeated reviews=%d",
+	if fixture.contentRequests != 0 || fixture.metadataRequests != 1 ||
+		fixture.transfers != before {
+		t.Fatalf(
+			"content requests=%d, metadata requests=%d, transfers=%d, before repeated reviews=%d",
 			fixture.contentRequests,
 			fixture.metadataRequests,
 			fixture.transfers,
-			before)
+			before,
+		)
 	}
 
-	t.Logf("content API requests=0; metadata requests=1; initial Git transfers=%d; repeated/concurrent Git transfers=0",
-		before)
+	t.Logf(
+		"content API requests=0; metadata requests=1; initial Git transfers=%d; repeated/concurrent Git transfers=0",
+		before,
+	)
 }
 
 // TestGitTransportPreservesCancellation verifies cancellation before
@@ -111,7 +146,13 @@ func TestGitTransportPreservesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err := fixture.client.GetFileContent(ctx, 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+	_, err := fixture.client.GetFileContent(
+		ctx,
+		77,
+		fixture.repo,
+		gitFixtureSourcePath,
+		fixture.head,
+	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation = %v", err)
 	}

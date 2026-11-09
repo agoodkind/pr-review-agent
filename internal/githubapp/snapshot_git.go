@@ -75,7 +75,10 @@ func (client *Client) materializeRepositorySnapshot(
 	}
 
 	snapshot := &repositorySnapshot{
-		root: root, files: nil, metadata: make(map[string]string), gitlinks: make(map[string]FileContent),
+		root:     root,
+		files:    nil,
+		metadata: make(map[string]string),
+		gitlinks: make(map[string]FileContent),
 	}
 
 	var (
@@ -129,7 +132,10 @@ func (snapshot *repositorySnapshot) writeGitTree(
 				return repositoryAccessError("writeGitTree", err)
 			}
 		case filemode.Submodule:
-			snapshot.gitlinks[name] = FileContent{Data: []byte("Subproject commit " + entry.Hash.String() + "\n"), Metadata: ""}
+			snapshot.gitlinks[name] = FileContent{
+				Data:     []byte("Subproject commit " + entry.Hash.String() + "\n"),
+				Metadata: "",
+			}
 		case filemode.Regular, filemode.Deprecated, filemode.Executable, filemode.Symlink:
 			file, err := tree.TreeEntryFile(&entry)
 			if err != nil {
@@ -198,7 +204,12 @@ func (snapshot *repositorySnapshot) writeGitBlob(blob *object.File, name string)
 	return nil
 }
 
-func validateGitTreeEntry(ctx context.Context, entry object.TreeEntry, prefix string, entries *int) (string, error) {
+func validateGitTreeEntry(
+	ctx context.Context,
+	entry object.TreeEntry,
+	prefix string,
+	entries *int,
+) (string, error) {
 	err := ctx.Err()
 	if err != nil {
 		return "", repositoryAccessError("writeGitTree", err)

@@ -44,28 +44,63 @@ func TestServiceInspectionLoadsUnchangedSourceWithoutAddingFindingAnchors(t *tes
 	if err := fixture.run(t.Context(), job); err != nil {
 		t.Fatal(err)
 	}
+
 	assertInspectionSnapshotRemoved(t, capture)
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	if len(capture.reviewRequests) != 2 {
-		t.Fatalf("The real SDK sent %d review requests; expected an inspection request and its continuation.", len(capture.reviewRequests))
+		t.Fatalf(
+			"The real SDK sent %d review requests; expected an inspection request and its continuation.",
+			len(capture.reviewRequests),
+		)
 	}
-	if strings.Contains(capture.reviewRequests[0], "sysctl --load") || !strings.Contains(capture.reviewRequests[1], "sysctl --load") || !strings.Contains(capture.reviewRequests[1], string(job.Head)) || strings.Contains(capture.reviewRequests[1], "uncommitted activation source") {
-		t.Fatal("The continuation must receive the unchanged activation script from the reviewed commit.")
+
+	if strings.Contains(capture.reviewRequests[0], "sysctl --load") ||
+		!strings.Contains(capture.reviewRequests[1], "sysctl --load") ||
+		!strings.Contains(capture.reviewRequests[1], string(job.Head)) ||
+		strings.Contains(capture.reviewRequests[1], "uncommitted activation source") {
+		t.Fatal(
+			"The continuation must receive the unchanged activation script from the reviewed commit.",
+		)
 	}
+
 	if len(capture.revisions) != 1 || capture.revisions[0] != string(job.Head) {
-		t.Fatalf("Collection and inspection did not reuse one cached Git acquisition: %v", capture.revisions)
+		t.Fatalf(
+			"Collection and inspection did not reuse one cached Git acquisition: %v",
+			capture.revisions,
+		)
 	}
-	if len(capture.archivesAtReview) != 2 || capture.archivesAtReview[0] != 1 || capture.archivesAtReview[1] != 1 || len(capture.forbiddenRequests) != 0 {
-		t.Fatalf("Review source or search used individual APIs instead of the existing snapshot: archives=%v forbidden=%v", capture.archivesAtReview, capture.forbiddenRequests)
+
+	if len(capture.archivesAtReview) != 2 || capture.archivesAtReview[0] != 1 ||
+		capture.archivesAtReview[1] != 1 ||
+		len(capture.forbiddenRequests) != 0 {
+		t.Fatalf(
+			"Review source or search used individual APIs instead of the existing snapshot: archives=%v forbidden=%v",
+			capture.archivesAtReview,
+			capture.forbiddenRequests,
+		)
 	}
-	if len(fixture.state.streamedComments) != 1 || fixture.state.streamedComments[0]["path"] != "network.tf" || fixture.state.streamedComments[0]["line"] != float64(3) {
-		t.Fatalf("Supporting source created a finding anchor or lost the changed-line finding: %v", fixture.state.streamedComments)
+
+	if len(fixture.state.streamedComments) != 1 ||
+		fixture.state.streamedComments[0]["path"] != "network.tf" ||
+		fixture.state.streamedComments[0]["line"] != float64(3) {
+		t.Fatalf(
+			"Supporting source created a finding anchor or lost the changed-line finding: %v",
+			fixture.state.streamedComments,
+		)
 	}
-	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) || fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
-		t.Fatalf("The complete inspected review did not publish its grounded rejection: review=%v check=%v", fixture.state.lastSubmitReview, fixture.state.lastUpdateCheckRun)
+
+	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionRequestChanges) ||
+		fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatalf(
+			"The complete inspected review did not publish its grounded rejection: review=%v check=%v",
+			fixture.state.lastSubmitReview,
+			fixture.state.lastUpdateCheckRun,
+		)
 	}
+
 	body := failureSummaryComment(t, fixture)
+
 	for _, row := range []string{
 		"| Requests | `" + strconv.Itoa(capture.requests) + "` |",
 		"| Total tokens | `" + strconv.Itoa(capture.requests*16) + "` |",
@@ -75,6 +110,7 @@ func TestServiceInspectionLoadsUnchangedSourceWithoutAddingFindingAnchors(t *tes
 			t.Fatalf("The completed review omitted its full request usage or coverage: %s", row)
 		}
 	}
+
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed != job.Head || len(state.Pending) != 0 {
 		t.Fatal("The inspected review did not complete its original source checkpoint.")
@@ -85,21 +121,28 @@ func TestServiceInspectionFailurePreservesFindingsAndPendingWork(t *testing.T) {
 	fixture, job, capture := newInspectionServiceFixture(t, "missing")
 	_ = fixture.run(t.Context(), job)
 	assertInspectionSnapshotRemoved(t, capture)
-	if len(fixture.state.streamedComments) != 1 || fixture.state.streamedComments[0]["path"] != "network.tf" {
-		t.Fatal("The required evidence failure discarded a finding established before the inspection.")
+	if len(fixture.state.streamedComments) != 1 ||
+		fixture.state.streamedComments[0]["path"] != "network.tf" {
+		t.Fatal(
+			"The required evidence failure discarded a finding established before the inspection.",
+		)
 	}
+
 	for _, submitted := range fixture.state.submittedReviews {
 		if submitted["state"] == "APPROVED" {
 			t.Fatal("A required inspection failure published an approval.")
 		}
 	}
+
 	if fixture.state.lastUpdateCheckRun["conclusion"] == "success" {
 		t.Fatal("A required inspection failure satisfied the review check.")
 	}
+
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed == job.Head || len(state.Pending) == 0 {
 		t.Fatal("A required inspection failure completed the unread source checkpoint.")
 	}
+
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	if len(capture.reviewRequests) != 1 {
@@ -112,10 +155,18 @@ func TestServiceInspectionCancelsPublicationAfterTheHeadChanges(t *testing.T) {
 	if err := fixture.run(t.Context(), job); err != nil {
 		t.Fatal(err)
 	}
+
 	assertInspectionSnapshotRemoved(t, capture)
-	if len(fixture.state.streamedComments) != 0 || len(fixture.state.submittedReviews) != 0 || fixture.state.lastUpdateCheckRun["conclusion"] != "cancelled" {
-		t.Fatalf("The head guard allowed stale inspected findings to publish: comments=%v reviews=%v check=%v", fixture.state.streamedComments, fixture.state.submittedReviews, fixture.state.lastUpdateCheckRun)
+	if len(fixture.state.streamedComments) != 0 || len(fixture.state.submittedReviews) != 0 ||
+		fixture.state.lastUpdateCheckRun["conclusion"] != "cancelled" {
+		t.Fatalf(
+			"The head guard allowed stale inspected findings to publish: comments=%v reviews=%v check=%v",
+			fixture.state.streamedComments,
+			fixture.state.submittedReviews,
+			fixture.state.lastUpdateCheckRun,
+		)
 	}
+
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 	if len(capture.revisions) != 1 || capture.revisions[0] != string(job.Head) {
@@ -132,16 +183,21 @@ func TestServiceInspectionSetupFailureSkipsModelReview(t *testing.T) {
 	if len(capture.reviewRequests) != 0 {
 		t.Fatal("The service requested model review after inspection setup failed.")
 	}
+
 	if fixture.state.lastUpdateCheckRun["conclusion"] == "success" {
 		t.Fatal("Inspection setup failure satisfied the review check.")
 	}
+
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed == job.Head || len(state.Pending) == 0 {
 		t.Fatal("Inspection setup failure completed unread source work.")
 	}
 }
 
-func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture, domain.ReviewJob, *inspectionServiceCapture) {
+func newInspectionServiceFixture(
+	t *testing.T,
+	scenario string,
+) (*serviceFixture, domain.ReviewJob, *inspectionServiceCapture) {
 	t.Helper()
 	snapshotDirectory := t.TempDir()
 	t.Setenv("TMPDIR", snapshotDirectory)
@@ -158,42 +214,72 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 			fixture.state.mu.Unlock()
 		}
 	}
-	githubServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if strings.Contains(request.URL.Path, ".git/") {
-			if request.Method == http.MethodPost {
-				capture.mu.Lock()
-				capture.revisions = append(capture.revisions, head)
-				capture.mu.Unlock()
+
+	githubServer := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if strings.Contains(request.URL.Path, ".git/") {
+				if request.Method == http.MethodPost {
+					capture.mu.Lock()
+					capture.revisions = append(capture.revisions, head)
+					capture.mu.Unlock()
+				}
+
+				gitHandler.ServeHTTP(writer, request)
+
+				return
 			}
 
-			gitHandler.ServeHTTP(writer, request)
+			if request.Method == http.MethodGet {
+				switch {
+				case isPullRequestRead(request):
+					fixture.state.mu.Lock()
+					currentHead := fixture.state.headSHA
+					fixture.state.mu.Unlock()
+					serviceWriteJSON(
+						writer,
+						http.StatusOK,
+						map[string]any{
+							"number":  testPRNumber,
+							"state":   "open",
+							"merged":  false,
+							"draft":   false,
+							"title":   "Rename the upstream bridge",
+							"body":    "The host requires the renamed bridge during network activation.",
+							"commits": 0,
+							"head":    map[string]string{"sha": currentHead},
+							"base":    map[string]string{"sha": base},
+						},
+					)
 
-			return
-		}
-		if request.Method == http.MethodGet {
-			switch {
-			case isPullRequestRead(request):
-				fixture.state.mu.Lock()
-				currentHead := fixture.state.headSHA
-				fixture.state.mu.Unlock()
-				serviceWriteJSON(writer, http.StatusOK, map[string]any{"number": testPRNumber, "state": "open", "merged": false, "draft": false, "title": "Rename the upstream bridge", "body": "The host requires the renamed bridge during network activation.", "commits": 0, "head": map[string]string{"sha": currentHead}, "base": map[string]string{"sha": base}})
-				return
-			case strings.HasSuffix(request.URL.Path, "/commits"):
-				serviceWriteJSON(writer, http.StatusOK, []any{})
-				return
-			case strings.Contains(request.URL.Path, "/contents/") || request.URL.Path == "/search/code":
-				capture.mu.Lock()
-				capture.forbiddenRequests = append(capture.forbiddenRequests, request.URL.RequestURI())
-				capture.mu.Unlock()
-				t.Errorf("The review requested an individual source API: %s", request.URL.RequestURI())
-				http.Error(writer, "Use pinned Git objects.", http.StatusInternalServerError)
-				return
+					return
+				case strings.HasSuffix(request.URL.Path, "/commits"):
+					serviceWriteJSON(writer, http.StatusOK, []any{})
+					return
+				case strings.Contains(
+					request.URL.Path,
+					"/contents/",
+				) || request.URL.Path == "/search/code":
+					capture.mu.Lock()
+					capture.forbiddenRequests = append(
+						capture.forbiddenRequests,
+						request.URL.RequestURI(),
+					)
+					capture.mu.Unlock()
+					t.Errorf(
+						"The review requested an individual source API: %s",
+						request.URL.RequestURI(),
+					)
+					http.Error(writer, "Use pinned Git objects.", http.StatusInternalServerError)
+
+					return
+				}
 			}
-		}
-		fixture.state.mu.Lock()
-		defer fixture.state.mu.Unlock()
-		handleServiceRequest(writer, request, fixture.state)
-	}))
+
+			fixture.state.mu.Lock()
+			defer fixture.state.mu.Unlock()
+			handleServiceRequest(writer, request, fixture.state)
+		}),
+	)
 	t.Cleanup(githubServer.Close)
 	providerServer := inspectionServiceProvider(t, capture, scenario)
 	logger := slog.New(slog.DiscardHandler)
@@ -201,14 +287,17 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	graphqlAddress, err := url.Parse(githubServer.URL + "/graphql")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	providerAddress, err := url.Parse(providerServer.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	policy := policytest.Load(t)
 	examplePrivateKey := serviceTestPrivateKey(t)
 
@@ -218,25 +307,59 @@ func newInspectionServiceFixture(t *testing.T, scenario string) (*serviceFixture
 	githubConfig.GitHubPrivateKey = examplePrivateKey
 	githubConfig.GitHubAPIBaseURL = apiAddress
 	githubConfig.GitHubGraphQLURL = graphqlAddress
-	github := githubapp.NewClient(githubConfig,
-		testgit.Client(t,
-			githubServer),
+	github := githubapp.NewClient(
+		githubConfig,
+		testgit.Client(t, githubServer),
 		func() time.Time {
-			return time.Unix(1_700_000_000,
-				0)
+			return time.Unix(1_700_000_000, 0)
 		},
-		logger)
+		logger,
+	)
 	t.Cleanup(func() { _ = github.Close() })
-	model := openai.NewClient(config.Config{ReviewPolicy: policy, MinimumImportance: 5, Providers: []config.ProviderConfig{{ID: "inspection", API: config.ResponsesAPI, Model: "inspection-service-model", APIKey: "example-credential", BaseURL: providerAddress}}}, providerServer.Client())
+	model := openai.NewClient(
+		config.Config{
+			ReviewPolicy:      policy,
+			MinimumImportance: 5,
+			Providers: []config.ProviderConfig{
+				{
+					ID:      "inspection",
+					API:     config.ResponsesAPI,
+					Model:   "inspection-service-model",
+					APIKey:  "example-credential",
+					BaseURL: providerAddress,
+				},
+			},
+		},
+		providerServer.Client(),
+	)
 	fixture.github = github
 	fixture.model = model
 	var serviceGitHub review.GitHub = github
 	if scenario == "unavailable" {
 		serviceGitHub = struct{ review.GitHub }{GitHub: github}
 	}
-	fixture.service = review.NewService(serviceGitHub, diff.NewCollector(github), model, fixture.reconciler, queue.NewKeyedLocker(), testBotLogin, 5, config.DefaultReviewMaxFiles, config.DefaultReviewMaxChunks, config.DefaultReviewChunkTimeout, nil, testClock(8*time.Second), logger, 1, config.MaximumPromptBytes, policy)
+
+	fixture.service = review.NewService(
+		serviceGitHub,
+		diff.NewCollector(github),
+		model,
+		fixture.reconciler,
+		queue.NewKeyedLocker(),
+		testBotLogin,
+		5,
+		config.DefaultReviewMaxFiles,
+		config.DefaultReviewMaxChunks,
+		config.DefaultReviewChunkTimeout,
+		nil,
+		testClock(8*time.Second),
+		logger,
+		1,
+		config.MaximumPromptBytes,
+		policy,
+	)
 	job := fixture.job()
 	job.Head = domain.HeadSHA(head)
+
 	return fixture, job, capture
 }
 
@@ -260,88 +383,167 @@ func assertInspectionSnapshotRemoved(t *testing.T, capture *inspectionServiceCap
 	}
 }
 
-func inspectionServiceProvider(t *testing.T, capture *inspectionServiceCapture, scenario string) *httptest.Server {
+func inspectionServiceProvider(
+	t *testing.T,
+	capture *inspectionServiceCapture,
+	scenario string,
+) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		payload, err := io.ReadAll(request.Body)
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var native struct {
-			Text struct {
-				Format struct {
-					Name string `json:"name"`
-				} `json:"format"`
-			} `json:"text"`
-		}
-		if err := json.Unmarshal(payload, &native); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		capture.mu.Lock()
-		capture.requests++
-		requestIndex := capture.requests
-		var content []byte
-		switch native.Text.Format.Name {
-		case "review_result":
-			capture.reviewRequests = append(capture.reviewRequests, string(payload))
-			capture.archivesAtReview = append(capture.archivesAtReview, len(capture.revisions))
-			iteration := len(capture.reviewRequests)
-			finding := domain.Finding{RuleID: "functional_correctness", Surface: domain.FindingFile, Path: "network.tf", StartLine: 3, EndLine: 3, Title: "Create the renamed bridge before activation", Body: "The activation script loads settings before creating the renamed bridge. Create the bridge before loading its settings.", Claim: "The activation script requires the renamed bridge before it exists.", Evidence: "bridge = \"uplink\"", Importance: 9}
-			var result domain.ReviewResult
-			result.OmissionsAcceptable = true
-			inspections := []review.InspectionRequest{}
-			if iteration == 1 {
-				inspections = []review.InspectionRequest{{Operation: "search_repository", Query: "sysctl --load", Reason: "Find activation settings in the reviewed repository."}, {Operation: "read_file", Target: "network/activate.sh", Reason: "Check whether activation creates the renamed bridge before loading its settings."}}
-				if scenario == "missing" {
-					result.Findings = []domain.Finding{finding}
-				}
-			} else {
-				if capture.beforeContinuation != nil {
-					capture.beforeContinuation()
-				}
-				result.Findings = []domain.Finding{finding}
-				unsupported := finding
-				unsupported.Path = "network/activate.sh"
-				unsupported.StartLine = 3
-				unsupported.EndLine = 3
-				unsupported.Evidence = "sysctl --load=/etc/sysctl.d/forwarding.conf"
-				result.Findings = append(result.Findings, unsupported)
+	server := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			payload, err := io.ReadAll(request.Body)
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
 			}
-			content, err = json.Marshal(struct {
-				domain.ReviewResult
-				InspectionRequests []review.InspectionRequest `json:"inspection_requests"`
-			}{ReviewResult: result, InspectionRequests: inspections})
-		case "review_report":
-			content, err = json.Marshal(review.Report{Summary: "The change renames the upstream bridge.", Walkthrough: []string{"The host activation uses the renamed bridge."}})
-		case "finding_consolidation":
-			content = []byte(`{"groups":[{"candidates":[1],"restates_open_thread":false,"reason":"The candidate identifies a distinct source defect."}]}`)
-		default:
-			err = fmt.Errorf("unexpected model stage %s", native.Text.Format.Name)
-		}
-		capture.mu.Unlock()
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeInspectionServiceCompletion(writer, string(content), requestIndex)
-	}))
+
+			var native struct {
+				Text struct {
+					Format struct {
+						Name string `json:"name"`
+					} `json:"format"`
+				} `json:"text"`
+			}
+			if err := json.Unmarshal(payload, &native); err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			capture.mu.Lock()
+			capture.requests++
+			requestIndex := capture.requests
+			var content []byte
+			switch native.Text.Format.Name {
+			case "review_result":
+				capture.reviewRequests = append(capture.reviewRequests, string(payload))
+				capture.archivesAtReview = append(capture.archivesAtReview, len(capture.revisions))
+				iteration := len(capture.reviewRequests)
+				finding := domain.Finding{
+					RuleID:     "functional_correctness",
+					Surface:    domain.FindingFile,
+					Path:       "network.tf",
+					StartLine:  3,
+					EndLine:    3,
+					Title:      "Create the renamed bridge before activation",
+					Body:       "The activation script loads settings before creating the renamed bridge. Create the bridge before loading its settings.",
+					Claim:      "The activation script requires the renamed bridge before it exists.",
+					Evidence:   "bridge = \"uplink\"",
+					Importance: 9,
+				}
+				var result domain.ReviewResult
+				result.OmissionsAcceptable = true
+				inspections := []review.InspectionRequest{}
+				if iteration == 1 {
+					inspections = []review.InspectionRequest{
+						{
+							Operation: "search_repository",
+							Query:     "sysctl --load",
+							Reason:    "Find activation settings in the reviewed repository.",
+						},
+						{
+							Operation: "read_file",
+							Target:    "network/activate.sh",
+							Reason:    "Check whether activation creates the renamed bridge before loading its settings.",
+						},
+					}
+					if scenario == "missing" {
+						result.Findings = []domain.Finding{finding}
+					}
+				} else {
+					if capture.beforeContinuation != nil {
+						capture.beforeContinuation()
+					}
+
+					result.Findings = []domain.Finding{finding}
+					unsupported := finding
+					unsupported.Path = "network/activate.sh"
+					unsupported.StartLine = 3
+					unsupported.EndLine = 3
+					unsupported.Evidence = "sysctl --load=/etc/sysctl.d/forwarding.conf"
+					result.Findings = append(result.Findings, unsupported)
+				}
+
+				content, err = json.Marshal(
+					struct {
+						domain.ReviewResult
+						InspectionRequests []review.InspectionRequest `json:"inspection_requests"`
+					}{
+						ReviewResult:       result,
+						InspectionRequests: inspections,
+					},
+				)
+			case "review_report":
+				content, err = json.Marshal(review.Report{
+					Summary:     "The change renames the upstream bridge.",
+					Walkthrough: []string{"The host activation uses the renamed bridge."},
+				})
+			case "finding_consolidation":
+				content = []byte(
+					`{"groups":[{"candidates":[1],"restates_open_thread":false,"reason":"The candidate identifies a distinct source defect."}]}`,
+				)
+			default:
+				err = fmt.Errorf("unexpected model stage %s", native.Text.Format.Name)
+			}
+
+			capture.mu.Unlock()
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			writeInspectionServiceCompletion(writer, string(content), requestIndex)
+		}),
+	)
 	t.Cleanup(server.Close)
+
 	return server
 }
 
-func writeInspectionServiceCompletion(writer http.ResponseWriter, content string, requestIndex int) {
+func writeInspectionServiceCompletion(
+	writer http.ResponseWriter,
+	content string,
+	requestIndex int,
+) {
 	writer.Header().Set("Content-Type", "text/event-stream")
+
 	frames := []map[string]any{
-		{"type": "response.output_text.delta", "delta": content, "output_index": 0, "content_index": 0},
-		{"type": "response.completed", "response": map[string]any{"id": fmt.Sprintf("inspection-response-%d", requestIndex), "object": "response", "status": "completed", "model": "inspection-service-model", "output": []map[string]any{{"type": "message", "role": "assistant", "status": "completed", "content": []map[string]any{{"type": "output_text", "text": content, "annotations": []any{}}}}}, "usage": map[string]int{"input_tokens": 11, "output_tokens": 5, "total_tokens": 16}}},
+		{
+			"type":          "response.output_text.delta",
+			"delta":         content,
+			"output_index":  0,
+			"content_index": 0,
+		},
+		{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id":     fmt.Sprintf("inspection-response-%d", requestIndex),
+				"object": "response",
+				"status": "completed",
+				"model":  "inspection-service-model",
+				"output": []map[string]any{
+					{
+						"type":   "message",
+						"role":   "assistant",
+						"status": "completed",
+						"content": []map[string]any{
+							{"type": "output_text", "text": content, "annotations": []any{}},
+						},
+					},
+				},
+				"usage": map[string]int{
+					"input_tokens":  11,
+					"output_tokens": 5,
+					"total_tokens":  16,
+				},
+			},
+		},
 	}
 	for _, frame := range frames {
 		encoded, err := json.Marshal(frame)
 		if err != nil {
 			return
 		}
+
 		_, _ = fmt.Fprintf(writer, "data: %s\n\n", encoded)
 	}
 }

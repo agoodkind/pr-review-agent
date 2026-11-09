@@ -433,7 +433,9 @@ func (collector *Collector) collectMetadata(
 // failing so a later run retries it rather than silently reviewing more than
 // it was asked to.
 func (collector *Collector) baseUnreachable(err error) bool {
-	if _, unavailable := errors.AsType[*githubapp.IncrementalHistoryUnavailableError](err); unavailable {
+	if _, unavailable := errors.AsType[*githubapp.IncrementalHistoryUnavailableError](
+		err,
+	); unavailable {
 		return true
 	}
 
@@ -462,9 +464,21 @@ func (collector *Collector) compareIncremental(
 	)
 
 	if source, available := collector.source.(incrementalSource); available {
-		comparison, err = source.CompareIncremental(ctx, ref.InstallationID, ref.Repository, base, pullRequest)
+		comparison, err = source.CompareIncremental(
+			ctx,
+			ref.InstallationID,
+			ref.Repository,
+			base,
+			pullRequest,
+		)
 	} else {
-		comparison, err = collector.source.Compare(ctx, ref.InstallationID, ref.Repository, base, pullRequest.Head)
+		comparison, err = collector.source.Compare(
+			ctx,
+			ref.InstallationID,
+			ref.Repository,
+			base,
+			pullRequest.Head,
+		)
 	}
 
 	if err != nil {
@@ -582,6 +596,7 @@ func collectFile(
 				slog.String("path", changedFile.Path),
 				slog.String("err", err.Error()),
 			)
+
 			return FileContext{}, fmt.Errorf("recover patch for %s: %w", changedFile.Path, err)
 		}
 
@@ -620,6 +635,7 @@ func loadCurrentFile(
 			slog.String("path", file.Path),
 			slog.String("err", err.Error()),
 		)
+
 		return false, nil
 	}
 
@@ -631,6 +647,7 @@ func loadCurrentFile(
 			slog.String("path", file.Path),
 			slog.String("err", err.Error()),
 		)
+
 		return false, fmt.Errorf("load content for %s: %w", file.Path, err)
 	}
 

@@ -32,7 +32,13 @@ func TestGitCacheNegotiatesNewHeadsWithoutDownloadingUnchangedObjects(t *testing
 
 	first := domain.HeadSHA(gitCommand(t, fixture.directory, "rev-parse", "HEAD"))
 
-	_, initialReadError := fixture.client.GetFile(t.Context(), 77, fixture.repo, gitFixtureSourcePath, first)
+	_, initialReadError := fixture.client.GetFile(
+		t.Context(),
+		77,
+		fixture.repo,
+		gitFixtureSourcePath,
+		first,
+	)
 	if initialReadError != nil {
 		t.Fatal(initialReadError)
 	}
@@ -40,12 +46,23 @@ func TestGitCacheNegotiatesNewHeadsWithoutDownloadingUnchangedObjects(t *testing
 	fixture.mutex.Lock()
 	initialBytes := fixture.gitBytes
 	fixture.mutex.Unlock()
-	writeGitFixtureFile(t, fixture.directory, gitFixtureSourcePath, "package fixture\nvar Value = 3\n")
+	writeGitFixtureFile(
+		t,
+		fixture.directory,
+		gitFixtureSourcePath,
+		"package fixture\nvar Value = 3\n",
+	)
 	gitCommand(t, fixture.directory, "add", gitFixtureSourcePath)
 	gitCommand(t, fixture.directory, "commit", "-m", "Change one small source")
 	second := domain.HeadSHA(gitCommand(t, fixture.directory, "rev-parse", "HEAD"))
 
-	content, err := fixture.client.GetFile(t.Context(), 77, fixture.repo, gitFixtureSourcePath, second)
+	content, err := fixture.client.GetFile(
+		t.Context(),
+		77,
+		fixture.repo,
+		gitFixtureSourcePath,
+		second,
+	)
 	if err != nil || string(content) != "package fixture\nvar Value = 3\n" {
 		t.Fatalf("new head content = %q: %v", content, err)
 	}
@@ -54,27 +71,40 @@ func TestGitCacheNegotiatesNewHeadsWithoutDownloadingUnchangedObjects(t *testing
 	defer fixture.mutex.Unlock()
 
 	additionalBytes := fixture.gitBytes - initialBytes
-	if initialBytes < 1024*1024 || additionalBytes >= initialBytes/10 || fixture.contentRequests != 0 {
-		t.Fatalf("initial Git bytes=%d, incremental Git bytes=%d, content API requests=%d, haves=%v",
+	if initialBytes < 1024*1024 || additionalBytes >= initialBytes/10 ||
+		fixture.contentRequests != 0 {
+		t.Fatalf(
+			"initial Git bytes=%d, incremental Git bytes=%d, content API requests=%d, haves=%v",
 			initialBytes,
 			additionalBytes,
 			fixture.contentRequests,
-			fixture.haves)
+			fixture.haves,
+		)
 	}
 
-	t.Logf("initial Git bytes=%d; new-head Git bytes=%d; unchanged object bytes=%d; content API requests=0",
+	t.Logf(
+		"initial Git bytes=%d; new-head Git bytes=%d; unchanged object bytes=%d; content API requests=0",
 		initialBytes,
 		additionalBytes,
-		len(unchanged))
+		len(unchanged),
+	)
 }
 
 // TestGetFileReturnsGitSubmoduleReference verifies the parent repository
 // gitlink and URL.
 func TestGetFileReturnsGitSubmoduleReference(t *testing.T) {
 	fixture := newGitFixture(t)
-	content, err := fixture.client.GetFile(t.Context(), 77, fixture.repo, "lib/module", fixture.head)
+	content, err := fixture.client.GetFile(
+		t.Context(),
+		77,
+		fixture.repo,
+		"lib/module",
+		fixture.head,
+	)
 
-	want := "Submodule repository: https://example.invalid/nested.git\nSubproject commit " + string(fixture.root) + "\n"
+	want := "Submodule repository: https://example.invalid/nested.git\nSubproject commit " + string(
+		fixture.root,
+	) + "\n"
 	if err != nil || string(content) != want {
 		t.Fatalf("gitlink content = %q, want %q: %v", content, want, err)
 	}
@@ -90,12 +120,14 @@ func TestGetFilePreservesTheExistingContentLimit(t *testing.T) {
 	head := domain.HeadSHA(gitCommand(t, fixture.directory, "rev-parse", "HEAD"))
 
 	content, err := fixture.client.GetFile(t.Context(), 77, fixture.repo, "large.txt", head)
-	if err == nil || len(content) != 0 || !strings.Contains(err.Error(), "content response byte limit") {
+	if err == nil || len(content) != 0 ||
+		!strings.Contains(err.Error(), "content response byte limit") {
 		t.Fatalf("oversized content = %d bytes: %v", len(content), err)
 	}
 
 	_, comparisonError := fixture.client.Compare(t.Context(), 77, fixture.repo, fixture.head, head)
-	if comparisonError == nil || !strings.Contains(comparisonError.Error(), "content response byte limit") {
+	if comparisonError == nil ||
+		!strings.Contains(comparisonError.Error(), "content response byte limit") {
 		t.Fatalf("oversized text comparison must preserve the content limit: %v", comparisonError)
 	}
 }
@@ -104,9 +136,14 @@ func TestGetFilePreservesTheExistingContentLimit(t *testing.T) {
 // identity separation and bounded cache entries.
 func TestGitCacheSeparatesInstallationsAndEvictsInactiveRepositories(t *testing.T) {
 	fixture := newGitFixture(t)
+
 	for installation := int64(1); installation <= 33; installation++ {
 		_, installationError := fixture.client.GetFile(
-			t.Context(), installation, fixture.repo, gitFixtureSourcePath, fixture.head,
+			t.Context(),
+			installation,
+			fixture.repo,
+			gitFixtureSourcePath,
+			fixture.head,
 		)
 		if installationError != nil {
 			t.Fatal(installationError)
@@ -121,12 +158,24 @@ func TestGitCacheSeparatesInstallationsAndEvictsInactiveRepositories(t *testing.
 		t.Fatalf("separate installation transfers=%d, want 33", before)
 	}
 
-	_, currentErr := fixture.client.GetFile(t.Context(), 33, fixture.repo, gitFixtureSourcePath, fixture.head)
+	_, currentErr := fixture.client.GetFile(
+		t.Context(),
+		33,
+		fixture.repo,
+		gitFixtureSourcePath,
+		fixture.head,
+	)
 	if currentErr != nil {
 		t.Fatal(currentErr)
 	}
 
-	_, evictedErr := fixture.client.GetFile(t.Context(), 1, fixture.repo, gitFixtureSourcePath, fixture.head)
+	_, evictedErr := fixture.client.GetFile(
+		t.Context(),
+		1,
+		fixture.repo,
+		gitFixtureSourcePath,
+		fixture.head,
+	)
 	if evictedErr != nil {
 		t.Fatal(evictedErr)
 	}
@@ -135,19 +184,31 @@ func TestGitCacheSeparatesInstallationsAndEvictsInactiveRepositories(t *testing.
 	defer fixture.mutex.Unlock()
 
 	if fixture.transfers != 34 || fixture.contentRequests != 0 {
-		t.Fatalf("cache transfers=%d, content API requests=%d", fixture.transfers, fixture.contentRequests)
+		t.Fatalf(
+			"cache transfers=%d, content API requests=%d",
+			fixture.transfers,
+			fixture.contentRequests,
+		)
 	}
 
-	t.Log("33 installation identities require 33 transfers; " +
-		"the cached identity requires 0; the evicted identity requires 1")
+	t.Log(
+		"33 installation identities require 33 transfers; " +
+			"the cached identity requires 0; the evicted identity requires 1",
+	)
 }
 
 // TestGitComparisonBatchesMissingAncestry verifies bounded transfers through
 // a long history.
 func TestGitComparisonBatchesMissingAncestry(t *testing.T) {
 	fixture := newGitFixture(t)
+
 	for index := range 100 {
-		writeGitFixtureFile(t, fixture.directory, "history.txt", strings.Repeat("history\n", index+1))
+		writeGitFixtureFile(
+			t,
+			fixture.directory,
+			"history.txt",
+			strings.Repeat("history\n", index+1),
+		)
 		gitCommand(t, fixture.directory, "add", "history.txt")
 		gitCommand(t, fixture.directory, "commit", "-m", "Extend feature history")
 	}
@@ -156,17 +217,29 @@ func TestGitComparisonBatchesMissingAncestry(t *testing.T) {
 
 	comparison, err := fixture.client.Compare(t.Context(), 77, fixture.repo, fixture.base, head)
 	if err != nil || comparison.MergeBase != fixture.root {
-		t.Fatalf("long-history merge base = %s, want %s: %v", comparison.MergeBase, fixture.root, err)
+		t.Fatalf(
+			"long-history merge base = %s, want %s: %v",
+			comparison.MergeBase,
+			fixture.root,
+			err,
+		)
 	}
 
 	fixture.mutex.Lock()
 	defer fixture.mutex.Unlock()
 
 	if fixture.transfers > 5 || fixture.contentRequests != 0 {
-		t.Fatalf("100 commits required %d transfers and %d content API requests", fixture.transfers, fixture.contentRequests)
+		t.Fatalf(
+			"100 commits required %d transfers and %d content API requests",
+			fixture.transfers,
+			fixture.contentRequests,
+		)
 	}
 
-	t.Logf("100 additional commits require %d Git transfers; content API requests=0", fixture.transfers)
+	t.Logf(
+		"100 additional commits require %d Git transfers; content API requests=0",
+		fixture.transfers,
+	)
 }
 
 // TestGitComparisonCountsSourceRowsThatResembleDiffHeaders verifies complete
@@ -183,7 +256,8 @@ func TestGitComparisonCountsSourceRowsThatResembleDiffHeaders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(comparison.Files) != 1 || comparison.Files[0].Additions != 1 || comparison.Files[0].Deletions != 1 {
+	if len(comparison.Files) != 1 || comparison.Files[0].Additions != 1 ||
+		comparison.Files[0].Deletions != 1 {
 		t.Fatalf("complete local patch counts = %+v", comparison.Files)
 	}
 }
