@@ -29,7 +29,11 @@ func TestLivePartialReviewSurvivesPromptFailureAndInvalidSavedState(t *testing.T
 	if err != nil {
 		t.Fatal("The private evidence directory could not be created.")
 	}
-	logFile, err := os.OpenFile(filepath.Join(directory, "service.ndjson"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	logFile, err := os.OpenFile(
+		filepath.Join(directory, "service.ndjson"),
+		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
+		0o600,
+	)
 	if err != nil {
 		t.Fatal("The private service log could not be created.")
 	}
@@ -41,7 +45,11 @@ func TestLivePartialReviewSurvivesPromptFailureAndInvalidSavedState(t *testing.T
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	before := liveReviewBodyCapture(t, ctx, client, opts, repo)
-	if !liveReviewBodyFixture(t, opts, before.PullRequest.Title) || githubapp.LatestDecisionReview(before.Reviews, cfg.GitHubBotLogin).State != "APPROVED" {
+	if !liveReviewBodyFixture(
+		t,
+		opts,
+		before.PullRequest.Title,
+	) || githubapp.LatestDecisionReview(before.Reviews, cfg.GitHubBotLogin).State != "APPROVED" {
 		t.Fatal("The regression requires a dedicated fixture with an existing bot approval.")
 	}
 	var original githubapp.IssueComment
@@ -51,7 +59,10 @@ func TestLivePartialReviewSurvivesPromptFailureAndInvalidSavedState(t *testing.T
 		}
 	}
 	state, valid := marker.DecodeState(original.Body)
-	if original.ID == 0 || !valid || !strings.Contains(original.Body, "<!-- pr-review-agent:metadata:v1 ") {
+	if original.ID == 0 || !valid || !strings.Contains(
+		original.Body,
+		"<!-- pr-review-agent:metadata:v1 ",
+	) {
 		t.Fatal("The fixture requires an existing summary with valid saved metadata.")
 	}
 	if err := writeReviewBodyBackup(filepath.Join(directory, "before.json"), before); err != nil {
@@ -60,7 +71,13 @@ func TestLivePartialReviewSurvivesPromptFailureAndInvalidSavedState(t *testing.T
 	t.Cleanup(func() {
 		recovery, stop := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer stop()
-		if _, err := client.UpdateIssueComment(recovery, opts.installationID, repo, original.ID, original.Body); err != nil {
+		if _, err := client.UpdateIssueComment(
+			recovery,
+			opts.installationID,
+			repo,
+			original.ID,
+			original.Body,
+		); err != nil {
 			t.Error("The original fixture summary could not be restored.")
 		}
 		after := liveReviewBodyCapture(t, recovery, client, opts, repo)
@@ -81,11 +98,26 @@ func TestLivePartialReviewSurvivesPromptFailureAndInvalidSavedState(t *testing.T
 		t.Fatal("The fixture state marker is not separate from its saved report.")
 	}
 	seeded := strings.TrimSpace(prefix) + "\n" + marker.EncodeState(state)
-	if _, err := client.UpdateIssueComment(ctx, opts.installationID, repo, original.ID, seeded); err != nil {
+	if _, err := client.UpdateIssueComment(
+		ctx,
+		opts.installationID,
+		repo,
+		original.ID,
+		seeded,
+	); err != nil {
 		t.Fatal("The partial checkpoint could not be stored in GitHub.")
 	}
 	for range 2 {
-		job := domain.ReviewJob{PullRequestRef: domain.PullRequestRef{Repository: repo, Number: opts.pullRequest, InstallationID: opts.installationID, Head: before.PullRequest.Head}, DeliveryID: "partial-progress-failure-" + rand.Text(), Forced: true}
+		job := domain.ReviewJob{
+			PullRequestRef: domain.PullRequestRef{
+				Repository:     repo,
+				Number:         opts.pullRequest,
+				InstallationID: opts.installationID,
+				Head:           before.PullRequest.Head,
+			},
+			DeliveryID: "partial-progress-failure-" + rand.Text(),
+			Forced:     true,
+		}
 		admitted, accepted, err := service.Admit(ctx, job)
 		if err != nil || !accepted {
 			t.Fatal("The real GitHub service did not admit the prompt-budget regression.")
@@ -96,10 +128,16 @@ func TestLivePartialReviewSurvivesPromptFailureAndInvalidSavedState(t *testing.T
 		}
 		body := livePartialSummary(t, ctx, client, opts, original.ID)
 		stored, valid := marker.DecodeState(body)
-		if !valid || stored.Status != marker.StateFailed || stored.RunID != job.DeliveryID || stored.LastReviewed != "" || !reflect.DeepEqual(stored.Completed, state.Completed) || !reflect.DeepEqual(stored.Pending, state.Pending) {
+		if !valid || stored.Status != marker.StateFailed || stored.RunID != job.DeliveryID || stored.LastReviewed != "" || !reflect.DeepEqual(
+			stored.Completed,
+			state.Completed,
+		) || !reflect.DeepEqual(stored.Pending, state.Pending) {
 			t.Fatal("The failed run discarded the partial checkpoint.")
 		}
-		if !strings.HasPrefix(body, strings.TrimSpace(prefix)) || strings.Count(body, "<!-- pr-review-agent:maintenance-failure:start -->") != 1 {
+		if !strings.HasPrefix(
+			body,
+			strings.TrimSpace(prefix),
+		) || strings.Count(body, "<!-- pr-review-agent:maintenance-failure:start -->") != 1 {
 			t.Fatal("The failed run erased saved results or repeated its status notice.")
 		}
 	}
@@ -107,25 +145,52 @@ func TestLivePartialReviewSurvivesPromptFailureAndInvalidSavedState(t *testing.T
 	if _, valid := marker.DecodeState(invalid); valid {
 		t.Fatal("The damaged checkpoint must fail state decoding.")
 	}
-	if _, err := client.UpdateIssueComment(ctx, opts.installationID, repo, original.ID, invalid); err != nil {
+	if _, err := client.UpdateIssueComment(
+		ctx,
+		opts.installationID,
+		repo,
+		original.ID,
+		invalid,
+	); err != nil {
 		t.Fatal("The damaged checkpoint could not be stored in GitHub.")
 	}
-	job := domain.ReviewJob{PullRequestRef: domain.PullRequestRef{Repository: repo, Number: opts.pullRequest, InstallationID: opts.installationID, Head: before.PullRequest.Head}, DeliveryID: "partial-progress-invalid-" + rand.Text(), Forced: true}
+	job := domain.ReviewJob{
+		PullRequestRef: domain.PullRequestRef{
+			Repository:     repo,
+			Number:         opts.pullRequest,
+			InstallationID: opts.installationID,
+			Head:           before.PullRequest.Head,
+		},
+		DeliveryID: "partial-progress-invalid-" + rand.Text(),
+		Forced:     true,
+	}
 	admitted, accepted, err := service.Admit(ctx, job)
 	if err != nil || !accepted {
 		t.Fatal("The real GitHub service did not admit the invalid-state regression.")
 	}
 	outcome, runErr := service.RunWithOutcome(ctx, admitted)
-	if runErr == nil || outcome.Disposition != domain.AssessmentFailed || !strings.Contains(runErr.Error(), "saved review state") {
+	if runErr == nil || outcome.Disposition != domain.AssessmentFailed || !strings.Contains(
+		runErr.Error(),
+		"saved review state",
+	) {
 		t.Fatal("The invalid checkpoint did not stop the review before analysis.")
 	}
 	if livePartialSummary(t, ctx, client, opts, original.ID) != invalid {
 		t.Fatal("The failed read replaced the original saved review data.")
 	}
-	t.Logf("The real GitHub regression retained saved results across repeated prompt failures and an invalid checkpoint. Private evidence: %s", directory)
+	t.Logf(
+		"The real GitHub regression retained saved results across repeated prompt failures and an invalid checkpoint. Private evidence: %s",
+		directory,
+	)
 }
 
-func livePartialSummary(t *testing.T, ctx context.Context, client *githubapp.Client, opts reviewBodyOptions, identifier int64) string {
+func livePartialSummary(
+	t *testing.T,
+	ctx context.Context,
+	client *githubapp.Client,
+	opts reviewBodyOptions,
+	identifier int64,
+) string {
 	t.Helper()
 	repo, err := reviewBodyRepository(opts.repository)
 	if err != nil {

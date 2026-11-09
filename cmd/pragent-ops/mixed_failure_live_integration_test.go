@@ -34,29 +34,66 @@ func TestLiveMixedFailureReportsTheFinalFailedOperation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	before := liveReviewBodyCapture(t, ctx, github, opts, repo)
-	if before.PullRequest.State != "closed" || !before.PullRequest.Draft || !liveReviewBodyFixture(t, opts, before.PullRequest.Title) {
+	if before.PullRequest.State != "closed" || !before.PullRequest.Draft || !liveReviewBodyFixture(
+		t,
+		opts,
+		before.PullRequest.Title,
+	) {
 		t.Fatal("Select a closed draft fixture for the mixed failure regression.")
 	}
-	reference := domain.PullRequestRef{Repository: repo, InstallationID: opts.installationID, Number: opts.pullRequest, Head: before.PullRequest.Head}
+	reference := domain.PullRequestRef{
+		Repository:     repo,
+		InstallationID: opts.installationID,
+		Number:         opts.pullRequest,
+		Head:           before.PullRequest.Head,
+	}
 	original := liveApprovalSummary(t, ctx, github, reference, cfg.GitHubBotLogin)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
-		if _, err := github.UpdateIssueComment(cleanupCtx, opts.installationID, repo, original.ID, original.Body); err != nil {
+		if _, err := github.UpdateIssueComment(
+			cleanupCtx,
+			opts.installationID,
+			repo,
+			original.ID,
+			original.Body,
+		); err != nil {
 			t.Error("Restore the fixture summary:", err)
 		}
 	})
-	_, providerErr := openai.NewClient(cfg, http.DefaultClient).Review(ctx, "Review this identity function: func identity(value int) int { return value }")
+	_, providerErr := openai.NewClient(cfg, http.DefaultClient).Review(
+		ctx,
+		"Review this identity function: func identity(value int) int { return value }",
+	)
 	var providerFailure *openai.ProviderError
-	if !errors.As(providerErr, &providerFailure) || providerFailure.StatusCode != http.StatusUnauthorized {
+	if !errors.As(
+		providerErr,
+		&providerFailure,
+	) || providerFailure.StatusCode != http.StatusUnauthorized {
 		t.Fatal("The real provider did not return the intended authentication refusal.")
 	}
-	_, publicationErr := github.SubmitReview(ctx, opts.installationID, repo, opts.pullRequest, githubapp.SubmitReviewRequest{CommitID: reference.Head, Event: domain.ReviewDecisionRequestChanges})
+	_, publicationErr := github.SubmitReview(
+		ctx,
+		opts.installationID,
+		repo,
+		opts.pullRequest,
+		githubapp.SubmitReviewRequest{
+			CommitID: reference.Head,
+			Event:    domain.ReviewDecisionRequestChanges,
+		},
+	)
 	var publicationFailure githubapp.APIError
-	if !errors.As(publicationErr, &publicationFailure) || publicationFailure.StatusCode != http.StatusUnprocessableEntity {
+	if !errors.As(
+		publicationErr,
+		&publicationFailure,
+	) || publicationFailure.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatal("GitHub did not return the intended empty-review refusal.")
 	}
-	job := domain.ReviewJob{PullRequestRef: reference, DeliveryID: "live-mixed-failure-" + rand.Text(), Forced: true}
+	job := domain.ReviewJob{
+		PullRequestRef: reference,
+		DeliveryID:     "live-mixed-failure-" + rand.Text(),
+		Forced:         true,
+	}
 	job, admitted, err := service.Admit(ctx, job)
 	if err != nil || !admitted {
 		t.Fatal("The mixed failure check could not be admitted.")
@@ -76,11 +113,22 @@ func TestLiveMixedFailureReportsTheFinalFailedOperation(t *testing.T) {
 	}
 	explanation, err := cfg.ReviewPolicy.Render("failure.service", data)
 	if err != nil || !strings.HasPrefix(check.Summary, explanation) {
-		t.Fatal("The final GitHub publication error incorrectly blamed the earlier provider failure.")
+		t.Fatal(
+			"The final GitHub publication error incorrectly blamed the earlier provider failure.",
+		)
 	}
 	after := liveReviewBodyCapture(t, ctx, github, opts, repo)
-	if !reflect.DeepEqual(before.PullRequest, after.PullRequest) || !reflect.DeepEqual(before.Threads, after.Threads) || !reflect.DeepEqual(before.Reviews, after.Reviews) || len(before.Comments) != len(after.Comments) {
+	if !reflect.DeepEqual(before.PullRequest, after.PullRequest) || !reflect.DeepEqual(
+		before.Threads,
+		after.Threads,
+	) || !reflect.DeepEqual(
+		before.Reviews,
+		after.Reviews,
+	) || len(before.Comments) != len(after.Comments) {
 		t.Fatal("The mixed failure changed fixture metadata, reviews, threads, or comment count.")
 	}
-	t.Logf("Check %d attributed the final failure to the GitHub operation after the real provider HTTP 401.", job.CheckRunID)
+	t.Logf(
+		"Check %d attributed the final failure to the GitHub operation after the real provider HTTP 401.",
+		job.CheckRunID,
+	)
 }

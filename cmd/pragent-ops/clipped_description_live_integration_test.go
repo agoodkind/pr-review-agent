@@ -28,8 +28,13 @@ func TestLiveClippedContrastsRemainBlockingInDescription(t *testing.T) {
 	defer cancel()
 	bad := clippedLivePassage(t, "clipped-contrast-bad.txt")
 	fixed := clippedLivePassage(t, "clipped-contrast-corrected.txt")
-	if strings.Contains(fixture.original.Body, bad) || strings.Count(fixed, "\n") > strings.Count(bad, "\n") || bad == fixed {
-		t.Fatal("The description fixture requires clean original prose and a distinct replacement within the original line count.")
+	if strings.Contains(
+		fixture.original.Body,
+		bad,
+	) || strings.Count(fixed, "\n") > strings.Count(bad, "\n") || bad == fixed {
+		t.Fatal(
+			"The description fixture requires clean original prose and a distinct replacement within the original line count.",
+		)
 	}
 	fixture.awaitMetadata(t, ctx, fixture.original.Body, "APPROVED", 0)
 	expectedBody := fixture.original.Body
@@ -52,28 +57,54 @@ func TestLiveClippedContrastsRemainBlockingInDescription(t *testing.T) {
 	fixture.editBody(t, ctx, expectedBody, fixture.original.Body)
 	expectedBody = fixture.original.Body
 	fixture.awaitMetadata(t, ctx, expectedBody, "APPROVED", 0)
-	t.Logf("The deployed description review retained both occurrences, blocked the remaining occurrence after one correction, and approved the restored description on %s#%d.", fixture.opts.repository, fixture.opts.pullRequest)
+	t.Logf(
+		"The deployed description review retained both occurrences, blocked the remaining occurrence after one correction, and approved the restored description on %s#%d.",
+		fixture.opts.repository,
+		fixture.opts.pullRequest,
+	)
 }
 
-func (fixture *clippedLiveFixture) editBody(t *testing.T, ctx context.Context, expected, replacement string) {
+func (fixture *clippedLiveFixture) editBody(
+	t *testing.T,
+	ctx context.Context,
+	expected string,
+	replacement string,
+) {
 	t.Helper()
 	current := fixture.pullRequest(t, ctx)
 	if current.Head.SHA != fixture.head || current.Head.Ref != fixture.original.Head.Ref || current.Title != fixture.original.Title || current.Body != expected {
-		t.Fatal("The fixture changed concurrently. The description edit will preserve the external change.")
+		t.Fatal(
+			"The fixture changed concurrently. The description edit will preserve the external change.",
+		)
 	}
 	if expected == replacement {
 		return
 	}
 	var updated clippedLivePR
-	clippedLiveAPI(t, ctx, http.MethodPatch, fmt.Sprintf("repos/%s/pulls/%d", fixture.opts.repository, fixture.opts.pullRequest), struct {
-		Body string `json:"body"`
-	}{replacement}, &updated)
+	clippedLiveAPI(
+		t,
+		ctx,
+		http.MethodPatch,
+		fmt.Sprintf("repos/%s/pulls/%d", fixture.opts.repository, fixture.opts.pullRequest),
+		struct {
+			Body string `json:"body"`
+		}{
+			replacement,
+		},
+		&updated,
+	)
 	if updated.Head.SHA != fixture.head || updated.Head.Ref != fixture.original.Head.Ref || updated.Title != fixture.original.Title || updated.Body != replacement {
 		t.Fatal("The updated description did not retain the expected head, branch, and title.")
 	}
 }
 
-func (fixture *clippedLiveFixture) awaitMetadata(t *testing.T, parent context.Context, body, decision string, count int) []domain.Finding {
+func (fixture *clippedLiveFixture) awaitMetadata(
+	t *testing.T,
+	parent context.Context,
+	body string,
+	decision string,
+	count int,
+) []domain.Finding {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 6*time.Minute)
 	defer cancel()
@@ -87,7 +118,13 @@ func (fixture *clippedLiveFixture) awaitMetadata(t *testing.T, parent context.Co
 		findings, revisionCurrent := clippedLiveMetadata(snapshot, fixture.bot)
 		actual := githubapp.LatestDecisionReview(snapshot.Reviews, fixture.bot).State
 		completed := validateReviewBodySummary(snapshot, fixture.bot) == nil
-		next := fmt.Sprintf("The latest decision is %s. The summary completion is %t. The metadata revision match is %t. The summary contains %d metadata findings.", actual, completed, revisionCurrent, len(findings))
+		next := fmt.Sprintf(
+			"The latest decision is %s. The summary completion is %t. The metadata revision match is %t. The summary contains %d metadata findings.",
+			actual,
+			completed,
+			revisionCurrent,
+			len(findings),
+		)
 		if next != last {
 			t.Log(next)
 			last = next
@@ -100,7 +137,12 @@ func (fixture *clippedLiveFixture) awaitMetadata(t *testing.T, parent context.Co
 		case <-time.After(5 * time.Second):
 		}
 	}
-	t.Fatalf("The description review did not produce %s with %d metadata findings within six minutes. %s", decision, count, last)
+	t.Fatalf(
+		"The description review did not produce %s with %d metadata findings within six minutes. %s",
+		decision,
+		count,
+		last,
+	)
 	return nil
 }
 
@@ -122,20 +164,37 @@ func clippedLiveMetadata(snapshot reviewBodySnapshot, bot string) ([]domain.Find
 			Findings []domain.Finding `json:"findings"`
 		}
 		if found && err == nil && json.Unmarshal(decoded, &record) == nil {
-			return record.Findings, record.Head == snapshot.PullRequest.Head && record.Revision == diff.PullRequestRevision(snapshot.PullRequest)
+			return record.Findings, record.Head == snapshot.PullRequest.Head && record.Revision == diff.PullRequestRevision(
+				snapshot.PullRequest,
+			)
 		}
 	}
 	return nil, false
 }
 
-func clippedLiveAssertMetadataAnchors(t *testing.T, findings []domain.Finding, document, passage string) {
+func clippedLiveAssertMetadataAnchors(
+	t *testing.T,
+	findings []domain.Finding,
+	document string,
+	passage string,
+) {
 	t.Helper()
 	var anchors []githubapp.ReviewThread
 	for _, finding := range findings {
 		if finding.EffectiveSurface() != domain.FindingPullRequestDescription || finding.RuleID != "clipped_contrasts" || finding.Importance != 10 {
-			t.Fatal("The description findings must apply the clipped_contrasts rule with importance ten.")
+			t.Fatal(
+				"The description findings must apply the clipped_contrasts rule with importance ten.",
+			)
 		}
-		anchors = append(anchors, githubapp.ReviewThread{RootComment: domain.ReviewComment{StartLine: finding.StartLine, EndLine: finding.EndLine}})
+		anchors = append(
+			anchors,
+			githubapp.ReviewThread{
+				RootComment: domain.ReviewComment{
+					StartLine: finding.StartLine,
+					EndLine:   finding.EndLine,
+				},
+			},
+		)
 	}
 	clippedLiveAssertAnchors(t, anchors, document, passage)
 }

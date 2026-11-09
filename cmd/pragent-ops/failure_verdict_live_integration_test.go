@@ -66,7 +66,11 @@ func TestLiveFailurePresentationPreservesSavedReview(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	before := liveReviewBodyCapture(t, ctx, github, opts, repo)
-	if before.PullRequest.State != "open" || before.PullRequest.Draft || !liveReviewBodyFixture(t, opts, before.PullRequest.Title) {
+	if before.PullRequest.State != "open" || before.PullRequest.Draft || !liveReviewBodyFixture(
+		t,
+		opts,
+		before.PullRequest.Title,
+	) {
 		t.Fatal("The failure presentation regression requires an explicit open fixture.")
 	}
 	if githubapp.LatestDecisionReview(before.Reviews, cfg.GitHubBotLogin).State != "APPROVED" {
@@ -85,7 +89,12 @@ func TestLiveFailurePresentationPreservesSavedReview(t *testing.T) {
 	if original.ID == 0 || !valid {
 		t.Fatal("The fixture requires an existing summary and valid saved review state.")
 	}
-	details := liveDetailsSection(t, original.Body, "<details>\n<summary>Review details</summary>", "</details>")
+	details := liveDetailsSection(
+		t,
+		original.Body,
+		"<details>\n<summary>Review details</summary>",
+		"</details>",
+	)
 	metadata := liveDetailsSection(t, original.Body, "<!-- pr-review-agent:metadata:v1 ", " -->")
 	directory, err := os.MkdirTemp("", "pragent-failure-presentation-live-")
 	if err != nil || writeReviewBodyBackup(filepath.Join(directory, "before.json"), before) != nil {
@@ -94,28 +103,70 @@ func TestLiveFailurePresentationPreservesSavedReview(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanupCancel()
-		if _, restoreErr := github.UpdateIssueComment(cleanupCtx, opts.installationID, repo, original.ID, original.Body); restoreErr != nil {
+		if _, restoreErr := github.UpdateIssueComment(
+			cleanupCtx,
+			opts.installationID,
+			repo,
+			original.ID,
+			original.Body,
+		); restoreErr != nil {
 			t.Error("The original fixture summary could not be restored.")
 		}
-		if _, restoreErr := github.SubmitReview(cleanupCtx, opts.installationID, repo, opts.pullRequest, githubapp.SubmitReviewRequest{CommitID: before.PullRequest.Head, Event: domain.ReviewDecisionApprove}); restoreErr != nil {
+		if _, restoreErr := github.SubmitReview(
+			cleanupCtx,
+			opts.installationID,
+			repo,
+			opts.pullRequest,
+			githubapp.SubmitReviewRequest{
+				CommitID: before.PullRequest.Head,
+				Event:    domain.ReviewDecisionApprove,
+			},
+		); restoreErr != nil {
 			t.Error("The fixture app approval could not be restored.")
 		}
 	})
 	prepared := strings.Replace(original.Body, metadata, "", 1)
-	prepared = strings.Replace(prepared, "## Review", review.RenderProgressBody(before.PullRequest.Head, len(prior.Pending)), 1)
-	if _, err := github.UpdateIssueComment(ctx, opts.installationID, repo, original.ID, prepared); err != nil {
+	prepared = strings.Replace(
+		prepared,
+		"## Review",
+		review.RenderProgressBody(before.PullRequest.Head, len(prior.Pending)),
+		1,
+	)
+	if _, err := github.UpdateIssueComment(
+		ctx,
+		opts.installationID,
+		repo,
+		original.ID,
+		prepared,
+	); err != nil {
 		t.Fatal("The saved progress state could not be prepared on the dedicated fixture.")
 	}
-	rejection, err := github.SubmitReview(ctx, opts.installationID, repo, opts.pullRequest, githubapp.SubmitReviewRequest{
-		CommitID: before.PullRequest.Head, Event: domain.ReviewDecisionRequestChanges,
-		Body: "The dedicated fixture requires reassessment of its review metadata.\n\n" + marker.Review(before.PullRequest.Head, domain.ReviewDecisionRequestChanges),
-	})
+	rejection, err := github.SubmitReview(
+		ctx,
+		opts.installationID,
+		repo,
+		opts.pullRequest,
+		githubapp.SubmitReviewRequest{
+			CommitID: before.PullRequest.Head,
+			Event:    domain.ReviewDecisionRequestChanges,
+			Body: "The dedicated fixture requires reassessment of its review metadata.\n\n" + marker.Review(
+				before.PullRequest.Head,
+				domain.ReviewDecisionRequestChanges,
+			),
+		},
+	)
 	if err != nil {
 		t.Fatal("The dedicated fixture rejection could not be created.")
 	}
 	job := domain.ReviewJob{
-		PullRequestRef: domain.PullRequestRef{Repository: repo, Number: opts.pullRequest, InstallationID: opts.installationID, Head: before.PullRequest.Head},
-		DeliveryID:     "live-failure-presentation-" + rand.Text(), RefreshVerdict: true,
+		PullRequestRef: domain.PullRequestRef{
+			Repository:     repo,
+			Number:         opts.pullRequest,
+			InstallationID: opts.installationID,
+			Head:           before.PullRequest.Head,
+		},
+		DeliveryID:     "live-failure-presentation-" + rand.Text(),
+		RefreshVerdict: true,
 	}
 	job, admitted, err := service.Admit(ctx, job)
 	if err != nil || !admitted {
@@ -126,10 +177,21 @@ func TestLiveFailurePresentationPreservesSavedReview(t *testing.T) {
 		t.Fatal("The real invalid provider credential did not produce a failed assessment.")
 	}
 	after := liveReviewBodyCapture(t, ctx, github, opts, repo)
-	if !reflect.DeepEqual(before.PullRequest, after.PullRequest) || !reflect.DeepEqual(before.Threads, after.Threads) || len(before.Comments) != len(after.Comments) {
-		t.Fatal("The failed review changed PR metadata, inline threads, or the number of top-level comments.")
+	if !reflect.DeepEqual(before.PullRequest, after.PullRequest) || !reflect.DeepEqual(
+		before.Threads,
+		after.Threads,
+	) || len(before.Comments) != len(after.Comments) {
+		t.Fatal(
+			"The failed review changed PR metadata, inline threads, or the number of top-level comments.",
+		)
 	}
-	liveFailureAssertReviews(t, append(before.Reviews, rejection), after.Reviews, rejection, "CHANGES_REQUESTED")
+	liveFailureAssertReviews(
+		t,
+		append(before.Reviews, rejection),
+		after.Reviews,
+		rejection,
+		"CHANGES_REQUESTED",
+	)
 	var current githubapp.IssueComment
 	for _, comment := range after.Comments {
 		if comment.ID == original.ID && comment.Author == original.Author {
@@ -137,25 +199,65 @@ func TestLiveFailurePresentationPreservesSavedReview(t *testing.T) {
 		}
 	}
 	state, valid := marker.DecodeState(current.Body)
-	if !valid || state.Status != marker.StateFailed || state.LastReviewed != prior.LastReviewed || !reflect.DeepEqual(state.Pending, prior.Pending) || !reflect.DeepEqual(state.Completed, prior.Completed) || !reflect.DeepEqual(state.Unread, prior.Unread) {
+	if !valid || state.Status != marker.StateFailed || state.LastReviewed != prior.LastReviewed || !reflect.DeepEqual(
+		state.Pending,
+		prior.Pending,
+	) || !reflect.DeepEqual(
+		state.Completed,
+		prior.Completed,
+	) || !reflect.DeepEqual(state.Unread, prior.Unread) {
 		t.Fatal("The failed review erased or advanced its saved checkpoint.")
 	}
-	if !strings.Contains(current.Body, details) || strings.Contains(current.Body, "Reviewing `") || strings.Contains(current.Body, invalidCredential) {
-		t.Fatal("The failure lost saved details, retained active progress, or exposed the invalid credential.")
+	if !strings.Contains(current.Body, details) || strings.Contains(
+		current.Body,
+		"Reviewing `",
+	) || strings.Contains(current.Body, invalidCredential) {
+		t.Fatal(
+			"The failure lost saved details, retained active progress, or exposed the invalid credential.",
+		)
 	}
-	dismissal, found, err := github.FindReviewDismissal(ctx, opts.installationID, repo, opts.pullRequest, rejection.ID)
+	dismissal, found, err := github.FindReviewDismissal(
+		ctx,
+		opts.installationID,
+		repo,
+		opts.pullRequest,
+		rejection.ID,
+	)
 	if err != nil || !found || dismissal.Actor != cfg.GitHubBotLogin {
 		t.Fatal("GitHub did not retain the app's own failure dismissal.")
 	}
-	permalink := "https://github.com/" + opts.repository + "/pull/" + strconv.Itoa(opts.pullRequest) + "#issuecomment-" + strconv.FormatInt(original.ID, 10)
-	if !strings.Contains(dismissal.Message, permalink) || !strings.Contains(dismissal.Message, cfg.Providers[0].ID) || !strings.Contains(dismissal.Message, "HTTP 401") || strings.Contains(dismissal.Message, "queue retains") || strings.Contains(dismissal.Message, invalidCredential) {
+	permalink := "https://github.com/" + opts.repository + "/pull/" + strconv.Itoa(
+		opts.pullRequest,
+	) + "#issuecomment-" + strconv.FormatInt(original.ID, 10)
+	if !strings.Contains(dismissal.Message, permalink) || !strings.Contains(
+		dismissal.Message,
+		cfg.Providers[0].ID,
+	) || !strings.Contains(dismissal.Message, "HTTP 401") || strings.Contains(
+		dismissal.Message,
+		"queue retains",
+	) || strings.Contains(dismissal.Message, invalidCredential) {
 		t.Fatal("The dismissal omitted its safe provider cause or existing summary permalink.")
 	}
-	liveFailureAssertReceipt(t, ctx, github, job, outcome, invalidCredential, cfg.GitHubBotLogin, cfg.Providers[0].ID)
+	liveFailureAssertReceipt(
+		t,
+		ctx,
+		github,
+		job,
+		outcome,
+		invalidCredential,
+		cfg.GitHubBotLogin,
+		cfg.Providers[0].ID,
+	)
 	if err := writeReviewBodyBackup(filepath.Join(directory, "after.json"), after); err != nil {
 		t.Fatal("The live failure evidence could not be saved privately.")
 	}
-	t.Logf("The failed check %d preserved summary %d and dismissed review %d. Private evidence: %s", job.CheckRunID, original.ID, rejection.ID, directory)
+	t.Logf(
+		"The failed check %d preserved summary %d and dismissed review %d. Private evidence: %s",
+		job.CheckRunID,
+		original.ID,
+		rejection.ID,
+		directory,
+	)
 }
 
 func TestLiveUnexpectedFailurePreservesLaterOwnApproval(t *testing.T) {
@@ -165,7 +267,11 @@ func TestLiveUnexpectedFailurePreservesLaterOwnApproval(t *testing.T) {
 	if os.Getenv("PR_AGENT_LIVE_FAILURE_APPROVAL_PULL_REQUEST") == "" {
 		t.Skip("An explicitly selected approval fixture is not configured.")
 	}
-	fixture := liveFailureTarget(t, "PR_AGENT_LIVE_FAILURE_APPROVAL_PULL_REQUEST", "PR_AGENT_LIVE_FAILURE_APPROVAL_REVIEW_ID")
+	fixture := liveFailureTarget(
+		t,
+		"PR_AGENT_LIVE_FAILURE_APPROVAL_PULL_REQUEST",
+		"PR_AGENT_LIVE_FAILURE_APPROVAL_REVIEW_ID",
+	)
 	liveFailureRun(t, fixture, "APPROVED")
 }
 
@@ -173,13 +279,26 @@ func liveFailureTarget(t *testing.T, numberName, reviewName string) liveFailureF
 	t.Helper()
 	parts := strings.Split(os.Getenv("PR_AGENT_LIVE_REPOSITORY"), "/")
 	number, numberErr := strconv.Atoi(os.Getenv(numberName))
-	installation, installationErr := strconv.ParseInt(os.Getenv("PR_AGENT_LIVE_INSTALLATION_ID"), 10, 64)
+	installation, installationErr := strconv.ParseInt(
+		os.Getenv("PR_AGENT_LIVE_INSTALLATION_ID"),
+		10,
+		64,
+	)
 	expected, reviewErr := strconv.ParseInt(os.Getenv(reviewName), 10, 64)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || numberErr != nil || number <= 0 || installationErr != nil || installation <= 0 || reviewErr != nil || expected <= 0 {
-		t.Fatal("The live regression requires explicit repository, pull request, installation, and expected review identifiers.")
+	if len(
+		parts,
+	) != 2 || parts[0] == "" || parts[1] == "" || numberErr != nil || number <= 0 || installationErr != nil || installation <= 0 || reviewErr != nil || expected <= 0 {
+		t.Fatal(
+			"The live regression requires explicit repository, pull request, installation, and expected review identifiers.",
+		)
 	}
 	var fixture liveFailureFixture
-	fixture.reference = domain.PullRequestRef{Repository: domain.Repository{Owner: parts[0], Name: parts[1]}, InstallationID: installation, Number: number, Head: ""}
+	fixture.reference = domain.PullRequestRef{
+		Repository:     domain.Repository{Owner: parts[0], Name: parts[1]},
+		InstallationID: installation,
+		Number:         number,
+		Head:           "",
+	}
 	fixture.expectedReview = expected
 	return fixture
 }
@@ -189,7 +308,9 @@ func liveFailureConfig(t *testing.T) (config.Config, string) {
 	keyPath := os.Getenv("PR_AGENT_LIVE_GITHUB_APP_KEY_FILE")
 	providerID := os.Getenv("PR_AGENT_LIVE_FAILURE_PROVIDER_ID")
 	if keyPath == "" || providerID == "" {
-		t.Fatal("The live regression requires a GitHub app private-key file and an explicit runtime provider ID.")
+		t.Fatal(
+			"The live regression requires a GitHub app private-key file and an explicit runtime provider ID.",
+		)
 	}
 	key, err := cloudflareops.ReadCredential(keyPath)
 	if err != nil {
@@ -218,18 +339,21 @@ func liveFailureConfig(t *testing.T) (config.Config, string) {
 	encoded := liveFailureEncode(t, runtime)
 	invalidCredential := "live-auth-error-" + rand.Text()
 	webhookSecret := rand.Text()
-	cfg, err := config.LoadRuntime(encoded, func(name string) (string, bool) {
-		if name == "GITHUB_PRIVATE_KEY" {
-			return string(key), true
-		}
-		if name == "GITHUB_WEBHOOK_SECRET" {
-			return webhookSecret, true
-		}
-		if strings.HasSuffix(name, "_API_KEY") {
-			return invalidCredential, true
-		}
-		return "", false
-	})
+	cfg, err := config.LoadRuntime(
+		encoded,
+		func(name string) (string, bool) {
+			if name == "GITHUB_PRIVATE_KEY" {
+				return string(key), true
+			}
+			if name == "GITHUB_WEBHOOK_SECRET" {
+				return webhookSecret, true
+			}
+			if strings.HasSuffix(name, "_API_KEY") {
+				return invalidCredential, true
+			}
+			return "", false
+		},
+	)
 	if err != nil {
 		t.Fatal("The live GitHub identity and selected provider could not be configured.")
 	}
@@ -260,12 +384,22 @@ func liveFailureProvider(t *testing.T, runtime map[string]json.RawMessage, provi
 	}
 	for _, name := range []string{"cf_access_client_id_binding", "cf_access_client_secret_binding"} {
 		var binding string
-		if value, present := selected[name]; present && json.Unmarshal(value, &binding) == nil && binding != "" {
+		if value, present := selected[name]; present && json.Unmarshal(
+			value,
+			&binding,
+		) == nil && binding != "" {
 			t.Fatal("Select a provider that does not require Cloudflare Access credentials.")
 		}
 	}
 	// The test removes app admission limits to exercise the provider authentication error.
-	for _, name := range []string{"daily_token_limit", "daily_token_types", "token_limit", "token_types", "token_window", "token_limits"} {
+	for _, name := range []string{
+		"daily_token_limit",
+		"daily_token_types",
+		"token_limit",
+		"token_types",
+		"token_window",
+		"token_limits",
+	} {
 		delete(selected, name)
 	}
 	selected["disabled"] = json.RawMessage("false")
@@ -287,11 +421,40 @@ func liveFailureEncode[T liveFailureJSON](t *testing.T, value T) json.RawMessage
 }
 
 func liveFailureService(cfg config.Config, logger *slog.Logger) (*review.Service, *githubapp.Client) {
-	githubHTTP := &http.Client{Transport: nil, CheckRedirect: nil, Jar: nil, Timeout: 30 * time.Second}
+	githubHTTP := &http.Client{
+		Transport:     nil,
+		CheckRedirect: nil,
+		Jar:           nil,
+		Timeout:       30 * time.Second,
+	}
 	github := githubapp.NewClient(cfg, githubHTTP, clock.System, logger)
 	model := openai.NewClient(cfg, http.DefaultClient)
-	reconciler := reconcile.NewService(github, model, cfg.GitHubBotLogin, logger, cfg.PromptBytes(), cfg.ReviewPolicy)
-	service := review.NewService(github, diff.NewCollector(github), model, reconciler, queue.NewKeyedLocker(), cfg.GitHubBotLogin, cfg.MinimumImportance, cfg.ReviewMaxFiles, cfg.ReviewMaxChunks, cfg.ReviewChunkTimeout, cfg.ServiceFailureAppearance, clock.System, logger, cfg.ChunkConcurrency(), cfg.PromptBytes(), cfg.ReviewPolicy)
+	reconciler := reconcile.NewService(
+		github,
+		model,
+		cfg.GitHubBotLogin,
+		logger,
+		cfg.PromptBytes(),
+		cfg.ReviewPolicy,
+	)
+	service := review.NewService(
+		github,
+		diff.NewCollector(github),
+		model,
+		reconciler,
+		queue.NewKeyedLocker(),
+		cfg.GitHubBotLogin,
+		cfg.MinimumImportance,
+		cfg.ReviewMaxFiles,
+		cfg.ReviewMaxChunks,
+		cfg.ReviewChunkTimeout,
+		cfg.ServiceFailureAppearance,
+		clock.System,
+		logger,
+		cfg.ChunkConcurrency(),
+		cfg.PromptBytes(),
+		cfg.ReviewPolicy,
+	)
 	service.SetFailureVerdictPolicy(config.DismissLatestFailureVerdict)
 	service.SetApproveEachCommit(cfg.ApproveEachCommit)
 	return service, github
@@ -315,12 +478,22 @@ func liveFailureRun(t *testing.T, fixture liveFailureFixture, expectedState stri
 	logger := slog.New(slog.NewJSONHandler(logFile, nil))
 	service, github := liveFailureService(cfg, logger)
 	reference := fixture.reference
-	original, err := github.GetPullRequest(ctx, reference.InstallationID, reference.Repository, reference.Number)
+	original, err := github.GetPullRequest(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		reference.Number,
+	)
 	if err != nil || original.State != "open" || original.Draft || !original.EligibilityKnown || !original.MetadataKnown {
 		t.Fatal("The explicitly selected fixture must have validated open, non-draft metadata.")
 	}
 	reference.Head = original.Head
-	before, err := github.ListReviews(ctx, reference.InstallationID, reference.Repository, reference.Number)
+	before, err := github.ListReviews(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		reference.Number,
+	)
 	if err != nil {
 		t.Fatal("The fixture's current reviews could not be read with the GitHub app.")
 	}
@@ -328,14 +501,22 @@ func liveFailureRun(t *testing.T, fixture liveFailureFixture, expectedState stri
 	if latest.ID != fixture.expectedReview || latest.State != expectedState {
 		t.Fatal("The latest own opinionated review differs from the explicitly selected fixture.")
 	}
-	if expectedState == "CHANGES_REQUESTED" && !slices.ContainsFunc(before, func(item githubapp.Review) bool {
-		return item.Author != cfg.GitHubBotLogin && (item.State == "APPROVED" || item.State == "CHANGES_REQUESTED" || item.State == "COMMENTED")
-	}) {
-		t.Fatal("The rejection fixture requires another author's submitted review to verify ownership protection.")
+	if expectedState == "CHANGES_REQUESTED" && !slices.ContainsFunc(
+		before,
+		func(item githubapp.Review) bool {
+			return item.Author != cfg.GitHubBotLogin && (item.State == "APPROVED" || item.State == "CHANGES_REQUESTED" || item.State == "COMMENTED")
+		},
+	) {
+		t.Fatal(
+			"The rejection fixture requires another author's submitted review to verify ownership protection.",
+		)
 	}
-	if expectedState == "APPROVED" && !slices.ContainsFunc(before, func(item githubapp.Review) bool {
-		return item.Author == cfg.GitHubBotLogin && item.State == "CHANGES_REQUESTED" && item.ID != latest.ID
-	}) {
+	if expectedState == "APPROVED" && !slices.ContainsFunc(
+		before,
+		func(item githubapp.Review) bool {
+			return item.Author == cfg.GitHubBotLogin && item.State == "CHANGES_REQUESTED" && item.ID != latest.ID
+		},
+	) {
 		t.Fatal("The approval fixture requires an earlier own requested-changes review.")
 	}
 	var job domain.ReviewJob
@@ -352,20 +533,46 @@ func liveFailureRun(t *testing.T, fixture liveFailureFixture, expectedState stri
 	if outcome.Disposition != domain.AssessmentFailed && outcome.Disposition != domain.AssessmentIncomplete {
 		t.Fatal("The provider failure did not retain an unsuccessful assessment outcome.")
 	}
-	if !slices.Contains(outcome.FailureClasses, string(config.FailureOther)) || outcome.Nonce == "" || outcome.CoverageComplete {
+	if !slices.Contains(
+		outcome.FailureClasses,
+		string(config.FailureOther),
+	) || outcome.Nonce == "" || outcome.CoverageComplete {
 		t.Fatal("The durable outcome did not retain the unexpected failure classification.")
 	}
-	after, err := github.ListReviews(ctx, reference.InstallationID, reference.Repository, reference.Number)
+	after, err := github.ListReviews(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		reference.Number,
+	)
 	if err != nil {
 		t.Fatal("The fixture's review states could not be read after the failure.")
 	}
 	liveFailureAssertReviews(t, before, after, latest, expectedState)
-	liveFailureAssertReceipt(t, ctx, github, job, outcome, invalidCredential, cfg.GitHubBotLogin, cfg.Providers[0].ID)
-	current, err := github.GetPullRequest(ctx, reference.InstallationID, reference.Repository, reference.Number)
+	liveFailureAssertReceipt(
+		t,
+		ctx,
+		github,
+		job,
+		outcome,
+		invalidCredential,
+		cfg.GitHubBotLogin,
+		cfg.Providers[0].ID,
+	)
+	current, err := github.GetPullRequest(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		reference.Number,
+	)
 	if err != nil || !reflect.DeepEqual(current, original) {
 		t.Fatal("The fixture metadata changed during the live regression.")
 	}
-	t.Logf("Live failure regression retained check %d and verified review %d state transitions.", job.CheckRunID, fixture.expectedReview)
+	t.Logf(
+		"Live failure regression retained check %d and verified review %d state transitions.",
+		job.CheckRunID,
+		fixture.expectedReview,
+	)
 }
 
 func liveFailureAssertProvider(t *testing.T, logPath, providerID, model string) {
@@ -393,19 +600,30 @@ func liveFailureAssertProvider(t *testing.T, logPath, providerID, model string) 
 			return
 		}
 	}
-	t.Fatal("The production service log does not establish an unexpected real provider authentication or request failure.")
+	t.Fatal(
+		"The production service log does not establish an unexpected real provider authentication or request failure.",
+	)
 }
 
-func liveFailureAssertReviews(t *testing.T, before, after []githubapp.Review, latest githubapp.Review, expectedState string) {
+func liveFailureAssertReviews(
+	t *testing.T,
+	before []githubapp.Review,
+	after []githubapp.Review,
+	latest githubapp.Review,
+	expectedState string,
+) {
 	t.Helper()
 	for _, old := range before {
 		state := old.State
 		if old.ID == latest.ID && expectedState == "CHANGES_REQUESTED" {
 			state = "DISMISSED"
 		}
-		if !slices.ContainsFunc(after, func(item githubapp.Review) bool {
-			return item.ID == old.ID && item.Author == old.Author && item.State == state
-		}) {
+		if !slices.ContainsFunc(
+			after,
+			func(item githubapp.Review) bool {
+				return item.ID == old.ID && item.Author == old.Author && item.State == state
+			},
+		) {
 			t.Fatalf("Review %d did not retain its required author and state.", old.ID)
 		}
 	}
@@ -413,15 +631,34 @@ func liveFailureAssertReviews(t *testing.T, before, after []githubapp.Review, la
 		if item.Author != latest.Author || (item.State != "APPROVED" && item.State != "CHANGES_REQUESTED") {
 			continue
 		}
-		if !slices.ContainsFunc(before, func(old githubapp.Review) bool { return old.ID == item.ID }) {
+		if !slices.ContainsFunc(
+			before,
+			func(old githubapp.Review) bool { return old.ID == item.ID },
+		) {
 			t.Fatal("The failed assessment published a new bot verdict.")
 		}
 	}
 }
 
-func liveFailureAssertReceipt(t *testing.T, ctx context.Context, github *githubapp.Client, job domain.ReviewJob, outcome domain.AssessmentOutcome, invalidCredential, bot, providerID string) {
+func liveFailureAssertReceipt(
+	t *testing.T,
+	ctx context.Context,
+	github *githubapp.Client,
+	job domain.ReviewJob,
+	outcome domain.AssessmentOutcome,
+	invalidCredential string,
+	bot string,
+	providerID string,
+) {
 	t.Helper()
-	check, found, err := github.FindCheckRunByExternalID(ctx, job.InstallationID, job.Repository, job.Head, config.ReviewCheckName, job.DeliveryID)
+	check, found, err := github.FindCheckRunByExternalID(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Head,
+		config.ReviewCheckName,
+		job.DeliveryID,
+	)
 	if err != nil || !found || check.Status != "completed" || check.Outcome.Nonce != outcome.Nonce || check.Outcome.Disposition != outcome.Disposition || check.Outcome.CheckRunID != job.CheckRunID {
 		t.Fatal("GitHub did not retain the failed assessment's durable outcome marker.")
 	}
@@ -434,8 +671,13 @@ func liveFailureAssertReceipt(t *testing.T, ctx context.Context, github *githuba
 		if comment.Author != bot || !valid || state.RunID != job.DeliveryID {
 			continue
 		}
-		if strings.Contains(comment.Body, invalidCredential) || !strings.Contains(comment.Body, providerID) {
-			t.Fatal("The public failure summary does not contain a safe operational failure explanation.")
+		if strings.Contains(
+			comment.Body,
+			invalidCredential,
+		) || !strings.Contains(comment.Body, providerID) {
+			t.Fatal(
+				"The public failure summary does not contain a safe operational failure explanation.",
+			)
 		}
 		return
 	}

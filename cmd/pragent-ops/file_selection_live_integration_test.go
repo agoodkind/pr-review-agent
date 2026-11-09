@@ -31,19 +31,40 @@ func TestLiveDependencyReviewExcludesLockfileContentsBeforeChunking(t *testing.T
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
-	client := githubapp.NewClient(cfg, &http.Client{Timeout: 30 * time.Second}, time.Now, slog.Default())
-	pullRequest, err := client.GetPullRequest(ctx, opts.installationID, repository, opts.pullRequest)
+	client := githubapp.NewClient(
+		cfg,
+		&http.Client{Timeout: 30 * time.Second},
+		time.Now,
+		slog.Default(),
+	)
+	pullRequest, err := client.GetPullRequest(
+		ctx,
+		opts.installationID,
+		repository,
+		opts.pullRequest,
+	)
 	if err != nil {
 		t.Fatal("The real dependency pull request could not be read.")
 	}
-	reference := domain.PullRequestRef{Repository: repository, Number: opts.pullRequest, InstallationID: opts.installationID, Head: pullRequest.Head}
+	reference := domain.PullRequestRef{
+		Repository:     repository,
+		Number:         opts.pullRequest,
+		InstallationID: opts.installationID,
+		Head:           pullRequest.Head,
+	}
 	input, err := diff.NewCollector(client).Collect(ctx, reference, pullRequest)
 	if err != nil {
 		t.Fatal("The real dependency changes could not be collected.")
 	}
 	const lockPath = "deploy/cloudflare/package-lock.json"
 	const manifestPath = "deploy/cloudflare/package.json"
-	if len(input.Files) != 2 || !slices.ContainsFunc(input.Files, func(file diff.FileContext) bool { return file.Path == lockPath }) || !slices.ContainsFunc(input.Files, func(file diff.FileContext) bool { return file.Path == manifestPath }) {
+	if len(input.Files) != 2 || !slices.ContainsFunc(
+		input.Files,
+		func(file diff.FileContext) bool { return file.Path == lockPath },
+	) || !slices.ContainsFunc(
+		input.Files,
+		func(file diff.FileContext) bool { return file.Path == manifestPath },
+	) {
 		t.Fatal("Select the dependency regression with its lockfile and manifest changes.")
 	}
 	assessments, unresolved, err := review.PlanFileAssessments(input, cfg.ReviewPolicy)
@@ -51,7 +72,9 @@ func TestLiveDependencyReviewExcludesLockfileContentsBeforeChunking(t *testing.T
 		t.Fatal("The configured deterministic policy did not assess both dependency files.")
 	}
 	for _, assessment := range assessments {
-		if assessment.Path == lockPath && (!assessment.PermitsContentExclusion() || len(assessment.Evidence) == 0) {
+		if assessment.Path == lockPath && (!assessment.PermitsContentExclusion() || len(
+			assessment.Evidence,
+		) == 0) {
 			t.Fatal("The lockfile assessment did not justify its content exclusion.")
 		}
 		if assessment.Path == manifestPath && assessment.Action != domain.FileActionReview {
@@ -77,7 +100,13 @@ func TestLiveDependencyReviewExcludesLockfileContentsBeforeChunking(t *testing.T
 			t.Fatal("A generated lockfile still requires a content review chunk.")
 		}
 		manifestReviewed = manifestReviewed || slices.Contains(chunk.Paths, manifestPath)
-		prompt, err := review.BuildPrompt(chunk, cfg.MinimumImportance, "", cfg.ReviewPolicy, cfg.PromptBytes())
+		prompt, err := review.BuildPrompt(
+			chunk,
+			cfg.MinimumImportance,
+			"",
+			cfg.ReviewPolicy,
+			cfg.PromptBytes(),
+		)
 		if err != nil {
 			t.Fatal("The actual review prompt could not be built.")
 		}
@@ -92,15 +121,25 @@ func TestLiveDependencyReviewExcludesLockfileContentsBeforeChunking(t *testing.T
 		}
 	}
 	if !manifestReviewed || len(after) >= len(before) {
-		t.Fatal("The file selection did not reduce generated review work while retaining the manifest.")
+		t.Fatal(
+			"The file selection did not reduce generated review work while retaining the manifest.",
+		)
 	}
 	var summary review.Summary
 	summary.FileAssessments = decisions
 	summary.FileAssessmentMaximumBytes = cfg.ReviewPolicy.FileAssessmentMaximumBytes()
 	summary.FileAssessmentsDisplay = cfg.ReviewPolicy.FileAssessmentsDisplay()
 	body := review.RenderBody(summary)
-	if !strings.Contains(body, lockPath) || !strings.Contains(body, "<!-- pr-review-agent:file-assessments:v1 ") {
+	if !strings.Contains(
+		body,
+		lockPath,
+	) || !strings.Contains(body, "<!-- pr-review-agent:file-assessments:v1 ") {
 		t.Fatal("The rendered review did not retain the diagnostic assessment and its evidence.")
 	}
-	t.Logf("Real GitHub collection at %s produced %d chunks before selection and %d afterward. The manifest requires review; the lockfile contents do not require provider requests.", pullRequest.Head, len(before), len(after))
+	t.Logf(
+		"Real GitHub collection at %s produced %d chunks before selection and %d afterward. The manifest requires review; the lockfile contents do not require provider requests.",
+		pullRequest.Head,
+		len(before),
+		len(after),
+	)
 }

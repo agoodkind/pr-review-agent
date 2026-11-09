@@ -34,25 +34,36 @@ func TestLiveUnexpectedFailureSelectsNextProvider(t *testing.T) {
 	cfg.Providers = []config.ProviderConfig{invalid, selected}
 
 	for _, stage := range []string{"review", "report", "reconcile", "consolidate"} {
-		t.Run(stage, func(t *testing.T) {
-			client := openai.NewClient(cfg, &http.Client{})
-			ctx, cancel := modelrequest.WithTimeout(t.Context(), client, time.Nanosecond)
-			defer cancel()
-			ctx = gklog.WithLogger(ctx, slog.New(slog.NewJSONHandler(io.Discard, nil)))
-			ctx, recorder := review.WithUsageRecorder(ctx)
-			_ = callLiveStage(ctx, client, stage, liveFailoverPrompt(t, cfg))
-			attempts := recorder.Summary().ProviderAttempts
-			if len(attempts) != 2 || attempts[0].Status.ProviderID != invalid.ID || attempts[1].Status.ProviderID != selected.ID {
-				t.Fatal("the unexpected authentication failure did not select the next configured provider")
-			}
-			if attempts[0].HTTPStatus < 400 || attempts[0].HTTPStatus >= 500 || attempts[0].HTTPStatus == http.StatusTooManyRequests || !attempts[0].Fallback {
-				t.Fatal("the first provider did not produce an unexpected client error followed by fallback")
-			}
-			if ctx.Err() != nil {
-				t.Fatal("the inherited stage timeout cancelled independently bounded provider attempts")
-			}
-			assertFallbackResponded(t, recorder.Summary(), selected.ID)
-		})
+		t.Run(
+			stage,
+			func(t *testing.T) {
+				client := openai.NewClient(cfg, &http.Client{})
+				ctx, cancel := modelrequest.WithTimeout(t.Context(), client, time.Nanosecond)
+				defer cancel()
+				ctx = gklog.WithLogger(ctx, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+				ctx, recorder := review.WithUsageRecorder(ctx)
+				_ = callLiveStage(ctx, client, stage, liveFailoverPrompt(t, cfg))
+				attempts := recorder.Summary().ProviderAttempts
+				if len(
+					attempts,
+				) != 2 || attempts[0].Status.ProviderID != invalid.ID || attempts[1].Status.ProviderID != selected.ID {
+					t.Fatal(
+						"the unexpected authentication failure did not select the next configured provider",
+					)
+				}
+				if attempts[0].HTTPStatus < 400 || attempts[0].HTTPStatus >= 500 || attempts[0].HTTPStatus == http.StatusTooManyRequests || !attempts[0].Fallback {
+					t.Fatal(
+						"the first provider did not produce an unexpected client error followed by fallback",
+					)
+				}
+				if ctx.Err() != nil {
+					t.Fatal(
+						"the inherited stage timeout cancelled independently bounded provider attempts",
+					)
+				}
+				assertFallbackResponded(t, recorder.Summary(), selected.ID)
+			},
+		)
 	}
 }
 
@@ -69,7 +80,9 @@ func TestLiveProviderTimeoutSelectsNextProvider(t *testing.T) {
 	ctx, recorder := review.WithUsageRecorder(ctx)
 	_, _ = client.Review(ctx, liveFailoverPrompt(t, cfg))
 	attempts := recorder.Summary().ProviderAttempts
-	if len(attempts) != 2 || attempts[0].Status.ProviderID != expired.ID || attempts[1].Status.ProviderID != selected.ID || !attempts[0].Fallback {
+	if len(
+		attempts,
+	) != 2 || attempts[0].Status.ProviderID != expired.ID || attempts[1].Status.ProviderID != selected.ID || !attempts[0].Fallback {
 		t.Fatal("the provider timeout did not select the next provider")
 	}
 	if ctx.Err() != nil {

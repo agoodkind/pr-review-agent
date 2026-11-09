@@ -33,7 +33,12 @@ func TestLiveEmptyNativeReviewRejectsBodyUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := githubapp.NewClient(cfg, &http.Client{Timeout: 30 * time.Second}, time.Now, slog.Default())
+	client := githubapp.NewClient(
+		cfg,
+		&http.Client{Timeout: 30 * time.Second},
+		time.Now,
+		slog.Default(),
+	)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 	before := liveReviewBodyCapture(t, ctx, client, opts, repo)
@@ -58,14 +63,30 @@ func TestLiveEmptyNativeReviewRejectsBodyUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 	const body = "This closed fixture verifies that an inline rejection can receive its metadata explanation."
-	_, updateErr := client.UpdateReview(ctx, opts.installationID, repo, opts.pullRequest, reviewID, body)
+	_, updateErr := client.UpdateReview(
+		ctx,
+		opts.installationID,
+		repo,
+		opts.pullRequest,
+		reviewID,
+		body,
+	)
 	after := liveReviewBodyCapture(t, ctx, client, opts, repo)
 	if err := writeReviewBodyBackup(filepath.Join(directory, "after.json"), after); err != nil {
 		t.Fatal(err)
 	}
 	var native githubapp.APIError
-	if !errors.As(updateErr, &native) || native.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(native.Message, "Could not edit a review with a missing body") {
-		t.Fatalf("The native empty-body update contract changed. Inspect the private evidence in %s.", directory)
+	if !errors.As(
+		updateErr,
+		&native,
+	) || native.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(
+		native.Message,
+		"Could not edit a review with a missing body",
+	) {
+		t.Fatalf(
+			"The native empty-body update contract changed. Inspect the private evidence in %s.",
+			directory,
+		)
 	}
 	data, err := json.Marshal(native)
 	if err != nil {
@@ -77,5 +98,9 @@ func TestLiveEmptyNativeReviewRejectsBodyUpdates(t *testing.T) {
 	if !liveReviewBodySnapshotsEqual(before, after) {
 		t.Fatal("The refused body update changed the closed fixture.")
 	}
-	t.Logf("GitHub refused the body update with HTTP422 and preserved review %d and the entire closed fixture. Private evidence: %s.", reviewID, directory)
+	t.Logf(
+		"GitHub refused the body update with HTTP422 and preserved review %d and the entire closed fixture. Private evidence: %s.",
+		reviewID,
+		directory,
+	)
 }

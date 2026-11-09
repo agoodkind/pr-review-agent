@@ -142,7 +142,8 @@ func RecordProviderAttempt(
 }
 
 func sameProviderAttempt(left, right ProviderAttempt) bool {
-	return left.Status.ProviderID == right.Status.ProviderID && left.Status.Model == right.Status.Model &&
+	return left.Status.ProviderID == right.Status.ProviderID &&
+		left.Status.Model == right.Status.Model &&
 		left.Status.Cause == right.Status.Cause &&
 		left.API == right.API &&
 		left.ReasoningEffort == right.ReasoningEffort &&

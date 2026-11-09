@@ -12,16 +12,29 @@ import (
 	"time"
 )
 
-func (fixture *clippedLiveFixture) commit(t *testing.T, ctx context.Context, content, subject string) string {
+func (fixture *clippedLiveFixture) commit(
+	t *testing.T,
+	ctx context.Context,
+	content string,
+	subject string,
+) string {
 	t.Helper()
 	worktree := os.Getenv("PR_AGENT_LIVE_CLIPPED_WORKTREE")
 	if !filepath.IsAbs(worktree) {
-		t.Fatal("PR_AGENT_LIVE_CLIPPED_WORKTREE must identify the fixture's absolute worktree path.")
+		t.Fatal(
+			"PR_AGENT_LIVE_CLIPPED_WORKTREE must identify the fixture's absolute worktree path.",
+		)
 	}
 	if clippedLiveGit(t, ctx, worktree, "status", "--porcelain") != "" {
 		t.Fatal("The fixture worktree must be clean before each signed commit.")
 	}
-	if clippedLiveGit(t, ctx, worktree, "rev-parse", "HEAD") != fixture.head || clippedLiveGit(t, ctx, worktree, "branch", "--show-current") != fixture.original.Head.Ref {
+	if clippedLiveGit(t, ctx, worktree, "rev-parse", "HEAD") != fixture.head || clippedLiveGit(
+		t,
+		ctx,
+		worktree,
+		"branch",
+		"--show-current",
+	) != fixture.original.Head.Ref {
 		t.Fatal("The fixture worktree must use the expected branch and commit.")
 	}
 	remote := clippedLiveGit(t, ctx, worktree, "remote", "get-url", "--push", "origin")
@@ -40,8 +53,24 @@ func (fixture *clippedLiveFixture) commit(t *testing.T, ctx context.Context, con
 	if clippedLiveGit(t, ctx, worktree, "diff", "--cached", "--name-only") == "" {
 		return fixture.head
 	}
-	clippedLiveGit(t, ctx, worktree, "commit", "-S", "-m", subject+"\n\nCo-authored-by: Codex <noreply@openai.com>")
-	clippedLiveGit(t, ctx, worktree, "push", "--force-with-lease=refs/heads/"+fixture.original.Head.Ref+":"+fixture.head, "origin", "HEAD:refs/heads/"+fixture.original.Head.Ref)
+	clippedLiveGit(
+		t,
+		ctx,
+		worktree,
+		"commit",
+		"-S",
+		"-m",
+		subject+"\n\nCo-authored-by: Codex <noreply@openai.com>",
+	)
+	clippedLiveGit(
+		t,
+		ctx,
+		worktree,
+		"push",
+		"--force-with-lease=refs/heads/"+fixture.original.Head.Ref+":"+fixture.head,
+		"origin",
+		"HEAD:refs/heads/"+fixture.original.Head.Ref,
+	)
 	return clippedLiveGit(t, ctx, worktree, "rev-parse", "HEAD")
 }
 
