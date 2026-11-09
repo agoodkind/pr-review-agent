@@ -137,7 +137,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			summary := findingDetailsSummary()
+			summary := fixture.gitFindingSummary()
 			summary.MetadataRevision = diff.PullRequestRevision(pr)
 			summary.Metadata[0].Surface = domain.FindingPullRequestDescription
 			summary.Metadata[0].RuleID = "complete_sentences"
@@ -246,7 +246,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			summary := findingDetailsSummary()
+			summary := fixture.gitFindingSummary()
 			summary.MetadataRevision = diff.PullRequestRevision(pr)
 			summary.Metadata[0].RuleID = "pr_title"
 			summary.Metadata[0].Body = strings.Repeat("The title omits the changed review behavior that distinguishes this fixture from other review tests. ", 4)
@@ -270,11 +270,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 					Pending: []string{"pending-metadata"},
 				}),
 			}}
-			fixture.state.reviewPages = [][]map[string]any{{{
-				"id": float64(4100), "commit_id": testHeadSHA, "state": "DISMISSED",
-				"body": marker.Review(job.Head, domain.ReviewDecisionRequestChanges),
-				"user": map[string]any{"login": testBotLogin},
-			}}}
+			fixture.seedDismissedGitReview(job.Head)
 			admitted, accepted, err := fixture.service.Admit(t.Context(), job)
 			if err != nil || !accepted {
 				t.Fatalf("The forced review did not admit the current fixture: %v.", err)

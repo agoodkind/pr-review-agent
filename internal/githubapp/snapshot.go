@@ -29,6 +29,7 @@ type repositorySnapshotScope struct {
 	directory      string
 	revisions      map[domain.HeadSHA]repositorySnapshotResult
 	closed         bool
+	pullRequest    *PullRequest
 }
 
 type repositorySnapshotResult struct {
@@ -58,6 +59,7 @@ func (client *Client) OpenRepositorySnapshot(ctx context.Context, installationID
 	scope := &repositorySnapshotScope{
 		client: client, installationID: installationID, repository: repo, head: head,
 		gate: make(chan struct{}, 1), directory: "", revisions: make(map[domain.HeadSHA]repositorySnapshotResult), closed: false,
+		pullRequest: nil,
 	}
 	scope.gate <- struct{}{}
 	return context.WithValue(ctx, repositorySnapshotKey{}, scope), scope.close, nil
@@ -134,7 +136,13 @@ func (scope *repositorySnapshotScope) load(ctx context.Context, ref domain.HeadS
 		}
 		scope.directory = directory
 	}
-	snapshot, err := scope.client.downloadRepositorySnapshot(ctx, scope.installationID, scope.repository, ref, scope.directory)
+
+	snapshot,
+		err := scope.client.materializeRepositorySnapshot(ctx,
+		scope.installationID,
+		scope.repository,
+		ref,
+		scope.directory)
 	scope.revisions[ref] = repositorySnapshotResult{snapshot: snapshot, err: err}
 	return snapshot, err
 }

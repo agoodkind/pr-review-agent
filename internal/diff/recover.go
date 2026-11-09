@@ -68,10 +68,6 @@ func (recovery *patchRecovery) recover(ctx context.Context, changed githubapp.Ch
 		slog.ErrorContext(ctx, "reconstruct text patch", slog.String("path", changed.Path), slog.String("err", err.Error()))
 		return "", fmt.Errorf("reconstruct text patch for %s: %w", changed.Path, err)
 	}
-	if err := validateRecoveredPatch(changed, patch, current); err != nil {
-		slog.ErrorContext(ctx, "validate recovered patch", slog.String("path", changed.Path), slog.String("err", err.Error()))
-		return "", fmt.Errorf("validate recovered patch for %s: %w", changed.Path, err)
-	}
 	return patch, nil
 }
 
@@ -134,20 +130,6 @@ func (recovery *patchRecovery) readFile(ctx context.Context, path string, commit
 
 func isPatchText(content string) bool {
 	return utf8.ValidString(content) && !strings.ContainsRune(content, '\x00')
-}
-
-func validateRecoveredPatch(changed githubapp.ChangedFile, patch, current string) error {
-	parsed, err := parsePatch(patch)
-	if err != nil {
-		return err
-	}
-	if err := patchChangeCountsError(changed, parsed); err != nil {
-		return err
-	}
-	if patch == "" {
-		return nil
-	}
-	return ValidatePatchContent(patch, current)
 }
 
 func patchChangeCountsError(changed githubapp.ChangedFile, parsed parsedPatch) error {

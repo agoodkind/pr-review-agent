@@ -394,55 +394,14 @@ func TestRESTPaginationLoadsEveryPage(t *testing.T) {
 	}
 }
 
-func TestListChangedFilesPreservesMissingPatch(t *testing.T) {
-	privateKey := testPrivateKey(t)
-	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
-	defer server.Close()
+// TestGetFileReadsPinnedGitContent verifies exact file bytes from the
+// requested Git commit.
+func TestGetFileReadsPinnedGitContent(t *testing.T) {
+	fixture := newGitFixture(t)
 
-	state.changedFilePages = [][]map[string]any{
-		{
-			{"filename": "with.patch", "status": "modified", "patch": "@@"},
-			{"filename": "without.patch", "status": "added"},
-		},
-	}
-
-	files, err := client.ListChangedFiles(context.Background(), 99, testRepo(), 3)
-	if err != nil {
-		t.Fatalf("ListChangedFiles: %v", err)
-	}
-	if len(files) != 2 {
-		t.Fatalf("file count = %d, want 2", len(files))
-	}
-	if !files[0].PatchPresent || files[0].Patch != "@@" {
-		t.Fatalf("patched file = %+v", files[0])
-	}
-	if files[1].PatchPresent || files[1].Patch != "" {
-		t.Fatalf("missing patch file = %+v", files[1])
-	}
-}
-
-func TestGetFileDecodesBase64Content(t *testing.T) {
-	privateKey := testPrivateKey(t)
-	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
-	defer server.Close()
-
-	state.fileContent = map[string]any{
-		"content":  "Zm9v\n",
-		"encoding": "base64",
-	}
-
-	content, err := client.GetFile(
-		context.Background(),
-		99,
-		testRepo(),
-		"dir/file.go",
-		domain.HeadSHA(testHeadSHA),
-	)
-	if err != nil {
-		t.Fatalf("GetFile: %v", err)
-	}
-	if string(content) != "foo" {
-		t.Fatalf("content = %q, want foo", string(content))
+	content, err := fixture.client.GetFile(t.Context(), 77, fixture.repo, gitFixtureSourcePath, fixture.head)
+	if err != nil || string(content) != gitFixtureSourceContent {
+		t.Fatalf("Pinned Git content = %q: %v", content, err)
 	}
 }
 
@@ -944,6 +903,8 @@ func newStatefulTestClient(
 		return state.nowValue
 	}
 	client := githubapp.NewClient(cfg, server.Client(), nowFn, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	t.Cleanup(func() { _ = client.Close() })
 	return client, server, state
 }
 

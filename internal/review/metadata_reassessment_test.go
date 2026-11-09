@@ -41,6 +41,7 @@ func seedMetadataReassessment(t *testing.T, fixture *serviceFixture, findings []
 		t.Fatal(err)
 	}
 	summary := testSummary()
+	summary.Head = job.Head
 	summary.Decision = domain.ReviewDecisionRequestChanges
 	summary.Metadata = findings
 	summary.MetadataRevision = "previous-metadata-revision"
