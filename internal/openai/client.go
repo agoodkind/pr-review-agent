@@ -754,30 +754,7 @@ func completeWith(
 		return "", "", modelProviderError(target.model, err)
 	}
 
-	if incompleteReason == "max_output_tokens" {
-		return "", "", &TruncatedError{Model: target.model}
-	}
-
-	if incompleteReason != "" {
-		return "", "", errors.New("openai response incomplete: " + incompleteReason)
-	}
-
-	if !completed {
-		return "", "", errors.New("openai response ended without a completion event")
-	}
-
-	result := strings.TrimSpace(content.String())
-	if result == "" {
-		return "", "", errors.New("openai response missing message content")
-	}
-
-	completionModel := target.model
-	if (target.model == config.AutoRouterModel || target.model == config.FreeRouterModel) &&
-		responseModel != "" {
-		completionModel = responseModel
-	}
-
-	return result, completionModel, nil
+	return responseCompletion(target, &content, responseModel, completed, incompleteReason)
 }
 
 func logResponseOutputShape(
