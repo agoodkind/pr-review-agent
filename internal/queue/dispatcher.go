@@ -42,13 +42,16 @@ type Status struct {
 func (dispatcher *Dispatcher) Status() Status {
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+
 	return dispatcher.statusLocked()
 }
 
 func (dispatcher *Dispatcher) statusLocked() Status {
 	return Status{
-		AdmissionClosed: dispatcher.closed, Queued: dispatcher.queued,
-		Running: dispatcher.running, Outstanding: dispatcher.queued + dispatcher.running,
+		AdmissionClosed: dispatcher.closed,
+		Queued:          dispatcher.queued,
+		Running:         dispatcher.running,
+		Outstanding:     dispatcher.queued + dispatcher.running,
 	}
 }
 
@@ -56,6 +59,7 @@ func (dispatcher *Dispatcher) statusLocked() Status {
 func (dispatcher *Dispatcher) StopAdmission() Status {
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+
 	return dispatcher.stopAdmissionLocked()
 }
 
@@ -66,6 +70,7 @@ func (dispatcher *Dispatcher) StopAdmissionIfIdle() Status {
 	if dispatcher.queued+dispatcher.running != 0 {
 		return dispatcher.statusLocked()
 	}
+
 	return dispatcher.stopAdmissionLocked()
 }
 
@@ -74,6 +79,7 @@ func (dispatcher *Dispatcher) stopAdmissionLocked() Status {
 		dispatcher.closed = true
 		close(dispatcher.jobs)
 	}
+
 	return dispatcher.statusLocked()
 }
 
@@ -102,6 +108,7 @@ func (dispatcher *Dispatcher) Start(ctx context.Context) {
 		dispatcher.mu.Unlock()
 		return
 	}
+
 	dispatcher.started = true
 	dispatcher.wg.Go(func() {
 		dispatcher.schedule(ctx)
@@ -121,6 +128,7 @@ func (dispatcher *Dispatcher) schedule(ctx context.Context) {
 			if !ok {
 				break
 			}
+
 			pending = remaining
 			key := job.Key()
 			activeKeys[key] = struct{}{}
@@ -135,12 +143,14 @@ func (dispatcher *Dispatcher) schedule(ctx context.Context) {
 		if jobs == nil && running == 0 {
 			return
 		}
+
 		select {
 		case job, ok := <-jobs:
 			if !ok {
 				jobs = nil
 				continue
 			}
+
 			pending = append(pending, job)
 		case key := <-dispatcher.completed:
 			delete(activeKeys, key)
@@ -157,10 +167,14 @@ func nextRunnableJob(
 		if _, active := activeKeys[job.Key()]; active {
 			continue
 		}
+
 		pending = append(pending[:index], pending[index+1:]...)
+
 		return job, pending, true
 	}
+
 	var empty domain.ReviewJob
+
 	return empty, pending, false
 }
 

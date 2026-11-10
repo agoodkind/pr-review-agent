@@ -15,9 +15,11 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	if _, ok := FindReview(firstBody); !ok {
 		t.Fatal("first review marker missing")
 	}
+
 	if _, ok := FindReview(secondBody); !ok {
 		t.Fatal("second review marker missing")
 	}
+
 	if firstBody == secondBody {
 		t.Fatal("different prose should not compare equal")
 	}
@@ -30,6 +32,7 @@ func TestReviewMarkerRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("FindReview: not found")
 	}
+
 	if parsed != head {
 		t.Fatalf("head = %q, want %q", parsed, head)
 	}
@@ -44,9 +47,11 @@ func TestReviewMarkerRecordsTheDecision(t *testing.T) {
 	if !ReviewBlocked(Review(head, domain.ReviewDecisionRequestChanges)) {
 		t.Fatal("a blocking marker did not read back as blocking")
 	}
+
 	if ReviewBlocked(Review(head, domain.ReviewDecisionApprove)) {
 		t.Fatal("an approving marker read back as blocking")
 	}
+
 	// A marker written before the decision was recorded reads as not blocking,
 	// so a block dismissed in that era is restated rather than withheld. That is
 	// the older behavior and the safe direction to be wrong in.
@@ -54,6 +59,7 @@ func TestReviewMarkerRecordsTheDecision(t *testing.T) {
 	if _, ok := FindReview(legacy); !ok {
 		t.Fatal("a marker without a decision stopped being recognized")
 	}
+
 	if ReviewBlocked(legacy) {
 		t.Fatal("a marker without a decision claimed to be blocking")
 	}
@@ -75,10 +81,12 @@ func TestFindingMarkerChangesWithHead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Finding headA: %v", err)
 	}
+
 	markerB, err := Finding(headB, finding)
 	if err != nil {
 		t.Fatalf("Finding headB: %v", err)
 	}
+
 	if markerA == markerB {
 		t.Fatal("finding marker should change with head")
 	}
@@ -107,10 +115,12 @@ func TestFindingMarkerIsStableForEquivalentPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Finding findingA: %v", err)
 	}
+
 	markerB, err := Finding(head, findingB)
 	if err != nil {
 		t.Fatalf("Finding findingB: %v", err)
 	}
+
 	if markerA != markerB {
 		t.Fatalf("markers differ for equivalent paths: %q vs %q", markerA, markerB)
 	}
@@ -118,6 +128,7 @@ func TestFindingMarkerIsStableForEquivalentPaths(t *testing.T) {
 
 func TestFindingMarkerRejectsUnsafePaths(t *testing.T) {
 	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
+
 	cases := []domain.Finding{
 		{Path: "../secret.go", StartLine: 1, EndLine: 1, Title: "t", Body: "b", Importance: 1},
 		{Path: "/etc/passwd", StartLine: 1, EndLine: 1, Title: "t", Body: "b", Importance: 1},
@@ -152,6 +163,7 @@ func TestFindingMarkerCarriesTheClaimTextHashAndNotTheSentence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
+
 	if strings.Contains(body, claim) {
 		t.Fatalf("published body carries the claim sentence itself:\n%s", body)
 	}
@@ -160,6 +172,7 @@ func TestFindingMarkerCarriesTheClaimTextHashAndNotTheSentence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimTextKey: %v", err)
 	}
+
 	if !strings.Contains(body, "claimtext="+wantKey) {
 		t.Fatalf("published body missing claimtext=%s:\n%s", wantKey, body)
 	}
@@ -168,9 +181,11 @@ func TestFindingMarkerCarriesTheClaimTextHashAndNotTheSentence(t *testing.T) {
 	if !ok {
 		t.Fatalf("FindFinding: marker not found in\n%s", body)
 	}
+
 	if parsed.ClaimTextKey != wantKey {
 		t.Fatalf("ClaimTextKey = %q, want %q", parsed.ClaimTextKey, wantKey)
 	}
+
 	if parsed.ClaimKey == "" {
 		t.Fatal("ClaimKey is empty: the evidence key must survive beside the claim text key")
 	}
@@ -184,10 +199,14 @@ func TestClaimTextKeyIgnoresCaseSpacingAndTrailingPunctuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimTextKey first: %v", err)
 	}
-	second, err := ClaimTextKey("  the produce   authorization check\tis skipped for CACHED tokens.  ")
+
+	second, err := ClaimTextKey(
+		"  the produce   authorization check\tis skipped for CACHED tokens.  ",
+	)
 	if err != nil {
 		t.Fatalf("ClaimTextKey second: %v", err)
 	}
+
 	if first != second {
 		t.Fatalf("keys differ for one claim: %q vs %q", first, second)
 	}
@@ -196,6 +215,7 @@ func TestClaimTextKeyIgnoresCaseSpacingAndTrailingPunctuation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ClaimTextKey other: %v", err)
 	}
+
 	if other == first {
 		t.Fatal("a different claim shares the key: the key states nothing")
 	}
@@ -226,6 +246,7 @@ func TestAMarkerWithoutAClaimTextKeyDecodesWithAnEmptyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
+
 	if strings.Contains(body, "claimtext=") {
 		t.Fatalf("marker carries a claim text key for a finding with no claim:\n%s", body)
 	}
@@ -234,6 +255,7 @@ func TestAMarkerWithoutAClaimTextKeyDecodesWithAnEmptyKey(t *testing.T) {
 	if !ok {
 		t.Fatalf("FindFinding: marker not found in\n%s", body)
 	}
+
 	if parsed.ClaimTextKey != "" {
 		t.Fatalf("ClaimTextKey = %q, want empty", parsed.ClaimTextKey)
 	}
@@ -247,11 +269,16 @@ func TestAMarkerWithoutAClaimTextKeyDecodesWithAnEmptyKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeFindingBody: %v", err)
 	}
+
 	if decodedHead != head {
 		t.Fatalf("head = %q, want %q", decodedHead, head)
 	}
+
 	if decoded.Claim != "" {
-		t.Fatalf("decoded claim = %q, want empty: the comment never carries the sentence", decoded.Claim)
+		t.Fatalf(
+			"decoded claim = %q, want empty: the comment never carries the sentence",
+			decoded.Claim,
+		)
 	}
 }
 
@@ -259,6 +286,7 @@ func TestMarkerParserRejectsMalformedValues(t *testing.T) {
 	if _, ok := FindReview("<!-- pr-review-agent:review:v1 head=ZZZZ -->"); ok {
 		t.Fatal("malformed review marker accepted")
 	}
+
 	if _, ok := FindFinding("<!-- pr-review-agent:finding:v1 head=abc id=def -->"); ok {
 		t.Fatal("malformed finding marker accepted")
 	}
@@ -279,6 +307,7 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
+
 	encoded += "\n\n<sub><i>Display footer.</i></sub>"
 	decodedHead, decodedFinding, err := DecodeFindingBody(domain.ReviewComment{
 		Path:      finding.Path,
@@ -289,14 +318,17 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeFindingBody: %v", err)
 	}
+
 	if decodedHead != head {
 		t.Fatalf("head = %q, want %q", decodedHead, head)
 	}
+
 	if decodedFinding.Title != finding.Title ||
 		decodedFinding.Body != finding.Body ||
 		decodedFinding.Suggestion != finding.Suggestion {
 		t.Fatalf("decoded finding = %+v, want %+v", decodedFinding, finding)
 	}
+
 	wantSuggestion := "```suggestion\n" + finding.Suggestion + "\n```"
 	if !strings.Contains(encoded, wantSuggestion) {
 		t.Fatalf("encoded body missing suggestion: %q", encoded)
@@ -308,6 +340,7 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFindingBody historical: %v", err)
 	}
+
 	_, decodedHistorical, err := DecodeFindingBody(domain.ReviewComment{
 		Path:      historical.Path,
 		StartLine: historical.StartLine,
@@ -317,6 +350,7 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecodeFindingBody historical: %v", err)
 	}
+
 	if decodedHistorical.Suggestion != "" {
 		t.Fatalf("historical suggestion = %q, want empty", decodedHistorical.Suggestion)
 	}
@@ -340,10 +374,12 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FindingID original: %v", err)
 	}
+
 	movedID, err := FindingID(moved)
 	if err != nil {
 		t.Fatalf("FindingID moved: %v", err)
 	}
+
 	if movedID != originalID {
 		t.Fatalf("moved id = %q, want stable id %q", movedID, originalID)
 	}

@@ -53,6 +53,7 @@ func PatchContents(patch string) (string, string) {
 
 func renderPatchLines(lines map[int]string) string {
 	maximum := 0
+
 	for line := range lines {
 		maximum = max(maximum, line)
 	}
@@ -114,7 +115,12 @@ func CommitReview(
 //	forbidden := ContentAPIRequest(request)
 func ContentAPIRequest(request *http.Request) bool {
 	endpoints := []string{
-		"/contents/", "/git/blobs/", "/git/trees/", "/tarball/", "/compare/", "/search/code",
+		"/contents/",
+		"/git/blobs/",
+		"/git/trees/",
+		"/tarball/",
+		"/compare/",
+		"/search/code",
 	}
 	for _, endpoint := range endpoints {
 		if strings.Contains(request.URL.Path, endpoint) {

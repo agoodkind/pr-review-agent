@@ -81,7 +81,9 @@ func (state State) WithPolicyRevision(revision string) State {
 		state.Completed = nil
 		state.Unread = nil
 	}
+
 	state.PolicyRevision = revision
+
 	return state
 }
 
@@ -108,14 +110,17 @@ func DecodeState(body string) (State, bool) {
 	if len(matches) != 9 {
 		return emptyState(), false
 	}
+
 	head := domain.HeadSHA("")
 	if matches[1] != "" {
 		parsed, err := domain.ParseHeadSHA(matches[1])
 		if err != nil {
 			return emptyState(), false
 		}
+
 		head = parsed
 	}
+
 	return State{
 		PolicyRevision: matches[8],
 		LastReviewed:   head,
@@ -134,12 +139,20 @@ func splitIDs(value string) []string {
 	if value == "" {
 		return nil
 	}
+
 	return strings.Split(value, ",")
 }
 
 func emptyState() State {
 	return State{
-		LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil, PolicyRevision: "",
+		LastReviewed:   "",
+		RunID:          "",
+		Status:         "",
+		Pending:        nil,
+		Completed:      nil,
+		ForcedBy:       "",
+		Unread:         nil,
+		PolicyRevision: "",
 	}
 }
 

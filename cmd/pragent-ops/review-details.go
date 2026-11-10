@@ -47,13 +47,29 @@ func reviewDetails(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return err
 	}
-	client := githubapp.NewClient(cfg, &http.Client{Timeout: reviewBodyRequestTimeout}, time.Now, slog.Default())
+	client := githubapp.NewClient(
+		cfg,
+		&http.Client{Timeout: reviewBodyRequestTimeout},
+		time.Now,
+		slog.Default(),
+	)
 	var snapshot reviewDetailsSnapshot
-	snapshot.Original, err = captureReviewBodies(ctx, client, opts.identity.installationID, repo, opts.identity.pullRequest)
+	snapshot.Original, err = captureReviewBodies(
+		ctx,
+		client,
+		opts.identity.installationID,
+		repo,
+		opts.identity.pullRequest,
+	)
 	if err != nil {
 		return err
 	}
-	snapshot.Source, err = client.GetCheckRunDetails(ctx, opts.identity.installationID, repo, opts.sourceCheckID)
+	snapshot.Source, err = client.GetCheckRunDetails(
+		ctx,
+		opts.identity.installationID,
+		repo,
+		opts.sourceCheckID,
+	)
 	if err != nil {
 		return err
 	}
@@ -69,7 +85,15 @@ func reviewDetails(ctx context.Context, args []string, stdout, stderr io.Writer)
 			return err
 		}
 	}
-	_, err = fmt.Fprintf(stdout, "Summary comment %d requires repair: %t. Check run %d matches head %s. The command applied changes: %t.\n", snapshot.Comment.ID, changed, snapshot.Source.Run.ID, snapshot.Original.PullRequest.Head, opts.identity.apply && changed)
+	_, err = fmt.Fprintf(
+		stdout,
+		"Summary comment %d requires repair: %t. Check run %d matches head %s. The command applied changes: %t.\n",
+		snapshot.Comment.ID,
+		changed,
+		snapshot.Source.Run.ID,
+		snapshot.Original.PullRequest.Head,
+		opts.identity.apply && changed,
+	)
 	return err
 }
 
@@ -77,17 +101,67 @@ func reviewDetailsFlags(args []string, output io.Writer) (reviewDetailsOptions, 
 	var opts reviewDetailsOptions
 	set := flag.NewFlagSet("review-details", flag.ContinueOnError)
 	set.SetOutput(output)
-	set.StringVar(&opts.identity.runtime, "runtime", "runtime.json", "Read the GitHub app ID and bot login from this public runtime file.")
-	set.StringVar(&opts.identity.appID, "app-id", "", "Use this GitHub app ID instead of the runtime value.")
-	set.StringVar(&opts.identity.botLogin, "bot-login", "", "Use this exact bot login instead of the runtime value.")
-	set.StringVar(&opts.identity.privateKeyFile, "app-private-key-file", "", "Read the GitHub app RSA private key from this file.")
-	set.StringVar(&opts.identity.repository, "repository", "", "Select the target repository using OWNER/REPO.")
+	set.StringVar(
+		&opts.identity.runtime,
+		"runtime",
+		"runtime.json",
+		"Read the GitHub app ID and bot login from this public runtime file.",
+	)
+	set.StringVar(
+		&opts.identity.appID,
+		"app-id",
+		"",
+		"Use this GitHub app ID instead of the runtime value.",
+	)
+	set.StringVar(
+		&opts.identity.botLogin,
+		"bot-login",
+		"",
+		"Use this exact bot login instead of the runtime value.",
+	)
+	set.StringVar(
+		&opts.identity.privateKeyFile,
+		"app-private-key-file",
+		"",
+		"Read the GitHub app RSA private key from this file.",
+	)
+	set.StringVar(
+		&opts.identity.repository,
+		"repository",
+		"",
+		"Select the target repository using OWNER/REPO.",
+	)
 	set.IntVar(&opts.identity.pullRequest, "pull-request", 0, "Select this pull request number.")
-	set.Int64Var(&opts.identity.installationID, "installation-id", 0, "Authenticate with this GitHub app installation ID.")
-	set.Int64Var(&opts.commentID, "summary-comment-id", 0, "Repair this exact existing summary comment.")
-	set.Int64Var(&opts.sourceCheckID, "source-check-run-id", 0, "Restore details from this exact successful check run.")
-	set.StringVar(&opts.identity.backupFile, "backup-file", "", "Create this private original snapshot before applying repair.")
-	set.BoolVar(&opts.identity.apply, "apply", false, "Update the summary after saving and verifying its original snapshot.")
+	set.Int64Var(
+		&opts.identity.installationID,
+		"installation-id",
+		0,
+		"Authenticate with this GitHub app installation ID.",
+	)
+	set.Int64Var(
+		&opts.commentID,
+		"summary-comment-id",
+		0,
+		"Repair this exact existing summary comment.",
+	)
+	set.Int64Var(
+		&opts.sourceCheckID,
+		"source-check-run-id",
+		0,
+		"Restore details from this exact successful check run.",
+	)
+	set.StringVar(
+		&opts.identity.backupFile,
+		"backup-file",
+		"",
+		"Create this private original snapshot before applying repair.",
+	)
+	set.BoolVar(
+		&opts.identity.apply,
+		"apply",
+		false,
+		"Update the summary after saving and verifying its original snapshot.",
+	)
 	if err := set.Parse(args); err != nil {
 		return opts, err
 	}
@@ -95,7 +169,9 @@ func reviewDetailsFlags(args []string, output io.Writer) (reviewDetailsOptions, 
 		return opts, errors.New("review-details does not accept positional arguments")
 	}
 	if opts.identity.repository == "" || opts.identity.pullRequest <= 0 || opts.identity.installationID <= 0 || opts.identity.privateKeyFile == "" || opts.commentID <= 0 || opts.sourceCheckID <= 0 {
-		return opts, errors.New("review-details requires repository, pull-request, installation-id, app-private-key-file, summary-comment-id, and source-check-run-id")
+		return opts, errors.New(
+			"review-details requires repository, pull-request, installation-id, app-private-key-file, summary-comment-id, and source-check-run-id",
+		)
 	}
 	if opts.identity.apply && opts.identity.backupFile == "" {
 		return opts, errors.New("review-details --apply requires a new backup-file")
@@ -103,10 +179,16 @@ func reviewDetailsFlags(args []string, output io.Writer) (reviewDetailsOptions, 
 	return opts, nil
 }
 
-func prepareReviewDetails(snapshot *reviewDetailsSnapshot, opts reviewDetailsOptions, cfg config.Config) error {
+func prepareReviewDetails(
+	snapshot *reviewDetailsSnapshot,
+	opts reviewDetailsOptions,
+	cfg config.Config,
+) error {
 	source := snapshot.Source
 	if source.Run.ID != opts.sourceCheckID || source.AppID != cfg.GitHubAppID || source.Run.Name != config.ReviewCheckName || source.Run.Head != snapshot.Original.PullRequest.Head || source.Run.Status != "completed" || source.Run.Conclusion != "success" {
-		return errors.New("the source must be the configured app's successful completed review check on the current head")
+		return errors.New(
+			"the source must be the configured app's successful completed review check on the current head",
+		)
 	}
 	count := 0
 	for _, comment := range snapshot.Original.Comments {
@@ -117,8 +199,12 @@ func prepareReviewDetails(snapshot *reviewDetailsSnapshot, opts reviewDetailsOpt
 			snapshot.Comment = comment
 		}
 	}
-	if count != 1 || snapshot.Comment.ID != opts.commentID || snapshot.Comment.Author != cfg.GitHubBotLogin || !marker.HasSummary(snapshot.Comment.Body) {
-		return errors.New("the selected comment must be the single summary owned by the configured bot")
+	if count != 1 || snapshot.Comment.ID != opts.commentID || snapshot.Comment.Author != cfg.GitHubBotLogin || !marker.HasSummary(
+		snapshot.Comment.Body,
+	) {
+		return errors.New(
+			"the selected comment must be the single summary owned by the configured bot",
+		)
 	}
 	if strings.Count(snapshot.Comment.Body, "<!-- pr-review-agent:state:v1 ") != 1 {
 		return errors.New("the summary must contain exactly one checkpoint")
@@ -132,24 +218,39 @@ func prepareReviewDetails(snapshot *reviewDetailsSnapshot, opts reviewDetailsOpt
 		return errors.New("the selected summary must record complete coverage of the current head")
 	}
 	var err error
-	snapshot.Repaired, err = review.RestoreReviewDetails(snapshot.Comment.Body, source.Summary, snapshot.Original.Threads, cfg.GitHubBotLogin)
+	snapshot.Repaired, err = review.RestoreReviewDetails(
+		snapshot.Comment.Body,
+		source.Summary,
+		snapshot.Original.Threads,
+		cfg.GitHubBotLogin,
+	)
 	if err != nil {
 		return err
 	}
 	if state.Status == marker.StateFailed {
-		if !review.MetadataMatches(snapshot.Comment.Body, head, diff.PullRequestRevision(snapshot.Original.PullRequest)) {
-			return errors.New("a failed checkpoint requires a metadata assessment matching the current pull request revision")
+		if !review.MetadataMatches(
+			snapshot.Comment.Body,
+			head,
+			diff.PullRequestRevision(snapshot.Original.PullRequest),
+		) {
+			return errors.New(
+				"a failed checkpoint requires a metadata assessment matching the current pull request revision",
+			)
 		}
 		latest := githubapp.LatestDecisionReview(snapshot.Original.Reviews, cfg.GitHubBotLogin)
 		if latest.State != "APPROVED" || latest.CommitID != head {
-			return errors.New("a failed checkpoint requires the latest bot decision to approve the current head")
+			return errors.New(
+				"a failed checkpoint requires the latest bot decision to approve the current head",
+			)
 		}
 		snapshot.Repaired = review.ClearUpdateFailure(snapshot.Repaired)
 		snapshot.Repaired, err = completeReviewDetailsCheckpoint(snapshot.Repaired)
 		return err
 	}
 	if state.Status != marker.StateDone {
-		return errors.New("review-details requires a completed checkpoint or a recoverable failed checkpoint")
+		return errors.New(
+			"review-details requires a completed checkpoint or a recoverable failed checkpoint",
+		)
 	}
 	return nil
 }

@@ -54,25 +54,50 @@ func TestUncappedProductionRuntimeRetainsAccounting(t *testing.T) {
 	}
 	var summary review.Summary
 	summary.Usage.ProviderColumns = cfg.ReviewPolicy.ProviderDetails()
-	summary.Usage.ProviderAttempts = []review.ProviderAttempt{{Status: review.ProviderStatus{ProviderID: provider.ID, Model: provider.Model}, Count: 1}}
+	summary.Usage.ProviderAttempts = []review.ProviderAttempt{
+		{Status: review.ProviderStatus{ProviderID: provider.ID, Model: provider.Model}, Count: 1},
+	}
 	summary.Usage.PeriodUsage = periods
 	body := review.RenderDetails(summary)
-	if !strings.Contains(body, "Recorded usage<br>**22 tokens**") || strings.Contains(body, "Recorded usage<br>unavailable") {
+	if !strings.Contains(body, "Recorded usage<br>**22 tokens**") ||
+		strings.Contains(body, "Recorded usage<br>unavailable") {
 		t.Fatalf("The review must display the stored uncapped usage: %s", body)
 	}
 }
 
 func TestAccountingHistoryQueriesHaveIndependentTimeouts(t *testing.T) {
 	endpoint, transport := accountingWorkerTLS(t, time.Second)
-	cfg := loadUncappedRuntime(t, endpoint, map[string]string{"PROVIDER_USAGE_QUERY_TIMEOUT": "1500ms"})
+	cfg := loadUncappedRuntime(
+		t,
+		endpoint,
+		map[string]string{"PROVIDER_USAGE_QUERY_TIMEOUT": "1500ms"},
+	)
 	provider := cfg.Providers[0]
 	var keys []review.ProviderModelKey
 	for index := range 6 {
-		keys = append(keys, review.ProviderModelKey{ProviderID: provider.ID, RequestedModel: fmt.Sprintf("history-%d", index)})
+		keys = append(
+			keys,
+			review.ProviderModelKey{
+				ProviderID:     provider.ID,
+				RequestedModel: fmt.Sprintf("history-%d", index),
+			},
+		)
 	}
 	at := time.Now().UTC().Truncate(time.Millisecond)
 	storage := quota.NewClient(endpoint, cfg.GitHubWebhookSecret, transport.Client())
-	reportDisplayUsage(t, storage, at, provider.ID, keys[0].RequestedModel, provider.Model, 20, 0, 0, 2, 22)
+	reportDisplayUsage(
+		t,
+		storage,
+		at,
+		provider.ID,
+		keys[0].RequestedModel,
+		provider.Model,
+		20,
+		0,
+		0,
+		2,
+		22,
+	)
 	client := openai.NewClient(cfg, transport.Client())
 	periods, err := client.LoadProviderPeriodUsage(t.Context(), keys, at.Add(time.Minute))
 	if err != nil || len(periods) != len(keys) {
@@ -90,7 +115,11 @@ func TestAccountingHistoryQueriesHaveIndependentTimeouts(t *testing.T) {
 
 func TestRuntimeUsageQueryTimeoutControlsRecordedTotals(t *testing.T) {
 	endpoint, transport := accountingWorkerTLS(t, 100*time.Millisecond)
-	cfg := loadUncappedRuntime(t, endpoint, map[string]string{"PROVIDER_USAGE_QUERY_TIMEOUT": "20ms"})
+	cfg := loadUncappedRuntime(
+		t,
+		endpoint,
+		map[string]string{"PROVIDER_USAGE_QUERY_TIMEOUT": "20ms"},
+	)
 	provider := cfg.Providers[0]
 	storage := quota.NewClient(endpoint, cfg.GitHubWebhookSecret, transport.Client())
 	at := time.Now().UTC().Truncate(time.Millisecond)
@@ -99,13 +128,21 @@ func TestRuntimeUsageQueryTimeoutControlsRecordedTotals(t *testing.T) {
 	client := openai.NewClient(cfg, transport.Client())
 	periods, err := client.LoadProviderPeriodUsage(t.Context(), keys, at.Add(time.Second))
 	if !errors.Is(err, context.DeadlineExceeded) || len(periods) != 1 || periods[0].Available {
-		t.Fatalf("The configured display deadline must reject a slower real storage response: %+v, %v", periods, err)
+		t.Fatalf(
+			"The configured display deadline must reject a slower real storage response: %+v, %v",
+			periods,
+			err,
+		)
 	}
 	cfg = loadUncappedRuntime(t, endpoint, map[string]string{"PROVIDER_USAGE_QUERY_TIMEOUT": "1s"})
 	client = openai.NewClient(cfg, transport.Client())
 	periods, err = client.LoadProviderPeriodUsage(t.Context(), keys, at.Add(time.Second))
 	if err != nil || len(periods) != 1 || !periods[0].Available || periods[0].TotalTokens != 22 {
-		t.Fatalf("A longer configured display deadline must retrieve the stored usage: %+v, %v", periods, err)
+		t.Fatalf(
+			"A longer configured display deadline must retrieve the stored usage: %+v, %v",
+			periods,
+			err,
+		)
 	}
 }
 
@@ -118,15 +155,21 @@ func accountingWorkerTLS(t *testing.T, latency time.Duration) (string, *httptest
 	path := target.Path
 	target.Path = ""
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		time.Sleep(latency)
-		proxy.ServeHTTP(writer, request)
-	}))
+	server := httptest.NewTLSServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			time.Sleep(latency)
+			proxy.ServeHTTP(writer, request)
+		}),
+	)
 	t.Cleanup(server.Close)
 	return server.URL + path, server
 }
 
-func loadUncappedRuntime(t *testing.T, endpoint string, settings ...map[string]string) config.Config {
+func loadUncappedRuntime(
+	t *testing.T,
+	endpoint string,
+	settings ...map[string]string,
+) config.Config {
 	t.Helper()
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
@@ -163,7 +206,12 @@ func loadUncappedRuntime(t *testing.T, endpoint string, settings ...map[string]s
 		t.Fatal(err)
 	}
 	credentials := map[string]string{
-		"GITHUB_PRIVATE_KEY":                     string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})),
+		"GITHUB_PRIVATE_KEY": string(
+			pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+			}),
+		),
 		"GITHUB_WEBHOOK_SECRET":                  "test-review-budget-secret",
 		"PROVIDER_OPENAI_GOODKIND_IO_API_KEY":    "test-key",
 		"PROVIDER_OPENAI_GOODKINDALEX_API_KEY":   "test-key",
@@ -178,10 +226,13 @@ func loadUncappedRuntime(t *testing.T, endpoint string, settings ...map[string]s
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadRuntime(data, func(name string) (string, bool) {
-		value, found := credentials[name]
-		return value, found
-	})
+	cfg, err := config.LoadRuntime(
+		data,
+		func(name string) (string, bool) {
+			value, found := credentials[name]
+			return value, found
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

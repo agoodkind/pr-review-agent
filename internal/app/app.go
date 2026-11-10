@@ -41,20 +41,34 @@ type App struct {
 }
 
 // New wires the review runtime and returns a ready application.
-func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, logger *slog.Logger) *App {
+func New(
+	cfg config.Config,
+	githubHTTP *http.Client,
+	openaiHTTP *http.Client,
+	logger *slog.Logger,
+) *App {
 	if logger == nil {
 		logger = slog.Default()
 	}
+
 	if githubHTTP == nil {
 		githubHTTP = http.DefaultClient
 	}
+
 	if openaiHTTP == nil {
 		openaiHTTP = http.DefaultClient
 	}
 
 	githubClient := githubapp.NewClient(cfg, githubHTTP, time.Now, logger)
 	openaiClient := openai.NewClient(cfg, openaiHTTP)
-	reconcileService := reconcile.NewService(githubClient, openaiClient, cfg.GitHubBotLogin, logger, cfg.PromptBytes(), cfg.ReviewPolicy)
+	reconcileService := reconcile.NewService(
+		githubClient,
+		openaiClient,
+		cfg.GitHubBotLogin,
+		logger,
+		cfg.PromptBytes(),
+		cfg.ReviewPolicy,
+	)
 	collector := diff.NewCollector(githubClient)
 	reviewService := review.NewService(
 		githubClient,
@@ -77,18 +91,20 @@ func New(cfg config.Config, githubHTTP *http.Client, openaiHTTP *http.Client, lo
 	reviewService.SetFailureVerdictPolicy(cfg.FailureVerdictPolicy)
 	reviewService.SetApproveEachCommit(cfg.ApproveEachCommit)
 
-	cache := queue.NewDeliveryCache(
-		config.DeliveryCacheCapacity,
-		config.DeliveryCacheTTL,
-		time.Now,
-	)
+	cache := queue.NewDeliveryCache(config.DeliveryCacheCapacity, config.DeliveryCacheTTL, time.Now)
 	coordinator := &reassessment.Coordinator{
 		BotLogin:  cfg.GitHubBotLogin,
 		Discovery: githubClient,
 		Clock:     clock.System,
 		Settings:  cfg.Reassessment,
-		Store:     &reassessment.Client{URL: cfg.Reassessment.QueueURL, SigningKey: cfg.GitHubWebhookSecret, HTTP: githubHTTP},
-		GitHub:    githubClient, Providers: openaiClient, Logger: logger,
+		Store: &reassessment.Client{
+			URL:        cfg.Reassessment.QueueURL,
+			SigningKey: cfg.GitHubWebhookSecret,
+			HTTP:       githubHTTP,
+		},
+		GitHub:    githubClient,
+		Providers: openaiClient,
+		Logger:    logger,
 	}
 	dispatcher := queue.NewDispatcher(
 		config.QueueCapacity,
@@ -134,10 +150,18 @@ func (application *App) Start(ctx context.Context) {
 				)
 			}
 		}()
-		application.logger.InfoContext(runCtx, "http server listening", slog.String("addr", application.server.Addr))
+		application.logger.InfoContext(
+			runCtx,
+			"http server listening",
+			slog.String("addr", application.server.Addr),
+		)
 		err := application.server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			application.logger.ErrorContext(runCtx, "http server failed", slog.String("err", err.Error()))
+			application.logger.ErrorContext(
+				runCtx,
+				"http server failed",
+				slog.String("err", err.Error()),
+			)
 		}
 	}()
 }
@@ -150,9 +174,11 @@ func (application *App) Shutdown(ctx context.Context) error {
 			shutdownErr = fmt.Errorf("shutdown http server: %w", err)
 		}
 	}
+
 	if err := application.dispatcher.Shutdown(ctx); err != nil && shutdownErr == nil {
 		shutdownErr = fmt.Errorf("shutdown dispatcher: %w", err)
 	}
+
 	if application.runCancel != nil {
 		application.runCancel()
 	}
@@ -161,6 +187,7 @@ func (application *App) Shutdown(ctx context.Context) error {
 	if err != nil {
 		shutdownErr = errors.Join(shutdownErr, err)
 	}
+
 	return shutdownErr
 }
 
@@ -175,6 +202,7 @@ func (runner reviewRunner) Run(ctx context.Context, job domain.ReviewJob) error 
 	if runner.reassessment != nil {
 		ctx = review.WithOutcomeSink(ctx, runner.reassessment.Observe)
 	}
+
 	outcome, err := runner.service.RunWithOutcome(ctx, job)
 	if err != nil {
 		if outcome.ReassessmentID != "" {
@@ -182,9 +210,13 @@ func (runner reviewRunner) Run(ctx context.Context, job domain.ReviewJob) error 
 		} else {
 			runner.cache.Release(job.DeliveryID)
 		}
+
 		logger.ErrorContext(ctx, "review job", slog.String("err", err.Error()))
+
 		return fmt.Errorf("review job: %w", err)
 	}
+
 	runner.cache.Settle(job.DeliveryID)
+
 	return nil
 }

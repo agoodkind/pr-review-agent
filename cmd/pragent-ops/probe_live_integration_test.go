@@ -21,7 +21,9 @@ func TestLiveProviderProbe(t *testing.T) {
 		t.Skip("Live provider credentials are not configured.")
 	}
 	if providerID == "" || credentialPath == "" {
-		t.Fatal("Live provider testing requires PR_AGENT_LIVE_PROVIDER_ID and PR_AGENT_LIVE_API_KEY_FILE.")
+		t.Fatal(
+			"Live provider testing requires PR_AGENT_LIVE_PROVIDER_ID and PR_AGENT_LIVE_API_KEY_FILE.",
+		)
 	}
 	signingKeyPath := os.Getenv("PR_AGENT_LIVE_SIGNING_KEY_FILE")
 	runtimePath := filepath.Join("..", "..", "runtime.json")
@@ -43,8 +45,15 @@ func TestLiveProviderProbe(t *testing.T) {
 	}
 	directory := filepath.Join(t.TempDir(), "probe")
 	args := []string{
-		"probe", "--provider", providerID, "--credential-file", credentialPath,
-		"--runtime", runtimePath, "--output-dir", directory,
+		"probe",
+		"--provider",
+		providerID,
+		"--credential-file",
+		credentialPath,
+		"--runtime",
+		runtimePath,
+		"--output-dir",
+		directory,
 	}
 	if signingKeyPath != "" {
 		args = append(args, "--signing-key-file", signingKeyPath)
@@ -68,14 +77,18 @@ func TestLiveProviderProbe(t *testing.T) {
 		t.Fatal("The probe result is invalid.")
 	}
 	selected := cfg.Providers[0]
-	if !result.Success || result.Provider != selected.ID || result.ConfiguredModel != selected.Model || result.ReasoningEffort != string(selected.ReasoningEffort) {
+	if !result.Success || result.Provider != selected.ID || result.ConfiguredModel != selected.Model || result.ReasoningEffort != string(
+		selected.ReasoningEffort,
+	) {
 		t.Fatal("The successful probe did not identify the selected runtime provider settings.")
 	}
 	usage := result.Usage
 	if usage.Requests != 1 || usage.ReportedRequests != 1 || usage.InputTokens <= 0 || usage.OutputTokens <= 0 || usage.TotalTokens <= 0 {
 		t.Fatal("The provider did not report token usage for exactly one review request.")
 	}
-	if len(usage.Models) != 1 || usage.Models[0].RequestedModel != selected.Model || usage.Models[0].Model == "" {
+	if len(
+		usage.Models,
+	) != 1 || usage.Models[0].RequestedModel != selected.Model || usage.Models[0].Model == "" {
 		t.Fatal("The usage report did not identify the requested and actual models.")
 	}
 }

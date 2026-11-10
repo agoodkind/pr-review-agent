@@ -18,14 +18,29 @@ func TestLoadedWindowAndTokenTypesDetermineAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	now := time.Date(2026, time.October, 4, 12, 0, 0, 0, time.UTC)
 	provider := cfg.Providers[0]
 	events := []quota.Event{
-		{AdmittedAtMS: now.Add(-16 * time.Minute).UnixMilli(), Usage: quota.Usage{InputTokens: 1000, OutputTokens: 10, TotalTokens: 1010}},
-		{AdmittedAtMS: now.Add(-time.Minute).UnixMilli(), Usage: quota.Usage{InputTokens: 50, OutputTokens: 900, TotalTokens: 950}},
+		{
+			AdmittedAtMS: now.Add(-16 * time.Minute).UnixMilli(),
+			Usage:        quota.Usage{InputTokens: 1000, OutputTokens: 10, TotalTokens: 1010},
+		},
+		{
+			AdmittedAtMS: now.Add(-time.Minute).UnixMilli(),
+			Usage:        quota.Usage{InputTokens: 50, OutputTokens: 900, TotalTokens: 950},
+		},
 	}
-	snapshot, err := quota.Evaluate(provider.TokenWindow, now, provider.TokenLimit, provider.TokenTypes, events, now.Add(-time.Hour).UnixMilli())
-	if err != nil || snapshot.Allowed || snapshot.Used != 50 || snapshot.AvailableAtMS != now.Add(14*time.Minute).UnixMilli() {
+	snapshot, err := quota.Evaluate(
+		provider.TokenWindow,
+		now,
+		provider.TokenLimit,
+		provider.TokenTypes,
+		events,
+		now.Add(-time.Hour).UnixMilli(),
+	)
+	if err != nil || snapshot.Allowed || snapshot.Used != 50 ||
+		snapshot.AvailableAtMS != now.Add(14*time.Minute).UnixMilli() {
 		t.Fatalf("loaded quota admission = %+v, error = %v", snapshot, err)
 	}
 }

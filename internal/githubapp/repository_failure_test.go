@@ -16,29 +16,39 @@ import (
 // token refusal cannot cause the legacy HTTP-status recovery.
 func TestGitCurrentTokenRefusalDoesNotWidenReview(t *testing.T) {
 	for _, status := range []int{http.StatusNotFound, http.StatusUnprocessableEntity} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			fixture := newGitFixture(t)
-			fixture.tokenLifetime = time.Minute
-			fixture.tokenStatuses = []int{http.StatusCreated, status, http.StatusCreated}
-			ctx, pullRequest, ref := openGitFixtureReview(t, fixture)
-			_, err := diff.NewCollector(fixture.client).CollectRange(
-				ctx, ref, pullRequest, domain.HeadSHA(gitHistoryUnknownRevision),
-			)
-
-			apiError, matches := errors.AsType[githubapp.APIError](err)
-			if !matches || apiError.StatusCode != status {
-				t.Fatalf("current token status %d returned %v", status, err)
-			}
-
-			fixture.mutex.Lock()
-			defer fixture.mutex.Unlock()
-
-			if fixture.tokenRequests != 2 || fixture.contentRequests != 0 || fixture.transfers != 0 {
-				t.Fatalf("token requests=%d, content requests=%d, Git transfers=%d",
-					fixture.tokenRequests, fixture.contentRequests, fixture.transfers,
+		t.Run(
+			http.StatusText(status),
+			func(t *testing.T) {
+				fixture := newGitFixture(t)
+				fixture.tokenLifetime = time.Minute
+				fixture.tokenStatuses = []int{http.StatusCreated, status, http.StatusCreated}
+				ctx, pullRequest, ref := openGitFixtureReview(t, fixture)
+				_, err := diff.NewCollector(fixture.client).CollectRange(
+					ctx,
+					ref,
+					pullRequest,
+					domain.HeadSHA(gitHistoryUnknownRevision),
 				)
-			}
-		})
+
+				apiError, matches := errors.AsType[githubapp.APIError](err)
+				if !matches || apiError.StatusCode != status {
+					t.Fatalf("current token status %d returned %v", status, err)
+				}
+
+				fixture.mutex.Lock()
+				defer fixture.mutex.Unlock()
+
+				if fixture.tokenRequests != 2 || fixture.contentRequests != 0 ||
+					fixture.transfers != 0 {
+					t.Fatalf(
+						"token requests=%d, content requests=%d, Git transfers=%d",
+						fixture.tokenRequests,
+						fixture.contentRequests,
+						fixture.transfers,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -47,13 +57,23 @@ func TestGitCurrentTokenRefusalDoesNotWidenReview(t *testing.T) {
 func TestGitUnrelatedCurrentHistoryDoesNotWidenReview(t *testing.T) {
 	fixture := newGitFixture(t)
 	tree := gitCommand(t, fixture.directory, "rev-parse", string(fixture.head)+"^{tree}")
-	unrelated := gitCommand(t, fixture.directory, "commit-tree", tree, "-m", "Create unrelated current history")
+	unrelated := gitCommand(
+		t,
+		fixture.directory,
+		"commit-tree",
+		tree,
+		"-m",
+		"Create unrelated current history",
+	)
 	gitCommand(t, fixture.directory, "update-ref", "refs/heads/unrelated-current", unrelated)
 	fixture.head = domain.HeadSHA(unrelated)
 	ctx, pullRequest, ref := openGitFixtureReview(t, fixture)
 
 	_, err := diff.NewCollector(fixture.client).CollectRange(
-		ctx, ref, pullRequest, domain.HeadSHA(gitHistoryUnknownRevision),
+		ctx,
+		ref,
+		pullRequest,
+		domain.HeadSHA(gitHistoryUnknownRevision),
 	)
 
 	apiError, matches := errors.AsType[githubapp.APIError](err)
@@ -61,7 +81,8 @@ func TestGitUnrelatedCurrentHistoryDoesNotWidenReview(t *testing.T) {
 		t.Fatalf("unrelated current history returned %v", err)
 	}
 
-	if strings.Contains(err.Error(), "list changed files") || !strings.HasPrefix(err.Error(), "compare ") {
+	if strings.Contains(err.Error(), "list changed files") ||
+		!strings.HasPrefix(err.Error(), "compare ") {
 		t.Fatalf("The current history error entered full collection: %v", err)
 	}
 }
@@ -71,16 +92,35 @@ func TestGitUnrelatedCurrentHistoryDoesNotWidenReview(t *testing.T) {
 func TestGitPointerWithoutMappingPreservesOrdinaryReview(t *testing.T) {
 	fixture := newGitFixture(t)
 	gitCommand(t, fixture.directory, "rm", ".gitmodules")
-	gitCommand(t, fixture.directory, "commit", "-m", "Keep an embedded repository pointer without a mapping")
+	gitCommand(
+		t,
+		fixture.directory,
+		"commit",
+		"-m",
+		"Keep an embedded repository pointer without a mapping",
+	)
 	fixture.head = domain.HeadSHA(gitCommand(t, fixture.directory, "rev-parse", "HEAD"))
 	ctx, pullRequest, ref := openGitFixtureReview(t, fixture)
 
-	pointer, err := fixture.client.GetFileContent(ctx, ref.InstallationID, ref.Repository, "lib/module", ref.Head)
-	if err != nil || pointer.Metadata != "" || string(pointer.Data) != "Subproject commit "+string(fixture.root)+"\n" {
+	pointer, err := fixture.client.GetFileContent(
+		ctx,
+		ref.InstallationID,
+		ref.Repository,
+		"lib/module",
+		ref.Head,
+	)
+	if err != nil || pointer.Metadata != "" ||
+		string(pointer.Data) != "Subproject commit "+string(fixture.root)+"\n" {
 		t.Fatalf("unmapped parent pointer = %+v: %v", pointer, err)
 	}
 
-	source, err := fixture.client.GetFileContent(ctx, ref.InstallationID, ref.Repository, gitFixtureSourcePath, ref.Head)
+	source, err := fixture.client.GetFileContent(
+		ctx,
+		ref.InstallationID,
+		ref.Repository,
+		gitFixtureSourcePath,
+		ref.Head,
+	)
 	if err != nil || string(source.Data) != gitFixtureSourceContent {
 		t.Fatalf("ordinary source = %q: %v", source.Data, err)
 	}
@@ -124,7 +164,13 @@ func TestGitMalformedMappingStillFails(t *testing.T) {
 	gitCommand(t, fixture.directory, "commit", "-m", "Create an invalid submodule mapping fixture")
 	head := domain.HeadSHA(gitCommand(t, fixture.directory, "rev-parse", "HEAD"))
 
-	_, err := fixture.client.GetFileContent(t.Context(), 77, fixture.repo, gitFixtureSourcePath, head)
+	_, err := fixture.client.GetFileContent(
+		t.Context(),
+		77,
+		fixture.repo,
+		gitFixtureSourcePath,
+		head,
+	)
 	if err == nil {
 		t.Fatal("An existing malformed mapping did not fail source acquisition")
 	}

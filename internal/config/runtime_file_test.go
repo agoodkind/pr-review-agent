@@ -20,6 +20,7 @@ func TestRepositoryRuntimeLoadsServiceConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var runtime struct {
 		Providers []struct {
 			ID                    string `json:"id"`
@@ -30,33 +31,45 @@ func TestRepositoryRuntimeLoadsServiceConfiguration(t *testing.T) {
 	if err := json.Unmarshal(data, &runtime); err != nil {
 		t.Fatal(err)
 	}
+
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	credentials := map[string]string{
-		"GITHUB_PRIVATE_KEY": string(pem.EncodeToMemory(&pem.Block{
-			Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-		})),
+		"GITHUB_PRIVATE_KEY": string(
+			pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+			}),
+		),
 		"GITHUB_WEBHOOK_SECRET": "fixture-runtime-webhook-secret",
 	}
+
 	for _, provider := range runtime.Providers {
 		prefix := "PROVIDER_" + strings.ToUpper(provider.ID)
 		credentials[prefix+"_API_KEY"] = "fixture-runtime-api-key"
 		if provider.AccessClientIDBinding != "" {
 			credentials[prefix+"_CF_ACCESS_CLIENT_ID"] = "fixture-runtime-access-id"
 		}
+
 		if provider.AccessSecretBinding != "" {
 			credentials[prefix+"_CF_ACCESS_CLIENT_SECRET"] = "fixture-runtime-access-secret"
 		}
 	}
-	cfg, err := config.LoadRuntime(data, func(name string) (string, bool) {
-		value, found := credentials[name]
-		return value, found
-	})
+
+	cfg, err := config.LoadRuntime(
+		data,
+		func(name string) (string, bool) {
+			value, found := credentials[name]
+			return value, found
+		},
+	)
 	if err != nil {
 		t.Fatalf("load repository runtime: %v", err)
 	}
+
 	if cfg.GitHubPrivateKey == nil || len(cfg.GitHubWebhookSecret) == 0 ||
 		len(cfg.Providers) == 0 || len(cfg.Providers) != len(runtime.Providers) {
 		t.Fatal("repository runtime did not configure the service credentials and providers")

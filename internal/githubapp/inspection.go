@@ -8,17 +8,37 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
-// SearchRepository finds literal matches in the private reviewed-head snapshot.
-func (client *Client) SearchRepository(ctx context.Context, installationID int64, repo domain.Repository, query string) ([]string, error) {
+// SearchRepository finds literal matches in the reviewed snapshot.
+//
+// The client requires an active snapshot and rejects empty or multiline
+// queries.
+//
+// For example:
+//
+//	matches, err := client.SearchRepository(
+//		ctx,
+//		installationID,
+//		repo,
+//		"OpenRoot",
+//	)
+func (client *Client) SearchRepository(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	query string,
+) ([]string, error) {
 	if strings.TrimSpace(query) == "" || strings.ContainsAny(query, "\r\n\x00") {
 		return nil, errors.New("repository search requires a nonempty literal query")
 	}
+
 	scope, err := client.repositorySnapshotScope(ctx, installationID, repo)
 	if err != nil {
 		return nil, err
 	}
+
 	if scope == nil {
 		return nil, errors.New("repository search requires an active repository snapshot scope")
 	}
+
 	return scope.search(ctx, query)
 }

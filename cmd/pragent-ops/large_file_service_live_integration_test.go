@@ -86,7 +86,9 @@ type largeFileEvidence interface {
 
 func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	if os.Getenv("PR_AGENT_LIVE_LARGE_FILE_TEST") != "1" {
-		t.Skip("Set PR_AGENT_LIVE_LARGE_FILE_TEST=1 to exercise the deployed classification service.")
+		t.Skip(
+			"Set PR_AGENT_LIVE_LARGE_FILE_TEST=1 to exercise the deployed classification service.",
+		)
 	}
 	selected := largeFileLiveScenarios(t)
 	caseTimeout, suiteTimeout := largeFileLiveTimeouts(t, len(selected))
@@ -95,10 +97,24 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), suiteTimeout)
 	defer cancel()
 	live.health(t, ctx)
-	original := liveReviewBodyCapture(t, ctx, live.fixture.client, live.fixture.opts, live.fixture.repo)
-	largeFileSave(t, live.evidence, "original.json", largeFileOriginalEvidence{Tree: live.originalTree, Snapshot: original})
+	original := liveReviewBodyCapture(
+		t,
+		ctx,
+		live.fixture.client,
+		live.fixture.opts,
+		live.fixture.repo,
+	)
+	largeFileSave(
+		t,
+		live.evidence,
+		"original.json",
+		largeFileOriginalEvidence{Tree: live.originalTree, Snapshot: original},
+	)
 	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), largeFileCleanupTimeout)
+		cleanupCtx, cleanupCancel := context.WithTimeout(
+			context.Background(),
+			largeFileCleanupTimeout,
+		)
 		defer cleanupCancel()
 		live.restore(t, cleanupCtx)
 	})
@@ -106,14 +122,29 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	if selected["generated_sql"] {
 		sqlPath := largeFileFixturePrefix + "generated.sql"
 		sql := largeFileSQL(live.limit)
-		live.stage(t, ctx, "Add generated migration review fixture", "The fixture contains marked generated SQL. The configured generated-content policy excludes its body from ordinary review. The test does not execute the SQL.", map[string]string{sqlPath: sql}, "")
-		live.await(t, ctx, "generated_sql", func(_ reviewBodySnapshot, body string) bool {
-			kind, action, found := largeFileAssessment(body, sqlPath)
-			if !found || kind != "generated" || action != "exclude" {
-				return false
-			}
-			return largeFileDetail(body, "All file content inspected") == "no" && largeFileDetail(body, "Review scope assessed") == "yes"
-		})
+		live.stage(
+			t,
+			ctx,
+			"Add generated migration review fixture",
+			"The fixture contains marked generated SQL. The configured generated-content policy excludes its body from ordinary review. The test does not execute the SQL.",
+			map[string]string{sqlPath: sql},
+			"",
+		)
+		live.await(
+			t,
+			ctx,
+			"generated_sql",
+			func(_ reviewBodySnapshot, body string) bool {
+				kind, action, found := largeFileAssessment(body, sqlPath)
+				if !found || kind != "generated" || action != "exclude" {
+					return false
+				}
+				return largeFileDetail(
+					body,
+					"All file content inspected",
+				) == "no" && largeFileDetail(body, "Review scope assessed") == "yes"
+			},
+		)
 	}
 
 	vaultPath := largeFileFixturePrefix + "credentials.vault"
@@ -122,51 +153,138 @@ func TestLiveLargeFileClassificationsThroughDeployedService(t *testing.T) {
 	previousCiphertext := largeFileCiphertext(live.limit/2, "a")
 	reader := "package fixture\n\n// The compiled role remains independent of the encrypted authentication token.\nconst CredentialSource = \"credentials.vault\"\nconst CredentialReference = \"service_token\"\n\nfunc AllowedRole(_ map[string]string) string { return \"reader\" }\n"
 	if selected["credential_rotation"] {
-		rotation := strings.Replace(reader, "The compiled role remains independent of the encrypted authentication token.", "The credential rotation preserves the reader role independently of the token.", 1)
-		baseline := largeFileBaselineSpec{Files: map[string]string{vaultPath: previousCiphertext, authorizationPath: reader}, Modified: []string{vaultPath, authorizationPath}, Oversized: vaultPath}
-		live.stageWithBaseline(t, ctx, "credential_rotation", "Rotate encrypted credential fixture", "Rotate the existing service_token authentication credential in credentials.vault. AllowedRole in authorization.go returns reader independently of the token. The test ciphertext does not contain real credentials. The fixture does not supply external validation results.", baseline, map[string]string{vaultPath: ciphertext, authorizationPath: rotation}, "")
-		live.await(t, ctx, "credential_rotation", func(_ reviewBodySnapshot, body string) bool {
-			_, action, found := largeFileAssessment(body, vaultPath)
-			return found && action == "exclude" && largeFileDetail(body, "Review scope assessed") == "yes"
-		})
+		rotation := strings.Replace(
+			reader,
+			"The compiled role remains independent of the encrypted authentication token.",
+			"The credential rotation preserves the reader role independently of the token.",
+			1,
+		)
+		baseline := largeFileBaselineSpec{
+			Files:     map[string]string{vaultPath: previousCiphertext, authorizationPath: reader},
+			Modified:  []string{vaultPath, authorizationPath},
+			Oversized: vaultPath,
+		}
+		live.stageWithBaseline(
+			t,
+			ctx,
+			"credential_rotation",
+			"Rotate encrypted credential fixture",
+			"Rotate the existing service_token authentication credential in credentials.vault. AllowedRole in authorization.go returns reader independently of the token. The test ciphertext does not contain real credentials. The fixture does not supply external validation results.",
+			baseline,
+			map[string]string{vaultPath: ciphertext, authorizationPath: rotation},
+			"",
+		)
+		live.await(
+			t,
+			ctx,
+			"credential_rotation",
+			func(_ reviewBodySnapshot, body string) bool {
+				_, action, found := largeFileAssessment(body, vaultPath)
+				return found && action == "exclude" && largeFileDetail(
+					body,
+					"Review scope assessed",
+				) == "yes"
+			},
+		)
 	}
 
 	if selected["hidden_authorization"] {
 		permissions := "package fixture\n\n// The encrypted document determines the role and allowed deletion resources.\nconst AuthorizationSource = \"credentials.vault\"\n\nfunc AllowedRole(vaultValues map[string]string) string { return vaultValues[\"role\"] }\n\nfunc DeletionResources(vaultValues map[string][]string) []string { return vaultValues[\"allowed_delete_resources\"] }\n"
-		baseline := largeFileBaselineSpec{Files: map[string]string{vaultPath: previousCiphertext, authorizationPath: reader}, Modified: []string{vaultPath, authorizationPath}, Oversized: vaultPath}
-		live.stageWithBaseline(t, ctx, "hidden_authorization", "Change encrypted authorization fixture", "Change role and allowed_delete_resources inside the existing credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The ciphertext uses the same harmless test payload as the credential-rotation case. The fixture does not supply decrypted values or permission validation results.", baseline, map[string]string{vaultPath: ciphertext, authorizationPath: permissions}, "")
-		live.await(t, ctx, "hidden_authorization", func(_ reviewBodySnapshot, body string) bool {
-			assessment, found := largeFilePersistedAssessment(body, vaultPath)
-			return found && assessment.ContentKind == "encrypted" && assessment.ContentReviewRequirement == domain.ContentReviewRequired &&
-				(assessment.Action == domain.FileActionGap || assessment.Action == domain.FileActionInspectRelated) &&
-				largeFileDetail(body, "All file content inspected") == "yes" && largeFileDetail(body, "Review scope assessed") == "no"
-		})
+		baseline := largeFileBaselineSpec{
+			Files:     map[string]string{vaultPath: previousCiphertext, authorizationPath: reader},
+			Modified:  []string{vaultPath, authorizationPath},
+			Oversized: vaultPath,
+		}
+		live.stageWithBaseline(
+			t,
+			ctx,
+			"hidden_authorization",
+			"Change encrypted authorization fixture",
+			"Change role and allowed_delete_resources inside the existing credentials.vault. authorization.go now delegates permission decisions to those encrypted values. The ciphertext uses the same harmless test payload as the credential-rotation case. The fixture does not supply decrypted values or permission validation results.",
+			baseline,
+			map[string]string{vaultPath: ciphertext, authorizationPath: permissions},
+			"",
+		)
+		live.await(
+			t,
+			ctx,
+			"hidden_authorization",
+			func(_ reviewBodySnapshot, body string) bool {
+				assessment, found := largeFilePersistedAssessment(body, vaultPath)
+				return found && assessment.ContentKind == "encrypted" && assessment.ContentReviewRequirement == domain.ContentReviewRequired &&
+					(assessment.Action == domain.FileActionGap || assessment.Action == domain.FileActionInspectRelated) &&
+					largeFileDetail(
+						body,
+						"All file content inspected",
+					) == "yes" && largeFileDetail(body, "Review scope assessed") == "no"
+			},
+		)
 	}
 
 	if selected["gitlink_initial"] || selected["gitlink_updated"] {
 		first := live.fixture.original.Head.SHA
 		second := clippedLiveGit(t, ctx, live.worktree, "rev-parse", first+"^")
 		if selected["gitlink_initial"] {
-			live.stage(t, ctx, "Add pinned parent integration fixture", "Add a fixture gitlink pinned to an existing commit in this repository. Review the parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", nil, first)
-			live.await(t, ctx, "gitlink_initial", func(_ reviewBodySnapshot, body string) bool {
-				return largeFileDetail(body, "All file content inspected") == "yes" && largeFileDetail(body, "Review scope assessed") == "yes"
-			})
+			live.stage(
+				t,
+				ctx,
+				"Add pinned parent integration fixture",
+				"Add a fixture gitlink pinned to an existing commit in this repository. Review the parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.",
+				nil,
+				first,
+			)
+			live.await(
+				t,
+				ctx,
+				"gitlink_initial",
+				func(_ reviewBodySnapshot, body string) bool {
+					return largeFileDetail(
+						body,
+						"All file content inspected",
+					) == "yes" && largeFileDetail(body, "Review scope assessed") == "yes"
+				},
+			)
 		}
 		if selected["gitlink_updated"] {
-			baseline := largeFileBaselineSpec{Gitlink: first, Modified: []string{largeFileFixturePrefix + "sdk"}}
-			live.stageWithBaseline(t, ctx, "gitlink_updated", "Update pinned parent integration fixture", "Update the fixture gitlink to another existing commit in this repository. Review the changed parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.", baseline, nil, second)
-			live.await(t, ctx, "gitlink_updated", func(snapshot reviewBodySnapshot, body string) bool {
-				if largeFileDetail(body, "All file content inspected") != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
-					return false
-				}
-				for _, thread := range snapshot.Threads {
-					finding, valid := marker.FindFinding(thread.RootComment.Body)
-					if valid && string(finding.Head) == live.fixture.head && thread.RootComment.Author == live.fixture.bot && !strings.HasPrefix(thread.RootComment.Path, largeFileFixturePrefix) && thread.RootComment.Path != ".gitmodules" && thread.RootComment.Path != live.fixture.filePath {
+			baseline := largeFileBaselineSpec{
+				Gitlink:  first,
+				Modified: []string{largeFileFixturePrefix + "sdk"},
+			}
+			live.stageWithBaseline(
+				t,
+				ctx,
+				"gitlink_updated",
+				"Update pinned parent integration fixture",
+				"Update the fixture gitlink to another existing commit in this repository. Review the changed parent pointer and .gitmodules integration. The fixture does not request nested upstream source review.",
+				baseline,
+				nil,
+				second,
+			)
+			live.await(
+				t,
+				ctx,
+				"gitlink_updated",
+				func(snapshot reviewBodySnapshot, body string) bool {
+					if largeFileDetail(
+						body,
+						"All file content inspected",
+					) != "yes" || largeFileDetail(body, "Review scope assessed") != "yes" {
 						return false
 					}
-				}
-				return true
-			})
+					for _, thread := range snapshot.Threads {
+						finding, valid := marker.FindFinding(thread.RootComment.Body)
+						if valid && string(
+							finding.Head,
+						) == live.fixture.head && thread.RootComment.Author == live.fixture.bot && !strings.HasPrefix(
+							thread.RootComment.Path,
+							largeFileFixturePrefix,
+						) && thread.RootComment.Path != ".gitmodules" && thread.RootComment.Path != live.fixture.filePath {
+							return false
+						}
+					}
+					return true
+				},
+			)
 		}
 	}
 }
@@ -188,15 +306,23 @@ func largeFileLiveScenarios(t *testing.T) map[string]bool {
 			t.Fatal("PR_AGENT_LIVE_SCENARIOS must contain nonempty comma-separated scenario IDs.")
 		}
 		if !allowed[scenario] {
-			t.Fatalf("PR_AGENT_LIVE_SCENARIOS contains an unknown scenario; choose only %s.", strings.Join(largeFileScenarioIDs, ", "))
+			t.Fatalf(
+				"PR_AGENT_LIVE_SCENARIOS contains an unknown scenario; choose only %s.",
+				strings.Join(largeFileScenarioIDs, ", "),
+			)
 		}
 		if selected[scenario] {
-			t.Fatalf("PR_AGENT_LIVE_SCENARIOS repeats scenario %s; select each scenario once.", scenario)
+			t.Fatalf(
+				"PR_AGENT_LIVE_SCENARIOS repeats scenario %s; select each scenario once.",
+				scenario,
+			)
 		}
 		selected[scenario] = true
 	}
 	if selected["gitlink_updated"] && !selected["gitlink_initial"] {
-		t.Fatal("The gitlink_updated scenario requires gitlink_initial; include both in PR_AGENT_LIVE_SCENARIOS.")
+		t.Fatal(
+			"The gitlink_updated scenario requires gitlink_initial; include both in PR_AGENT_LIVE_SCENARIOS.",
+		)
 	}
 	return selected
 }
@@ -212,13 +338,22 @@ func largeFileLiveTimeouts(t *testing.T, scenarioCount int) (time.Duration, time
 		caseTimeout = parsed
 	}
 	const maximumDuration = time.Duration(1<<63 - 1)
-	if caseTimeout > (maximumDuration-largeFileSuiteOverhead-largeFileCleanupTimeout-time.Minute)/time.Duration(scenarioCount) {
-		t.Fatal("PR_AGENT_LIVE_CASE_TIMEOUT is too large to calculate the suite deadline; select a shorter positive duration.")
+	if caseTimeout > (maximumDuration-largeFileSuiteOverhead-largeFileCleanupTimeout-time.Minute)/time.Duration(
+		scenarioCount,
+	) {
+		t.Fatal(
+			"PR_AGENT_LIVE_CASE_TIMEOUT is too large to calculate the suite deadline; select a shorter positive duration.",
+		)
 	}
 	suiteTimeout := time.Duration(scenarioCount)*caseTimeout + largeFileSuiteOverhead
 	required := suiteTimeout + largeFileCleanupTimeout
 	if deadline, limited := t.Deadline(); limited && time.Until(deadline) < required {
-		t.Fatalf("The live classification suite and cleanup require %s. Run go test with -timeout %s or longer; the current test deadline has %s remaining.", required, required+time.Minute, time.Until(deadline).Round(time.Second))
+		t.Fatalf(
+			"The live classification suite and cleanup require %s. Run go test with -timeout %s or longer; the current test deadline has %s remaining.",
+			required,
+			required+time.Minute,
+			time.Until(deadline).Round(time.Second),
+		)
 	}
 	return caseTimeout, suiteTimeout
 }
@@ -227,20 +362,49 @@ func largeFileServiceSetup(t *testing.T) *largeFileServiceFixture {
 	t.Helper()
 	fixture := clippedLiveSetup(t)
 	worktree := os.Getenv("PR_AGENT_LIVE_CLIPPED_WORKTREE")
-	if !filepath.IsAbs(worktree) || clippedLiveGit(t, t.Context(), worktree, "status", "--porcelain") != "" || clippedLiveGit(t, t.Context(), worktree, "rev-parse", "HEAD") != fixture.head || clippedLiveGit(t, t.Context(), worktree, "branch", "--show-current") != fixture.original.Head.Ref {
+	if !filepath.IsAbs(worktree) || clippedLiveGit(
+		t,
+		t.Context(),
+		worktree,
+		"status",
+		"--porcelain",
+	) != "" || clippedLiveGit(
+		t,
+		t.Context(),
+		worktree,
+		"rev-parse",
+		"HEAD",
+	) != fixture.head || clippedLiveGit(
+		t,
+		t.Context(),
+		worktree,
+		"branch",
+		"--show-current",
+	) != fixture.original.Head.Ref {
 		t.Fatal("The dedicated fixture requires its clean, current, explicitly selected worktree.")
 	}
 	remote := clippedLiveGit(t, t.Context(), worktree, "remote", "get-url", "--push", "origin")
 	if remote != "git@github.com:"+fixture.opts.repository+".git" && remote != "https://github.com/"+fixture.opts.repository+".git" {
 		t.Fatal("The fixture worktree must push to its explicitly selected repository.")
 	}
-	if clippedLiveGit(t, t.Context(), worktree, "ls-tree", "-r", "HEAD", "--", largeFileFixturePrefix) != "" {
+	if clippedLiveGit(
+		t,
+		t.Context(),
+		worktree,
+		"ls-tree",
+		"-r",
+		"HEAD",
+		"--",
+		largeFileFixturePrefix,
+	) != "" {
 		t.Fatal("The classification fixture prefix already contains tracked work.")
 	}
 	if _, err := os.Lstat(filepath.Join(worktree, largeFileFixturePrefix)); !os.IsNotExist(err) {
 		t.Fatal("The classification fixture prefix must not contain existing local files.")
 	}
-	if info, err := os.Lstat(filepath.Join(worktree, ".gitmodules")); err == nil && !info.Mode().IsRegular() {
+	if info, err := os.Lstat(
+		filepath.Join(worktree, ".gitmodules"),
+	); err == nil && !info.Mode().IsRegular() {
 		t.Fatal("The existing .gitmodules path must identify a regular file.")
 	} else if err != nil && !os.IsNotExist(err) {
 		t.Fatal("The existing .gitmodules path could not be inspected.")
@@ -270,17 +434,36 @@ func largeFileServiceSetup(t *testing.T) *largeFileServiceFixture {
 		t.Fatal(err)
 	}
 	t.Logf("Private classification acceptance evidence: %s", evidence)
-	live := &largeFileServiceFixture{fixture: fixture, worktree: worktree, evidence: evidence, originalTree: clippedLiveGit(t, t.Context(), worktree, "rev-parse", "HEAD^{tree}"), currentBody: fixture.original.Body, origin: endpoint.Scheme + "://" + endpoint.Host, revision: revision, limit: limit, localHead: fixture.head}
+	live := &largeFileServiceFixture{
+		fixture:      fixture,
+		worktree:     worktree,
+		evidence:     evidence,
+		originalTree: clippedLiveGit(t, t.Context(), worktree, "rev-parse", "HEAD^{tree}"),
+		currentBody:  fixture.original.Body,
+		origin:       endpoint.Scheme + "://" + endpoint.Host,
+		revision:     revision,
+		limit:        limit,
+		localHead:    fixture.head,
+	}
 	live.currentBase, live.currentDraft = fixture.original.Base, fixture.original.Draft
 	if current := live.pullRequest(t, t.Context()); current != fixture.original {
-		t.Fatal("The fixture metadata changed while its original head and comparison base were captured.")
+		t.Fatal(
+			"The fixture metadata changed while its original head and comparison base were captured.",
+		)
 	}
 	live.originalForce = live.forceLabelPresent(t, t.Context())
 	live.saveBaselineRecovery(t)
 	return live
 }
 
-func (live *largeFileServiceFixture) stage(t *testing.T, ctx context.Context, subject, body string, files map[string]string, gitlink string) {
+func (live *largeFileServiceFixture) stage(
+	t *testing.T,
+	ctx context.Context,
+	subject string,
+	body string,
+	files map[string]string,
+	gitlink string,
+) {
 	t.Helper()
 	live.beginScenario(t, ctx)
 	live.restorePaths(t, ctx)
@@ -291,7 +474,12 @@ func (live *largeFileServiceFixture) stage(t *testing.T, ctx context.Context, su
 	live.force(t, ctx)
 }
 
-func (live *largeFileServiceFixture) writeFiles(t *testing.T, ctx context.Context, files map[string]string, gitlink string) {
+func (live *largeFileServiceFixture) writeFiles(
+	t *testing.T,
+	ctx context.Context,
+	files map[string]string,
+	gitlink string,
+) {
 	t.Helper()
 	for path, content := range files {
 		if !strings.HasPrefix(path, largeFileFixturePrefix) {
@@ -316,10 +504,24 @@ func (live *largeFileServiceFixture) writeFiles(t *testing.T, ctx context.Contex
 			modules = string(data)
 		}
 		modules += "\n[submodule \"pr-agent-classification-fixture\"]\n\tpath = " + largeFileFixturePrefix + "sdk\n\turl = https://github.com/" + live.fixture.opts.repository + ".git\n"
-		if err := os.WriteFile(filepath.Join(live.worktree, ".gitmodules"), []byte(modules), 0o600); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(live.worktree, ".gitmodules"),
+			[]byte(modules),
+			0o600,
+		); err != nil {
 			t.Fatal(err)
 		}
-		clippedLiveGit(t, ctx, live.worktree, "update-index", "--add", "--cacheinfo", "160000", gitlink, largeFileFixturePrefix+"sdk")
+		clippedLiveGit(
+			t,
+			ctx,
+			live.worktree,
+			"update-index",
+			"--add",
+			"--cacheinfo",
+			"160000",
+			gitlink,
+			largeFileFixturePrefix+"sdk",
+		)
 	}
 }
 
@@ -327,13 +529,28 @@ func (live *largeFileServiceFixture) guard(t *testing.T, ctx context.Context) {
 	t.Helper()
 	current := live.pullRequest(t, ctx)
 	if current.Base != live.currentBase {
-		t.Fatal("The fixture comparison base changed externally; the harness will not reset a base branch. Private baseline recovery evidence preserves the expected state.")
+		t.Fatal(
+			"The fixture comparison base changed externally; the harness will not reset a base branch. Private baseline recovery evidence preserves the expected state.",
+		)
 	}
-	if (current.Head.SHA != live.fixture.head && current.Head.SHA != live.localHead) || current.Head.Ref != live.fixture.original.Head.Ref || current.Title != live.fixture.original.Title || current.Body != live.currentBody || current.Draft != live.currentDraft || clippedLiveGit(t, ctx, live.worktree, "rev-parse", "HEAD") != live.localHead {
+	if (current.Head.SHA != live.fixture.head && current.Head.SHA != live.localHead) || current.Head.Ref != live.fixture.original.Head.Ref || current.Title != live.fixture.original.Title || current.Body != live.currentBody || current.Draft != live.currentDraft || clippedLiveGit(
+		t,
+		ctx,
+		live.worktree,
+		"rev-parse",
+		"HEAD",
+	) != live.localHead {
 		t.Fatal("The fixture changed concurrently; the test will not overwrite that change.")
 	}
 	live.fixture.head = current.Head.SHA
-	command := exec.CommandContext(ctx, "git", "status", "--porcelain", "-z", "--untracked-files=all")
+	command := exec.CommandContext(
+		ctx,
+		"git",
+		"status",
+		"--porcelain",
+		"-z",
+		"--untracked-files=all",
+	)
 	command.Dir = live.worktree
 	status, err := command.CombinedOutput()
 	if err != nil {
@@ -343,7 +560,10 @@ func (live *largeFileServiceFixture) guard(t *testing.T, ctx context.Context) {
 		if entry == "" {
 			continue
 		}
-		if len(entry) < 4 || (!strings.HasPrefix(entry[3:], largeFileFixturePrefix) && entry[3:] != ".gitmodules") {
+		if len(entry) < 4 || (!strings.HasPrefix(
+			entry[3:],
+			largeFileFixturePrefix,
+		) && entry[3:] != ".gitmodules") {
 			t.Fatal("The fixture worktree contains unrelated work; the test will not overwrite it.")
 		}
 	}
@@ -352,9 +572,22 @@ func (live *largeFileServiceFixture) guard(t *testing.T, ctx context.Context) {
 func (live *largeFileServiceFixture) setBody(t *testing.T, ctx context.Context, body string) {
 	t.Helper()
 	var result clippedLivePR
-	clippedLiveAPI(t, ctx, http.MethodPatch, fmt.Sprintf("repos/%s/pulls/%d", live.fixture.opts.repository, live.fixture.opts.pullRequest), struct {
-		Body string `json:"body"`
-	}{Body: body}, &result)
+	clippedLiveAPI(
+		t,
+		ctx,
+		http.MethodPatch,
+		fmt.Sprintf(
+			"repos/%s/pulls/%d",
+			live.fixture.opts.repository,
+			live.fixture.opts.pullRequest,
+		),
+		struct {
+			Body string `json:"body"`
+		}{
+			Body: body,
+		},
+		&result,
+	)
 	if result.Body != body {
 		t.Fatal("GitHub did not retain the scenario description.")
 	}
@@ -367,7 +600,15 @@ func (live *largeFileServiceFixture) commit(t *testing.T, ctx context.Context, s
 	if !live.commitLocal(t, ctx, subject, false) {
 		return
 	}
-	clippedLiveGit(t, ctx, live.worktree, "push", "--force-with-lease=refs/heads/"+live.fixture.original.Head.Ref+":"+previous, "origin", "HEAD:refs/heads/"+live.fixture.original.Head.Ref)
+	clippedLiveGit(
+		t,
+		ctx,
+		live.worktree,
+		"push",
+		"--force-with-lease=refs/heads/"+live.fixture.original.Head.Ref+":"+previous,
+		"origin",
+		"HEAD:refs/heads/"+live.fixture.original.Head.Ref,
+	)
 	live.fixture.head = live.localHead
 	live.awaitHead(t, ctx, previous)
 	live.verifyCommit(t, ctx, live.localHead, parent)
@@ -379,23 +620,46 @@ func (live *largeFileServiceFixture) restorePaths(t *testing.T, ctx context.Cont
 	arguments := append([]string{"ls-files", "--"}, largeFileFixturePaths...)
 	tracked := strings.Fields(clippedLiveGit(t, ctx, live.worktree, arguments...))
 	if len(tracked) > 0 {
-		arguments = append([]string{"restore", "--source=" + live.fixture.original.Head.SHA, "--staged", "--worktree", "--"}, tracked...)
+		arguments = append(
+			[]string{
+				"restore",
+				"--source=" + live.fixture.original.Head.SHA,
+				"--staged",
+				"--worktree",
+				"--",
+			},
+			tracked...,
+		)
 		clippedLiveGit(t, ctx, live.worktree, arguments...)
 	}
 	for _, path := range largeFileFixturePaths {
 		if path == largeFileFixturePrefix+"sdk" {
 			continue
 		}
-		if path == ".gitmodules" && clippedLiveGit(t, ctx, live.worktree, "ls-tree", live.fixture.original.Head.SHA, "--", path) != "" {
+		if path == ".gitmodules" && clippedLiveGit(
+			t,
+			ctx,
+			live.worktree,
+			"ls-tree",
+			live.fixture.original.Head.SHA,
+			"--",
+			path,
+		) != "" {
 			continue
 		}
 		absolute := filepath.Join(live.worktree, filepath.FromSlash(path))
 		if err := os.Remove(absolute); err != nil && !os.IsNotExist(err) {
-			t.Fatal("An explicitly owned untracked fixture file could not be removed during restoration.")
+			t.Fatal(
+				"An explicitly owned untracked fixture file could not be removed during restoration.",
+			)
 		}
 	}
-	if err := os.Remove(filepath.Join(live.worktree, largeFileFixturePrefix)); err != nil && !os.IsNotExist(err) {
-		t.Fatal("The explicitly owned fixture directory contains unexpected work and could not be removed during restoration.")
+	if err := os.Remove(
+		filepath.Join(live.worktree, largeFileFixturePrefix),
+	); err != nil && !os.IsNotExist(err) {
+		t.Fatal(
+			"The explicitly owned fixture directory contains unexpected work and could not be removed during restoration.",
+		)
 	}
 }
 
@@ -409,7 +673,13 @@ func (live *largeFileServiceFixture) restore(t *testing.T, ctx context.Context) 
 	if live.originalForce != live.forceLabelPresent(t, ctx) {
 		live.setForceLabel(t, ctx, live.originalForce)
 	}
-	if clippedLiveGit(t, ctx, live.worktree, "rev-parse", "HEAD^{tree}") != live.originalTree || clippedLiveGit(t, ctx, live.worktree, "status", "--porcelain") != "" {
+	if clippedLiveGit(
+		t,
+		ctx,
+		live.worktree,
+		"rev-parse",
+		"HEAD^{tree}",
+	) != live.originalTree || clippedLiveGit(t, ctx, live.worktree, "status", "--porcelain") != "" {
 		t.Error("The fixture did not restore its exact original tree and clean worktree.")
 	}
 	live.setDraft(t, ctx, live.fixture.original.Draft)
@@ -427,7 +697,18 @@ func (live *largeFileServiceFixture) forceLabelPresent(t *testing.T, ctx context
 	var labels []struct {
 		Name string `json:"name"`
 	}
-	clippedLiveAPI(t, ctx, http.MethodGet, fmt.Sprintf("repos/%s/issues/%d/labels", live.fixture.opts.repository, live.fixture.opts.pullRequest), nil, &labels)
+	clippedLiveAPI(
+		t,
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf(
+			"repos/%s/issues/%d/labels",
+			live.fixture.opts.repository,
+			live.fixture.opts.pullRequest,
+		),
+		nil,
+		&labels,
+	)
 	for _, label := range labels {
 		if label.Name == domain.RerunReviewLabel {
 			return true
@@ -438,17 +719,37 @@ func (live *largeFileServiceFixture) forceLabelPresent(t *testing.T, ctx context
 
 func (live *largeFileServiceFixture) setForceLabel(t *testing.T, ctx context.Context, present bool) {
 	t.Helper()
-	endpoint := fmt.Sprintf("repos/%s/issues/%d/labels", live.fixture.opts.repository, live.fixture.opts.pullRequest)
+	endpoint := fmt.Sprintf(
+		"repos/%s/issues/%d/labels",
+		live.fixture.opts.repository,
+		live.fixture.opts.pullRequest,
+	)
 	if present {
 		var result []struct {
 			Name string `json:"name"`
 		}
-		clippedLiveAPI(t, ctx, http.MethodPost, endpoint, struct {
-			Labels []string `json:"labels"`
-		}{Labels: []string{domain.RerunReviewLabel}}, &result)
+		clippedLiveAPI(
+			t,
+			ctx,
+			http.MethodPost,
+			endpoint,
+			struct {
+				Labels []string `json:"labels"`
+			}{
+				Labels: []string{domain.RerunReviewLabel},
+			},
+			&result,
+		)
 		return
 	}
-	command := exec.CommandContext(ctx, "gh", "api", "--method", http.MethodDelete, endpoint+"/"+url.PathEscape(domain.RerunReviewLabel))
+	command := exec.CommandContext(
+		ctx,
+		"gh",
+		"api",
+		"--method",
+		http.MethodDelete,
+		endpoint+"/"+url.PathEscape(domain.RerunReviewLabel),
+	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("The fixture force label could not be restored: %.512s", output)
 	}
@@ -456,9 +757,18 @@ func (live *largeFileServiceFixture) setForceLabel(t *testing.T, ctx context.Con
 
 func (live *largeFileServiceFixture) force(t *testing.T, ctx context.Context) {
 	t.Helper()
-	check, found, err := live.fixture.client.FindCheckRun(ctx, live.fixture.opts.installationID, live.fixture.repo, domain.HeadSHA(live.fixture.head), config.ReviewCheckName)
+	check, found, err := live.fixture.client.FindCheckRun(
+		ctx,
+		live.fixture.opts.installationID,
+		live.fixture.repo,
+		domain.HeadSHA(live.fixture.head),
+		config.ReviewCheckName,
+	)
 	if err != nil {
-		t.Fatalf("The prior fixture check could not be read before forcing full review: %s", liveReviewBodyReadFailure(ctx, err))
+		t.Fatalf(
+			"The prior fixture check could not be read before forcing full review: %s",
+			liveReviewBodyReadFailure(ctx, err),
+		)
 	}
 	live.minimumCheck = 0
 	if found {
@@ -478,50 +788,130 @@ func (live *largeFileServiceFixture) health(t *testing.T, ctx context.Context) {
 	}
 	response, err := (&http.Client{Timeout: time.Minute}).Do(request)
 	if err != nil {
-		t.Fatalf("The deployed review service could not confirm its revision: %s", liveReviewBodyReadFailure(ctx, err))
+		t.Fatalf(
+			"The deployed review service could not confirm its revision: %s",
+			liveReviewBodyReadFailure(ctx, err),
+		)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.Header.Get("X-Pr-Agent-Revision") != live.revision {
-		t.Fatal("The active review service does not match the explicitly expected healthy revision.")
+	if response.StatusCode != http.StatusOK || response.Header.Get(
+		"X-Pr-Agent-Revision",
+	) != live.revision {
+		t.Fatal(
+			"The active review service does not match the explicitly expected healthy revision.",
+		)
 	}
 }
 
-func (live *largeFileServiceFixture) await(t *testing.T, parent context.Context, scenario string, accepts func(reviewBodySnapshot, string) bool) {
+func (live *largeFileServiceFixture) await(
+	t *testing.T,
+	parent context.Context,
+	scenario string,
+	accepts func(reviewBodySnapshot, string) bool,
+) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, live.caseTimeout)
 	defer cancel()
 	for ctx.Err() == nil {
 		live.guard(t, ctx)
-		snapshot := liveReviewBodyCapture(t, ctx, live.fixture.client, live.fixture.opts, live.fixture.repo)
+		snapshot := liveReviewBodyCapture(
+			t,
+			ctx,
+			live.fixture.client,
+			live.fixture.opts,
+			live.fixture.repo,
+		)
 		for _, comment := range snapshot.Comments {
 			state, valid := marker.DecodeState(comment.Body)
 			head, marked := marker.FindReview(comment.Body)
-			if comment.Author != live.fixture.bot || !valid || !marked || string(head) != live.fixture.head || state.RunID == "" || state.Status != marker.StateDone || state.LastReviewed != head || len(state.Pending) != 0 || len(state.Unread) != 0 || !review.MetadataMatches(comment.Body, head, diff.PullRequestRevision(snapshot.PullRequest)) {
+			if comment.Author != live.fixture.bot || !valid || !marked || string(
+				head,
+			) != live.fixture.head || state.RunID == "" || state.Status != marker.StateDone || state.LastReviewed != head || len(
+				state.Pending,
+			) != 0 || len(state.Unread) != 0 || !review.MetadataMatches(
+				comment.Body,
+				head,
+				diff.PullRequestRevision(snapshot.PullRequest),
+			) {
 				continue
 			}
-			check, found, err := live.fixture.client.FindCheckRunByExternalID(ctx, live.fixture.opts.installationID, live.fixture.repo, head, config.ReviewCheckName, state.RunID)
+			check, found, err := live.fixture.client.FindCheckRunByExternalID(
+				ctx,
+				live.fixture.opts.installationID,
+				live.fixture.repo,
+				head,
+				config.ReviewCheckName,
+				state.RunID,
+			)
 			if err != nil {
-				t.Fatalf("The deployed classification check for scenario %s on head %s and run %s could not be read: %s", scenario, live.fixture.head, state.RunID, liveReviewBodyReadFailure(ctx, err))
+				t.Fatalf(
+					"The deployed classification check for scenario %s on head %s and run %s could not be read: %s",
+					scenario,
+					live.fixture.head,
+					state.RunID,
+					liveReviewBodyReadFailure(ctx, err),
+				)
 			}
-			if !found || check.Status != "completed" || check.ID <= live.minimumCheck || check.ExternalID != state.RunID || !accepts(snapshot, comment.Body) {
+			if !found || check.Status != "completed" || check.ID <= live.minimumCheck || check.ExternalID != state.RunID || !accepts(
+				snapshot,
+				comment.Body,
+			) {
 				continue
 			}
-			requests, requestErr := strconv.Atoi(strings.Trim(largeFileDetail(comment.Body, "Requests"), "`"))
-			if requestErr != nil || requests < 1 || largeFileDetail(comment.Body, "Model") == "unknown" {
-				t.Fatal("The classification result did not report actual provider requests and a model.")
+			requests, requestErr := strconv.Atoi(
+				strings.Trim(largeFileDetail(comment.Body, "Requests"), "`"),
+			)
+			if requestErr != nil || requests < 1 || largeFileDetail(
+				comment.Body,
+				"Model",
+			) == "unknown" {
+				t.Fatal(
+					"The classification result did not report actual provider requests and a model.",
+				)
 			}
-			for _, label := range []string{"Requests reporting usage", "Input tokens", "Output tokens", "Total tokens"} {
-				value, err := strconv.ParseInt(strings.Trim(largeFileDetail(comment.Body, label), "`"), 10, 64)
+			for _, label := range []string{
+				"Requests reporting usage",
+				"Input tokens",
+				"Output tokens",
+				"Total tokens",
+			} {
+				value, err := strconv.ParseInt(
+					strings.Trim(largeFileDetail(comment.Body, label), "`"),
+					10,
+					64,
+				)
 				if err != nil || value <= 0 {
-					t.Fatalf("The completed classification review did not report positive %s.", label)
+					t.Fatalf(
+						"The completed classification review did not report positive %s.",
+						label,
+					)
 				}
 			}
-			details, err := live.fixture.client.GetCheckRunDetails(ctx, live.fixture.opts.installationID, live.fixture.repo, check.ID)
+			details, err := live.fixture.client.GetCheckRunDetails(
+				ctx,
+				live.fixture.opts.installationID,
+				live.fixture.repo,
+				check.ID,
+			)
 			if err != nil {
-				t.Fatalf("The completed classification check %d details could not be read: %s", check.ID, liveReviewBodyReadFailure(ctx, err))
+				t.Fatalf(
+					"The completed classification check %d details could not be read: %s",
+					check.ID,
+					liveReviewBodyReadFailure(ctx, err),
+				)
 			}
 			live.health(t, ctx)
-			largeFileSave(t, live.evidence, scenario+".json", largeFileServiceEvidence{Scenario: scenario, Revision: live.revision, Snapshot: snapshot, Check: details})
+			largeFileSave(
+				t,
+				live.evidence,
+				scenario+".json",
+				largeFileServiceEvidence{
+					Scenario: scenario,
+					Revision: live.revision,
+					Snapshot: snapshot,
+					Check:    details,
+				},
+			)
 			return
 		}
 		select {
@@ -529,7 +919,13 @@ func (live *largeFileServiceFixture) await(t *testing.T, parent context.Context,
 		case <-time.After(5 * time.Second):
 		}
 	}
-	t.Fatalf("The deployed classification scenario %s did not establish its expected result on head %s within %s: %v.", scenario, live.fixture.head, live.caseTimeout, ctx.Err())
+	t.Fatalf(
+		"The deployed classification scenario %s did not establish its expected result on head %s within %s: %v.",
+		scenario,
+		live.fixture.head,
+		live.caseTimeout,
+		ctx.Err(),
+	)
 }
 
 func largeFileSave[T largeFileEvidence](t *testing.T, directory, name string, value T) {
@@ -595,9 +991,16 @@ func largeFileDetail(body, name string) string {
 
 func largeFileSQL(minimum int) string {
 	var source strings.Builder
-	source.WriteString("-- Code generated by the harmless classification fixture generator; DO NOT EDIT.\n-- Preserve existing classification_active_users records throughout this migration.\nCREATE TABLE classification_audit (id integer PRIMARY KEY, note text);\n")
+	source.WriteString(
+		"-- Code generated by the harmless classification fixture generator; DO NOT EDIT.\n-- Preserve existing classification_active_users records throughout this migration.\nCREATE TABLE classification_audit (id integer PRIMARY KEY, note text);\n",
+	)
 	for index := 0; source.Len() <= minimum; index++ {
-		fmt.Fprintf(&source, "INSERT INTO classification_audit VALUES (%d, 'fixture record %d');\n", index, index)
+		fmt.Fprintf(
+			&source,
+			"INSERT INTO classification_audit VALUES (%d, 'fixture record %d');\n",
+			index,
+			index,
+		)
 	}
 	source.WriteString("DROP TABLE classification_active_users;\n")
 	return source.String()

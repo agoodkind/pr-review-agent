@@ -62,8 +62,13 @@ func (client *Client) fetchRepositoryAncestry(
 	hashes []plumbing.Hash,
 	depth int,
 ) error {
-	client.logger.DebugContext(ctx, "Fetch immutable repository Git objects",
-		"revision_count", len(hashes), "depth", depth,
+	client.logger.DebugContext(
+		ctx,
+		"Fetch immutable repository Git objects",
+		"revision_count",
+		len(hashes),
+		"depth",
+		depth,
 	)
 
 	token, err := client.installationToken(ctx, key.installationID)
@@ -80,7 +85,10 @@ func (client *Client) fetchRepositoryAncestry(
 
 	authentication := &githttp.BasicAuth{Username: "x-access-token", Password: token}
 
-	session, err := githttp.NewClient(client.httpClient).NewUploadPackSession(endpoint, authentication)
+	session, err := githttp.NewClient(client.httpClient).NewUploadPackSession(
+		endpoint,
+		authentication,
+	)
 	if err != nil {
 		return repositoryAccessError("open authenticated Git session", err)
 	}
@@ -143,6 +151,7 @@ func repositoryUploadRequest(
 	if err != nil {
 		return nil, repositoryAccessError("fetchRepositoryAncestry", err)
 	}
+
 	// Include a cached parent in the shallow graph to negotiate its existing objects.
 	if depth == 1 && len(request.Haves) > 0 {
 		request.Depth = packp.DepthCommits(repositoryWarmCacheDepth)
@@ -178,7 +187,12 @@ func (client *Client) storeRepositoryPack(
 	response *packp.UploadPackResponse,
 	hashes []plumbing.Hash,
 ) error {
-	client.logger.DebugContext(ctx, "Store fetched repository Git objects", "revision_count", len(hashes))
+	client.logger.DebugContext(
+		ctx,
+		"Store fetched repository Git objects",
+		"revision_count",
+		len(hashes),
+	)
 
 	var err error
 
@@ -221,7 +235,10 @@ func (client *Client) storeRepositoryPack(
 	if writeError != nil {
 		rollbackError := client.repositories.discard(key, entry)
 
-		return repositoryAccessError("roll back failed Git pack storage", errors.Join(writeError, rollbackError))
+		return repositoryAccessError(
+			"roll back failed Git pack storage",
+			errors.Join(writeError, rollbackError),
+		)
 	}
 
 	entry.failed = false
@@ -252,12 +269,18 @@ func (client *Client) writeRepositoryPackState(
 	for _, hash := range hashes {
 		_, err = object.GetCommit(entry.repository, hash)
 		if err != nil {
-			return repositoryAccessError("Git server did not provide the exact requested commit", err)
+			return repositoryAccessError(
+				"Git server did not provide the exact requested commit",
+				err,
+			)
 		}
 	}
 
 	for _, hash := range hashes {
-		reference := plumbing.NewHashReference(plumbing.ReferenceName("refs/pragent/"+hash.String()), hash)
+		reference := plumbing.NewHashReference(
+			plumbing.ReferenceName("refs/pragent/"+hash.String()),
+			hash,
+		)
 
 		err = entry.repository.SetReference(reference)
 		if err != nil {
@@ -272,9 +295,12 @@ func (client *Client) writeRepositoryPackState(
 		}
 	}
 
-	shallows = slices.DeleteFunc(shallows, func(hash plumbing.Hash) bool {
-		return slices.Contains(response.Unshallows, hash)
-	})
+	shallows = slices.DeleteFunc(
+		shallows,
+		func(hash plumbing.Hash) bool {
+			return slices.Contains(response.Unshallows, hash)
+		},
+	)
 
 	err = entry.repository.SetShallow(shallows)
 	if err != nil {

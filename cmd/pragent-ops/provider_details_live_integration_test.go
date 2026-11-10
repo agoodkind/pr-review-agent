@@ -43,8 +43,17 @@ func TestLiveProviderDetails(t *testing.T) {
 	if directory == "" {
 		directory = filepath.Join(t.TempDir(), "probe")
 	}
-	args := []string{"probe", "--provider", providerID, "--credential-file", credentialPath,
-		"--runtime", runtimePath, "--output-dir", directory}
+	args := []string{
+		"probe",
+		"--provider",
+		providerID,
+		"--credential-file",
+		credentialPath,
+		"--runtime",
+		runtimePath,
+		"--output-dir",
+		directory,
+	}
 	if signingKeyPath != "" {
 		args = append(args, "--signing-key-file", signingKeyPath)
 	}
@@ -68,7 +77,9 @@ func TestLiveProviderDetails(t *testing.T) {
 	selected := cfg.Providers[0]
 	attempt := result.Usage.ProviderAttempts[0]
 	if attempt.Status.ProviderID != selected.ID || attempt.Status.Model != selected.Model ||
-		attempt.API != config.ResolveProviderAPI(selected.API) || attempt.ReasoningEffort != config.ResolveReasoningEffort(selected.ReasoningEffort) ||
+		attempt.API != config.ResolveProviderAPI(
+			selected.API,
+		) || attempt.ReasoningEffort != config.ResolveReasoningEffort(selected.ReasoningEffort) ||
 		attempt.OutputCapOmitted != selected.OmitMaxOutputTokens {
 		t.Fatal("The recorded settings disagree with the actual selected provider.")
 	}
@@ -95,7 +106,12 @@ func TestLiveProviderDetails(t *testing.T) {
 	if !found || strings.Contains(visible, providerID) {
 		t.Fatal("The provider diagnostics are not confined to the collapsed details.")
 	}
-	for _, value := range []string{providerID, selected.Model, string(attempt.API), string(attempt.ReasoningEffort)} {
+	for _, value := range []string{
+		providerID,
+		selected.Model,
+		string(attempt.API),
+		string(attempt.ReasoningEffort),
+	} {
 		if !strings.Contains(details, value) {
 			t.Fatal("The collapsed details omit an actual provider request setting.")
 		}
@@ -108,7 +124,12 @@ func TestLiveProviderDetails(t *testing.T) {
 			t.Fatal("The collapsed details omit the model reported by the provider.")
 		}
 	}
-	t.Logf("The real probe recorded %d request, %d usage reports, %d total tokens, and completion=%t.",
-		result.Usage.Requests, result.Usage.ReportedRequests, result.Usage.TotalTokens, result.Success)
+	t.Logf(
+		"The real probe recorded %d request, %d usage reports, %d total tokens, and completion=%t.",
+		result.Usage.Requests,
+		result.Usage.ReportedRequests,
+		result.Usage.TotalTokens,
+		result.Success,
+	)
 	t.Logf("The private diagnostics and rendered review were saved to %s.", directory)
 }

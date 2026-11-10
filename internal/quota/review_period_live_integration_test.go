@@ -50,8 +50,14 @@ func TestLiveCancelledReviewRetainsRecordedPeriodUsage(t *testing.T) {
 	reference := livePeriodReference(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
-	pullRequest, err := github.GetPullRequest(ctx, reference.InstallationID, reference.Repository, reference.Number)
-	if err != nil || pullRequest.State != "closed" || !pullRequest.Draft || !strings.Contains(strings.ToLower(pullRequest.Title), "fixture") {
+	pullRequest, err := github.GetPullRequest(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		reference.Number,
+	)
+	if err != nil || pullRequest.State != "closed" || !pullRequest.Draft ||
+		!strings.Contains(strings.ToLower(pullRequest.Title), "fixture") {
 		t.Fatal("Select an explicit closed draft fixture for the period failure regression.")
 	}
 	reference.Head = pullRequest.Head
@@ -60,29 +66,80 @@ func TestLiveCancelledReviewRetainsRecordedPeriodUsage(t *testing.T) {
 	t.Cleanup(func() {
 		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer restoreCancel()
-		if _, err := github.UpdateIssueComment(restoreCtx, reference.InstallationID, reference.Repository, original.ID, original.Body); err != nil {
+		if _, err := github.UpdateIssueComment(
+			restoreCtx,
+			reference.InstallationID,
+			reference.Repository,
+			original.ID,
+			original.Body,
+		); err != nil {
 			t.Error("Restore the original fixture summary:", err)
 		}
 	})
 	prepared := removeLivePeriodDetails(t, original.Body)
-	if _, err := github.UpdateIssueComment(ctx, reference.InstallationID, reference.Repository, original.ID, prepared); err != nil {
+	if _, err := github.UpdateIssueComment(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		original.ID,
+		prepared,
+	); err != nil {
 		t.Fatal("The test could not prepare the fixture summary.")
 	}
 	provider := cfg.Providers[0]
 	storage := quota.NewClient(endpoint, cfg.GitHubWebhookSecret, client)
-	reportDisplayUsage(t, storage, time.Now().UTC(), provider.ID, provider.Model, provider.Model, 20, 0, 0, 2, 22)
+	reportDisplayUsage(
+		t,
+		storage,
+		time.Now().UTC(),
+		provider.ID,
+		provider.Model,
+		provider.Model,
+		20,
+		0,
+		0,
+		2,
+		22,
+	)
 	ctx, _ = review.WithUsageRecorder(ctx)
-	_, providerErr := model.Review(ctx, "Review this identity function: func identity(value int) int { return value }")
+	_, providerErr := model.Review(
+		ctx,
+		"Review this identity function: func identity(value int) int { return value }",
+	)
 	var refused *openai.ProviderError
 	if !errors.As(providerErr, &refused) || refused.StatusCode != http.StatusUnauthorized {
 		t.Fatal("The real provider did not reject the invalid test credential with HTTP 401.")
 	}
-	service := review.NewService(github, diff.NewCollector(github), model,
-		reconcile.NewService(github, model, cfg.GitHubBotLogin, slog.Default(), cfg.PromptBytes(), cfg.ReviewPolicy),
-		queue.NewKeyedLocker(), cfg.GitHubBotLogin, cfg.MinimumImportance, cfg.ReviewMaxFiles,
-		cfg.ReviewMaxChunks, cfg.ReviewChunkTimeout, cfg.ServiceFailureAppearance,
-		clock.System, slog.Default(), cfg.ChunkConcurrency(), cfg.PromptBytes(), cfg.ReviewPolicy)
-	job := domain.ReviewJob{PullRequestRef: reference, DeliveryID: "live-period-failure-" + rand.Text(), Forced: true}
+	service := review.NewService(
+		github,
+		diff.NewCollector(github),
+		model,
+		reconcile.NewService(
+			github,
+			model,
+			cfg.GitHubBotLogin,
+			slog.Default(),
+			cfg.PromptBytes(),
+			cfg.ReviewPolicy,
+		),
+		queue.NewKeyedLocker(),
+		cfg.GitHubBotLogin,
+		cfg.MinimumImportance,
+		cfg.ReviewMaxFiles,
+		cfg.ReviewMaxChunks,
+		cfg.ReviewChunkTimeout,
+		cfg.ServiceFailureAppearance,
+		clock.System,
+		slog.Default(),
+		cfg.ChunkConcurrency(),
+		cfg.PromptBytes(),
+		cfg.ReviewPolicy,
+	)
+	job := domain.ReviewJob{
+		PullRequestRef: reference,
+		DeliveryID:     "live-period-failure-" + rand.Text(),
+		Forced:         true,
+	}
 	job, admitted, err := service.Admit(ctx, job)
 	if err != nil || !admitted {
 		t.Fatal("GitHub did not admit the period failure check.")
@@ -92,16 +149,28 @@ func TestLiveCancelledReviewRetainsRecordedPeriodUsage(t *testing.T) {
 	if err := service.Reject(cancelled, job, providerErr); err == nil {
 		t.Fatal("The cancelled review must retain its provider error.")
 	}
-	check, err := github.GetCheckRunDetails(ctx, reference.InstallationID, reference.Repository, job.CheckRunID)
-	if err != nil || check.Run.Status != "completed" || check.Run.Conclusion != "cancelled" || !strings.Contains(check.Summary, "Recorded usage<br>22 tokens /") {
+	check, err := github.GetCheckRunDetails(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		job.CheckRunID,
+	)
+	if err != nil || check.Run.Status != "completed" || check.Run.Conclusion != "cancelled" ||
+		!strings.Contains(check.Summary, "Recorded usage<br>22 tokens /") {
 		t.Fatal("The cancelled check did not display its independently stored usage.")
 	}
 	current, after := livePeriodSummary(t, ctx, github, reference, cfg.GitHubBotLogin)
-	if len(after) != len(comments) || current.ID != original.ID || !strings.Contains(current.Body, "Recorded usage<br>22 tokens /") {
+	if len(after) != len(comments) || current.ID != original.ID ||
+		!strings.Contains(current.Body, "Recorded usage<br>22 tokens /") {
 		t.Fatal("The failure must update the existing summary with stored period totals.")
 	}
 	assertLivePeriodCheckpoint(t, original.Body, current.Body)
-	t.Logf("Cancelled check %d and summary %d retained 22 stored tokens after caller cancellation. Original summary: %s", job.CheckRunID, original.ID, backup)
+	t.Logf(
+		"Cancelled check %d and summary %d retained 22 stored tokens after caller cancellation. Original summary: %s",
+		job.CheckRunID,
+		original.ID,
+		backup,
+	)
 }
 
 func TestLiveMetadataFailureRetainsRecordedPeriodUsage(t *testing.T) {
@@ -119,37 +188,93 @@ func TestLiveMetadataFailureRetainsRecordedPeriodUsage(t *testing.T) {
 	reference := livePeriodReference(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
-	pullRequest, err := github.GetPullRequest(ctx, reference.InstallationID, reference.Repository, reference.Number)
-	if err != nil || pullRequest.State != "closed" || !pullRequest.Draft || !strings.Contains(strings.ToLower(pullRequest.Title), "fixture") {
+	pullRequest, err := github.GetPullRequest(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		reference.Number,
+	)
+	if err != nil || pullRequest.State != "closed" || !pullRequest.Draft ||
+		!strings.Contains(strings.ToLower(pullRequest.Title), "fixture") {
 		t.Fatal("Select an explicit closed draft fixture for the metadata period regression.")
 	}
 	reference.Head = pullRequest.Head
 	original, comments := livePeriodSummary(t, ctx, github, reference, cfg.GitHubBotLogin)
 	state, valid := marker.DecodeState(original.Body)
-	if !valid || state.Status != marker.StateDone || state.LastReviewed != reference.Head || len(state.Pending) != 0 {
+	if !valid || state.Status != marker.StateDone || state.LastReviewed != reference.Head ||
+		len(state.Pending) != 0 {
 		t.Fatal("The metadata regression requires a fixture with completed file coverage.")
 	}
 	backup := backupLivePeriodSummary(t, original)
 	t.Cleanup(func() {
 		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer restoreCancel()
-		if _, err := github.UpdateIssueComment(restoreCtx, reference.InstallationID, reference.Repository, original.ID, original.Body); err != nil {
+		if _, err := github.UpdateIssueComment(
+			restoreCtx,
+			reference.InstallationID,
+			reference.Repository,
+			original.ID,
+			original.Body,
+		); err != nil {
 			t.Error("Restore the original metadata fixture summary:", err)
 		}
 	})
 	prepared := removeLiveMetadataRecord(t, original.Body)
-	if _, err := github.UpdateIssueComment(ctx, reference.InstallationID, reference.Repository, original.ID, prepared); err != nil {
+	if _, err := github.UpdateIssueComment(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		original.ID,
+		prepared,
+	); err != nil {
 		t.Fatal("The test could not prepare the metadata fixture summary.")
 	}
 	provider := cfg.Providers[0]
 	storage := quota.NewClient(endpoint, cfg.GitHubWebhookSecret, client)
-	reportDisplayUsage(t, storage, time.Now().UTC(), provider.ID, provider.Model, provider.Model, 20, 0, 0, 2, 22)
-	service := review.NewService(github, diff.NewCollector(github), model,
-		reconcile.NewService(github, model, cfg.GitHubBotLogin, slog.Default(), cfg.PromptBytes(), cfg.ReviewPolicy),
-		queue.NewKeyedLocker(), cfg.GitHubBotLogin, cfg.MinimumImportance, cfg.ReviewMaxFiles,
-		cfg.ReviewMaxChunks, cfg.ReviewChunkTimeout, cfg.ServiceFailureAppearance,
-		clock.System, slog.Default(), cfg.ChunkConcurrency(), cfg.PromptBytes(), cfg.ReviewPolicy)
-	job := domain.ReviewJob{PullRequestRef: reference, DeliveryID: "live-metadata-period-" + rand.Text(), MetadataOnly: true, RefreshVerdict: true}
+	reportDisplayUsage(
+		t,
+		storage,
+		time.Now().UTC(),
+		provider.ID,
+		provider.Model,
+		provider.Model,
+		20,
+		0,
+		0,
+		2,
+		22,
+	)
+	service := review.NewService(
+		github,
+		diff.NewCollector(github),
+		model,
+		reconcile.NewService(
+			github,
+			model,
+			cfg.GitHubBotLogin,
+			slog.Default(),
+			cfg.PromptBytes(),
+			cfg.ReviewPolicy,
+		),
+		queue.NewKeyedLocker(),
+		cfg.GitHubBotLogin,
+		cfg.MinimumImportance,
+		cfg.ReviewMaxFiles,
+		cfg.ReviewMaxChunks,
+		cfg.ReviewChunkTimeout,
+		cfg.ServiceFailureAppearance,
+		clock.System,
+		slog.Default(),
+		cfg.ChunkConcurrency(),
+		cfg.PromptBytes(),
+		cfg.ReviewPolicy,
+	)
+	job := domain.ReviewJob{
+		PullRequestRef: reference,
+		DeliveryID:     "live-metadata-period-" + rand.Text(),
+		MetadataOnly:   true,
+		RefreshVerdict: true,
+	}
 	job, admitted, err := service.Admit(ctx, job)
 	if err != nil || !admitted {
 		t.Fatal("GitHub did not admit the metadata period check.")
@@ -158,18 +283,35 @@ func TestLiveMetadataFailureRetainsRecordedPeriodUsage(t *testing.T) {
 	if runErr == nil || outcome.Disposition != domain.AssessmentFailed {
 		t.Fatal("The invalid provider credential did not fail the metadata reassessment.")
 	}
-	check, err := github.GetCheckRunDetails(ctx, reference.InstallationID, reference.Repository, job.CheckRunID)
-	if err != nil || check.Run.Status != "completed" || check.Run.Conclusion != "failure" || !strings.Contains(check.Summary, "Recorded usage<br>22 tokens /") {
+	check, err := github.GetCheckRunDetails(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		job.CheckRunID,
+	)
+	if err != nil || check.Run.Status != "completed" || check.Run.Conclusion != "failure" ||
+		!strings.Contains(check.Summary, "Recorded usage<br>22 tokens /") {
 		t.Fatal("The failed metadata check did not display its independently stored usage.")
 	}
 	current, after := livePeriodSummary(t, ctx, github, reference, cfg.GitHubBotLogin)
-	_, preservedDetails, found := strings.Cut(original.Body, "<details>\n<summary>Review details</summary>")
+	_, preservedDetails, found := strings.Cut(
+		original.Body,
+		"<details>\n<summary>Review details</summary>",
+	)
 	preservedDetails, _, _ = strings.Cut(preservedDetails, "</details>")
-	if !found || len(after) != len(comments) || current.ID != original.ID || !strings.Contains(current.Body, preservedDetails) {
-		t.Fatal("The failed metadata refresh did not preserve the existing completed review details.")
+	if !found || len(after) != len(comments) || current.ID != original.ID ||
+		!strings.Contains(current.Body, preservedDetails) {
+		t.Fatal(
+			"The failed metadata refresh did not preserve the existing completed review details.",
+		)
 	}
 	assertLivePeriodCheckpoint(t, original.Body, current.Body)
-	t.Logf("Failed metadata check %d retained 22 stored tokens and preserved summary %d. Original summary: %s", job.CheckRunID, original.ID, backup)
+	t.Logf(
+		"Failed metadata check %d retained 22 stored tokens and preserved summary %d. Original summary: %s",
+		job.CheckRunID,
+		original.ID,
+		backup,
+	)
 }
 
 func removeLiveMetadataRecord(t *testing.T, body string) string {
@@ -207,7 +349,10 @@ func assertLivePeriodCheckpoint(t *testing.T, before, after string) {
 	t.Helper()
 	previous, previousValid := marker.DecodeState(before)
 	current, currentValid := marker.DecodeState(after)
-	if !previousValid || !currentValid || previous.LastReviewed != current.LastReviewed || !reflect.DeepEqual(previous.Completed, current.Completed) || !reflect.DeepEqual(previous.Pending, current.Pending) || !reflect.DeepEqual(previous.Unread, current.Unread) {
+	if !previousValid || !currentValid || previous.LastReviewed != current.LastReviewed ||
+		!reflect.DeepEqual(previous.Completed, current.Completed) ||
+		!reflect.DeepEqual(previous.Pending, current.Pending) ||
+		!reflect.DeepEqual(previous.Unread, current.Unread) {
 		t.Fatal("The failure changed the saved review coverage.")
 	}
 }
@@ -239,17 +384,41 @@ func livePeriodPrivateKey(t *testing.T) *rsa.PrivateKey {
 func livePeriodReference(t *testing.T) domain.PullRequestRef {
 	t.Helper()
 	parts := strings.Split(os.Getenv("PR_AGENT_LIVE_REPOSITORY"), "/")
-	installation, installationErr := strconv.ParseInt(os.Getenv("PR_AGENT_LIVE_INSTALLATION_ID"), 10, 64)
+	installation, installationErr := strconv.ParseInt(
+		os.Getenv("PR_AGENT_LIVE_INSTALLATION_ID"),
+		10,
+		64,
+	)
 	number, numberErr := strconv.Atoi(os.Getenv("PR_AGENT_LIVE_PULL_REQUEST"))
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || installationErr != nil || installation <= 0 || numberErr != nil || number <= 0 {
-		t.Fatal("The live regression requires an explicit repository, installation, and pull request.")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || installationErr != nil ||
+		installation <= 0 ||
+		numberErr != nil ||
+		number <= 0 {
+		t.Fatal(
+			"The live regression requires an explicit repository, installation, and pull request.",
+		)
 	}
-	return domain.PullRequestRef{Repository: domain.Repository{Owner: parts[0], Name: parts[1]}, InstallationID: installation, Number: number}
+	return domain.PullRequestRef{
+		Repository:     domain.Repository{Owner: parts[0], Name: parts[1]},
+		InstallationID: installation,
+		Number:         number,
+	}
 }
 
-func livePeriodSummary(t *testing.T, ctx context.Context, github *githubapp.Client, reference domain.PullRequestRef, bot string) (githubapp.IssueComment, []githubapp.IssueComment) {
+func livePeriodSummary(
+	t *testing.T,
+	ctx context.Context,
+	github *githubapp.Client,
+	reference domain.PullRequestRef,
+	bot string,
+) (githubapp.IssueComment, []githubapp.IssueComment) {
 	t.Helper()
-	comments, err := github.ListIssueComments(ctx, reference.InstallationID, reference.Repository, reference.Number)
+	comments, err := github.ListIssueComments(
+		ctx,
+		reference.InstallationID,
+		reference.Repository,
+		reference.Number,
+	)
 	if err != nil {
 		t.Fatal("The test could not read the live fixture comments.")
 	}

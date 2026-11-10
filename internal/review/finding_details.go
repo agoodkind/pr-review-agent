@@ -10,9 +10,12 @@ import (
 
 func renderSummaryFindings(summary Summary) string {
 	var parts []string
-	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
+	if fallback := renderFallbackFindings(
+		unpublishedSummaryFindings(summary, summary.Fallback),
+	); fallback != "" {
 		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
 	}
+
 	return strings.Join(parts, "\n\n")
 }
 
@@ -21,9 +24,11 @@ func renderFindingCheckpoints(summary Summary) string {
 	if summary.MetadataRevision != "" {
 		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
 	}
+
 	if fallback := encodeFallbackRecord(summary); fallback != "" {
 		parts = append(parts, fallback)
 	}
+
 	return strings.Join(parts, "\n")
 }
 
@@ -34,11 +39,13 @@ func unpublishedSummaryFindings(summary Summary, findings []domain.Finding) []do
 			published[id] = struct{}{}
 		}
 	}
+
 	for _, thread := range summary.Threads {
 		if thread.FindingID != "" {
 			published[thread.FindingID] = struct{}{}
 		}
 	}
+
 	remaining := make([]domain.Finding, 0, len(findings))
 	for _, finding := range findings {
 		id, err := marker.FindingID(finding)
@@ -47,8 +54,10 @@ func unpublishedSummaryFindings(summary Summary, findings []domain.Finding) []do
 				continue
 			}
 		}
+
 		remaining = append(remaining, finding)
 	}
+
 	return remaining
 }
 
@@ -56,12 +65,15 @@ func renderReviewMetadata(summary Summary) string {
 	if summary.MetadataFindingsDisplay == reviewrules.FindingsHidden {
 		return ""
 	}
+
 	body := renderMetadataFindings(unpublishedSummaryFindings(summary, summary.Metadata))
 	if body == "" {
 		return ""
 	}
+
 	if summary.MetadataFindingsDisplay == reviewrules.FindingsCollapsed {
 		return "<details>\n<summary>Prose findings</summary>\n\n" + body + "\n\n</details>"
 	}
+
 	return "#### Prose findings\n\n" + body
 }

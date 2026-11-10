@@ -101,22 +101,30 @@ func collectDisputes(
 			if thread.Resolved != resolved {
 				continue
 			}
+
 			normalizedPath, err := marker.NormalizePath(thread.RootComment.Path)
 			if err != nil {
 				continue
 			}
+
 			section := formatDiscussionSection(thread, normalizedPath, botLogin)
-			if owned, ok := ownedDisputeSection(
-				thread, normalizedPath, botLogin, currentHead, disputes.known,
-			); ok {
+			if owned, hasOwnedSection := ownedDisputeSection(
+				thread,
+				normalizedPath,
+				botLogin,
+				currentHead,
+				disputes.known,
+			); hasOwnedSection {
 				section = owned
 			}
+
 			if len(section) <= budget {
 				disputes.sections = append(disputes.sections, section)
 				budget -= len(section)
 			}
 		}
 	}
+
 	return disputes
 }
 
@@ -130,18 +138,22 @@ func ownedDisputeSection(
 	if thread.RootComment.Author != botLogin {
 		return "", false
 	}
+
 	published, ok := marker.FindFinding(thread.RootComment.Body)
 	if !ok {
 		return "", false
 	}
+
 	_, finding, err := marker.DecodeFindingBody(thread.RootComment)
 	if err != nil {
 		return "", false
 	}
+
 	current := published.Head == currentHead
 	if !thread.Resolved || current {
 		known.remember(threadKeys(published, thread.RootComment), thread.NodeID)
 	}
+
 	return formatDisputeSection(
 		normalizedPath,
 		finding,
@@ -161,6 +173,7 @@ func formatDiscussionSection(
 	if thread.Resolved {
 		state = "Resolved inline discussion"
 	}
+
 	var builder strings.Builder
 	builder.WriteString(state)
 	builder.WriteString("\nPath: ")
@@ -173,16 +186,20 @@ func formatDiscussionSection(
 		builder.WriteString("\nReplies: none yet.")
 		return builder.String()
 	}
+
 	lines, omitted := FormatReplies(thread.Replies, botLogin, MaximumReplyBytes)
 	builder.WriteString("\nReplies, oldest first")
 	if omitted > 0 {
 		fmt.Fprintf(&builder, ", with %d older replies not shown", omitted)
 	}
+
 	builder.WriteString(":")
+
 	for _, line := range lines {
 		builder.WriteString("\n")
 		builder.WriteString(line)
 	}
+
 	return builder.String()
 }
 
@@ -211,6 +228,7 @@ func formatDisputeSection(
 	default:
 		builder.WriteString("Open finding\nPath: ")
 	}
+
 	builder.WriteString(normalizedPath)
 	builder.WriteString("\nTitle: ")
 	builder.WriteString(finding.Title)
@@ -220,16 +238,20 @@ func formatDisputeSection(
 		builder.WriteString("\nReplies: none yet.")
 		return builder.String()
 	}
+
 	lines, omitted := FormatReplies(replies, botLogin, MaximumReplyBytes)
 	builder.WriteString("\nReplies, oldest first. The name before each one is who wrote it")
 	if omitted > 0 {
 		fmt.Fprintf(&builder, ", and %d older replies are not shown", omitted)
 	}
+
 	builder.WriteString(":")
+
 	for _, line := range lines {
 		builder.WriteString("\n")
 		builder.WriteString(line)
 	}
+
 	return builder.String()
 }
 
@@ -243,7 +265,9 @@ func (disputes disputeContext) promptSection(policy reviewrules.Policy) (string,
 	if len(disputes.sections) == 0 {
 		return "", nil
 	}
+
 	var data reviewrules.PromptData
 	data.Input = policy.WrapUntrusted(strings.Join(disputes.sections, "\n\n"))
+
 	return renderPrompt(policy, "disputes.input", data)
 }

@@ -55,12 +55,18 @@ func (client *Client) selectRepositoryMergeBase(
 	}
 
 	if len(bestBases) == 0 {
-		return nil, newAPIError(http.StatusUnprocessableEntity, "Git revisions do not share an ancestor")
+		return nil, newAPIError(
+			http.StatusUnprocessableEntity,
+			"Git revisions do not share an ancestor",
+		)
 	}
 
-	slices.SortFunc(bestBases, func(left *object.Commit, right *object.Commit) int {
-		return bytes.Compare(left.Hash[:], right.Hash[:])
-	})
+	slices.SortFunc(
+		bestBases,
+		func(left *object.Commit, right *object.Commit) int {
+			return bytes.Compare(left.Hash[:], right.Hash[:])
+		},
+	)
 
 	return bestBases[0], nil
 }

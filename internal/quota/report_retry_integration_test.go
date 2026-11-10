@@ -17,21 +17,56 @@ import (
 )
 
 func TestUsageReportRetriesAfterStorageCommitsWithoutDuplicatingCounters(t *testing.T) {
-	t.Run("the next attempt receives acknowledgment", func(t *testing.T) {
-		verifyReportDelivery(t, quota.DefaultReportPolicy(), 1, 2)
-	})
-	t.Run("three failed deliveries permit an explicit replay", func(t *testing.T) {
-		verifyReportDelivery(t, quota.DefaultReportPolicy(), 3, 3)
-	})
-	t.Run("a configured fourth attempt receives acknowledgment", func(t *testing.T) {
-		verifyReportDelivery(t, quota.ReportPolicy{Attempts: 4, AttemptTimeout: time.Second, Timeout: 5 * time.Second}, 3, 4)
-	})
-	t.Run("one configured attempt returns the delivery failure", func(t *testing.T) {
-		verifyReportDelivery(t, quota.ReportPolicy{Attempts: 1, AttemptTimeout: time.Second, Timeout: 2 * time.Second}, 1, 1)
-	})
+	t.Run(
+		"the next attempt receives acknowledgment",
+		func(t *testing.T) {
+			verifyReportDelivery(t, quota.DefaultReportPolicy(), 1, 2)
+		},
+	)
+	t.Run(
+		"three failed deliveries permit an explicit replay",
+		func(t *testing.T) {
+			verifyReportDelivery(t, quota.DefaultReportPolicy(), 3, 3)
+		},
+	)
+	t.Run(
+		"a configured fourth attempt receives acknowledgment",
+		func(t *testing.T) {
+			verifyReportDelivery(
+				t,
+				quota.ReportPolicy{
+					Attempts:       4,
+					AttemptTimeout: time.Second,
+					Timeout:        5 * time.Second,
+				},
+				3,
+				4,
+			)
+		},
+	)
+	t.Run(
+		"one configured attempt returns the delivery failure",
+		func(t *testing.T) {
+			verifyReportDelivery(
+				t,
+				quota.ReportPolicy{
+					Attempts:       1,
+					AttemptTimeout: time.Second,
+					Timeout:        2 * time.Second,
+				},
+				1,
+				1,
+			)
+		},
+	)
 }
 
-func verifyReportDelivery(t *testing.T, policy quota.ReportPolicy, interruptions, expectedAttempts int64) {
+func verifyReportDelivery(
+	t *testing.T,
+	policy quota.ReportPolicy,
+	interruptions int64,
+	expectedAttempts int64,
+) {
 	t.Helper()
 	endpoint := startBudgetWorker(t)
 	target, err := url.Parse(endpoint)
@@ -63,17 +98,25 @@ func verifyReportDelivery(t *testing.T, policy quota.ReportPolicy, interruptions
 	}
 	server := httptest.NewServer(proxy)
 	defer server.Close()
-	client, err := quota.NewReportingClient(server.URL+path, []byte("test-review-budget-secret"), nil, policy)
+	client, err := quota.NewReportingClient(
+		server.URL+path,
+		[]byte("test-review-budget-secret"),
+		nil,
+		policy,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	legacyTokens := int64(300)
 	report := quota.ReportRequest{
-		ReportID: "committed-response-lost", ProviderID: "retry_provider", Model: "retry_model",
+		ReportID:     "committed-response-lost",
+		ProviderID:   "retry_provider",
+		Model:        "retry_model",
 		AdmittedAtMS: now.UnixMilli(),
 		Usage:        quota.Usage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
-		LegacyDay:    now.Format("2006-01-02"), LegacyTokens: &legacyTokens,
+		LegacyDay:    now.Format("2006-01-02"),
+		LegacyTokens: &legacyTokens,
 	}
 	reportErr := client.Report(t.Context(), report)
 	if interruptions < expectedAttempts && reportErr != nil {
@@ -83,13 +126,21 @@ func verifyReportDelivery(t *testing.T, policy quota.ReportPolicy, interruptions
 		t.Fatal("the client acknowledged a report without receiving a response")
 	}
 	if responses.Load() != expectedAttempts {
-		t.Fatalf("the client made %d attempts after losing the committed response", responses.Load())
+		t.Fatalf(
+			"the client made %d attempts after losing the committed response",
+			responses.Load(),
+		)
 	}
 	storage := quota.NewClient(endpoint, []byte("test-review-budget-secret"), nil)
 	if err := storage.Report(t.Context(), report); err != nil {
 		t.Fatal(err)
 	}
-	bounds := quota.Bounds{StartMS: now.Add(-time.Minute).UnixMilli(), EndMS: now.Add(time.Minute).UnixMilli(), IncludeStart: true, IncludeEnd: true}
+	bounds := quota.Bounds{
+		StartMS:      now.Add(-time.Minute).UnixMilli(),
+		EndMS:        now.Add(time.Minute).UnixMilli(),
+		IncludeStart: true,
+		IncludeEnd:   true,
+	}
 	history, err := storage.Query(t.Context(), report.ProviderID, report.Model, bounds)
 	if err != nil {
 		t.Fatal(err)
@@ -133,21 +184,53 @@ func TestReportPolicyBoundsAttemptAndTotalDeliveryTime(t *testing.T) {
 	}
 	server := httptest.NewServer(proxy)
 	defer server.Close()
-	policy := quota.ReportPolicy{Attempts: 10, AttemptTimeout: 50 * time.Millisecond, Timeout: 130 * time.Millisecond}
-	client, err := quota.NewReportingClient(server.URL+path, []byte("test-review-budget-secret"), nil, policy)
+	policy := quota.ReportPolicy{
+		Attempts:       10,
+		AttemptTimeout: 50 * time.Millisecond,
+		Timeout:        130 * time.Millisecond,
+	}
+	client, err := quota.NewReportingClient(
+		server.URL+path,
+		[]byte("test-review-budget-secret"),
+		nil,
+		policy,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := time.Now()
-	err = client.Report(t.Context(), quota.ReportRequest{ReportID: "delayed-acknowledgment", ProviderID: "deadline_provider", Model: "deadline_model", AdmittedAtMS: started.UnixMilli(), Usage: quota.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5}})
+	err = client.Report(
+		t.Context(),
+		quota.ReportRequest{
+			ReportID:     "delayed-acknowledgment",
+			ProviderID:   "deadline_provider",
+			Model:        "deadline_model",
+			AdmittedAtMS: started.UnixMilli(),
+			Usage:        quota.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5},
+		},
+	)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("delayed delivery returned %v instead of its configured deadline", err)
 	}
 	if time.Since(started) >= 300*time.Millisecond || responses.Load() < 2 || responses.Load() > 3 {
-		t.Fatalf("configured timeouts did not bound delivery: elapsed=%s attempts=%d", time.Since(started), responses.Load())
+		t.Fatalf(
+			"configured timeouts did not bound delivery: elapsed=%s attempts=%d",
+			time.Since(started),
+			responses.Load(),
+		)
 	}
 	storage := quota.NewClient(endpoint, []byte("test-review-budget-secret"), nil)
-	history, err := storage.Query(t.Context(), "deadline_provider", "deadline_model", quota.Bounds{StartMS: started.Add(-time.Minute).UnixMilli(), EndMS: started.Add(time.Minute).UnixMilli(), IncludeStart: true, IncludeEnd: true})
+	history, err := storage.Query(
+		t.Context(),
+		"deadline_provider",
+		"deadline_model",
+		quota.Bounds{
+			StartMS:      started.Add(-time.Minute).UnixMilli(),
+			EndMS:        started.Add(time.Minute).UnixMilli(),
+			IncludeStart: true,
+			IncludeEnd:   true,
+		},
+	)
 	if err != nil || len(history.Events) != 1 || history.Events[0].TotalTokens != 5 {
 		t.Fatalf("delayed delivery did not preserve exactly one usage event: %+v, %v", history, err)
 	}

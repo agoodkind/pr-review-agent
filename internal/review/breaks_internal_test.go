@@ -37,7 +37,13 @@ func TestReplyLineBreaksCoversEveryBreakCodePoint(t *testing.T) {
 	} {
 		runes := []rune(constant.value)
 		if len(runes) != 1 || runes[0] != constant.want {
-			t.Fatalf("%s = %q (%U), want exactly %U", constant.name, constant.value, runes, constant.want)
+			t.Fatalf(
+				"%s = %q (%U), want exactly %U",
+				constant.name,
+				constant.value,
+				runes,
+				constant.want,
+			)
 		}
 	}
 }

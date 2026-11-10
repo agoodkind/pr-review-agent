@@ -9,9 +9,15 @@ func renderUsageDetails(usage UsageSummary) string {
 	var builder strings.Builder
 	builder.WriteString("\n#### Model usage\n\n| | |\n| --- | --- |\n")
 	if usage.ReportedRequests == 0 {
-		fmt.Fprintf(&builder, "| Requests | `%d` |\n\nToken usage was not reported.\n", usage.Requests)
+		fmt.Fprintf(
+			&builder,
+			"| Requests | `%d` |\n\nToken usage was not reported.\n",
+			usage.Requests,
+		)
+
 		return builder.String()
 	}
+
 	rows := []struct {
 		name  string
 		value int64
@@ -32,28 +38,36 @@ func renderUsageDetails(usage UsageSummary) string {
 	for _, row := range rows {
 		fmt.Fprintf(&builder, "| %s | `%d` |\n", row.name, row.value)
 	}
+
 	if len(usage.ServiceTiers) > 0 {
 		cells := make([]string, 0, len(usage.ServiceTiers))
 		for _, tier := range usage.ServiceTiers {
 			cells = append(cells, usageModelCell(tier))
 		}
+
 		fmt.Fprintf(&builder, "| Reported service tiers | %s |\n", strings.Join(cells, ", "))
 	}
-	if usage.PricedRequests == 0 {
-		builder.WriteString("| Estimated input cost | unknown |\n| Estimated cached input cost | unknown |\n| Estimated cache write cost | unknown |\n| Estimated output cost | unknown |\n| Estimated total cost | unknown |\n")
-	} else {
-		fmt.Fprintf(&builder, "| Estimated input cost | $%.8f |\n", usage.EstimatedInputCostUSD)
-		fmt.Fprintf(&builder, "| Estimated cached input cost | $%.8f |\n", usage.EstimatedCachedInputCostUSD)
-		fmt.Fprintf(&builder, "| Estimated cache write cost | %s |\n", cacheWriteCostCell(usage))
-		fmt.Fprintf(&builder, "| Estimated output cost | $%.8f |\n", usage.EstimatedOutputCostUSD)
-		fmt.Fprintf(&builder, "| Estimated total cost | $%.8f |\n", usage.EstimatedCostUSD)
-	}
-	fmt.Fprintf(&builder, "| Requests with priced usage | `%d` of `%d` |\n", usage.PricedRequests, usage.ReportedRequests)
+
+	writeUsageCosts(&builder, usage)
+
+	fmt.Fprintf(
+		&builder,
+		"| Requests with priced usage | `%d` of `%d` |\n",
+		usage.PricedRequests,
+		usage.ReportedRequests,
+	)
 	if usage.PricedRequests < usage.ReportedRequests {
-		builder.WriteString("\nSome reported token usage has no configured price. The estimate excludes its cost.\n")
+		builder.WriteString(
+			"\nSome reported token usage has no configured price. The estimate excludes its cost.\n",
+		)
 	}
+
 	if len(usage.Models) > 0 && len(usage.ProviderAttempts) == 0 {
-		builder.WriteString("\n| Requested model | Reported model | Requests | Input | Cached input | Output | Total | Estimated cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n")
+		builder.WriteString(
+			"\n| Requested model | Reported model | Requests | Input | Cached input | " +
+				"Output | Total | Estimated cost |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n",
+		)
+
 		for _, model := range usage.Models {
 			cost := "unknown"
 			if model.ReportedRequests == 0 {
@@ -61,12 +75,43 @@ func renderUsageDetails(usage UsageSummary) string {
 			} else if model.Priced {
 				cost = fmt.Sprintf("$%.8f", model.EstimatedCostUSD)
 			}
-			fmt.Fprintf(&builder, "| %s | %s | %d | %d | %d | %d | %d | %s |\n",
-				usageModelCell(model.RequestedModel), usageModelCell(model.Model), model.Requests,
-				model.InputTokens, model.CachedInputTokens, model.OutputTokens, model.TotalTokens, cost)
+
+			fmt.Fprintf(
+				&builder,
+				"| %s | %s | %d | %d | %d | %d | %d | %s |\n",
+				usageModelCell(model.RequestedModel),
+				usageModelCell(model.Model),
+				model.Requests,
+				model.InputTokens,
+				model.CachedInputTokens,
+				model.OutputTokens,
+				model.TotalTokens,
+				cost,
+			)
 		}
 	}
+
 	return builder.String()
+}
+
+func writeUsageCosts(builder *strings.Builder, usage UsageSummary) {
+	if usage.PricedRequests == 0 {
+		builder.WriteString(
+			"| Estimated input cost | unknown |\n| Estimated cached input cost | unknown |\n" +
+				"| Estimated cache write cost | unknown |\n| Estimated output cost | unknown |\n" +
+				"| Estimated total cost | unknown |\n",
+		)
+	} else {
+		fmt.Fprintf(builder, "| Estimated input cost | $%.8f |\n", usage.EstimatedInputCostUSD)
+		fmt.Fprintf(
+			builder,
+			"| Estimated cached input cost | $%.8f |\n",
+			usage.EstimatedCachedInputCostUSD,
+		)
+		fmt.Fprintf(builder, "| Estimated cache write cost | %s |\n", cacheWriteCostCell(usage))
+		fmt.Fprintf(builder, "| Estimated output cost | $%.8f |\n", usage.EstimatedOutputCostUSD)
+		fmt.Fprintf(builder, "| Estimated total cost | $%.8f |\n", usage.EstimatedCostUSD)
+	}
 }
 
 func cacheWriteCostCell(usage UsageSummary) string {
@@ -75,6 +120,7 @@ func cacheWriteCostCell(usage UsageSummary) string {
 			return "unknown"
 		}
 	}
+
 	return fmt.Sprintf("$%.8f", usage.EstimatedCacheWriteCostUSD)
 }
 

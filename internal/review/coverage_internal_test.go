@@ -24,6 +24,7 @@ func configuredScopeNotice(t *testing.T, shortfall structuralShortfall, pending 
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return notice
 }
 
@@ -33,21 +34,27 @@ func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
 
 	notice := configuredScopeNotice(
 		t,
-		structuralShortfall{Hunks: []unreadHunk{{
-			Path:   hostile,
-			Header: "@@ -1,1 +1,2 @@ `evil`",
-			Reason: oversizedHunkReason,
-			Target: nil,
-		}}},
+		structuralShortfall{
+			Hunks: []unreadHunk{
+				{
+					Path:   hostile,
+					Header: "@@ -1,1 +1,2 @@ `evil`",
+					Reason: oversizedHunkReason,
+					Target: nil,
+				},
+			},
+		},
 		0,
 	)
 
 	if strings.Contains(notice, "\nBODY:") {
 		t.Fatalf("a newline in a path reached the rendered notice:\n%s", notice)
 	}
+
 	if !strings.Contains(notice, `\n`) {
 		t.Fatalf("the newline was dropped rather than escaped:\n%s", notice)
 	}
+
 	// The renderer must emit exactly one opening and one closing fence.
 	if opened := strings.Count(notice, "\n```"); opened != 2 {
 		t.Fatalf("fence lines = %d, want one opened and one closed:\n%s", opened, notice)
@@ -66,8 +73,13 @@ func TestUnreadHunkTruncationKeepsAWholeRune(t *testing.T) {
 	if !utf8.ValidString(label) {
 		t.Fatalf("label contains a partial UTF-8 rune: %q", label)
 	}
+
 	if len(label) > maximumUnreadHunkLabelBytes+len("...") {
-		t.Fatalf("label bytes = %d, want at most %d", len(label), maximumUnreadHunkLabelBytes+len("..."))
+		t.Fatalf(
+			"label bytes = %d, want at most %d",
+			len(label),
+			maximumUnreadHunkLabelBytes+len("..."),
+		)
 	}
 }
 
@@ -76,14 +88,18 @@ func TestUnreadHunkTruncationKeepsAWholeRune(t *testing.T) {
 // count in the sentence above it stays exact.
 func TestALongUnreadListIsBoundedAndSaysHowManyItOmitted(t *testing.T) {
 	const extra = 5
+
 	hunks := make([]unreadHunk, 0, maximumListedUnreadHunks+extra)
 	for index := 0; index < maximumListedUnreadHunks+extra; index++ {
-		hunks = append(hunks, unreadHunk{
-			Path:   fmt.Sprintf("pkg/%s%d.go", strings.Repeat("deep/", 40), index),
-			Header: "@@ -1,1 +1,2 @@",
-			Reason: oversizedHunkReason,
-			Target: nil,
-		})
+		hunks = append(
+			hunks,
+			unreadHunk{
+				Path:   fmt.Sprintf("pkg/%s%d.go", strings.Repeat("deep/", 40), index),
+				Header: "@@ -1,1 +1,2 @@",
+				Reason: oversizedHunkReason,
+				Target: nil,
+			},
+		)
 	}
 
 	notice := configuredScopeNotice(
@@ -95,9 +111,11 @@ func TestALongUnreadListIsBoundedAndSaysHowManyItOmitted(t *testing.T) {
 	if !strings.Contains(notice, fmt.Sprintf("This list omits %d more unread changes.", extra)) {
 		t.Fatalf("the notice does not say what it omitted:\n%s", notice)
 	}
+
 	if listed := strings.Count(notice, oversizedHunkReason); listed != maximumListedUnreadHunks {
 		t.Fatalf("listed hunks = %d, want the cap of %d", listed, maximumListedUnreadHunks)
 	}
+
 	// One path long enough to crowd out the sentence is cut on its own.
 	for _, line := range strings.Split(notice, "\n") {
 		if len(line) > maximumUnreadHunkLabelBytes+len(oversizedHunkReason)+16 {
@@ -109,23 +127,31 @@ func TestALongUnreadListIsBoundedAndSaysHowManyItOmitted(t *testing.T) {
 // A run that also left chunks pending must not tell the reader the rest of the
 // head was reviewed, because those chunks were not read either.
 func TestANoticeWithPendingChunksDoesNotClaimTheRestWasReviewed(t *testing.T) {
-	shortfall := structuralShortfall{Hunks: []unreadHunk{{
-		Path:   "a.go",
-		Header: "@@ -1,1 +1,2 @@",
-		Reason: oversizedHunkReason,
-		Target: nil,
-	}}}
+	shortfall := structuralShortfall{
+		Hunks: []unreadHunk{
+			{
+				Path:   "a.go",
+				Header: "@@ -1,1 +1,2 @@",
+				Reason: oversizedHunkReason,
+				Target: nil,
+			},
+		},
+	}
 
 	withPending := configuredScopeNotice(t, shortfall, 3)
 	if strings.Contains(withPending, "Everything else on this head was reviewed") {
 		t.Fatalf("the notice claims coverage it does not have:\n%s", withPending)
 	}
+
 	if !strings.Contains(withPending, "3 review chunks remain unfinished") {
 		t.Fatalf("the notice does not say what is still owed:\n%s", withPending)
 	}
 
 	clean := configuredScopeNotice(t, shortfall, 0)
 	if strings.Contains(clean, "remain unfinished") {
-		t.Fatalf("the notice claims unfinished chunks when only file assessment remains:\n%s", clean)
+		t.Fatalf(
+			"the notice claims unfinished chunks when only file assessment remains:\n%s",
+			clean,
+		)
 	}
 }

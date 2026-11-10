@@ -215,6 +215,7 @@ func (cfg Config) ChunkConcurrency() int {
 	if cfg.ReviewChunkConcurrency == 0 {
 		return MaximumChunkConcurrency
 	}
+
 	return cfg.ReviewChunkConcurrency
 }
 
@@ -223,6 +224,7 @@ func (cfg Config) PromptBytes() int {
 	if cfg.ReviewMaxPromptBytes == 0 {
 		return MaximumPromptBytes
 	}
+
 	return cfg.ReviewMaxPromptBytes
 }
 
@@ -233,7 +235,9 @@ func LoadReviewLimits(lookup LookupEnv, cfg *Config) error {
 	if err != nil {
 		return err
 	}
+
 	cfg.ReviewMaxPromptBytes, err = loadPositiveSetting(lookup, "REVIEW_MAX_PROMPT_BYTES")
+
 	return err
 }
 
@@ -242,10 +246,12 @@ func loadPositiveSetting(lookup LookupEnv, name string) (int, error) {
 	if !configured {
 		return 0, nil
 	}
+
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed <= 0 {
 		return 0, fmt.Errorf("%s must be a positive integer", name)
 	}
+
 	return parsed, nil
 }
 
@@ -259,15 +265,19 @@ func FindModelPricing(pricingByModel map[string]ModelPricing, model string) (Mod
 	if pricing, ok := pricingByModel[model]; ok {
 		return pricing, true
 	}
+
 	matchedPrefix := ""
 	var matchedPricing ModelPricing
+
 	for prefix, pricing := range pricingByModel {
 		if !strings.HasPrefix(model, prefix+"-") || len(prefix) <= len(matchedPrefix) {
 			continue
 		}
+
 		matchedPrefix = prefix
 		matchedPricing = pricing
 	}
+
 	return matchedPricing, matchedPrefix != ""
 }
 
@@ -278,6 +288,7 @@ func FromEnvironment() (Config, error) {
 		slog.Error("read runtime configuration", "error", err)
 		return Config{}, fmt.Errorf("read runtime configuration: %w", err)
 	}
+
 	return LoadRuntime(data, os.LookupEnv)
 }
 
@@ -287,37 +298,52 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 	if err := json.Unmarshal(data, &rawValues); err != nil || rawValues == nil {
 		return Config{}, errors.New("runtime configuration must be a JSON object")
 	}
+
 	values := make(map[string]string, len(rawValues))
 	for name, raw := range rawValues {
 		if _, ok := runtimeConfigKeys[name]; !ok {
 			return Config{}, fmt.Errorf("unknown runtime configuration key %q", name)
 		}
+
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return Config{}, fmt.Errorf("runtime configuration key %q must not be null", name)
 		}
+
 		if name == "REVIEW_APPROVE_EACH_COMMIT" {
 			var value bool
 			if err := json.Unmarshal(raw, &value); err != nil {
 				return Config{}, fmt.Errorf("runtime configuration key %q must be a boolean", name)
 			}
+
 			values[name] = strconv.FormatBool(value)
 			continue
 		}
-		if name == "REASSESSMENT" || name == "PROVIDER_BUDGET_REPORT" || name == "PROVIDER_USAGE_RETENTION" || name == "REVIEW_MODEL_PRICING" || name == "PROVIDERS" || name == "PROVIDER_PRIORITY" || name == "SERVICE_FAILURE_APPEARANCE" || name == "REVIEW_RULE_IMPORTANCE" {
+
+		if name == "REASSESSMENT" || name == "PROVIDER_BUDGET_REPORT" ||
+			name == "PROVIDER_USAGE_RETENTION" ||
+			name == "REVIEW_MODEL_PRICING" ||
+			name == "PROVIDERS" ||
+			name == "PROVIDER_PRIORITY" ||
+			name == "SERVICE_FAILURE_APPEARANCE" ||
+			name == "REVIEW_RULE_IMPORTANCE" {
 			values[name] = string(raw)
 			continue
 		}
+
 		var value string
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return Config{}, fmt.Errorf("runtime configuration key %q must be a string", name)
 		}
+
 		values[name] = value
 	}
+
 	return Load(func(name string) (string, bool) {
 		if _, ok := runtimeConfigKeys[name]; ok {
 			value, found := values[name]
 			return value, found
 		}
+
 		return lookup(name)
 	})
 }
@@ -326,63 +352,80 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 func Load(lookup LookupEnv) (Config, error) {
 	cfg, missing := loadBase(lookup)
 	if len(missing) > 0 {
-		return Config{}, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+		return Config{}, fmt.Errorf(
+			"missing required environment variables: %s",
+			strings.Join(missing, ", "),
+		)
 	}
+
 	if err := LoadReviewLimits(lookup, &cfg); err != nil {
 		return Config{}, err
 	}
+
 	if value, configured := lookup("REVIEW_APPROVE_EACH_COMMIT"); configured {
 		approveEachCommit, err := strconv.ParseBool(value)
 		if err != nil {
 			return Config{}, errors.New("REVIEW_APPROVE_EACH_COMMIT must be a boolean")
 		}
+
 		cfg.ApproveEachCommit = approveEachCommit
 	}
+
 	policy, err := LoadReviewPolicy(lookup)
 	if err != nil {
 		return Config{}, err
 	}
+
 	cfg.ReviewPolicy = policy
 	pricing, err := loadModelPricing(lookup)
 	if err != nil {
 		return Config{}, err
 	}
+
 	cfg.ReviewModelPricing = pricing
 	ruleImportance, err := loadRuleImportance(lookup, policy.Catalog())
 	if err != nil {
 		return Config{}, err
 	}
+
 	cfg.RuleImportance = ruleImportance
 	appearances, err := loadFailureAppearances(lookup)
 	if err != nil {
 		return Config{}, err
 	}
+
 	cfg.ServiceFailureAppearance = appearances
 	cfg.FailureVerdictPolicy, err = loadFailureVerdictPolicy(lookup)
 	if err != nil {
 		return Config{}, err
 	}
+
 	if err := loadDeliveryPolicies(lookup, &cfg); err != nil {
 		return Config{}, err
 	}
+
 	failurePolicy, err := LoadProviderFailurePolicy(lookup)
 	if err != nil {
 		return Config{}, err
 	}
+
 	cfg.ProviderFailurePolicy = failurePolicy
 	if _, configured := lookup("PROVIDERS"); configured {
 		providers, err := LoadProviders(lookup)
 		if err != nil {
 			return Config{}, err
 		}
+
 		cfg.Providers = providers
 	}
+
 	if budgetURL, configured := loadRequiredText(lookup, "PROVIDER_BUDGET_URL"); configured {
 		cfg.ProviderBudgetURL, err = parseRequiredHTTPSURL("PROVIDER_BUDGET_URL", budgetURL)
 		if err != nil {
 			return Config{}, err
 		}
 	}
+
 	for _, provider := range cfg.Providers {
 		if !provider.Disabled && provider.HasTokenLimit() && cfg.ProviderBudgetURL == nil {
 			return Config{}, errors.New("PROVIDER_BUDGET_URL is required for capped providers")
@@ -393,33 +436,43 @@ func Load(lookup LookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("default GitHub API URL is invalid")
 	}
+
 	graphqlURL, err := url.Parse("https://api.github.com/graphql")
 	if err != nil {
 		return Config{}, errors.New("default GitHub GraphQL URL is invalid")
 	}
+
 	cfg.GitHubAPIBaseURL = apiBaseURL
 	cfg.GitHubGraphQLURL = graphqlURL
 
 	return cfg, nil
 }
 
-func loadRuleImportance(lookup LookupEnv, catalog reviewrules.Catalog) (reviewrules.Importance, error) {
+func loadRuleImportance(
+	lookup LookupEnv,
+	catalog reviewrules.Catalog,
+) (reviewrules.Importance, error) {
 	raw, configured := lookup("REVIEW_RULE_IMPORTANCE")
 	var importance reviewrules.Importance
 	if configured {
 		decoder := json.NewDecoder(strings.NewReader(raw))
 		if err := decoder.Decode(&importance); err != nil || importance == nil {
-			return nil, errors.New("REVIEW_RULE_IMPORTANCE must be a JSON object of integer importance values")
+			return nil, errors.New(
+				"REVIEW_RULE_IMPORTANCE must be a JSON object of integer importance values",
+			)
 		}
+
 		var trailing json.RawMessage
 		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 			return nil, errors.New("REVIEW_RULE_IMPORTANCE must contain one JSON object")
 		}
 	}
+
 	if err := catalog.ValidateImportance(importance); err != nil {
 		slog.Error("validate review rule importance", "error", err)
 		return nil, fmt.Errorf("validate REVIEW_RULE_IMPORTANCE: %w", err)
 	}
+
 	return importance, nil
 }
 
@@ -428,20 +481,24 @@ func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
 	if !ok || strings.TrimSpace(value) == "" {
 		return nil, nil
 	}
+
 	pricing := make(map[string]ModelPricing)
 	decoder := json.NewDecoder(strings.NewReader(value))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&pricing); err != nil {
 		return nil, errors.New("REVIEW_MODEL_PRICING must be a JSON object of token rates")
 	}
+
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("REVIEW_MODEL_PRICING must contain one JSON object")
 	}
+
 	for model, rates := range pricing {
 		if strings.TrimSpace(model) == "" {
 			return nil, errors.New("REVIEW_MODEL_PRICING model keys must not be empty")
 		}
+
 		if rates.InputPerMillionTokens < 0 ||
 			rates.CachedInputPerMillionTokens < 0 ||
 			(rates.CacheWritePerMillionTokens != nil && *rates.CacheWritePerMillionTokens < 0) ||
@@ -449,6 +506,7 @@ func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
 			return nil, errors.New("REVIEW_MODEL_PRICING token rates must not be negative")
 		}
 	}
+
 	return pricing, nil
 }
 
@@ -457,23 +515,33 @@ func loadFailureAppearances(lookup LookupEnv) (FailureAppearances, error) {
 	if !ok || strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
+
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	var parsed map[FailureClass]FailureAppearance
 	if err := decoder.Decode(&parsed); err != nil {
 		return nil, errors.New("SERVICE_FAILURE_APPEARANCE must be a JSON object")
 	}
+
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return nil, errors.New("SERVICE_FAILURE_APPEARANCE must contain one JSON object")
 	}
+
 	for class, appearance := range parsed {
 		if _, known := knownFailureClasses[class]; !known {
 			return nil, fmt.Errorf("SERVICE_FAILURE_APPEARANCE has unknown failure class %q", class)
 		}
+
 		if appearance != FailureAppearanceFail && appearance != FailureAppearancePass {
-			return nil, fmt.Errorf("SERVICE_FAILURE_APPEARANCE appearance for %q must be %q or %q", class, FailureAppearanceFail, FailureAppearancePass)
+			return nil, fmt.Errorf(
+				"SERVICE_FAILURE_APPEARANCE appearance for %q must be %q or %q",
+				class,
+				FailureAppearanceFail,
+				FailureAppearancePass,
+			)
 		}
 	}
+
 	return parsed, nil
 }
 
@@ -498,12 +566,14 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 	} else {
 		cfg.ReviewWorkers = reviewWorkers
 	}
+
 	minimumImportance, ok := loadMinimumImportance(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_MIN_IMPORTANCE")
 	} else {
 		cfg.MinimumImportance = minimumImportance
 	}
+
 	if _, configured := lookup("PROVIDERS"); !configured {
 		reviewModel, ok := loadRequiredText(lookup, "REVIEW_MODEL")
 		if !ok {
@@ -512,29 +582,34 @@ func loadBase(lookup LookupEnv) (Config, []string) {
 			cfg.ReviewModel = reviewModel
 		}
 	}
+
 	reviewMaxFiles, ok := loadReviewMaxFiles(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_MAX_FILES")
 	} else {
 		cfg.ReviewMaxFiles = reviewMaxFiles
 	}
+
 	reviewMaxChunks, ok := loadReviewMaxChunks(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_MAX_CHUNKS")
 	} else {
 		cfg.ReviewMaxChunks = reviewMaxChunks
 	}
+
 	reviewChunkTimeout, ok := loadReviewChunkTimeout(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_CHUNK_TIMEOUT")
 	} else {
 		cfg.ReviewChunkTimeout = reviewChunkTimeout
 	}
+
 	missing = append(missing, loadGitHub(lookup, &cfg)...)
 	if _, configured := lookup("PROVIDERS"); !configured {
 		missing = append(missing, loadClyde(lookup, &cfg)...)
 		missing = append(missing, loadFallback(lookup, &cfg)...)
 	}
+
 	cfg.LogForwardURL = loadLogForwardURL(lookup)
 
 	return cfg, missing
@@ -548,10 +623,12 @@ func loadLogForwardURL(lookup LookupEnv) *url.URL {
 	if !ok || strings.TrimSpace(value) == "" {
 		return nil
 	}
+
 	parsed, err := url.Parse(strings.TrimSpace(value))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil
 	}
+
 	return parsed
 }
 
@@ -560,6 +637,7 @@ func loadRequiredText(lookup LookupEnv, name string) (string, bool) {
 	if !ok || strings.TrimSpace(value) == "" {
 		return "", false
 	}
+
 	return value, true
 }
 
@@ -568,10 +646,12 @@ func loadReviewWorkers(lookup LookupEnv) (int, bool) {
 	if !ok || strings.TrimSpace(value) == "" {
 		return 0, false
 	}
+
 	workers, err := strconv.Atoi(value)
 	if err != nil || workers <= 0 {
 		return 0, false
 	}
+
 	return workers, true
 }
 
@@ -584,10 +664,12 @@ func loadReviewMaxFiles(lookup LookupEnv) (int, bool) {
 	if !ok || strings.TrimSpace(value) == "" {
 		return DefaultReviewMaxFiles, true
 	}
+
 	maxFiles, err := strconv.Atoi(value)
 	if err != nil || maxFiles <= 0 {
 		return 0, false
 	}
+
 	return maxFiles, true
 }
 
@@ -598,10 +680,12 @@ func loadReviewMaxChunks(lookup LookupEnv) (int, bool) {
 	if !ok || strings.TrimSpace(value) == "" {
 		return DefaultReviewMaxChunks, true
 	}
+
 	maxChunks, err := strconv.Atoi(value)
 	if err != nil || maxChunks <= 0 {
 		return 0, false
 	}
+
 	return maxChunks, true
 }
 
@@ -612,10 +696,12 @@ func loadReviewChunkTimeout(lookup LookupEnv) (time.Duration, bool) {
 	if !ok || strings.TrimSpace(value) == "" {
 		return DefaultReviewChunkTimeout, true
 	}
+
 	timeout, err := time.ParseDuration(value)
 	if err != nil || timeout <= 0 {
 		return 0, false
 	}
+
 	return timeout, true
 }
 
@@ -624,10 +710,13 @@ func loadMinimumImportance(lookup LookupEnv) (int, bool) {
 	if !ok || strings.TrimSpace(value) == "" {
 		return 0, false
 	}
+
 	importance, err := strconv.Atoi(value)
-	if err != nil || importance < reviewrules.MinimumImportance || importance > reviewrules.MaximumImportance {
+	if err != nil || importance < reviewrules.MinimumImportance ||
+		importance > reviewrules.MaximumImportance {
 		return 0, false
 	}
+
 	return importance, true
 }
 
@@ -636,6 +725,7 @@ func loadPort(lookup LookupEnv) string {
 	if !ok || strings.TrimSpace(port) == "" {
 		return "3000"
 	}
+
 	return port
 }
 
@@ -712,10 +802,12 @@ func loadClyde(lookup LookupEnv, cfg *Config) []string {
 		if !hasClientID {
 			missing = append(missing, "CF_ACCESS_CLIENT_ID")
 		}
+
 		if !hasClientSecret {
 			missing = append(missing, "CF_ACCESS_CLIENT_SECRET")
 		}
 	}
+
 	if hasClientID && hasClientSecret {
 		cfg.CFAccessClientID = cfClientID
 		cfg.CFAccessClientSecret = cfAccessValue // gitleaks:allow
@@ -737,11 +829,13 @@ var fallbackCoreNames = []string{
 // instead of at the moment the primary provider refuses a review.
 func loadFallback(lookup LookupEnv, cfg *Config) []string {
 	present := 0
+
 	for _, name := range fallbackCoreNames {
 		if _, ok := loadRequiredText(lookup, name); ok {
 			present++
 		}
 	}
+
 	if present == 0 {
 		return nil
 	}
@@ -777,6 +871,7 @@ func loadFallback(lookup LookupEnv, cfg *Config) []string {
 	if !loadFallbackTrigger(lookup, cfg) {
 		missing = append(missing, "FALLBACK_ON")
 	}
+
 	return missing
 }
 
@@ -789,18 +884,23 @@ func loadFallbackAccess(lookup LookupEnv, cfg *Config) []string {
 	if !hasClientID && !hasClientSecret {
 		return nil
 	}
+
 	var missing []string
 	if !hasClientID {
 		missing = append(missing, "FALLBACK_CF_ACCESS_CLIENT_ID")
 	}
+
 	if !hasClientSecret {
 		missing = append(missing, "FALLBACK_CF_ACCESS_CLIENT_SECRET")
 	}
+
 	if len(missing) > 0 {
 		return missing
 	}
+
 	cfg.FallbackCFAccessClientID = clientID
 	cfg.FallbackCFAccessClientSecret = clientSecret // gitleaks:allow
+
 	return nil
 }
 
@@ -813,10 +913,13 @@ func loadFallbackTrigger(lookup LookupEnv, cfg *Config) bool {
 		cfg.FallbackOnUsageExceeded = true
 		return true
 	}
+
 	if strings.TrimSpace(value) != FallbackOnUsageExceeded {
 		return false
 	}
+
 	cfg.FallbackOnUsageExceeded = true
+
 	return true
 }
 
@@ -825,12 +928,15 @@ func parseRequiredHTTPSURL(name string, value string) (*url.URL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s is not a valid URL", name)
 	}
+
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return nil, fmt.Errorf("%s must be an absolute URL", name)
 	}
+
 	if parsed.Scheme != "https" {
 		return nil, fmt.Errorf("%s must use HTTPS", name)
 	}
+
 	return parsed, nil
 }
 
@@ -848,9 +954,11 @@ func parseRSAPrivateKey(value string) (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, errors.New("malformed RSA private key")
 	}
+
 	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
 	if !ok {
 		return nil, errors.New("private key is not RSA")
 	}
+
 	return rsaKey, nil
 }

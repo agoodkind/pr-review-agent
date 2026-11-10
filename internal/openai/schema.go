@@ -9,68 +9,114 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-// MarshalReviewSchema constrains rule IDs to the catalog before a model returns findings.
+// MarshalReviewSchema encodes the structured review schema.
+//
+// The schema restricts finding rule IDs to the loaded catalog.
+//
+// For example:
+//
+//	schema, err := MarshalReviewSchema(policy)
 func MarshalReviewSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	ids, err := json.Marshal(policy.Catalog().IDs())
 	if err != nil {
 		slog.Warn("Review schema encoding failed")
 		return nil, fmt.Errorf("encode review rule IDs: %w", err)
 	}
+
 	surfaces, err := json.Marshal([]domain.FindingSurface{
-		domain.FindingFile, domain.FindingPullRequestTitle, domain.FindingPullRequestDescription, domain.FindingCommitMessage,
+		domain.FindingFile,
+		domain.FindingPullRequestTitle,
+		domain.FindingPullRequestDescription,
+		domain.FindingCommitMessage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode finding surfaces: %w", err)
 	}
+
 	actions, err := json.Marshal([]domain.CorrectionAction{
-		domain.CorrectionNone, domain.CorrectionReplace, domain.CorrectionDelete,
+		domain.CorrectionNone,
+		domain.CorrectionReplace,
+		domain.CorrectionDelete,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode finding correction actions: %w", err)
 	}
+
 	descriptions, err := marshalFindingDescriptions(policy)
 	if err != nil {
 		return nil, err
 	}
+
 	reason, err := marshalAssessmentReasonSchema(policy)
 	if err != nil {
 		return nil, err
 	}
+
 	inspections := fmt.Sprintf(inspectionRequestSchemaTemplate, policy.Limits().InspectionRequests)
-	return json.RawMessage(fmt.Sprintf(reviewSchemaTemplate, inspections, reason, policy.FileAssessmentMaximumEvidenceReferences(), ids, surfaces,
-		descriptions["surface"], descriptions["commit_sha"], actions, descriptions["correction_action"],
-		descriptions["path"], descriptions["start_line"], descriptions["end_line"])), nil
+
+	return json.RawMessage(
+		fmt.Sprintf(
+			reviewSchemaTemplate,
+			inspections,
+			reason,
+			policy.FileAssessmentMaximumEvidenceReferences(),
+			ids,
+			surfaces,
+			descriptions["surface"],
+			descriptions["commit_sha"],
+			actions,
+			descriptions["correction_action"],
+			descriptions["path"],
+			descriptions["start_line"],
+			descriptions["end_line"],
+		),
+	), nil
 }
 
-// MarshalClassificationSchema preserves assessment constraints and forbids findings.
+// MarshalClassificationSchema encodes the file classification schema.
+//
+// The schema preserves assessment constraints and forbids review findings.
+//
+// For example:
+//
+//	schema, err := MarshalClassificationSchema(policy)
 func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	schema, err := MarshalReviewSchema(policy)
 	if err != nil {
 		return nil, err
 	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(schema, &fields); err != nil {
 		return nil, requestEncodingError(err)
 	}
+
 	var properties map[string]json.RawMessage
 	if err := json.Unmarshal(fields["properties"], &properties); err != nil {
 		return nil, requestEncodingError(err)
 	}
+
 	var findings map[string]json.RawMessage
 	if err := json.Unmarshal(properties["findings"], &findings); err != nil {
 		return nil, requestEncodingError(err)
 	}
+
 	findings["maxItems"] = json.RawMessage("0")
-	properties["inspection_requests"] = json.RawMessage(fmt.Sprintf(inspectionRequestSchemaTemplate, 0))
+	properties["inspection_requests"] = json.RawMessage(
+		fmt.Sprintf(inspectionRequestSchemaTemplate, 0),
+	)
 	properties["findings"], err = json.Marshal(findings)
 	if err != nil {
 		return nil, requestEncodingError(err)
 	}
+
 	fields["properties"], err = json.Marshal(properties)
 	if err != nil {
 		return nil, requestEncodingError(err)
 	}
+
 	encoded, err := json.Marshal(fields)
+
 	return encoded, requestEncodingError(err)
 }
 
@@ -82,39 +128,62 @@ func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, 
 		slog.Warn("File assessment reason constraint rendering failed", "err", err)
 		return nil, fmt.Errorf("render file assessment reason constraint: %w", err)
 	}
+
 	constraint := struct {
 		Type        string `json:"type"`
 		Pattern     string `json:"pattern"`
 		Description string `json:"description"`
-	}{Type: "string", Pattern: fmt.Sprintf(`^[\s\S]{1,%d}$`, data.Total), Description: description}
+	}{
+		Type:        "string",
+		Pattern:     fmt.Sprintf(`^[\s\S]{1,%d}$`, data.Total),
+		Description: description,
+	}
 	encoded, err := json.Marshal(constraint)
 	if err != nil {
 		slog.Warn("File assessment reason constraint encoding failed", "err", err)
 		return nil, fmt.Errorf("encode file assessment reason constraint: %w", err)
 	}
+
 	return encoded, nil
 }
 
 func marshalFindingDescriptions(policy reviewrules.Policy) (map[string]json.RawMessage, error) {
 	descriptions := make(map[string]json.RawMessage)
 	var data reviewrules.PromptData
-	for _, field := range []string{"surface", "commit_sha", "correction_action", "path", "start_line", "end_line"} {
+
+	for _, field := range []string{
+		"surface",
+		"commit_sha",
+		"correction_action",
+		"path",
+		"start_line",
+		"end_line",
+	} {
 		description, err := policy.Render("schema.finding."+field, data)
 		if err != nil {
 			slog.Warn("Finding schema description rendering failed", "field", field)
 			return nil, fmt.Errorf("render finding schema description: %w", err)
 		}
+
 		encoded, err := json.Marshal(description)
 		if err != nil {
 			slog.Warn("Finding schema description encoding failed", "field", field)
 			return nil, fmt.Errorf("encode finding schema description: %w", err)
 		}
+
 		descriptions[field] = encoded
 	}
+
 	return descriptions, nil
 }
 
-// MarshalReportSchema applies the configured walkthrough bound to structured output.
+// MarshalReportSchema encodes the structured report schema.
+//
+// The schema applies the configured maximum number of walkthrough items.
+//
+// For example:
+//
+//	schema := MarshalReportSchema(policy)
 func MarshalReportSchema(policy reviewrules.Policy) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(reportSchemaTemplate, policy.Limits().WalkthroughItems))
 }
@@ -134,9 +203,21 @@ const inspectionRequestSchemaTemplate = `{"type":"array","maxItems":%d,"items":{
 var (
 	reviewSchemaTemplate = `{"type":"object","additionalProperties":false,"properties":{"inspection_requests":%s,"overview":{"type":"string"},"omissions_acceptable":{"type":"boolean"},"decision_reason":{"type":"string"},"file_assessments":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string"},"identity":{"type":"string"},"content_review_requirement":{"type":"string","enum":["required","unnecessary","uncertain"]},"content_kind":{"type":"string","enum":["source","generated","encrypted","binary","dependency","data","external","unknown"]},"action":{"type":"string","enum":["review","inspect_related","exclude","gap"]},"reason":%s,"evidence":{"type":"array","minItems":1,"maxItems":%d,"items":{"type":"string"}}},"required":["path","identity","content_review_requirement","content_kind","action","reason","evidence"]}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"rule_id":{"type":"string","enum":%s},"surface":{"type":"string","enum":%s,"description":%s},"commit_sha":{"type":"string","description":%s},"correction_action":{"type":"string","enum":%s,"description":%s},"path":{"type":"string","description":%s},"start_line":{"type":"integer","minimum":1,"description":%s},"end_line":{"type":"integer","minimum":1,"description":%s},"title":{"type":"string"},"body":{"type":"string"},"evidence":{"type":"string"},"claim":{"type":"string"},"suggestion":{"type":"string"},"importance":{"type":"integer","minimum":1,"maximum":10}},"required":["rule_id","surface","commit_sha","correction_action","path","start_line","end_line","title","body","evidence","claim","suggestion","importance"]}}},"required":["inspection_requests","overview","omissions_acceptable","decision_reason","findings","file_assessments"]}`
 	reportSchemaTemplate = `{"type":"object","additionalProperties":false,"properties":{"summary":{"type":"string"},"walkthrough":{"type":"array","maxItems":%d,"items":{"type":"string"}}},"required":["summary","walkthrough"]}`
-	reconcileSchemaJSON  = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"resolutions":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"thread_node_id":{"type":"string"},"resolution":{"type":"string","enum":["resolved","open","uncertain"]},"reason":{"type":"string"}},"required":["thread_node_id","resolution","reason"]}}},"required":["resolutions"]}`)
+	reconcileSchemaJSON  = json.RawMessage(
+		`{"type":"object","additionalProperties":false,"properties":{"resolutions":` +
+			`{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{` +
+			`"thread_node_id":{"type":"string"},"resolution":{"type":"string",` +
+			`"enum":["resolved","open","uncertain"]},"reason":{"type":"string"}},` +
+			`"required":["thread_node_id","resolution","reason"]}}},"required":["resolutions"]}`,
+	)
 	// consolidateSchemaJSON groups a chunk's own findings. The candidate numbers
 	// are the ones the prompt showed, so the answer says nothing this service
 	// cannot check against the findings it asked about.
-	consolidateSchemaJSON = json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"groups":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"candidates":{"type":"array","items":{"type":"integer"}},"restates_open_thread":{"type":"boolean"},"reason":{"type":"string"}},"required":["candidates","restates_open_thread","reason"]}}},"required":["groups"]}`)
+	consolidateSchemaJSON = json.RawMessage(
+		`{"type":"object","additionalProperties":false,"properties":{"groups":` +
+			`{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{` +
+			`"candidates":{"type":"array","items":{"type":"integer"}},` +
+			`"restates_open_thread":{"type":"boolean"},"reason":{"type":"string"}},` +
+			`"required":["candidates","restates_open_thread","reason"]}}},"required":["groups"]}`,
+	)
 )

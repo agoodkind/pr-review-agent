@@ -69,7 +69,10 @@ func run(
 	if cfg.LogForwardURL != nil {
 		forwarder = telemetry.NewForwarder(cfg.LogForwardURL.String(), cfg.GitHubWebhookSecret, nil)
 		if forwarder != nil {
-			handlers = append(handlers, correlation.SlogHandler(forwarder, correlation.HandlerOptions{}))
+			handlers = append(
+				handlers,
+				correlation.SlogHandler(forwarder, correlation.HandlerOptions{}),
+			)
 		}
 	}
 
@@ -95,10 +98,16 @@ func run(
 	}
 	providerSettings := make([]providerSetting, 0, len(cfg.Providers))
 	for _, provider := range cfg.Providers {
-		providerSettings = append(providerSettings, providerSetting{
-			ID: provider.ID, Model: provider.Model, API: provider.API,
-			ReasoningEffort: provider.ReasoningEffort, Disabled: provider.Disabled,
-		})
+		providerSettings = append(
+			providerSettings,
+			providerSetting{
+				ID:              provider.ID,
+				Model:           provider.Model,
+				API:             provider.API,
+				ReasoningEffort: provider.ReasoningEffort,
+				Disabled:        provider.Disabled,
+			},
+		)
 	}
 	logger.Info(
 		"pr-review-agent configured",

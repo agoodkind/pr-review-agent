@@ -22,70 +22,110 @@ func renderProviderDetails(summary UsageSummary) string {
 	if len(summary.ProviderAttempts) == 0 || len(summary.ProviderColumns) == 0 {
 		return ""
 	}
+
 	var builder strings.Builder
 	builder.WriteString("\n#### Provider details\n\n|")
+
 	for _, column := range summary.ProviderColumns {
 		fmt.Fprintf(&builder, " %s |", providerColumnHeading(column))
 	}
+
 	builder.WriteString("\n|")
+
 	for range summary.ProviderColumns {
 		builder.WriteString(" --- |")
 	}
+
 	builder.WriteString("\n")
+
 	rows := providerDetailRows(summary)
 	for _, row := range rows {
 		builder.WriteString("|")
+
 		for _, column := range summary.ProviderColumns {
 			fmt.Fprintf(&builder, " %s |", providerColumnValue(column, row))
 		}
+
 		builder.WriteString("\n")
 	}
+
 	if slices.Contains(summary.ProviderColumns, reviewrules.ProviderPeriodUsageColumn) {
-		builder.WriteString("\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. Dollar amounts estimate cost from configured prices and do not represent account charges.\n")
+		builder.WriteString(
+			"\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. " +
+				"Dollar amounts estimate cost from configured prices and do not represent account charges.\n",
+		)
 		builder.WriteString(renderProviderPeriodDetails(rows))
 	}
+
 	return builder.String()
 }
 
 func providerDetailRows(summary UsageSummary) []providerDetailRow {
 	var rows []providerDetailRow
+
 	for _, attempt := range summary.ProviderAttempts {
-		index := slices.IndexFunc(rows, func(row providerDetailRow) bool {
-			return row.attempt.Status.ProviderID == attempt.Status.ProviderID && row.attempt.Status.Model == attempt.Status.Model
-		})
+		index := slices.IndexFunc(
+			rows,
+			func(row providerDetailRow) bool {
+				return row.attempt.Status.ProviderID == attempt.Status.ProviderID &&
+					row.attempt.Status.Model == attempt.Status.Model
+			},
+		)
 		if index < 0 {
 			var usage ModelUsage
-			rows = append(rows, providerDetailRow{attempt: attempt, attempts: nil, usage: usage, models: nil, priced: 0, tiers: nil, periods: nil})
+			rows = append(
+				rows,
+				providerDetailRow{
+					attempt:  attempt,
+					attempts: nil,
+					usage:    usage,
+					models:   nil,
+					priced:   0,
+					tiers:    nil,
+					periods:  nil,
+				},
+			)
 			index = len(rows) - 1
 		}
+
 		if attempt.Sequence > rows[index].attempt.Sequence {
 			rows[index].attempt = attempt
 		}
+
 		rows[index].attempts = append(rows[index].attempts, attempt)
 	}
+
 	for index := range rows {
 		row := &rows[index]
+
 		for _, period := range summary.PeriodUsage {
-			if period.ProviderID == row.attempt.Status.ProviderID && period.RequestedModel == row.attempt.Status.Model {
+			if period.ProviderID == row.attempt.Status.ProviderID &&
+				period.RequestedModel == row.attempt.Status.Model {
 				row.periods = append(row.periods, period)
 			}
 		}
+
 		for _, model := range summary.Models {
-			if model.ProviderID != row.attempt.Status.ProviderID || model.RequestedModel != row.attempt.Status.Model {
+			if model.ProviderID != row.attempt.Status.ProviderID ||
+				model.RequestedModel != row.attempt.Status.Model {
 				continue
 			}
+
 			addUsage(&row.usage, model)
 			if model.Priced {
 				row.priced += model.ReportedRequests
 			}
+
 			if model.ServiceTier != "" && !slices.Contains(row.tiers, model.ServiceTier) {
 				row.tiers = append(row.tiers, model.ServiceTier)
 			}
+
 			if model.Model != "" && !slices.Contains(row.models, model.Model) {
 				row.models = append(row.models, model.Model)
 			}
 		}
 	}
+
 	return rows
 }
 
@@ -110,6 +150,7 @@ func providerColumnHeading(column reviewrules.ProviderDetailColumn) string {
 	case reviewrules.ProviderResultColumn:
 		return "Result"
 	}
+
 	return ""
 }
 
@@ -125,19 +166,28 @@ func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDe
 			for _, model := range row.models {
 				cells = append(cells, usageModelCell(model))
 			}
+
 			models = strings.Join(cells, ", ")
 		}
+
 		return usageModelCell(attempt.Status.Model) + " / " + models
 	case reviewrules.ProviderSettingsColumn:
 		outputLimit := "not sent"
 		if !attempt.OutputCapOmitted {
 			outputLimit = formatTokenCount(attempt.MaxOutputTokens)
 		}
+
 		var settings strings.Builder
-		settings.WriteString(usageModelCell(string(attempt.API)) + " / " + usageModelCell(string(attempt.ReasoningEffort)) + " / " + outputLimit)
+		settings.WriteString(
+			usageModelCell(string(attempt.API)) + " / " + usageModelCell(
+				string(attempt.ReasoningEffort),
+			) + " / " + outputLimit,
+		)
+
 		for _, tier := range row.tiers {
 			settings.WriteString("<br>Reported tier " + usageModelCell(tier))
 		}
+
 		return settings.String()
 	case reviewrules.ProviderRequestsColumn:
 		var attempts, completed int
@@ -147,21 +197,35 @@ func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDe
 				completed += outcome.Count
 			}
 		}
+
 		return fmt.Sprintf("%d / %d / %d", attempts, row.usage.Requests, completed)
 	case reviewrules.ProviderTokensColumn:
 		if row.usage.ReportedRequests == 0 {
 			return "not reported"
 		}
-		return fmt.Sprintf("Input %s<br>Cached %s<br>Cache writes %s<br>Output %s<br>Reasoning %s<br>Total %s<br>Usage reports %d / %d",
-			formatTokenCount(row.usage.InputTokens), formatTokenCount(row.usage.CachedInputTokens),
+
+		return fmt.Sprintf(
+			"Input %s<br>Cached %s<br>Cache writes %s<br>Output %s<br>Reasoning %s<br>Total %s<br>Usage reports %d / %d",
+			formatTokenCount(row.usage.InputTokens),
+			formatTokenCount(row.usage.CachedInputTokens),
 			formatTokenCount(row.usage.CacheWriteTokens),
-			formatTokenCount(row.usage.OutputTokens), formatTokenCount(row.usage.ReasoningTokens),
-			formatTokenCount(row.usage.TotalTokens), row.usage.ReportedRequests, row.usage.Requests)
+			formatTokenCount(row.usage.OutputTokens),
+			formatTokenCount(row.usage.ReasoningTokens),
+			formatTokenCount(row.usage.TotalTokens),
+			row.usage.ReportedRequests,
+			row.usage.Requests,
+		)
 	case reviewrules.ProviderCostColumn:
 		if row.priced == 0 {
 			return "unknown"
 		}
-		return fmt.Sprintf("$%.8f<br>Priced reports %d / %d", row.usage.EstimatedCostUSD, row.priced, row.usage.ReportedRequests)
+
+		return fmt.Sprintf(
+			"$%.8f<br>Priced reports %d / %d",
+			row.usage.EstimatedCostUSD,
+			row.priced,
+			row.usage.ReportedRequests,
+		)
 	case reviewrules.ProviderQuotaColumn:
 		return providerQuotaCell(attempt.Status)
 	case reviewrules.ProviderPeriodUsageColumn:
@@ -169,6 +233,7 @@ func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDe
 	case reviewrules.ProviderResultColumn:
 		return providerResultCell(row.attempts)
 	}
+
 	return ""
 }
 
@@ -176,41 +241,55 @@ func providerQuotaCell(status ProviderStatus) string {
 	if status.Limit == 0 {
 		return "No app limit"
 	}
+
 	if !status.QuotaKnown {
 		return "Unknown / " + formatTokenCount(status.Limit)
 	}
-	label := fmt.Sprintf("%s / %s (%s left)", formatTokenCount(status.Used), formatTokenCount(status.Limit), formatTokenCount(status.Remaining))
+
+	label := fmt.Sprintf(
+		"%s / %s (%s left)",
+		formatTokenCount(status.Used),
+		formatTokenCount(status.Limit),
+		formatTokenCount(status.Remaining),
+	)
 	window := status.TokenWindow
 	if window.Mode != "" {
 		label += "<br>" + usageModelCell(string(window.Mode))
 		if window.Duration != "" {
 			label += " " + usageModelCell(window.Duration)
 		}
+
 		if window.Schedule != "" {
 			label += " " + usageModelCell(window.Schedule) + " " + usageModelCell(window.Timezone)
 		}
 	}
+
 	return label
 }
 
 func providerResultCell(attempts []ProviderAttempt) string {
 	results := make([]string, 0, len(attempts))
 	var fallbacks int
+
 	for _, attempt := range attempts {
 		label := providerCauseLabel(attempt.Status.Cause)
 		if attempt.HTTPStatus != 0 {
 			label += fmt.Sprintf(" (HTTP %d)", attempt.HTTPStatus)
 		}
+
 		if attempt.ErrorCode != "" {
 			label += " " + usageModelCell(attempt.ErrorCode)
 		}
+
 		results = append(results, fmt.Sprintf("%s: %d", label, attempt.Count))
 		if attempt.Fallback {
 			fallbacks += attempt.Count
 		}
 	}
+
 	if fallbacks > 0 {
 		results = append(results, fmt.Sprintf("Next provider selected: %d", fallbacks))
 	}
+
 	return strings.Join(results, "<br>")
 }

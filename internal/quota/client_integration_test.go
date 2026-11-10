@@ -25,11 +25,17 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	signed := quota.NewClient(url, []byte("test-review-budget-secret"), nil)
 	legacyTokens := int64(300)
-	if err := signed.Report(t.Context(), quota.ReportRequest{
-		ProviderID: "operator_test", Model: "test_model", AdmittedAtMS: now.UnixMilli(),
-		Usage:     quota.Usage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
-		LegacyDay: now.Format("2006-01-02"), LegacyTokens: &legacyTokens,
-	}); err != nil {
+	if err := signed.Report(
+		t.Context(),
+		quota.ReportRequest{
+			ProviderID:   "operator_test",
+			Model:        "test_model",
+			AdmittedAtMS: now.UnixMilli(),
+			Usage:        quota.Usage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
+			LegacyDay:    now.Format("2006-01-02"),
+			LegacyTokens: &legacyTokens,
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	directory := t.TempDir()
@@ -45,16 +51,34 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 			Limit       int64         `json:"daily_token_limit"`
 			TokenLimits []quota.Limit `json:"token_limits"`
 		} `json:"PROVIDERS"`
-	}{URL: url}
-	configuration.Providers = append(configuration.Providers, struct {
-		ID          string        `json:"id"`
-		Model       string        `json:"model"`
-		Limit       int64         `json:"daily_token_limit"`
-		TokenLimits []quota.Limit `json:"token_limits"`
-	}{ID: "operator_test", Model: "test_model", Limit: 1000, TokenLimits: []quota.Limit{
-		{Limit: 100, TokenTypes: []quota.TokenType{quota.OutputTokens}, Window: quota.Window{Mode: quota.Rolling, Duration: "1m"}},
-		{Limit: 1000, TokenTypes: []quota.TokenType{quota.InputTokens}, Window: quota.Window{Mode: quota.Rolling, Duration: "24h"}},
-	}})
+	}{
+		URL: url,
+	}
+	configuration.Providers = append(
+		configuration.Providers,
+		struct {
+			ID          string        `json:"id"`
+			Model       string        `json:"model"`
+			Limit       int64         `json:"daily_token_limit"`
+			TokenLimits []quota.Limit `json:"token_limits"`
+		}{
+			ID:    "operator_test",
+			Model: "test_model",
+			Limit: 1000,
+			TokenLimits: []quota.Limit{
+				{
+					Limit:      100,
+					TokenTypes: []quota.TokenType{quota.OutputTokens},
+					Window:     quota.Window{Mode: quota.Rolling, Duration: "1m"},
+				},
+				{
+					Limit:      1000,
+					TokenTypes: []quota.TokenType{quota.InputTokens},
+					Window:     quota.Window{Mode: quota.Rolling, Duration: "24h"},
+				},
+			},
+		},
+	)
 	data, err := json.Marshal(configuration)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +88,19 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 		t.Fatal(err)
 	}
 	outputPath := filepath.Join(directory, "capture")
-	command := exec.CommandContext(t.Context(), "go", "run", "../../cmd/pragent-ops", "counters", "--runtime", runtimePath, "--operator-token-file", tokenFile, "--output-dir", outputPath)
+	command := exec.CommandContext(
+		t.Context(),
+		"go",
+		"run",
+		"../../cmd/pragent-ops",
+		"counters",
+		"--runtime",
+		runtimePath,
+		"--operator-token-file",
+		tokenFile,
+		"--output-dir",
+		outputPath,
+	)
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("operator CLI failed: %v: %s", err, output)
 	}
@@ -84,14 +120,19 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	if err := json.Unmarshal(data, &capture); err != nil {
 		t.Fatal(err)
 	}
-	if len(capture.Counters) != 1 || capture.Counters[0].Legacy.Used == nil || *capture.Counters[0].Legacy.Used != 300 || capture.Counters[0].Legacy.Remaining == nil || *capture.Counters[0].Legacy.Remaining != 700 {
+	if len(capture.Counters) != 1 || capture.Counters[0].Legacy.Used == nil ||
+		*capture.Counters[0].Legacy.Used != 300 ||
+		capture.Counters[0].Legacy.Remaining == nil ||
+		*capture.Counters[0].Legacy.Remaining != 700 {
 		t.Fatalf("operator CLI returned incorrect usage: %+v", capture)
 	}
 	limits := capture.Counters[0].TokenLimits
 	if len(limits) != 2 || limits[0].Snapshot.Allowed || limits[0].Snapshot.Used != 100 ||
 		limits[0].Snapshot.Remaining != 0 || limits[1].Snapshot.Used != 200 || limits[1].Snapshot.Remaining != 800 ||
 		len(limits[0].History.Events) != 1 || len(limits[1].History.Events) != 1 {
-		t.Fatal("operator CLI did not report each configured token window using the same stored usage")
+		t.Fatal(
+			"operator CLI did not report each configured token window using the same stored usage",
+		)
 	}
 	operator, err := quota.NewOperatorClient(url, []byte("test-operator-token"), nil)
 	if err != nil {
@@ -105,7 +146,17 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	if err != nil || len(history.Events) != 1 || history.Events[0].TotalTokens != 300 {
 		t.Fatalf("operator history query failed: %+v, %v", history, err)
 	}
-	storageCommand := exec.CommandContext(t.Context(), "go", "run", "../../cmd/pragent-ops", "storage", "--runtime", runtimePath, "--operator-token-file", tokenFile)
+	storageCommand := exec.CommandContext(
+		t.Context(),
+		"go",
+		"run",
+		"../../cmd/pragent-ops",
+		"storage",
+		"--runtime",
+		runtimePath,
+		"--operator-token-file",
+		tokenFile,
+	)
 	storageOutput, err := storageCommand.Output()
 	if err != nil {
 		t.Fatalf("storage CLI failed: %v", err)
@@ -114,10 +165,21 @@ func TestOperatorCLIReadsRealQuotaCounters(t *testing.T) {
 	if err := json.Unmarshal(storageOutput, &storage); err != nil {
 		t.Fatal(err)
 	}
-	if storage.DatabaseBytes <= 0 || storage.Events != 1 || storage.Details != 1 || storage.SDKRecords != 0 || storage.Retention.Enabled || storage.Retention.CutoffMS != 0 {
+	if storage.DatabaseBytes <= 0 || storage.Events != 1 || storage.Details != 1 ||
+		storage.SDKRecords != 0 ||
+		storage.Retention.Enabled ||
+		storage.Retention.CutoffMS != 0 {
 		t.Fatalf("storage CLI returned incorrect persisted state: %+v", storage)
 	}
-	if err := operator.Report(t.Context(), quota.ReportRequest{ProviderID: "operator_test", Model: "test_model", AdmittedAtMS: now.UnixMilli(), Usage: quota.Usage{TotalTokens: 1}}); err == nil {
+	if err := operator.Report(
+		t.Context(),
+		quota.ReportRequest{
+			ProviderID:   "operator_test",
+			Model:        "test_model",
+			AdmittedAtMS: now.UnixMilli(),
+			Usage:        quota.Usage{TotalTokens: 1},
+		},
+	); err == nil {
 		t.Fatal("operator token permitted a usage report")
 	}
 }
@@ -140,10 +202,15 @@ func TestClientUsesRealDurableStorageForSelectedUsageAndPagination(t *testing.T)
 		t.Fatalf("initial history = %+v", initial)
 	}
 	for index := range 501 {
-		if err := client.Report(ctx, quota.ReportRequest{
-			ProviderID: "integration_provider", Model: "configured_model",
-			AdmittedAtMS: now.Add(-time.Hour).UnixMilli(), Usage: quota.Usage{InputTokens: 2, OutputTokens: 1, TotalTokens: 3},
-		}); err != nil {
+		if err := client.Report(
+			ctx,
+			quota.ReportRequest{
+				ProviderID:   "integration_provider",
+				Model:        "configured_model",
+				AdmittedAtMS: now.Add(-time.Hour).UnixMilli(),
+				Usage:        quota.Usage{InputTokens: 2, OutputTokens: 1, TotalTokens: 3},
+			},
+		); err != nil {
 			t.Fatalf("report %d: %v", index, err)
 		}
 	}
@@ -152,10 +219,21 @@ func TestClientUsesRealDurableStorageForSelectedUsageAndPagination(t *testing.T)
 		t.Fatal(err)
 	}
 	legacyTokens := int64(100)
-	if err := client.Report(ctx, quota.ReportRequest{
-		ProviderID: "legacy_integration", Model: "configured_model", AdmittedAtMS: now.UnixMilli(),
-		Usage: quota.Usage{InputTokens: 70, OutputTokens: 30, TotalTokens: 100}, LegacyDay: legacy.Day, LegacyTokens: &legacyTokens,
-	}); err != nil {
+	if err := client.Report(
+		ctx,
+		quota.ReportRequest{
+			ProviderID:   "legacy_integration",
+			Model:        "configured_model",
+			AdmittedAtMS: now.UnixMilli(),
+			Usage: quota.Usage{
+				InputTokens:  70,
+				OutputTokens: 30,
+				TotalTokens:  100,
+			},
+			LegacyDay:    legacy.Day,
+			LegacyTokens: &legacyTokens,
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	legacy, err = client.CheckDaily(ctx, "legacy_integration", "configured_model", 100)
@@ -166,7 +244,14 @@ func TestClientUsesRealDurableStorageForSelectedUsageAndPagination(t *testing.T)
 	if err != nil || len(page.Events) != 501 {
 		t.Fatalf("query count = %d, error = %v", len(page.Events), err)
 	}
-	snapshot, err := quota.Evaluate(window, now, 1000, []quota.TokenType{quota.InputTokens}, page.Events, page.HistoryStartMS)
+	snapshot, err := quota.Evaluate(
+		window,
+		now,
+		1000,
+		[]quota.TokenType{quota.InputTokens},
+		page.Events,
+		page.HistoryStartMS,
+	)
 	if err != nil || snapshot.Allowed || snapshot.Used != 1002 || snapshot.HistoryComplete {
 		t.Fatalf("rolling snapshot = %+v, error = %v", snapshot, err)
 	}
@@ -196,7 +281,21 @@ func startBudgetWorker(t *testing.T) string {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256([]byte("test-operator-token"))
-	command := exec.Command(filepath.Join(directory, "node_modules", ".bin", "wrangler"), "dev", "--config", "test/budget.wrangler.jsonc", "--local", "--port", strconv.Itoa(port), "--inspector-port", "0", "--persist-to", t.TempDir(), "--var", "OPERATOR_TOKEN_SHA256:"+hex.EncodeToString(digest[:]))
+	command := exec.Command(
+		filepath.Join(directory, "node_modules", ".bin", "wrangler"),
+		"dev",
+		"--config",
+		"test/budget.wrangler.jsonc",
+		"--local",
+		"--port",
+		strconv.Itoa(port),
+		"--inspector-port",
+		"0",
+		"--persist-to",
+		t.TempDir(),
+		"--var",
+		"OPERATOR_TOKEN_SHA256:"+hex.EncodeToString(digest[:]),
+	)
 	command.Dir = directory
 	command.Stdout, command.Stderr = logFile, logFile
 	if err := command.Start(); err != nil {

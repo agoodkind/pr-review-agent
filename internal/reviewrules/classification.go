@@ -89,72 +89,114 @@ func (policy FileClassificationPolicy) Validate() error {
 	if err := policy.validateEvidence(); err != nil {
 		return err
 	}
+
 	for _, detector := range policy.TrustedDetectors {
 		switch detector.Detector {
-		case DetectorGenerated, DetectorHeader, DetectorVendor, DetectorBinary, DetectorGeneratedAttribute, DetectorVendorAttribute:
+		case DetectorGenerated,
+			DetectorHeader,
+			DetectorVendor,
+			DetectorBinary,
+			DetectorGeneratedAttribute,
+			DetectorVendorAttribute:
 		default:
 			return fmt.Errorf("file classification detector %q is unsupported", detector.Detector)
 		}
-		if !slices.Contains(policy.AllowedExclusions, detector.Kind) || strings.TrimSpace(detector.Reason) == "" {
-			return fmt.Errorf("file classification detector requires an allowed category and reason")
+
+		if !slices.Contains(policy.AllowedExclusions, detector.Kind) ||
+			strings.TrimSpace(detector.Reason) == "" {
+			return fmt.Errorf(
+				"file classification detector requires an allowed category and reason",
+			)
 		}
 	}
+
 	for _, exclusion := range policy.PathExclusions {
-		if !slices.Contains(policy.AllowedExclusions, exclusion.Kind) || strings.TrimSpace(exclusion.Reason) == "" {
-			return fmt.Errorf("file classification path exclusion requires an allowed category and reason")
+		if !slices.Contains(policy.AllowedExclusions, exclusion.Kind) ||
+			strings.TrimSpace(exclusion.Reason) == "" {
+			return fmt.Errorf(
+				"file classification path exclusion requires an allowed category and reason",
+			)
 		}
+
 		if _, err := path.Match(exclusion.Pattern, ""); err != nil {
 			return fmt.Errorf("file classification path exclusion is invalid: %w", err)
 		}
 	}
+
 	for _, pattern := range policy.ReviewOverrides {
 		if _, err := path.Match(pattern, ""); err != nil {
 			return fmt.Errorf("file classification review override is invalid: %w", err)
 		}
 	}
+
 	if strings.TrimSpace(policy.Instructions) == "" {
 		return fmt.Errorf("file classification requires review instructions")
 	}
-	if policy.MaximumPersistedBytes <= 0 || policy.MaximumReasonBytes <= 0 || policy.MaximumEvidenceReferences <= 0 {
-		return fmt.Errorf("file classification requires positive persistence, reason, and evidence limits")
+
+	if policy.MaximumPersistedBytes <= 0 || policy.MaximumReasonBytes <= 0 ||
+		policy.MaximumEvidenceReferences <= 0 {
+		return fmt.Errorf(
+			"file classification requires positive persistence, reason, and evidence limits",
+		)
 	}
+
 	for _, kind := range policy.AllowedExclusions {
 		switch kind {
-		case ContentSource, ContentGenerated, ContentEncrypted, ContentBinary, ContentDependency, ContentData, ContentExternal:
+		case ContentSource,
+			ContentGenerated,
+			ContentEncrypted,
+			ContentBinary,
+			ContentDependency,
+			ContentData,
+			ContentExternal:
 		case ContentUnknown:
 			return fmt.Errorf("unknown content cannot receive a configured exclusion")
 		default:
 			return fmt.Errorf("file classification exclusion kind %q is invalid", kind)
 		}
 	}
+
 	for pattern, instruction := range policy.PathInstructions {
 		if _, err := path.Match(pattern, ""); err != nil {
 			slog.Warn("File classification path pattern is invalid", "pattern", pattern, "err", err)
 			return fmt.Errorf("file classification pattern %q is invalid: %w", pattern, err)
 		}
+
 		if strings.TrimSpace(instruction) == "" {
 			return fmt.Errorf("file classification instruction for %q is empty", pattern)
 		}
 	}
+
 	return nil
 }
 
 func (policy FileClassificationPolicy) validateEvidence() error {
-	if slices.ContainsFunc(policy.UncertainContentPrefixes, func(prefix string) bool { return strings.TrimSpace(prefix) == "" }) {
+	if slices.ContainsFunc(
+		policy.UncertainContentPrefixes,
+		func(prefix string) bool { return strings.TrimSpace(prefix) == "" },
+	) {
 		return fmt.Errorf("file classification uncertain content prefixes must not be empty")
 	}
-	if policy.MaximumEvidenceBytes <= 0 || policy.MaximumPreviewBytes <= 0 || policy.MaximumDirectReviewBytes <= 0 || policy.MaximumHeaderBytes <= 0 {
-		return fmt.Errorf("file classification requires positive evidence, preview, and header limits")
+
+	if policy.MaximumEvidenceBytes <= 0 || policy.MaximumPreviewBytes <= 0 ||
+		policy.MaximumDirectReviewBytes <= 0 ||
+		policy.MaximumHeaderBytes <= 0 {
+		return fmt.Errorf(
+			"file classification requires positive evidence, preview, and header limits",
+		)
 	}
+
 	for _, pattern := range policy.HeaderPatterns {
 		if strings.TrimSpace(pattern) == "" {
 			return fmt.Errorf("file classification header patterns must not be empty")
 		}
+
 		if _, err := syntax.Parse(pattern, syntax.Perl); err != nil {
 			slog.Warn("File classification header pattern is invalid", "err", err)
 			return fmt.Errorf("file classification header pattern is invalid: %w", err)
 		}
 	}
+
 	return nil
 }
 
@@ -166,8 +208,10 @@ func compileClassificationHeaders(patterns []string) ([]*regexp.Regexp, error) {
 			slog.Warn("File classification header pattern is invalid", "err", err)
 			return nil, fmt.Errorf("file classification header pattern is invalid: %w", err)
 		}
+
 		compiled = append(compiled, matcher)
 	}
+
 	return compiled, nil
 }
 
@@ -178,6 +222,7 @@ func (policy Policy) MatchesFileClassificationHeader(content string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -191,6 +236,7 @@ func (policy Policy) FileClassification() FileClassificationPolicy {
 	settings.ReviewOverrides = slices.Clone(settings.ReviewOverrides)
 	settings.UncertainContentPrefixes = slices.Clone(settings.UncertainContentPrefixes)
 	settings.HeaderPatterns = slices.Clone(settings.HeaderPatterns)
+
 	return settings
 }
 
@@ -201,10 +247,12 @@ func (policy Policy) RequiresFileContentReview(filePath string) bool {
 		if !strings.Contains(pattern, "/") {
 			matched, _ = path.Match(pattern, path.Base(filePath))
 		}
+
 		if matched {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -234,16 +282,20 @@ func (policy Policy) FileReviewInstructions() string { return policy.fileClassif
 // FileClassificationPathInstructions returns trusted instructions for matching changed paths.
 func (policy Policy) FileClassificationPathInstructions(filePath string) string {
 	var output strings.Builder
+
 	patterns := make([]string, 0, len(policy.fileClassification.PathInstructions))
 	for pattern := range policy.fileClassification.PathInstructions {
 		patterns = append(patterns, pattern)
 	}
+
 	slices.Sort(patterns)
+
 	for _, pattern := range patterns {
 		if matches, _ := path.Match(pattern, filePath); matches {
 			output.WriteString("\n")
 			output.WriteString(policy.fileClassification.PathInstructions[pattern])
 		}
 	}
+
 	return output.String()
 }

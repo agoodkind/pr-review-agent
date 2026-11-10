@@ -24,14 +24,25 @@ func TestUsageHistoryRetainsCacheCountersAndReportedServiceTier(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	cached, writes := int64(40), int64(30)
 	report := quota.ReportRequest{
-		ReportID: "usage-details", ProviderID: "details_provider", Model: "model",
+		ReportID:     "usage-details",
+		ProviderID:   "details_provider",
+		Model:        "model",
 		AdmittedAtMS: now.UnixMilli(),
 		Usage: quota.Usage{
-			InputTokens: 100, OutputTokens: 10, TotalTokens: 110,
-			CachedInputTokens: &cached, CacheWriteTokens: &writes, ServiceTier: "default",
+			InputTokens:       100,
+			OutputTokens:      10,
+			TotalTokens:       110,
+			CachedInputTokens: &cached,
+			CacheWriteTokens:  &writes,
+			ServiceTier:       "default",
 			SDKUsage: &quota.SDKUsage{
-				API: "responses", Model: "reported_model", ResponseID: "response_identity",
-				UsageJSON: `{ "future_count": 9007199254740993, "future": {"explicit_null": null, "nested": [true, {"preserved": "` + strings.Repeat("x", 2048) + `"}] } }`,
+				API:        "responses",
+				Model:      "reported_model",
+				ResponseID: "response_identity",
+				UsageJSON: `{ "future_count": 9007199254740993, "future": {"explicit_null": null, "nested": [true, {"preserved": "` + strings.Repeat(
+					"x",
+					2048,
+				) + `"}] } }`,
 			},
 		},
 	}
@@ -41,7 +52,12 @@ func TestUsageHistoryRetainsCacheCountersAndReportedServiceTier(t *testing.T) {
 	if err := client.Report(t.Context(), report); err != nil {
 		t.Fatal(err)
 	}
-	bounds := quota.Bounds{StartMS: now.Add(-time.Minute).UnixMilli(), EndMS: now.Add(time.Minute).UnixMilli(), IncludeStart: true, IncludeEnd: true}
+	bounds := quota.Bounds{
+		StartMS:      now.Add(-time.Minute).UnixMilli(),
+		EndMS:        now.Add(time.Minute).UnixMilli(),
+		IncludeStart: true,
+		IncludeEnd:   true,
+	}
 	history, err := client.Query(t.Context(), report.ProviderID, report.Model, bounds)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +66,11 @@ func TestUsageHistoryRetainsCacheCountersAndReportedServiceTier(t *testing.T) {
 		t.Fatalf("storage returned %d events for the repeated report", len(history.Events))
 	}
 	usage := history.Events[0].Usage
-	if usage.CachedInputTokens == nil || *usage.CachedInputTokens != cached || usage.CacheWriteTokens == nil || *usage.CacheWriteTokens != writes || usage.ServiceTier != "default" || usage.TotalTokens != 110 {
+	if usage.CachedInputTokens == nil || *usage.CachedInputTokens != cached ||
+		usage.CacheWriteTokens == nil ||
+		*usage.CacheWriteTokens != writes ||
+		usage.ServiceTier != "default" ||
+		usage.TotalTokens != 110 {
 		t.Fatalf("stored usage lost billing details: %+v", usage)
 	}
 	if usage.SDKUsage == nil || *usage.SDKUsage != *report.SDKUsage {
@@ -68,7 +88,9 @@ func TestUsageHistoryRetainsCacheCountersAndReportedServiceTier(t *testing.T) {
 		t.Fatal("storage accepted changed native SDK usage with an existing report identity")
 	}
 	history, err = client.Query(t.Context(), report.ProviderID, report.Model, bounds)
-	if err != nil || len(history.Events) != 1 || history.Events[0].TotalTokens != 110 || history.Events[0].SDKUsage == nil || *history.Events[0].SDKUsage != *usage.SDKUsage {
+	if err != nil || len(history.Events) != 1 || history.Events[0].TotalTokens != 110 ||
+		history.Events[0].SDKUsage == nil ||
+		*history.Events[0].SDKUsage != *usage.SDKUsage {
 		t.Fatal("a conflicting native SDK report changed existing usage")
 	}
 }
@@ -111,19 +133,40 @@ func TestNativeUsageRequiresStorageAcknowledgmentWithoutRetrying(t *testing.T) {
 	defer server.Close()
 	client := quota.NewClient(server.URL+path, []byte("test-review-budget-secret"), nil)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	err = client.Report(t.Context(), quota.ReportRequest{
-		ReportID: "unacknowledged-native", ProviderID: "native_ack", Model: "model", AdmittedAtMS: now.UnixMilli(),
-		Usage: quota.Usage{
-			InputTokens: 3, OutputTokens: 2, TotalTokens: 5,
-			SDKUsage: &quota.SDKUsage{API: "responses", UsageJSON: `{"unknown":null}`},
+	err = client.Report(
+		t.Context(),
+		quota.ReportRequest{
+			ReportID:     "unacknowledged-native",
+			ProviderID:   "native_ack",
+			Model:        "model",
+			AdmittedAtMS: now.UnixMilli(),
+			Usage: quota.Usage{
+				InputTokens:  3,
+				OutputTokens: 2,
+				TotalTokens:  5,
+				SDKUsage:     &quota.SDKUsage{API: "responses", UsageJSON: `{"unknown":null}`},
+			},
 		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "did not acknowledge native SDK usage storage") || requests.Load() != 1 {
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "did not acknowledge native SDK usage storage") ||
+		requests.Load() != 1 {
 		t.Fatalf("native storage acknowledgment failure = %v, attempts=%d", err, requests.Load())
 	}
 	storage := quota.NewClient(endpoint, []byte("test-review-budget-secret"), nil)
-	history, err := storage.Query(t.Context(), "native_ack", "model", quota.Bounds{StartMS: now.Add(-time.Minute).UnixMilli(), EndMS: now.Add(time.Minute).UnixMilli(), IncludeStart: true, IncludeEnd: true})
-	if err != nil || len(history.Events) != 1 || history.Events[0].SDKUsage == nil || history.Events[0].TotalTokens != 5 {
+	history, err := storage.Query(
+		t.Context(),
+		"native_ack",
+		"model",
+		quota.Bounds{
+			StartMS:      now.Add(-time.Minute).UnixMilli(),
+			EndMS:        now.Add(time.Minute).UnixMilli(),
+			IncludeStart: true,
+			IncludeEnd:   true,
+		},
+	)
+	if err != nil || len(history.Events) != 1 || history.Events[0].SDKUsage == nil ||
+		history.Events[0].TotalTokens != 5 {
 		t.Fatal("the missing acknowledgment changed or duplicated committed native usage")
 	}
 }
@@ -133,18 +176,38 @@ func TestUsageHistoryPaginatesCompleteSDKEnvelopesWithoutChangingQuotaTotals(t *
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	const requests = 20
 	native := &quota.SDKUsage{
-		API: "generate_content", Model: "reported_model", ResponseID: "response_identity",
-		UsageJSON: `{"future_metadata":"` + strings.Repeat("界", 3000) + `","future_count":123456789012345678901234567890}`,
+		API:        "generate_content",
+		Model:      "reported_model",
+		ResponseID: "response_identity",
+		UsageJSON: `{"future_metadata":"` + strings.Repeat(
+			"界",
+			3000,
+		) + `","future_count":123456789012345678901234567890}`,
 	}
 	for index := range requests {
-		if err := client.Report(t.Context(), quota.ReportRequest{
-			ProviderID: "sdk_pages", Model: "configured_model", AdmittedAtMS: now.Add(-time.Duration(index) * time.Millisecond).UnixMilli(),
-			Usage: quota.Usage{InputTokens: 2, OutputTokens: 1, TotalTokens: 3, SDKUsage: native},
-		}); err != nil {
+		if err := client.Report(
+			t.Context(),
+			quota.ReportRequest{
+				ProviderID:   "sdk_pages",
+				Model:        "configured_model",
+				AdmittedAtMS: now.Add(-time.Duration(index) * time.Millisecond).UnixMilli(),
+				Usage: quota.Usage{
+					InputTokens:  2,
+					OutputTokens: 1,
+					TotalTokens:  3,
+					SDKUsage:     native,
+				},
+			},
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	bounds := quota.Bounds{StartMS: now.Add(-time.Minute).UnixMilli(), EndMS: now.Add(time.Minute).UnixMilli(), IncludeStart: true, IncludeEnd: true}
+	bounds := quota.Bounds{
+		StartMS:      now.Add(-time.Minute).UnixMilli(),
+		EndMS:        now.Add(time.Minute).UnixMilli(),
+		IncludeStart: true,
+		IncludeEnd:   true,
+	}
 	history, err := client.Query(t.Context(), "sdk_pages", "configured_model", bounds)
 	if err != nil || len(history.Events) != requests {
 		t.Fatalf("byte-bounded usage pages returned %d events: %v", len(history.Events), err)
@@ -154,7 +217,14 @@ func TestUsageHistoryPaginatesCompleteSDKEnvelopesWithoutChangingQuotaTotals(t *
 			t.Fatal("byte-bounded history changed the native usage JSON")
 		}
 	}
-	snapshot, err := quota.Evaluate(quota.Window{Mode: quota.Rolling, Duration: "1h"}, now.Add(time.Second), 1000, []quota.TokenType{quota.InputTokens, quota.OutputTokens}, history.Events, history.HistoryStartMS)
+	snapshot, err := quota.Evaluate(
+		quota.Window{Mode: quota.Rolling, Duration: "1h"},
+		now.Add(time.Second),
+		1000,
+		[]quota.TokenType{quota.InputTokens, quota.OutputTokens},
+		history.Events,
+		history.HistoryStartMS,
+	)
 	if err != nil || snapshot.Used != requests*3 {
 		t.Fatalf("native SDK metadata changed canonical accounting: %+v, %v", snapshot, err)
 	}

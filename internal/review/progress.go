@@ -39,22 +39,40 @@ func (service *Service) checkpoint(
 	summary := service.progressSummary(ctx, job, pass, tracker.completed)
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
-	err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
-			RenderDetails(summary) + "\n\n" +
-			renderSummaryFindings(summary) + "\n" +
-			encodeFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes) + "\n" + renderFindingCheckpoints(summary),
-		State: tracker.state,
-	})
+	err := service.upsertSummaryComment(
+		ctx,
+		job,
+		summaryCommentContent{
+			Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
+				RenderDetails(summary) + "\n\n" +
+				renderSummaryFindings(summary) + "\n" +
+				encodeFileAssessments(
+					summary.FileAssessments,
+					summary.FileAssessmentMaximumBytes,
+				) + "\n" + renderFindingCheckpoints(summary),
+			State: tracker.state,
+		},
+	)
 	if err != nil {
 		logger.ErrorContext(ctx, "advance checkpoint", slog.String("err", err.Error()))
 		return fmt.Errorf("advance checkpoint: %w", err)
 	}
-	logger.InfoContext(ctx, "review checkpoint advanced", slog.Int("pending", len(tracker.unfinished)))
+
+	logger.InfoContext(
+		ctx,
+		"review checkpoint advanced",
+		slog.Int("pending", len(tracker.unfinished)),
+	)
+
 	return nil
 }
 
-func (service *Service) progressSummary(ctx context.Context, job domain.ReviewJob, pass *chunkPass, completed []string) Summary {
+func (service *Service) progressSummary(
+	ctx context.Context,
+	job domain.ReviewJob,
+	pass *chunkPass,
+	completed []string,
+) Summary {
 	pass.mu.Lock()
 	var summary Summary
 	summary.InProgress = true
@@ -62,22 +80,26 @@ func (service *Service) progressSummary(ctx context.Context, job domain.ReviewJo
 	summary.Forced = job.Forced
 	summary.Duration = service.now().Sub(pass.startedAt)
 	summary.MinimumImportance = pass.settings.minimumImportance
+
 	summary.Models = slices.Clone(pass.work.AssessmentModels)
 	for _, model := range pass.models.names {
 		if !slices.Contains(summary.Models, model) {
 			summary.Models = append(summary.Models, model)
 		}
 	}
+
 	summary.Observed = slices.Clone(pass.collector.observed)
 	summary.Eligible = slices.Clone(pass.collector.anchored)
 	summary.Published = slices.Clone(pass.published)
 	summary.Chunks = len(completed)
 	pass.mu.Unlock()
+
 	for _, file := range pass.work.Files {
 		if completedFileReview(file, pass.work.Chunks, completed) {
 			summary.FilesReviewed++
 		}
 	}
+
 	summary.Usage = UsageFromContext(ctx)
 	summary.FileAssessments = pass.fileAssessments()
 	summary.FileAssessmentsDisplay = service.reviewPolicy.FileAssessmentsDisplay()
@@ -90,6 +112,7 @@ func (service *Service) progressSummary(ctx context.Context, job domain.ReviewJo
 	summary.DecisionReason = pass.decisionReason()
 	summary.Fallback, summary.fallbackCheckpoint = pass.fallbackSnapshot()
 	service.enrichProviderPeriodUsage(ctx, &summary)
+
 	return summary
 }
 
@@ -97,16 +120,20 @@ func completedFileReview(file diff.FileContext, chunks []diff.Chunk, completed [
 	if !file.CoverageComplete {
 		return false
 	}
+
 	found := false
+
 	for _, chunk := range chunks {
 		if chunk.RelationshipReview || !slices.Contains(chunk.Paths, file.Path) {
 			continue
 		}
+
 		found = true
 		if !chunk.CoverageComplete || !slices.Contains(completed, chunkID(chunk)) {
 			return false
 		}
 	}
+
 	return found
 }
 

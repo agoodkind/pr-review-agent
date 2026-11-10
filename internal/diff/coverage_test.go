@@ -33,43 +33,75 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 		{
 			name: "a binary file carries no reviewable patch",
 			file: githubapp.ChangedFile{
-				Path: "image.png", Status: "binary", Patch: "", PatchPresent: false,
+				Path:         "image.png",
+				Status:       "binary",
+				Patch:        "",
+				PatchPresent: false,
 			},
-			getErr: nil, contents: nil,
-			wantGap: diff.CoverageGapBinary, wantRecurs: true, wantError: false,
+			getErr:     nil,
+			contents:   nil,
+			wantGap:    diff.CoverageGapBinary,
+			wantRecurs: true,
+			wantError:  false,
 		},
 		{
 			name: "github supplies no patch for an oversized file",
 			file: githubapp.ChangedFile{
-				Path: "big.bin", Status: "modified", Patch: "", PatchPresent: false,
+				Path:         "big.bin",
+				Status:       "modified",
+				Patch:        "",
+				PatchPresent: false,
 			},
-			getErr: nil, contents: nil,
-			wantGap: diff.CoverageGapPatchAbsent, wantRecurs: true, wantError: false,
+			getErr:     nil,
+			contents:   nil,
+			wantGap:    diff.CoverageGapPatchAbsent,
+			wantRecurs: true,
+			wantError:  false,
 		},
 		{
 			name: "a malformed hunk header cannot be read",
 			file: githubapp.ChangedFile{
-				Path: "pkg/a.go", Status: "modified", Patch: "@@ nonsense @@\n+x\n", PatchPresent: true,
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ nonsense @@\n+x\n",
+				PatchPresent: true,
 			},
-			getErr: nil, contents: nil,
-			wantGap: diff.CoverageGapPatchUnreadable, wantRecurs: true, wantError: false,
+			getErr:     nil,
+			contents:   nil,
+			wantGap:    diff.CoverageGapPatchUnreadable,
+			wantRecurs: true,
+			wantError:  false,
 		},
 		{
 			name: "a truncated patch does not hide a failed content load",
 			file: githubapp.ChangedFile{
-				Path: "pkg/a.go", Status: "modified", Patch: "@@ -1,1 +1,5 @@\n line\n+added\n", PatchPresent: true,
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ -1,1 +1,5 @@\n line\n+added\n",
+				PatchPresent: true,
 			},
-			getErr: errors.New("read failed"), contents: nil,
-			wantGap: diff.CoverageGapNone, wantRecurs: false, wantError: true,
+			getErr:     errors.New("read failed"),
+			contents:   nil,
+			wantGap:    diff.CoverageGapNone,
+			wantRecurs: false,
+			wantError:  true,
 		},
 		{
 			name: "a content read that got no answer is one call that went wrong",
 			file: githubapp.ChangedFile{
-				Path: "pkg/a.go", Status: "modified", Patch: goodPatch, PatchPresent: true,
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        goodPatch,
+				PatchPresent: true,
 			},
-			getErr:   githubapp.APIError{StatusCode: http.StatusBadGateway, Message: "bad gateway"},
-			contents: nil,
-			wantGap:  diff.CoverageGapNone, wantRecurs: false, wantError: true,
+			getErr: githubapp.APIError{
+				StatusCode: http.StatusBadGateway,
+				Message:    "bad gateway",
+			},
+			contents:   nil,
+			wantGap:    diff.CoverageGapNone,
+			wantRecurs: false,
+			wantError:  true,
 		},
 		{
 			// GitHub answered, and it answers the same way on every later run.
@@ -77,11 +109,16 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 			// naming nothing a person could act on.
 			name: "a file github will not serve is answered the same way every time",
 			file: githubapp.ChangedFile{
-				Path: "pkg/a.go", Status: "modified", Patch: goodPatch, PatchPresent: true,
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        goodPatch,
+				PatchPresent: true,
 			},
-			getErr:   githubapp.APIError{StatusCode: http.StatusNotFound, Message: "Not Found"},
-			contents: nil,
-			wantGap:  diff.CoverageGapContentMissing, wantRecurs: true, wantError: false,
+			getErr:     githubapp.APIError{StatusCode: http.StatusNotFound, Message: "Not Found"},
+			contents:   nil,
+			wantGap:    diff.CoverageGapContentMissing,
+			wantRecurs: true,
+			wantError:  false,
 		},
 		{
 			// An error carrying no status this service recognizes could be
@@ -89,46 +126,66 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 			// request over something that may pass on the next run.
 			name: "an unclassifiable content failure is treated as one that may pass",
 			file: githubapp.ChangedFile{
-				Path: "pkg/a.go", Status: "modified", Patch: goodPatch, PatchPresent: true,
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        goodPatch,
+				PatchPresent: true,
 			},
-			getErr: errors.New("read failed"), contents: nil,
-			wantGap: diff.CoverageGapNone, wantRecurs: false, wantError: true,
+			getErr:     errors.New("read failed"),
+			contents:   nil,
+			wantGap:    diff.CoverageGapNone,
+			wantRecurs: false,
+			wantError:  true,
 		},
 	}
 
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			source := &fakeSource{
-				files:    []githubapp.ChangedFile{testCase.file},
-				contents: testCase.contents,
-				getErr:   testCase.getErr,
-			}
-			input, err := diff.NewCollector(source).Collect(
-				context.Background(), testRef(), testPullRequest(),
-			)
-			if testCase.wantError {
-				if !errors.Is(err, testCase.getErr) {
-					t.Fatalf("Collect error = %v, want %v", err, testCase.getErr)
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				source := &fakeSource{
+					files:    []githubapp.ChangedFile{testCase.file},
+					contents: testCase.contents,
+					getErr:   testCase.getErr,
 				}
-				if len(input.Files) != 0 {
-					t.Fatalf("files = %v, want no review input after failed collection", input.Files)
+				input, err := diff.NewCollector(source).Collect(
+					context.Background(),
+					testRef(),
+					testPullRequest(),
+				)
+				if testCase.wantError {
+					if !errors.Is(err, testCase.getErr) {
+						t.Fatalf("Collect error = %v, want %v", err, testCase.getErr)
+					}
+
+					if len(input.Files) != 0 {
+						t.Fatalf(
+							"files = %v, want no review input after failed collection",
+							input.Files,
+						)
+					}
+
+					return
 				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Collect: %v", err)
-			}
-			file := input.Files[0]
-			if file.CoverageComplete {
-				t.Fatal("coverage complete = true, want a file reported as not read whole")
-			}
-			if file.Gap != testCase.wantGap {
-				t.Fatalf("gap = %q, want %q", file.Gap, testCase.wantGap)
-			}
-			if file.Gap.Recurs() != testCase.wantRecurs {
-				t.Fatalf("recurs = %t, want %t", file.Gap.Recurs(), testCase.wantRecurs)
-			}
-		})
+
+				if err != nil {
+					t.Fatalf("Collect: %v", err)
+				}
+
+				file := input.Files[0]
+				if file.CoverageComplete {
+					t.Fatal("coverage complete = true, want a file reported as not read whole")
+				}
+
+				if file.Gap != testCase.wantGap {
+					t.Fatalf("gap = %q, want %q", file.Gap, testCase.wantGap)
+				}
+
+				if file.Gap.Recurs() != testCase.wantRecurs {
+					t.Fatalf("recurs = %t, want %t", file.Gap.Recurs(), testCase.wantRecurs)
+				}
+			},
+		)
 	}
 }
 
@@ -136,21 +193,29 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 // complete read for a shortfall it has to report.
 func TestACompletelyReadFileNamesNoGap(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/a.go",
-			Status:       "modified",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+				PatchPresent: true,
+			},
+		},
 		contents: map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
 	}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	input, err := diff.NewCollector(source).Collect(
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+	)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	if input.Files[0].Gap != diff.CoverageGapNone {
 		t.Fatalf("gap = %q, want none", input.Files[0].Gap)
 	}
+
 	if input.Files[0].Gap.Recurs() {
 		t.Fatal("recurs = true, want false for a file that was read whole")
 	}
@@ -161,19 +226,24 @@ func TestACompletelyReadFileNamesNoGap(t *testing.T) {
 // this is the one shortfall a later run cannot close.
 func TestChunkInputMarksAnOversizedHunkAndNamesIt(t *testing.T) {
 	const small = "@@ -1,1 +1,2 @@\n a\n+one\n"
-	huge := "@@ -4,1 +5,3 @@\n d\n+" + strings.Repeat("x", 400) + "\n+" + strings.Repeat("y", 400) + "\n"
+	huge := "@@ -4,1 +5,3 @@\n d\n+" + strings.Repeat("x", 400) + "\n+" + strings.Repeat(
+		"y",
+		400,
+	) + "\n"
 	input := diff.ReviewInput{
 		PullRequest: githubapp.PullRequest{},
-		Files: []diff.FileContext{{
-			Path:              "a.go",
-			Status:            "modified",
-			Patch:             small + "\n" + huge,
-			CurrentContent:    "a\none\nb\nc\nd\n",
-			ChangedRightLines: nil,
-			ChangedRightHunks: nil,
-			CoverageComplete:  true,
-			Gap:               diff.CoverageGapNone,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:              "a.go",
+				Status:            "modified",
+				Patch:             small + "\n" + huge,
+				CurrentContent:    "a\none\nb\nc\nd\n",
+				ChangedRightLines: nil,
+				ChangedRightHunks: nil,
+				CoverageComplete:  true,
+				Gap:               diff.CoverageGapNone,
+			},
+		},
 		MergeBase: "",
 	}
 
@@ -181,30 +251,42 @@ func TestChunkInputMarksAnOversizedHunkAndNamesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	pieces := make([]diff.Piece, 0, 2)
+
 	for _, chunk := range chunks {
 		pieces = append(pieces, chunk.Pieces...)
 	}
+
 	if len(pieces) != 2 {
 		t.Fatalf("pieces = %d, want one per hunk", len(pieces))
 	}
+
 	if pieces[0].Oversized {
 		t.Fatal("the small hunk was marked oversized")
 	}
+
 	if pieces[0].Header != "@@ -1,1 +1,2 @@" {
 		t.Fatalf("small hunk header = %q, want its coordinates", pieces[0].Header)
 	}
+
 	if !pieces[1].Oversized {
 		t.Fatal("the hunk larger than a whole chunk was not marked oversized")
 	}
+
 	if pieces[1].CoverageComplete {
 		t.Fatal("an oversized hunk reported complete coverage")
 	}
+
 	if pieces[1].Header != "@@ -4,1 +5,3 @@" {
 		t.Fatalf("oversized hunk header = %q, want its coordinates", pieces[1].Header)
 	}
+
 	if strings.Contains(pieces[1].Text, "xxxx") {
-		t.Fatalf("oversized hunk text = %q, want a placeholder rather than the diff", pieces[1].Text)
+		t.Fatalf(
+			"oversized hunk text = %q, want a placeholder rather than the diff",
+			pieces[1].Text,
+		)
 	}
 }
 
@@ -215,16 +297,18 @@ func TestAnUnreadHunkIsNamedWithoutTheSourceGitAppends(t *testing.T) {
 	patch := "@@ -1,1 +1,2 @@ func secret(token string) {\n a\n+" + strings.Repeat("z", 400) + "\n"
 	input := diff.ReviewInput{
 		PullRequest: githubapp.PullRequest{},
-		Files: []diff.FileContext{{
-			Path:              "a.go",
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    "a\n",
-			ChangedRightLines: nil,
-			ChangedRightHunks: nil,
-			CoverageComplete:  true,
-			Gap:               diff.CoverageGapNone,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:              "a.go",
+				Status:            "modified",
+				Patch:             patch,
+				CurrentContent:    "a\n",
+				ChangedRightLines: nil,
+				ChangedRightHunks: nil,
+				CoverageComplete:  true,
+				Gap:               diff.CoverageGapNone,
+			},
+		},
 		MergeBase: "",
 	}
 
@@ -232,13 +316,16 @@ func TestAnUnreadHunkIsNamedWithoutTheSourceGitAppends(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	if len(chunks) != 1 || len(chunks[0].Pieces) != 1 {
 		t.Fatalf("chunks = %d, want one holding the one hunk", len(chunks))
 	}
+
 	piece := chunks[0].Pieces[0]
 	if piece.Header != "@@ -1,1 +1,2 @@" {
 		t.Fatalf("header = %q, want the coordinates alone", piece.Header)
 	}
+
 	if strings.Contains(piece.Header, "func secret") {
 		t.Fatalf("header = %q, want no source line from the file", piece.Header)
 	}

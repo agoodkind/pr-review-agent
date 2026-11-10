@@ -14,6 +14,7 @@ func captured(t *testing.T, write func(logger *slog.Logger)) *runlog.Recorder {
 	t.Helper()
 	recorder := runlog.NewRecorder()
 	write(slog.New(recorder))
+
 	return recorder
 }
 
@@ -22,23 +23,36 @@ func captured(t *testing.T, write func(logger *slog.Logger)) *runlog.Recorder {
 // failed on, an internal endpoint, or a credential, so the value never reaches
 // the render while everything else on the line does.
 func TestRenderWithholdsTheValueOfEveryCauseField(t *testing.T) {
-	recorder := captured(t, func(logger *slog.Logger) {
-		logger.Error(
-			"review chunk request failed",
-			slog.Int("chunk", 3),
-			slog.Int("chunks", 13),
-			slog.String("err", "model provider returned HTTP 400: upstream call failed: secret-token-abc123"),
-		)
-		logger.Error("review chunks unread", slog.Any("causes", []string{
-			"chunk 3: model provider returned HTTP 400: secret-token-abc123",
-		}))
-	})
+	recorder := captured(
+		t,
+		func(logger *slog.Logger) {
+			logger.Error(
+				"review chunk request failed",
+				slog.Int("chunk", 3),
+				slog.Int("chunks", 13),
+				slog.String(
+					"err",
+					"model provider returned HTTP 400: upstream call failed: secret-token-abc123",
+				),
+			)
+			logger.Error(
+				"review chunks unread",
+				slog.Any(
+					"causes",
+					[]string{
+						"chunk 3: model provider returned HTTP 400: secret-token-abc123",
+					},
+				),
+			)
+		},
+	)
 
 	rendered := recorder.Render()
 
 	if strings.Contains(rendered, "secret-token-abc123") {
 		t.Fatalf("render published text this service never wrote:\n%s", rendered)
 	}
+
 	for _, want := range []string{
 		"review chunk request failed",
 		"review chunks unread",
@@ -59,23 +73,30 @@ func TestRenderWithholdsTheValueOfEveryCauseField(t *testing.T) {
 // a later log line adds and forgets to list. Both keep their key and their line,
 // so the reader loses a lookup rather than the diagnosis.
 func TestRenderWithholdsTheValueOfEveryFieldNotListed(t *testing.T) {
-	recorder := captured(t, func(logger *slog.Logger) {
-		logger.Error(
-			"model provider stream retried",
-			slog.Int("chunk", 3),
-			slog.String("last_err", "upstream call failed: secret-token-abc123"),
-		)
-		logger.Error(
-			"review chunk request failed",
-			slog.String("provider_detail", "POST https://internal.example/v1: secret-token-abc123"),
-		)
-	})
+	recorder := captured(
+		t,
+		func(logger *slog.Logger) {
+			logger.Error(
+				"model provider stream retried",
+				slog.Int("chunk", 3),
+				slog.String("last_err", "upstream call failed: secret-token-abc123"),
+			)
+			logger.Error(
+				"review chunk request failed",
+				slog.String(
+					"provider_detail",
+					"POST https://internal.example/v1: secret-token-abc123",
+				),
+			)
+		},
+	)
 
 	rendered := recorder.Render()
 
 	if strings.Contains(rendered, "secret-token-abc123") {
 		t.Fatalf("render published a field nobody vouched for:\n%s", rendered)
 	}
+
 	for _, want := range []string{
 		"model provider stream retried",
 		"review chunk request failed",
@@ -93,31 +114,45 @@ func TestRenderWithholdsTheValueOfEveryFieldNotListed(t *testing.T) {
 // entries themselves keep the cause, because the service log the check's run
 // identifier points at is where a reader recovers it.
 func TestEntriesKeepTheCauseTheRenderWithholds(t *testing.T) {
-	recorder := captured(t, func(logger *slog.Logger) {
-		logger.Error("review job failed", slog.String("err", "upstream call failed: secret-token-abc123"))
-	})
+	recorder := captured(
+		t,
+		func(logger *slog.Logger) {
+			logger.Error(
+				"review job failed",
+				slog.String("err", "upstream call failed: secret-token-abc123"),
+			)
+		},
+	)
 
 	entries := recorder.Entries()
 	if len(entries) != 1 {
 		t.Fatalf("entries = %d, want 1", len(entries))
 	}
+
 	if !strings.Contains(entries[0].Fields["err"], "secret-token-abc123") {
-		t.Fatalf("entry err = %q, want the cause kept for the private log", entries[0].Fields["err"])
+		t.Fatalf(
+			"entry err = %q, want the cause kept for the private log",
+			entries[0].Fields["err"],
+		)
 	}
 }
 
 // A field that carries this service's own wording is published as it is, so
 // redaction never costs the reader the diagnosis they came for.
 func TestRenderKeepsFieldsThisServiceWrote(t *testing.T) {
-	recorder := captured(t, func(logger *slog.Logger) {
-		logger.Info(
-			"review job skipped",
-			slog.String("reason", "173 diff chunks, over the 60 chunk review budget"),
-			slog.String("model", "fixture-review-model"),
-		)
-	})
+	recorder := captured(
+		t,
+		func(logger *slog.Logger) {
+			logger.Info(
+				"review job skipped",
+				slog.String("reason", "173 diff chunks, over the 60 chunk review budget"),
+				slog.String("model", "fixture-review-model"),
+			)
+		},
+	)
 
 	rendered := recorder.Render()
+
 	for _, want := range []string{
 		"reason=173 diff chunks, over the 60 chunk review budget",
 		"model=fixture-review-model",
@@ -169,6 +204,7 @@ func TestRenderKeepsAPublishedValueOnItsOwnLine(t *testing.T) {
 			t.Fatalf("a field value reached the start of a line:\n%s", rendered)
 		}
 	}
+
 	if !strings.Contains(rendered, `path=a.go\n`) {
 		t.Fatalf("rendered log did not escape the line break:\n%s", rendered)
 	}

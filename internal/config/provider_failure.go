@@ -20,6 +20,7 @@ func ResolveProviderFailurePolicy(policy ProviderFailurePolicy) ProviderFailureP
 	if policy == "" {
 		return ProviderRecoverableFailure
 	}
+
 	return policy
 }
 
@@ -39,9 +40,14 @@ func providerRequestTimeout(definition providerDefinition) (time.Duration, error
 	if definition.RequestTimeout == "" {
 		return 0, nil
 	}
+
 	timeout, err := time.ParseDuration(definition.RequestTimeout)
 	if err != nil || timeout <= 0 {
-		return 0, fmt.Errorf("provider %q request_timeout must be a positive duration", definition.ID)
+		return 0, fmt.Errorf(
+			"provider %q request_timeout must be a positive duration",
+			definition.ID,
+		)
 	}
+
 	return timeout, nil
 }

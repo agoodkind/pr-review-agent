@@ -21,7 +21,13 @@ func (fixture *liveDetailsFixture) write(t *testing.T, ctx context.Context, body
 	if current == body {
 		return
 	}
-	updated, err := fixture.client.UpdateIssueComment(ctx, fixture.opts.installationID, fixture.before.Repository, fixture.original.ID, body)
+	updated, err := fixture.client.UpdateIssueComment(
+		ctx,
+		fixture.opts.installationID,
+		fixture.before.Repository,
+		fixture.original.ID,
+		body,
+	)
 	if err != nil {
 		t.Fatalf("The fixture summary update failed: %v", err)
 	}
@@ -47,10 +53,15 @@ func liveDetailsSection(t *testing.T, body, prefix, suffix string) string {
 func liveDetailsAssertRecovered(t *testing.T, body, details, report string, head domain.HeadSHA) {
 	t.Helper()
 	state, valid := marker.DecodeState(body)
-	if !valid || state.Status != marker.StateDone || state.LastReviewed != head || len(state.Pending) != 0 || len(state.Unread) != 0 {
+	if !valid || state.Status != marker.StateDone || state.LastReviewed != head || len(
+		state.Pending,
+	) != 0 || len(state.Unread) != 0 {
 		t.Fatal("The successful refresh did not restore the completed current-head state.")
 	}
-	if !strings.Contains(body, details) || !strings.Contains(body, report) || strings.Contains(body, "Review refresh failed") {
+	if !strings.Contains(
+		body,
+		details,
+	) || !strings.Contains(body, report) || strings.Contains(body, "Review refresh failed") {
 		t.Fatal("The recovered summary lost measured details or retained the operational failure.")
 	}
 }

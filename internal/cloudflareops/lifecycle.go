@@ -67,9 +67,11 @@ var (
 )
 
 func sourceTimestamp(event Event) time.Time {
-	if timestamp, err := time.Parse(time.RFC3339Nano, text(event.Source, "time")); err == nil && timestamp.UnixMilli() > 0 {
+	if timestamp, err := time.Parse(time.RFC3339Nano, text(event.Source, "time")); err == nil &&
+		timestamp.UnixMilli() > 0 {
 		return timestamp.UTC()
 	}
+
 	return time.UnixMilli(event.Timestamp).UTC()
 }
 
@@ -87,6 +89,7 @@ func lifecycleMessage(message operationMessage) bool {
 	case messageProviderAttemptFailed:
 		return false
 	}
+
 	return false
 }
 
@@ -112,9 +115,11 @@ func updateLifecycle(run *Run, event Event) {
 		messageRefreshSkipped, messageRefreshWithheld,
 		messageSummaryCreated, messageSummaryUpdated, messageFailureSummary:
 	}
+
 	if !lifecycleMessage(message) {
 		return
 	}
+
 	lifecycle := LifecycleEvent{
 		Timestamp:         sourceTimestamp(event),
 		Message:           string(message),
@@ -140,16 +145,20 @@ func updateLifecycle(run *Run, event Event) {
 	if pending, ok := number(event.Source, "pending"); ok {
 		lifecycle.Pending = &pending
 	}
+
 	if visible, ok := booleanValue(event.Source, "visible"); ok {
 		lifecycle.Visible = &visible
 	}
+
 	if message == messageReconciliationSelected || message == messageReconciliationStarted {
 		lifecycle.SelectedThreadIDs = selectedThreadIDs(event.Source)
 	}
+
 	if message == messageReconciliationCompleted {
 		lifecycle.DecisionThreadIDs = returnedDecisionIDs(event.Source)
 		lifecycle.ResolvedThreadIDs = resolvedThreadIDs(event.Source)
 	}
+
 	run.Lifecycle = append(run.Lifecycle, lifecycle)
 }
 
@@ -158,13 +167,16 @@ func selectedThreadIDs(fields map[string]json.RawMessage) []string {
 	if json.Unmarshal(fields["thread_node_ids"], &identifiers) == nil && identifiers != nil {
 		return distinctIDs(identifiers)
 	}
+
 	encoded := text(fields, "thread_node_ids")
 	if json.Unmarshal([]byte(encoded), &identifiers) == nil && identifiers != nil {
 		return distinctIDs(identifiers)
 	}
+
 	if !strings.HasPrefix(encoded, "[") || !strings.HasSuffix(encoded, "]") {
 		return []string{}
 	}
+
 	return distinctIDs(strings.Fields(strings.TrimSuffix(strings.TrimPrefix(encoded, "["), "]")))
 }
 
@@ -176,18 +188,22 @@ func returnedDecisionIDs(fields map[string]json.RawMessage) []string {
 	identifiers := []string{}
 	raw := fields["resolutions"]
 	encoded := text(fields, "resolutions")
-	if json.Unmarshal(raw, &decisions) == nil || json.Unmarshal([]byte(encoded), &decisions) == nil {
+	if json.Unmarshal(raw, &decisions) == nil ||
+		json.Unmarshal([]byte(encoded), &decisions) == nil {
 		for _, decision := range decisions {
 			switch decision.Resolution {
 			case domain.ResolutionOpen, domain.ResolutionResolved, domain.ResolutionUncertain:
 				identifiers = append(identifiers, decision.ThreadNodeID)
 			}
 		}
+
 		return distinctIDs(identifiers)
 	}
+
 	for _, match := range legacyResolution.FindAllStringSubmatch(encoded, -1) {
 		identifiers = append(identifiers, match[1])
 	}
+
 	return distinctIDs(identifiers)
 }
 
@@ -202,20 +218,25 @@ func resolvedThreadIDs(fields map[string]json.RawMessage) []string {
 		for _, thread := range threads {
 			identifiers = append(identifiers, thread.NodeID)
 		}
+
 		return distinctIDs(identifiers)
 	}
+
 	for _, match := range legacyResolvedThread.FindAllStringSubmatch(encoded, -1) {
 		identifiers = append(identifiers, match[1])
 	}
+
 	return distinctIDs(identifiers)
 }
 
 func distinctIDs(identifiers []string) []string {
 	result := []string{}
+
 	for _, identifier := range identifiers {
 		if identifier != "" && !slices.Contains(result, identifier) {
 			result = append(result, identifier)
 		}
 	}
+
 	return result
 }

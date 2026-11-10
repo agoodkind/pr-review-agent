@@ -9,12 +9,14 @@ import (
 )
 
 func TestEndToEndPullRequestWebhookAcceptance(t *testing.T) {
-	payload := []byte(`{
+	payload := []byte(
+		`{
 		"action":"opened",
 		"installation":{"id":42},
 		"repository":{"name":"repo","owner":{"login":"owner"}},
 		"pull_request":{"number":7,"draft":false,"head":{"sha":"a3c4f1cac7f595bc824704b9d2a1f1191630dc32"}}
-	}`)
+	}`,
+	)
 	secret := []byte("secret")
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write(payload)
@@ -28,9 +30,11 @@ func TestEndToEndPullRequestWebhookAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePullRequest: %v", err)
 	}
+
 	if !supported {
 		t.Fatal("supported = false, want true")
 	}
+
 	if event.Head != "a3c4f1cac7f595bc824704b9d2a1f1191630dc32" {
 		t.Fatalf("head = %q, want opened head sha", event.Head)
 	}
@@ -51,6 +55,7 @@ func TestVerifySHA256AcceptsValidSignature(t *testing.T) {
 func TestVerifySHA256RejectsMissingMalformedAndWrongSignatures(t *testing.T) {
 	secret := []byte("secret")
 	body := []byte(`{"action":"opened"}`)
+
 	cases := []string{
 		"",
 		"sha1=deadbeef",
@@ -89,13 +94,16 @@ func TestParsePullRequestAcceptsFourSupportedActions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Marshal: %v", err)
 		}
+
 		event, supported, err := ParsePullRequest("pull_request", "delivery-1", body)
 		if err != nil {
 			t.Fatalf("action %s: %v", action, err)
 		}
+
 		if !supported {
 			t.Fatalf("action %s: not supported", action)
 		}
+
 		if event.Action != action {
 			t.Fatalf("action = %q, want %q", event.Action, action)
 		}
@@ -103,16 +111,19 @@ func TestParsePullRequestAcceptsFourSupportedActions(t *testing.T) {
 }
 
 func TestParsePullRequestIgnoresDraftAndUnsupportedEvents(t *testing.T) {
-	draftPayload := []byte(`{
+	draftPayload := []byte(
+		`{
 		"action":"opened",
 		"installation":{"id":1},
 		"repository":{"name":"repo","owner":{"login":"owner"}},
 		"pull_request":{"number":1,"draft":true,"head":{"sha":"a3c4f1cac7f595bc824704b9d2a1f1191630dc32"}}
-	}`)
+	}`,
+	)
 	_, supported, err := ParsePullRequest("pull_request", "delivery-1", draftPayload)
 	if err != nil {
 		t.Fatalf("draft opened: %v", err)
 	}
+
 	if supported {
 		t.Fatal("draft opened: want unsupported")
 	}
@@ -121,20 +132,24 @@ func TestParsePullRequestIgnoresDraftAndUnsupportedEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("push event: %v", err)
 	}
+
 	if supported {
 		t.Fatal("push event: want unsupported")
 	}
 
-	readyPayload := []byte(`{
+	readyPayload := []byte(
+		`{
 		"action":"ready_for_review",
 		"installation":{"id":1},
 		"repository":{"name":"repo","owner":{"login":"owner"}},
 		"pull_request":{"number":1,"draft":true,"head":{"sha":"a3c4f1cac7f595bc824704b9d2a1f1191630dc32"}}
-	}`)
+	}`,
+	)
 	_, supported, err = ParsePullRequest("pull_request", "delivery-3", readyPayload)
 	if err != nil {
 		t.Fatalf("ready_for_review draft: %v", err)
 	}
+
 	if !supported {
 		t.Fatal("ready_for_review draft: want supported")
 	}
@@ -172,6 +187,7 @@ func reviewThreadPayloadBody(action string, draft bool) []byte {
 	if err != nil {
 		panic(err)
 	}
+
 	return body
 }
 
@@ -202,6 +218,7 @@ func reviewCommentPayloadBody(action string, inReplyToID int64) []byte {
 	if err != nil {
 		panic(err)
 	}
+
 	return body
 }
 
@@ -215,6 +232,7 @@ func TestParseEventAcceptsInlineFindingReplies(t *testing.T) {
 		if err != nil {
 			t.Fatalf("action %s: %v", action, err)
 		}
+
 		if !supported || event.ThreadRootCommentID != 99 || !event.RefreshVerdict ||
 			event.Job().ThreadRootCommentID != 99 || !event.Job().RefreshVerdict {
 			t.Fatalf("action %s: event = %+v, want a thread reply job", action, event)
@@ -229,6 +247,7 @@ func TestParseEventAcceptsInlineFindingReplies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("root comment: %v", err)
 	}
+
 	if supported {
 		t.Fatal("root inline comment: want ignored")
 	}
@@ -244,12 +263,15 @@ func TestParseEventAcceptsResolvedAndUnresolvedThreadActions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("action %s: %v", action, err)
 		}
+
 		if !supported {
 			t.Fatalf("action %s: not supported", action)
 		}
+
 		if event.Head != "a3c4f1cac7f595bc824704b9d2a1f1191630dc32" {
 			t.Fatalf("head = %q, want the payload head sha", event.Head)
 		}
+
 		job := event.Job()
 		if job.Number != 7 || job.InstallationID != 42 || job.Repository.Owner != "owner" ||
 			!job.RefreshVerdict {
@@ -267,6 +289,7 @@ func TestParseEventIgnoresUnsupportedThreadActionsAndDrafts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unsupported action: %v", err)
 	}
+
 	if supported {
 		t.Fatal("unsupported action: want ignored")
 	}
@@ -279,6 +302,7 @@ func TestParseEventIgnoresUnsupportedThreadActionsAndDrafts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("draft: %v", err)
 	}
+
 	if supported {
 		t.Fatal("draft: want ignored")
 	}
@@ -293,17 +317,24 @@ func TestParseReviewThreadRejectsMissingRequiredFields(t *testing.T) {
 }
 
 func TestMentionedPullRequestCommentRequestsFullReview(t *testing.T) {
-	body := []byte(`{
+	body := []byte(
+		`{
 		"action":"created",
 		"installation":{"id":42},
 		"repository":{"name":"repo","owner":{"login":"owner"}},
 		"issue":{"number":7,"pull_request":{"url":"https://api.github.com/repos/owner/repo/pulls/7"}},
 		"comment":{"body":"@review-agent please review this change","user":{"login":"author"}}
-	}`)
-	event, supported, err := ParseMentionedIssueComment("delivery-mention", body, "review-agent[bot]")
+	}`,
+	)
+	event, supported, err := ParseMentionedIssueComment(
+		"delivery-mention",
+		body,
+		"review-agent[bot]",
+	)
 	if err != nil {
 		t.Fatalf("ParseMentionedIssueComment: %v", err)
 	}
+
 	if !supported || !event.Forced || event.Number != 7 || event.InstallationID != 42 {
 		t.Fatalf("event = %+v, want a forced review for pull request 7", event)
 	}
@@ -326,22 +357,39 @@ func TestMentionedIssueCommentIgnoresOtherTextAndIssues(t *testing.T) {
 		{"bot comment", "@review-agent", "created", `{"url":"pull"}`, "review-agent[bot]"},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			payload := map[string]any{
-				"action":       testCase.action,
-				"installation": map[string]any{"id": 42},
-				"repository":   map[string]any{"name": "repo", "owner": map[string]any{"login": "owner"}},
-				"issue":        map[string]any{"number": 7, "pull_request": json.RawMessage(testCase.issue)},
-				"comment":      map[string]any{"body": testCase.body, "user": map[string]any{"login": testCase.author}},
-			}
-			body, err := json.Marshal(payload)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			_, supported, err := ParseMentionedIssueComment("delivery-ignored", body, "review-agent[bot]")
-			if err != nil || supported {
-				t.Fatalf("supported = %v, err = %v, want ignored", supported, err)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				payload := map[string]any{
+					"action":       testCase.action,
+					"installation": map[string]any{"id": 42},
+					"repository": map[string]any{
+						"name":  "repo",
+						"owner": map[string]any{"login": "owner"},
+					},
+					"issue": map[string]any{
+						"number":       7,
+						"pull_request": json.RawMessage(testCase.issue),
+					},
+					"comment": map[string]any{
+						"body": testCase.body,
+						"user": map[string]any{"login": testCase.author},
+					},
+				}
+				body, err := json.Marshal(payload)
+				if err != nil {
+					t.Fatalf("Marshal: %v", err)
+				}
+
+				_, supported, err := ParseMentionedIssueComment(
+					"delivery-ignored",
+					body,
+					"review-agent[bot]",
+				)
+				if err != nil || supported {
+					t.Fatalf("supported = %v, err = %v, want ignored", supported, err)
+				}
+			},
+		)
 	}
 }

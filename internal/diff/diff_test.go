@@ -20,46 +20,56 @@ const (
 )
 
 func TestChangedRightLinesMultipleHunks(t *testing.T) {
-	patch := strings.Join([]string{
-		"diff --git a/a.go b/a.go",
-		"--- a/a.go",
-		"+++ b/a.go",
-		"@@ -1,3 +1,4 @@",
-		" package a",
-		"+added1",
-		" func main() {}",
-		"@@ -8,2 +9,3 @@",
-		" func other() {}",
-		"+added9",
-	}, "\n")
+	patch := strings.Join(
+		[]string{
+			"diff --git a/a.go b/a.go",
+			"--- a/a.go",
+			"+++ b/a.go",
+			"@@ -1,3 +1,4 @@",
+			" package a",
+			"+added1",
+			" func main() {}",
+			"@@ -8,2 +9,3 @@",
+			" func other() {}",
+			"+added9",
+		},
+		"\n",
+	)
 
 	changed, _, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
+
 	if !containsLine(changed, 2) {
 		t.Fatalf("changed lines = %v, want line 2", changed)
 	}
+
 	if !containsLine(changed, 10) {
 		t.Fatalf("changed lines = %v, want line 10", changed)
 	}
+
 	if containsLine(changed, 1) {
 		t.Fatalf("context line 1 should not be changed: %v", changed)
 	}
 }
 
 func TestChangedRightLinesDeletionAndContextExcluded(t *testing.T) {
-	patch := strings.Join([]string{
-		"@@ -4,4 +4,3 @@",
-		" context",
-		"-deleted",
-		" context2",
-	}, "\n")
+	patch := strings.Join(
+		[]string{
+			"@@ -4,4 +4,3 @@",
+			" context",
+			"-deleted",
+			" context2",
+		},
+		"\n",
+	)
 
 	changed, _, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
+
 	if len(changed) != 0 {
 		t.Fatalf("deleted-only hunk changed lines = %v, want empty", changed)
 	}
@@ -73,80 +83,98 @@ func TestChangedRightLinesMalformedHeader(t *testing.T) {
 }
 
 func TestChangedRightLinesTruncatedHunk(t *testing.T) {
-	patch := strings.Join([]string{
-		"@@ -1,3 +1,4 @@",
-		" context",
-		"+added",
-	}, "\n")
+	patch := strings.Join(
+		[]string{
+			"@@ -1,3 +1,4 @@",
+			" context",
+			"+added",
+		},
+		"\n",
+	)
 
 	changed, _, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
+
 	if !containsLine(changed, 2) {
 		t.Fatalf("changed lines = %v, want line 2", changed)
 	}
 
 	input := diff.ReviewInput{
-		Files: []diff.FileContext{{
-			Path:              "a.go",
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    "context\nadded\ncontext2\n",
-			ChangedRightLines: changed,
-			CoverageComplete:  false,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:              "a.go",
+				Status:            "modified",
+				Patch:             patch,
+				CurrentContent:    "context\nadded\ncontext2\n",
+				ChangedRightLines: changed,
+				CoverageComplete:  false,
+			},
+		},
 	}
 	chunks, err := diff.ChunkInput(input, 10_000)
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	if len(chunks) != 1 {
 		t.Fatalf("chunk count = %d, want 1", len(chunks))
 	}
+
 	if chunks[0].CoverageComplete {
 		t.Fatal("truncated hunk chunk should be incomplete")
 	}
 }
 
 func TestValidRangeSingleAndMultilineWithinHunk(t *testing.T) {
-	patch := strings.Join([]string{
-		"@@ -1,5 +1,7 @@",
-		" context1",
-		"+added2",
-		"+added3",
-		"+added4",
-		" context5",
-	}, "\n")
+	patch := strings.Join(
+		[]string{
+			"@@ -1,5 +1,7 @@",
+			" context1",
+			"+added2",
+			"+added3",
+			"+added4",
+			" context5",
+		},
+		"\n",
+	)
 
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
+
 	if !diff.ValidRange(changed, hunks, 2, 2) {
 		t.Fatal("single added line should be valid")
 	}
+
 	if !diff.ValidRange(changed, hunks, 2, 4) {
 		t.Fatal("contiguous added lines in one hunk should be valid")
 	}
+
 	if diff.ValidRange(changed, hunks, 2, 5) {
 		t.Fatal("range including context end line should be invalid")
 	}
 }
 
 func TestValidRangeRejectsLinesAcrossHunks(t *testing.T) {
-	patch := strings.Join([]string{
-		"@@ -1,2 +1,3 @@",
-		" ctx",
-		"+line2",
-		"@@ -3,1 +4,2 @@",
-		"+line4",
-	}, "\n")
+	patch := strings.Join(
+		[]string{
+			"@@ -1,2 +1,3 @@",
+			" ctx",
+			"+line2",
+			"@@ -3,1 +4,2 @@",
+			"+line4",
+		},
+		"\n",
+	)
 
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
+
 	if diff.ValidRange(changed, hunks, 2, 4) {
 		t.Fatal("range across hunks should be invalid")
 	}
@@ -154,12 +182,14 @@ func TestValidRangeRejectsLinesAcrossHunks(t *testing.T) {
 
 func TestCollectorModifiedFile(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/a.go",
-			Status:       "modified",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+				PatchPresent: true,
+			},
+		},
 		contents: map[string][]byte{
 			"pkg/a.go": []byte("line\nadded\n"),
 		},
@@ -169,16 +199,20 @@ func TestCollectorModifiedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	if len(input.Files) != 1 {
 		t.Fatalf("file count = %d, want 1", len(input.Files))
 	}
+
 	file := input.Files[0]
 	if !file.CoverageComplete {
 		t.Fatal("modified file with patch and content should be complete")
 	}
+
 	if !containsLine(file.ChangedRightLines, 2) {
 		t.Fatalf("changed lines = %v, want line 2", file.ChangedRightLines)
 	}
+
 	if file.CurrentContent != "line\nadded\n" {
 		t.Fatalf("content = %q", file.CurrentContent)
 	}
@@ -186,24 +220,32 @@ func TestCollectorModifiedFile(t *testing.T) {
 
 func TestCollectorRenamedFile(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/new.go",
-			PreviousPath: "pkg/old.go",
-			Status:       "renamed",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/new.go",
+				PreviousPath: "pkg/old.go",
+				Status:       "renamed",
+				Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+				PatchPresent: true,
+			},
+		},
 		contents: map[string][]byte{
 			"pkg/new.go": []byte("line\nadded\n"),
 		},
 	}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	input, err := diff.NewCollector(source).Collect(
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+	)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	if input.Files[0].Path != "pkg/new.go" {
 		t.Fatalf("path = %q, want pkg/new.go", input.Files[0].Path)
 	}
+
 	if !input.Files[0].CoverageComplete {
 		t.Fatal("renamed file should be complete")
 	}
@@ -211,12 +253,14 @@ func TestCollectorRenamedFile(t *testing.T) {
 
 func TestCollectorDeletedFileSkipsContent(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/removed.go",
-			Status:       "removed",
-			Patch:        "@@ -1,2 +0,0 @@\n-line1\n-line2\n",
-			PatchPresent: true,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/removed.go",
+				Status:       "removed",
+				Patch:        "@@ -1,2 +0,0 @@\n-line1\n-line2\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	pullRequest := testPullRequest()
 	pullRequest.Base = domain.HeadSHA(testStaleHeadSHA)
@@ -224,13 +268,16 @@ func TestCollectorDeletedFileSkipsContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	file := input.Files[0]
 	if file.CurrentContent != "" {
 		t.Fatalf("deleted file content = %q, want empty", file.CurrentContent)
 	}
+
 	if source.getCalls != 0 {
 		t.Fatalf("GetFile calls = %d, want 0", source.getCalls)
 	}
+
 	if !file.CoverageComplete {
 		t.Fatal("deleted file with valid patch should be complete")
 	}
@@ -238,16 +285,23 @@ func TestCollectorDeletedFileSkipsContent(t *testing.T) {
 
 func TestCollectorBinaryFileIncomplete(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "image.png",
-			Status:       "added",
-			PatchPresent: false,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "image.png",
+				Status:       "added",
+				PatchPresent: false,
+			},
+		},
 	}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	input, err := diff.NewCollector(source).Collect(
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+	)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	if input.Files[0].CoverageComplete {
 		t.Fatal("binary file without patch should be incomplete")
 	}
@@ -255,16 +309,23 @@ func TestCollectorBinaryFileIncomplete(t *testing.T) {
 
 func TestCollectorMissingPatchIncomplete(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "big.bin",
-			Status:       "modified",
-			PatchPresent: false,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "big.bin",
+				Status:       "modified",
+				PatchPresent: false,
+			},
+		},
 	}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	input, err := diff.NewCollector(source).Collect(
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+	)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	if input.Files[0].CoverageComplete {
 		t.Fatal("missing patch should be incomplete")
 	}
@@ -272,25 +333,39 @@ func TestCollectorMissingPatchIncomplete(t *testing.T) {
 
 func TestCollectorFailedContentReadReturnsError(t *testing.T) {
 	for _, base := range []domain.HeadSHA{"", testStaleHeadSHA} {
-		t.Run(string(base), func(t *testing.T) {
-			cause := errors.New("read failed")
-			source := &fakeSource{
-				files: []githubapp.ChangedFile{{
-					Path:         "pkg/a.go",
-					Status:       "modified",
-					Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-					PatchPresent: true,
-				}},
-				getErr: cause,
-			}
-			input, err := diff.NewCollector(source).CollectRange(context.Background(), testRef(), testPullRequest(), base)
-			if !errors.Is(err, cause) {
-				t.Fatalf("CollectRange error = %v, want the content-read failure", err)
-			}
-			if len(input.Files) != 0 {
-				t.Fatalf("files = %v, want no review input after failed collection", input.Files)
-			}
-		})
+		t.Run(
+			string(base),
+			func(t *testing.T) {
+				cause := errors.New("read failed")
+				source := &fakeSource{
+					files: []githubapp.ChangedFile{
+						{
+							Path:         "pkg/a.go",
+							Status:       "modified",
+							Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+							PatchPresent: true,
+						},
+					},
+					getErr: cause,
+				}
+				input, err := diff.NewCollector(source).CollectRange(
+					context.Background(),
+					testRef(),
+					testPullRequest(),
+					base,
+				)
+				if !errors.Is(err, cause) {
+					t.Fatalf("CollectRange error = %v, want the content-read failure", err)
+				}
+
+				if len(input.Files) != 0 {
+					t.Fatalf(
+						"files = %v, want no review input after failed collection",
+						input.Files,
+					)
+				}
+			},
+		)
 	}
 }
 
@@ -307,14 +382,20 @@ func TestCollectorDeterministicPathOrder(t *testing.T) {
 			"m.go": []byte("m\n"),
 		},
 	}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	input, err := diff.NewCollector(source).Collect(
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+	)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	paths := make([]string, 0, len(input.Files))
 	for _, file := range input.Files {
 		paths = append(paths, file.Path)
 	}
+
 	if !sort.StringsAreSorted(paths) {
 		t.Fatalf("paths = %v, want sorted", paths)
 	}
@@ -325,12 +406,14 @@ func TestCollectorDeterministicPathOrder(t *testing.T) {
 // again, so a run never reviews the same commit range twice.
 func TestCollectorRangeComparesSinceTheGivenBase(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/a.go",
-			Status:       "modified",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+				PatchPresent: true,
+			},
+		},
 		contents: map[string][]byte{
 			"pkg/a.go": []byte("line\nadded\n"),
 		},
@@ -343,16 +426,28 @@ func TestCollectorRangeComparesSinceTheGivenBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectRange: %v", err)
 	}
+
 	if source.compareCalls != 1 {
 		t.Fatalf("compare calls = %d, want 1", source.compareCalls)
 	}
+
 	if source.listCalls != 0 {
-		t.Fatalf("list changed files calls = %d, want 0: the range must not fetch the full file list", source.listCalls)
+		t.Fatalf(
+			"list changed files calls = %d, want 0: the range must not fetch the full file list",
+			source.listCalls,
+		)
 	}
+
 	if source.lastCompareBase != base || source.lastCompareHead != pullRequest.Head {
-		t.Fatalf("compare range = %s...%s, want %s...%s",
-			source.lastCompareBase, source.lastCompareHead, base, pullRequest.Head)
+		t.Fatalf(
+			"compare range = %s...%s, want %s...%s",
+			source.lastCompareBase,
+			source.lastCompareHead,
+			base,
+			pullRequest.Head,
+		)
 	}
+
 	if len(input.Files) != 1 {
 		t.Fatalf("file count = %d, want 1", len(input.Files))
 	}
@@ -362,12 +457,14 @@ func TestCollectorRangeComparesSinceTheGivenBase(t *testing.T) {
 // back to the full file list rather than comparing against nothing.
 func TestCollectorRangeFallsBackToTheFullListWhenBaseIsEmpty(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/a.go",
-			Status:       "modified",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+				PatchPresent: true,
+			},
+		},
 		contents: map[string][]byte{
 			"pkg/a.go": []byte("line\nadded\n"),
 		},
@@ -378,12 +475,18 @@ func TestCollectorRangeFallsBackToTheFullListWhenBaseIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectRange: %v", err)
 	}
+
 	if source.compareCalls != 0 {
-		t.Fatalf("compare calls = %d, want 0: an empty base means no prior review", source.compareCalls)
+		t.Fatalf(
+			"compare calls = %d, want 0: an empty base means no prior review",
+			source.compareCalls,
+		)
 	}
+
 	if source.listCalls != 1 {
 		t.Fatalf("list changed files calls = %d, want 1", source.listCalls)
 	}
+
 	if len(input.Files) != 1 {
 		t.Fatalf("file count = %d, want 1", len(input.Files))
 	}
@@ -393,25 +496,30 @@ func TestChunkInputEachHunkAppearsOnce(t *testing.T) {
 	patchOne := "@@ -1,1 +1,2 @@\n a\n+one\n"
 	patchTwo := "@@ -4,1 +5,2 @@\n d\n+two\n"
 	input := diff.ReviewInput{
-		Files: []diff.FileContext{{
-			Path:             "a.go",
-			Status:           "modified",
-			Patch:            patchOne + "\n" + patchTwo,
-			CurrentContent:   "a\none\nb\nc\nd\ntwo\n",
-			CoverageComplete: true,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:             "a.go",
+				Status:           "modified",
+				Patch:            patchOne + "\n" + patchTwo,
+				CurrentContent:   "a\none\nb\nc\nd\ntwo\n",
+				CoverageComplete: true,
+			},
+		},
 	}
 
 	chunks, err := diff.ChunkInput(input, 10_000)
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	if len(chunks) != 1 {
 		t.Fatalf("chunk count = %d, want 1", len(chunks))
 	}
+
 	if strings.Count(chunks[0].Text, "Diff hunk:") != 2 {
 		t.Fatalf("chunk text hunk count = %d, want 2", strings.Count(chunks[0].Text, "Diff hunk:"))
 	}
+
 	if chunks[0].Index != 1 || chunks[0].Total != 1 {
 		t.Fatalf("chunk index/total = %d/%d, want 1/1", chunks[0].Index, chunks[0].Total)
 	}
@@ -421,25 +529,30 @@ func TestChunkInputSplitsBetweenHunks(t *testing.T) {
 	patchOne := "@@ -1,1 +1,2 @@\n a\n+one\n"
 	patchTwo := "@@ -4,1 +5,2 @@\n d\n+two\n"
 	input := diff.ReviewInput{
-		Files: []diff.FileContext{{
-			Path:             "a.go",
-			Status:           "modified",
-			Patch:            patchOne + "\n" + patchTwo,
-			CurrentContent:   "a\none\nb\nc\nd\ntwo\n",
-			CoverageComplete: true,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:             "a.go",
+				Status:           "modified",
+				Patch:            patchOne + "\n" + patchTwo,
+				CurrentContent:   "a\none\nb\nc\nd\ntwo\n",
+				CoverageComplete: true,
+			},
+		},
 	}
 
 	chunks, err := diff.ChunkInput(input, 120)
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	if len(chunks) != 2 {
 		t.Fatalf("chunk count = %d, want 2", len(chunks))
 	}
+
 	if strings.Count(chunks[0].Text, "Diff hunk:") != 1 {
 		t.Fatal("first chunk should contain one hunk")
 	}
+
 	if strings.Count(chunks[1].Text, "Diff hunk:") != 1 {
 		t.Fatal("second chunk should contain one hunk")
 	}
@@ -448,22 +561,31 @@ func TestChunkInputSplitsBetweenHunks(t *testing.T) {
 func TestEndToEndMoreThanOneHundredChangedFiles(t *testing.T) {
 	files := make([]githubapp.ChangedFile, 0, 101)
 	contents := make(map[string][]byte, 101)
+
 	for index := range 101 {
 		path := fmt.Sprintf("internal/pkg/file_%03d.go", index)
-		files = append(files, githubapp.ChangedFile{
-			Path:         path,
-			Status:       "modified",
-			Patch:        "@@ -1 +1,2 @@\n x\n+y\n",
-			PatchPresent: true,
-		})
+		files = append(
+			files,
+			githubapp.ChangedFile{
+				Path:         path,
+				Status:       "modified",
+				Patch:        "@@ -1 +1,2 @@\n x\n+y\n",
+				PatchPresent: true,
+			},
+		)
 		contents[path] = []byte("x\ny\n")
 	}
 
 	source := &fakeSource{files: files, contents: contents}
-	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), testPullRequest())
+	input, err := diff.NewCollector(source).Collect(
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+	)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}
+
 	if len(input.Files) != 101 {
 		t.Fatalf("file count = %d, want 101", len(input.Files))
 	}
@@ -472,25 +594,29 @@ func TestEndToEndMoreThanOneHundredChangedFiles(t *testing.T) {
 // A small hunk uses nearby context when its full file exceeds the prompt.
 func TestChunkInputBoundsCurrentContentAroundEachHunk(t *testing.T) {
 	const maximumBytes = 400
+
 	lines := make([]string, 200)
 	for index := range lines {
 		lines[index] = fmt.Sprintf("distant-line-%03d", index+1)
 	}
+
 	lines[99] = "unchanged"
 	lines[100] = "added"
 
 	input := diff.ReviewInput{
 		PullRequest: githubapp.PullRequest{},
-		Files: []diff.FileContext{{
-			Path:              "a.go",
-			Status:            "modified",
-			Patch:             "@@ -100,1 +100,2 @@\n unchanged\n+added\n",
-			CurrentContent:    strings.Join(lines, "\n") + "\n",
-			ChangedRightLines: nil,
-			ChangedRightHunks: nil,
-			CoverageComplete:  true,
-			Gap:               diff.CoverageGapNone,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:              "a.go",
+				Status:            "modified",
+				Patch:             "@@ -100,1 +100,2 @@\n unchanged\n+added\n",
+				CurrentContent:    strings.Join(lines, "\n") + "\n",
+				ChangedRightLines: nil,
+				ChangedRightHunks: nil,
+				CoverageComplete:  true,
+				Gap:               diff.CoverageGapNone,
+			},
+		},
 		MergeBase: "",
 	}
 
@@ -498,23 +624,34 @@ func TestChunkInputBoundsCurrentContentAroundEachHunk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	if len(chunks) != 1 || len(chunks[0].Pieces) != 1 {
-		t.Fatalf("chunks = %d, pieces = %d, want one chunk with one hunk",
-			len(chunks), len(chunks[0].Pieces))
+		t.Fatalf(
+			"chunks = %d, pieces = %d, want one chunk with one hunk",
+			len(chunks),
+			len(chunks[0].Pieces),
+		)
 	}
+
 	piece := chunks[0].Pieces[0]
 	if piece.Oversized || !piece.CoverageComplete {
-		t.Fatalf("small hunk = oversized %t, complete %t, want reviewable",
-			piece.Oversized, piece.CoverageComplete)
+		t.Fatalf(
+			"small hunk = oversized %t, complete %t, want reviewable",
+			piece.Oversized,
+			piece.CoverageComplete,
+		)
 	}
+
 	if len(piece.Text) > maximumBytes {
 		t.Fatalf("hunk bytes = %d, want at most %d", len(piece.Text), maximumBytes)
 	}
+
 	for _, expected := range []string{"distant-line-099", "unchanged", "added", "distant-line-102"} {
 		if !strings.Contains(piece.Text, expected) {
 			t.Fatalf("hunk text omits nearby line %q: %q", expected, piece.Text)
 		}
 	}
+
 	if strings.Contains(piece.Text, "distant-line-001") {
 		t.Fatalf("hunk text includes the whole file: %q", piece.Text)
 	}
@@ -525,16 +662,18 @@ func TestChunkInputRefusesMismatchedHunkCoordinates(t *testing.T) {
 	const maximumBytes = 400
 	input := diff.ReviewInput{
 		PullRequest: githubapp.PullRequest{},
-		Files: []diff.FileContext{{
-			Path:              "a.go",
-			Status:            "modified",
-			Patch:             "@@ -500,1 +500,2 @@\n absent\n+added\n",
-			CurrentContent:    strings.Repeat("current line\n", 200),
-			ChangedRightLines: nil,
-			ChangedRightHunks: nil,
-			CoverageComplete:  true,
-			Gap:               diff.CoverageGapNone,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:              "a.go",
+				Status:            "modified",
+				Patch:             "@@ -500,1 +500,2 @@\n absent\n+added\n",
+				CurrentContent:    strings.Repeat("current line\n", 200),
+				ChangedRightLines: nil,
+				ChangedRightHunks: nil,
+				CoverageComplete:  true,
+				Gap:               diff.CoverageGapNone,
+			},
+		},
 		MergeBase: "",
 	}
 
@@ -542,14 +681,22 @@ func TestChunkInputRefusesMismatchedHunkCoordinates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	if len(chunks) != 1 || len(chunks[0].Pieces) != 1 {
-		t.Fatalf("chunks = %d, pieces = %d, want one chunk with one hunk",
-			len(chunks), len(chunks[0].Pieces))
+		t.Fatalf(
+			"chunks = %d, pieces = %d, want one chunk with one hunk",
+			len(chunks),
+			len(chunks[0].Pieces),
+		)
 	}
+
 	piece := chunks[0].Pieces[0]
 	if !piece.Oversized || piece.CoverageComplete {
-		t.Fatalf("mismatched hunk = oversized %t, complete %t, want refused",
-			piece.Oversized, piece.CoverageComplete)
+		t.Fatalf(
+			"mismatched hunk = oversized %t, complete %t, want refused",
+			piece.Oversized,
+			piece.CoverageComplete,
+		)
 	}
 }
 
@@ -591,10 +738,12 @@ func (source *fakeSource) Compare(
 	if source.compareErr != nil {
 		return githubapp.Comparison{}, source.compareErr
 	}
+
 	mergeBase := base
 	if source.mergeBase != "" {
 		mergeBase = source.mergeBase
 	}
+
 	return githubapp.Comparison{MergeBase: mergeBase, Files: source.files}, nil
 }
 
@@ -606,16 +755,22 @@ func (source *fakeSource) GetFile(
 	_ domain.HeadSHA,
 ) ([]byte, error) {
 	if path == ".gitattributes" || strings.HasSuffix(path, "/.gitattributes") {
-		return nil, githubapp.APIError{StatusCode: http.StatusNotFound, Message: "The attribute file does not exist."}
+		return nil, githubapp.APIError{
+			StatusCode: http.StatusNotFound,
+			Message:    "The attribute file does not exist.",
+		}
 	}
+
 	source.getCalls++
 	if source.getErr != nil {
 		return nil, source.getErr
 	}
+
 	content, ok := source.contents[path]
 	if !ok {
 		return nil, errors.New("missing content")
 	}
+
 	return content, nil
 }
 
@@ -624,6 +779,7 @@ func testRef() domain.PullRequestRef {
 	if err != nil {
 		panic(err)
 	}
+
 	return domain.PullRequestRef{
 		Repository:     domain.Repository{Owner: "owner", Name: "repo"},
 		Number:         1,
@@ -633,40 +789,50 @@ func testRef() domain.PullRequestRef {
 }
 
 func TestChunkSplitDividesHunksAndKeepsEveryLine(t *testing.T) {
-	patch := strings.Join([]string{
-		"@@ -1,2 +1,3 @@",
-		" package main",
-		"+added1",
-		"@@ -20,2 +21,3 @@",
-		" func b() {}",
-		"+added2",
-		"@@ -40,2 +41,3 @@",
-		" func c() {}",
-		"+added3",
-	}, "\n")
+	patch := strings.Join(
+		[]string{
+			"@@ -1,2 +1,3 @@",
+			" package main",
+			"+added1",
+			"@@ -20,2 +21,3 @@",
+			" func b() {}",
+			"+added2",
+			"@@ -40,2 +41,3 @@",
+			" func c() {}",
+			"+added3",
+		},
+		"\n",
+	)
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
 	}
 
-	chunks, err := diff.ChunkInput(diff.ReviewInput{
-		PullRequest: testPullRequest(),
-		Files: []diff.FileContext{{
-			Path:              "main.go",
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    "package main\n",
-			ChangedRightLines: changed,
-			ChangedRightHunks: hunks,
-			CoverageComplete:  true,
-		}},
-	}, 1_000_000)
+	chunks, err := diff.ChunkInput(
+		diff.ReviewInput{
+			PullRequest: testPullRequest(),
+			Files: []diff.FileContext{
+				{
+					Path:              "main.go",
+					Status:            "modified",
+					Patch:             patch,
+					CurrentContent:    "package main\n",
+					ChangedRightLines: changed,
+					ChangedRightHunks: hunks,
+					CoverageComplete:  true,
+				},
+			},
+		},
+		1_000_000,
+	)
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
 	}
+
 	if len(chunks) != 1 {
 		t.Fatalf("chunk count = %d, want 1", len(chunks))
 	}
+
 	whole := chunks[0]
 	if len(whole.Pieces) != 3 {
 		t.Fatalf("pieces = %d, want one per hunk", len(whole.Pieces))
@@ -676,15 +842,22 @@ func TestChunkSplitDividesHunksAndKeepsEveryLine(t *testing.T) {
 	if !ok {
 		t.Fatal("Split() reported false for a chunk with three hunks")
 	}
+
 	if len(first.Pieces)+len(second.Pieces) != len(whole.Pieces) {
-		t.Fatalf("halves hold %d and %d pieces, want %d together",
-			len(first.Pieces), len(second.Pieces), len(whole.Pieces))
+		t.Fatalf(
+			"halves hold %d and %d pieces, want %d together",
+			len(first.Pieces),
+			len(second.Pieces),
+			len(whole.Pieces),
+		)
 	}
+
 	for _, piece := range whole.Pieces {
 		if !strings.Contains(first.Text, piece.Text) && !strings.Contains(second.Text, piece.Text) {
 			t.Fatalf("a hunk was lost by the split: %q", piece.Text)
 		}
 	}
+
 	if first.Index != whole.Index || second.Total != whole.Total {
 		t.Fatal("the halves lost the parent chunk position")
 	}
@@ -722,15 +895,22 @@ func TestChunkSplitCarriesIncompleteCoverage(t *testing.T) {
 	if !ok {
 		t.Fatal("Split() reported false for a chunk with two hunks")
 	}
+
 	if !first.CoverageComplete {
 		t.Fatal("the complete half reports incomplete coverage")
 	}
+
 	if second.CoverageComplete {
 		t.Fatal("the incomplete half reports complete coverage")
 	}
 }
 
-func (source *fakeSource) ListPullRequestCommits(context.Context, int64, domain.Repository, int) ([]githubapp.PullRequestCommit, error) {
+func (source *fakeSource) ListPullRequestCommits(
+	context.Context,
+	int64,
+	domain.Repository,
+	int,
+) ([]githubapp.PullRequestCommit, error) {
 	return nil, errors.New("the existing file fixture does not provide commit metadata")
 }
 
@@ -739,6 +919,7 @@ func testPullRequest() githubapp.PullRequest {
 	if err != nil {
 		panic(err)
 	}
+
 	return githubapp.PullRequest{
 		Number: 1,
 		Head:   head,
@@ -758,26 +939,39 @@ func containsLine(changed map[int]struct{}, line int) bool {
 // so the review never recovers on its own.
 func TestCollectorRangeReviewsEverythingWhenTheBaseIsGone(t *testing.T) {
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/a.go",
-			Status:       "modified",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
-		contents:   map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
-		compareErr: githubapp.APIError{StatusCode: http.StatusNotFound, Message: "No common ancestor"},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+				PatchPresent: true,
+			},
+		},
+		contents: map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
+		compareErr: githubapp.APIError{
+			StatusCode: http.StatusNotFound,
+			Message:    "No common ancestor",
+		},
 	}
 	collector := diff.NewCollector(source)
 
 	input, err := collector.CollectRange(
-		context.Background(), testRef(), testPullRequest(), domain.HeadSHA(testStaleHeadSHA),
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+		domain.HeadSHA(testStaleHeadSHA),
 	)
 	if err != nil {
 		t.Fatalf("CollectRange: %v, want the whole pull request reviewed instead of a failure", err)
 	}
+
 	if source.listCalls != 1 {
-		t.Fatalf("list changed files calls = %d, want 1: the run must fall back to the full list", source.listCalls)
+		t.Fatalf(
+			"list changed files calls = %d, want 1: the run must fall back to the full list",
+			source.listCalls,
+		)
 	}
+
 	if len(input.Files) != 1 {
 		t.Fatalf("file count = %d, want 1", len(input.Files))
 	}
@@ -789,25 +983,32 @@ func TestCollectorRangeReviewsEverythingWhenTheBaseIsGone(t *testing.T) {
 func TestCollectRangeUsesThePullRequestWhenReviewHistoryDiverges(t *testing.T) {
 	const divergedMergeBase = "f8a9c5fdfaf828ef157a37e2f5d4f4424963af65"
 	source := &fakeSource{
-		files: []githubapp.ChangedFile{{
-			Path:         "pkg/a.go",
-			Status:       "modified",
-			Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
-			PatchPresent: true,
-		}},
+		files: []githubapp.ChangedFile{
+			{
+				Path:         "pkg/a.go",
+				Status:       "modified",
+				Patch:        "@@ -1,1 +1,2 @@\n line\n+added\n",
+				PatchPresent: true,
+			},
+		},
 		contents:  map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
 		mergeBase: domain.HeadSHA(divergedMergeBase),
 	}
 
 	input, err := diff.NewCollector(source).CollectRange(
-		context.Background(), testRef(), testPullRequest(), domain.HeadSHA(testStaleHeadSHA),
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+		domain.HeadSHA(testStaleHeadSHA),
 	)
 	if err != nil {
 		t.Fatalf("CollectRange: %v", err)
 	}
+
 	if source.listCalls != 1 {
 		t.Fatalf("list changed files calls = %d, want 1", source.listCalls)
 	}
+
 	if input.MergeBase != "" {
 		t.Fatalf("merge base = %q, want the current pull request file list", input.MergeBase)
 	}
@@ -817,15 +1018,22 @@ func TestCollectRangeUsesThePullRequestWhenReviewHistoryDiverges(t *testing.T) {
 // rather than silently reviewing more than it was asked to.
 func TestCollectorRangeFailsWhenCompareIsMerelyBroken(t *testing.T) {
 	source := &fakeSource{
-		compareErr: githubapp.APIError{StatusCode: http.StatusInternalServerError, Message: "server error"},
+		compareErr: githubapp.APIError{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "server error",
+		},
 	}
 	collector := diff.NewCollector(source)
 
 	if _, err := collector.CollectRange(
-		context.Background(), testRef(), testPullRequest(), domain.HeadSHA(testStaleHeadSHA),
+		context.Background(),
+		testRef(),
+		testPullRequest(),
+		domain.HeadSHA(testStaleHeadSHA),
 	); err == nil {
 		t.Fatal("CollectRange returned no error, want the transient failure surfaced")
 	}
+
 	if source.listCalls != 0 {
 		t.Fatalf("list changed files calls = %d, want 0", source.listCalls)
 	}

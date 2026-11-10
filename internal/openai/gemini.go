@@ -26,22 +26,27 @@ func completeGemini(
 	report usageReporter,
 ) (string, string, error) {
 	attempts := int32(1)
-	sdk, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:     target.apiKey,
-		Backend:    genai.BackendGeminiAPI,
-		HTTPClient: target.httpClient,
-		HTTPOptions: genai.HTTPOptions{
-			BaseURL: target.baseURL.String(),
-			RetryOptions: &genai.HTTPRetryOptions{
-				Attempts: &attempts,
+	sdk, err := genai.NewClient(
+		ctx,
+		&genai.ClientConfig{
+			APIKey:     target.apiKey,
+			Backend:    genai.BackendGeminiAPI,
+			HTTPClient: target.httpClient,
+			HTTPOptions: genai.HTTPOptions{
+				BaseURL: target.baseURL.String(),
+				RetryOptions: &genai.HTTPRetryOptions{
+					Attempts: &attempts,
+				},
 			},
 		},
-	})
+	)
 	if err != nil {
 		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "Gemini client creation failed")
+
 		return "", "", fmt.Errorf("create Gemini client: %w", err)
 	}
+
 	params, err := newGeminiParams(target, policy, schema)
 	if err != nil {
 		return "", "", err
@@ -60,51 +65,51 @@ func completeGemini(
 			report(usage, "", &sdkUsage)
 		}
 	}()
+
 	contents := []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)}
-	for chunk, streamErr := range sdk.Models.GenerateContentStream(ctx, target.model, contents, params) {
+	for chunk, streamErr := range sdk.Models.GenerateContentStream(
+		ctx,
+		target.model,
+		contents,
+		params,
+	) {
 		if streamErr != nil {
 			return "", "", geminiProviderError(streamErr)
 		}
+
 		if chunk.ModelVersion != "" {
 			model = chunk.ModelVersion
 		}
+
 		sdkUsage.ResponseID = cmp.Or(chunk.ResponseID, sdkUsage.ResponseID)
 		if chunk.UsageMetadata != nil {
 			usageJSON, err := json.Marshal(chunk.UsageMetadata)
 			if err != nil {
 				return "", "", fmt.Errorf("encode Gemini SDK usage: %w", err)
 			}
+
 			usage = responseUsageFromGemini(chunk.UsageMetadata)
 			hasUsage = true
 			sdkUsage.UsageJSON = string(usageJSON)
 		}
+
 		for _, candidate := range chunk.Candidates {
 			if candidate.FinishReason != "" {
 				finishReason = candidate.FinishReason
 			}
+
 			appendGeminiContent(&content, candidate.Content)
 		}
 	}
-	if finishReason == genai.FinishReasonMaxTokens {
-		return "", "", &TruncatedError{Model: target.model}
-	}
-	if finishReason != genai.FinishReasonStop {
-		return "", "", fmt.Errorf("gemini completion ended without a successful finish reason: %s", finishReason)
-	}
-	result := strings.TrimSpace(content.String())
-	if result == "" {
-		return "", "", errors.New("gemini completion missing message content")
-	}
-	if model == "" {
-		return result, target.model, nil
-	}
-	return result, model, nil
+
+	return geminiCompletion(target, &content, model, finishReason)
 }
 
 func appendGeminiContent(builder *strings.Builder, content *genai.Content) {
 	if content == nil {
 		return
 	}
+
 	for _, part := range content.Parts {
 		if !part.Thought {
 			builder.WriteString(part.Text)
@@ -112,11 +117,16 @@ func appendGeminiContent(builder *strings.Builder, content *genai.Content) {
 	}
 }
 
-func newGeminiParams(target provider, policy string, schema json.RawMessage) (*genai.GenerateContentConfig, error) {
+func newGeminiParams(
+	target provider,
+	policy string,
+	schema json.RawMessage,
+) (*genai.GenerateContentConfig, error) {
 	level, err := geminiThinkingLevel(target.reasoningEffort)
 	if err != nil {
 		return nil, err
 	}
+
 	params := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(policy, genai.RoleUser),
 		ThinkingConfig:    &genai.ThinkingConfig{ThinkingLevel: level},
@@ -126,12 +136,15 @@ func newGeminiParams(target provider, policy string, schema json.RawMessage) (*g
 		if limit == 0 {
 			limit = config.MaximumOutputTokens
 		}
+
 		params.MaxOutputTokens = int32(limit)
 	}
+
 	if !target.omitTextFormat {
 		params.ResponseMIMEType = "application/json"
 		params.ResponseJsonSchema = schema
 	}
+
 	return params, nil
 }
 
@@ -147,7 +160,11 @@ func geminiThinkingLevel(effort config.ReasoningEffort) (genai.ThinkingLevel, er
 		return genai.ThinkingLevelHigh, nil
 	case config.ReasoningNone, config.ReasoningXHigh:
 	}
-	return genai.ThinkingLevelUnspecified, fmt.Errorf("unsupported Gemini reasoning effort: %s", effort)
+
+	return genai.ThinkingLevelUnspecified, fmt.Errorf(
+		"unsupported Gemini reasoning effort: %s",
+		effort,
+	)
 }
 
 func geminiProviderError(err error) error {
@@ -161,10 +178,13 @@ func geminiProviderError(err error) error {
 			Message:    apiError.Message,
 		}
 	}
+
 	return err
 }
 
-func responseUsageFromGemini(usage *genai.GenerateContentResponseUsageMetadata) responses.ResponseUsage {
+func responseUsageFromGemini(
+	usage *genai.GenerateContentResponseUsageMetadata,
+) responses.ResponseUsage {
 	return responses.ResponseUsage{
 		InputTokens:  int64(usage.PromptTokenCount),
 		OutputTokens: int64(usage.CandidatesTokenCount) + int64(usage.ThoughtsTokenCount),

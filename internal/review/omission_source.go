@@ -8,6 +8,7 @@ func unreadPiece(piece diff.Piece, reason string) unreadHunk {
 		target := piece.Metadata.Target()
 		hunk.Target = &target
 	}
+
 	return hunk
 }
 
@@ -15,8 +16,14 @@ func (hunk unreadHunk) sourceLabel() string {
 	if hunk.Target == nil {
 		return hunk.Path
 	}
+
 	source := diff.MetadataSource{
-		Surface: hunk.Target.Surface, CommitSHA: hunk.Target.CommitSHA, Text: "", StartLine: 0, EndLine: 0,
+		Surface:   hunk.Target.Surface,
+		CommitSHA: hunk.Target.CommitSHA,
+		Text:      "",
+		StartLine: 0,
+		EndLine:   0,
 	}
+
 	return source.Label()
 }

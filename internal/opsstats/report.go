@@ -152,21 +152,25 @@ func (report *Report) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode statistics report: %w", err)
 	}
+
 	return data, nil
 }
 
 func botAuthor(author *Actor, login string) bool {
-	return author != nil && strings.TrimSuffix(author.Login, "[bot]") == strings.TrimSuffix(login, "[bot]")
+	return author != nil &&
+		strings.TrimSuffix(author.Login, "[bot]") == strings.TrimSuffix(login, "[bot]")
 }
 
 // LogTargets supplements GitHub search with pull requests present in retained telemetry.
 func LogTargets(metrics cloudflareops.Metrics) []Target {
 	var targets []Target
+
 	for _, run := range metrics.Runs {
 		if run.PullRequest > 0 && strings.Count(run.Repository, "/") == 1 {
 			targets = append(targets, Target{Repository: run.Repository, Number: run.PullRequest})
 		}
 	}
+
 	return targets
 }
 
@@ -175,19 +179,30 @@ func proof(run cloudflareops.Run, event cloudflareops.LifecycleEvent) Proof {
 	if head == "" {
 		head = run.Head
 	}
+
 	return Proof{RunID: run.ID, Timestamp: event.Timestamp, Message: event.Message, Head: head}
 }
 
 func missingReassessment(status string) bool {
-	return strings.HasPrefix(status, "later_admitted_") && strings.HasSuffix(status, "_without_recorded_reassessment")
+	return strings.HasPrefix(status, "later_admitted_") &&
+		strings.HasSuffix(status, "_without_recorded_reassessment")
 }
 
 func unavailableTerminal(status string) bool {
-	return status == "later_admitted_trigger_without_terminal_evidence" || status == "current_head_review_in_progress"
+	return status == "later_admitted_trigger_without_terminal_evidence" ||
+		status == "current_head_review_in_progress"
 }
 
 // Build uses explicit admissions and returned decisions; summary updates cannot prove a revisit.
-func Build(metrics cloudflareops.Metrics, prs []PullRequest, owner, bot string, exclusions []string, minimumImportance int, capturedAt time.Time) Report {
+func Build(
+	metrics cloudflareops.Metrics,
+	prs []PullRequest,
+	owner string,
+	bot string,
+	exclusions []string,
+	minimumImportance int,
+	capturedAt time.Time,
+) Report {
 	var report Report
 	report.CapturedAt, report.Owner, report.BotLogin = capturedAt, owner, bot
 	report.Excluded, report.Metrics, report.GitHub = exclusions, metrics, prs
@@ -195,9 +210,11 @@ func Build(metrics cloudflareops.Metrics, prs []PullRequest, owner, bot string, 
 	report.Limitations = reportLimitations()
 	report.Totals.CapturedPullRequests = len(prs)
 	report.recordLifecycleBounds()
+
 	for _, pr := range prs {
 		report.recordPullRequest(pr, minimumImportance)
 	}
+
 	return report
 }
 
@@ -218,9 +235,11 @@ func (report *Report) recordLifecycleBounds() {
 	for _, run := range report.Metrics.Runs {
 		for _, event := range run.Lifecycle {
 			timestamp := event.Timestamp
-			if report.ObservedLifecycleFrom == nil || timestamp.Before(*report.ObservedLifecycleFrom) {
+			if report.ObservedLifecycleFrom == nil ||
+				timestamp.Before(*report.ObservedLifecycleFrom) {
 				report.ObservedLifecycleFrom = &timestamp
 			}
+
 			if report.ObservedLifecycleTo == nil || timestamp.After(*report.ObservedLifecycleTo) {
 				report.ObservedLifecycleTo = &timestamp
 			}
@@ -237,15 +256,19 @@ func (report *Report) recordPullRequest(pr PullRequest, minimumImportance int) {
 	if summary.Excluded {
 		report.Totals.ExcludedPullRequests++
 		report.PullRequests = append(report.PullRequests, summary)
+
 		return
 	}
+
 	runs := report.runsFor(summary.Target)
 	if pr.State == "OPEN" {
 		report.Totals.OpenPullRequests++
 	}
+
 	if pr.State == "OPEN" && pr.IsDraft {
 		report.Totals.DraftPullRequests++
 	}
+
 	report.recordStandingReviews(pr, &summary, runs)
 	report.recordHistoricalReviews(pr, summary, runs)
 	report.recordThreads(pr, &summary, runs, minimumImportance)
@@ -254,11 +277,13 @@ func (report *Report) recordPullRequest(pr PullRequest, minimumImportance int) {
 
 func (report *Report) runsFor(target Target) []cloudflareops.Run {
 	var runs []cloudflareops.Run
+
 	for _, run := range report.Metrics.Runs {
 		if run.Repository == target.Repository && run.PullRequest == target.Number {
 			runs = append(runs, run)
 		}
 	}
+
 	return runs
 }
 
@@ -267,11 +292,13 @@ func botChecks(pr PullRequest, bot string) []Check {
 	if pr.StatusCheckRollup == nil {
 		return checks
 	}
+
 	for _, check := range pr.StatusCheckRollup.Contexts.Nodes {
 		if check.CheckSuite.App.Slug == strings.TrimSuffix(bot, "[bot]") {
 			checks = append(checks, check)
 		}
 	}
+
 	return checks
 }
 
@@ -282,14 +309,20 @@ func newReviewRevisit(pr PullRequest, review Review, target Target) Revisit {
 	item.CurrentReviewState = review.State
 	item.PullRequestState, item.Draft = pr.State, pr.IsDraft
 	item.OldHead = review.Commit.OID != pr.HeadRefOID
+
 	return item
 }
 
-func (report *Report) recordStandingReviews(pr PullRequest, summary *PullRequestSummary, runs []cloudflareops.Run) {
+func (report *Report) recordStandingReviews(
+	pr PullRequest,
+	summary *PullRequestSummary,
+	runs []cloudflareops.Run,
+) {
 	for _, review := range pr.LatestOpinionatedReviews.Nodes {
 		if review.State != "CHANGES_REQUESTED" || !botAuthor(review.Author, report.BotLogin) {
 			continue
 		}
+
 		item := newReviewRevisit(pr, review, summary.Target)
 		item.StandingReview = true
 		correlate(&item, runs, pr.HeadRefOID, summary.BotChecks, report.Metrics.Manifest.To)
@@ -297,27 +330,37 @@ func (report *Report) recordStandingReviews(pr PullRequest, summary *PullRequest
 		if item.OldHead {
 			summary.OldHeadBotRejections++
 		}
+
 		report.Revisits = append(report.Revisits, item)
 		report.recordCurrentItem(item)
 	}
 }
 
 func isStanding(pr PullRequest, id int64) bool {
-	return slices.ContainsFunc(pr.LatestOpinionatedReviews.Nodes, func(review Review) bool { return review.DatabaseID == id })
+	return slices.ContainsFunc(
+		pr.LatestOpinionatedReviews.Nodes,
+		func(review Review) bool { return review.DatabaseID == id },
+	)
 }
 
-func (report *Report) recordHistoricalReviews(pr PullRequest, summary PullRequestSummary, runs []cloudflareops.Run) {
+func (report *Report) recordHistoricalReviews(
+	pr PullRequest,
+	summary PullRequestSummary,
+	runs []cloudflareops.Run,
+) {
 	candidates := historicalCandidates(pr, runs, report.BotLogin)
 	for _, review := range pr.Reviews.Nodes {
 		if !candidates[review.DatabaseID] || isStanding(pr, review.DatabaseID) {
 			continue
 		}
+
 		item := newReviewRevisit(pr, review, summary.Target)
 		item.PullRequestState, item.Draft = "OPEN", false
 		correlate(&item, runs, pr.HeadRefOID, summary.BotChecks, report.Metrics.Manifest.To)
 		if len(item.Triggers) == 0 {
 			continue
 		}
+
 		item.WindowRevisitStatus = item.Status
 		item.PullRequestState, item.Draft = pr.State, pr.IsDraft
 		item.HistoricalStanding = "unknown_dismissal_timing"
@@ -328,56 +371,73 @@ func (report *Report) recordHistoricalReviews(pr PullRequest, summary PullReques
 		} else {
 			report.Totals.HistoricalReviewsWithUnknownState++
 		}
+
 		report.Revisits = append(report.Revisits, item)
 	}
 }
 
 func latestOpinionBefore(reviews []Review, bot string, timestamp time.Time) *Review {
 	var latest *Review
+
 	for index := range reviews {
 		review := &reviews[index]
 		if !botAuthor(review.Author, bot) || review.SubmittedAt.After(timestamp) {
 			continue
 		}
+
 		if review.State == "COMMENTED" || review.State == "PENDING" {
 			continue
 		}
+
 		if latest == nil || review.SubmittedAt.After(latest.SubmittedAt) {
 			latest = review
 		}
 	}
+
 	return latest
 }
 
 func historicalCandidates(pr PullRequest, runs []cloudflareops.Run, bot string) map[int64]bool {
 	candidates := make(map[int64]bool)
+
 	for _, run := range runs {
 		for _, event := range run.Lifecycle {
 			if event.Message != "webhook delivery accepted" {
 				continue
 			}
+
 			latest := latestOpinionBefore(pr.Reviews.Nodes, bot, event.Timestamp)
 			if latest == nil {
 				continue
 			}
+
 			if latest.State == "CHANGES_REQUESTED" || latest.State == "DISMISSED" {
 				candidates[latest.DatabaseID] = true
 			}
 		}
 	}
+
 	return candidates
 }
 
-func (report *Report) recordThreads(pr PullRequest, summary *PullRequestSummary, runs []cloudflareops.Run, minimumImportance int) {
+func (report *Report) recordThreads(
+	pr PullRequest,
+	summary *PullRequestSummary,
+	runs []cloudflareops.Run,
+	minimumImportance int,
+) {
 	for _, thread := range pr.ReviewThreads.Nodes {
-		if len(thread.Comments.Nodes) == 0 || !botAuthor(thread.Comments.Nodes[0].Author, report.BotLogin) {
+		if len(thread.Comments.Nodes) == 0 ||
+			!botAuthor(thread.Comments.Nodes[0].Author, report.BotLogin) {
 			continue
 		}
+
 		item := newThreadRevisit(pr, thread, summary.Target, minimumImportance)
 		correlate(&item, runs, pr.HeadRefOID, summary.BotChecks, report.Metrics.Manifest.To)
 		if !thread.IsResolved {
 			summary.UnresolvedBotThreads++
 		}
+
 		report.Revisits = append(report.Revisits, item)
 		report.recordCurrentItem(item)
 	}
@@ -387,23 +447,29 @@ func (report *Report) recordCurrentItem(item Revisit) {
 	if item.Resolved {
 		return
 	}
+
 	if item.PullRequestState != "OPEN" {
 		if item.Kind == "thread" {
 			report.Totals.HistoricalUnresolvedThreads++
 		}
+
 		return
 	}
+
 	if item.Kind == "review" {
 		report.Totals.OpenBotRejections++
 	} else {
 		report.Totals.OpenUnresolvedBotThreads++
 	}
+
 	if item.Kind == "review" && item.OldHead {
 		report.Totals.OpenOldHeadRejections++
 	}
+
 	if item.Kind == "thread" && item.Status == "reassessed_unresolved" {
 		report.Totals.OpenThreadsReassessedUnresolved++
 	}
+
 	report.recordMissingItem(item)
 }
 
@@ -411,12 +477,15 @@ func (report *Report) recordMissingItem(item Revisit) {
 	if item.PullRequestState != "OPEN" || item.Resolved || item.Draft {
 		return
 	}
+
 	if unavailableTerminal(item.Status) {
 		report.Totals.OpenItemsWithoutTerminalEvidence++
 	}
+
 	if !missingReassessment(item.Status) {
 		return
 	}
+
 	if item.Kind == "review" {
 		report.Totals.OpenReviewsWithoutRecordedReassessment++
 	} else {

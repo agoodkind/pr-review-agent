@@ -33,6 +33,7 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 	t.Helper()
 	directory := t.TempDir()
 	relationshipGitCommand(t, directory, "init", "--quiet")
+
 	sources := map[string]string{
 		"network.tf":     "script = \"activate_bridge\"\n",
 		"new_ref.go":     "package fixture\nconst NewReference = \"activate_bridge\"\n",
@@ -44,43 +45,84 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 		".gitattributes": "attributed.tf linguist-generated=true\n",
 	}
 	for filePath, content := range sources {
-		if err := os.WriteFile(filepath.Join(directory, filePath), []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(
+			filepath.Join(directory, filePath),
+			[]byte(content),
+			0o600,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
+
 	relationshipGitCommand(t, directory, "add", "--all")
-	relationshipGitCommand(t, directory, "-c", "user.name=Integration Test", "-c", "user.email=integration@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--quiet", "-m", "Create inspection sources\n\nCo-authored-by: Codex <noreply@openai.com>")
+	relationshipGitCommand(
+		t,
+		directory,
+		"-c",
+		"user.name=Integration Test",
+		"-c",
+		"user.email=integration@example.invalid",
+		"-c",
+		"commit.gpgsign=false",
+		"-c",
+		"core.hooksPath=/dev/null",
+		"commit",
+		"--quiet",
+		"-m",
+		"Create inspection sources\n\nCo-authored-by: Codex <noreply@openai.com>",
+	)
 	head := strings.TrimSpace(relationshipGitCommand(t, directory, "rev-parse", "HEAD"))
 
 	gitHandler := testgit.Handler(t, directory)
-	if err := os.WriteFile(filepath.Join(directory, "activate.sh"), []byte("uncommitted source must not appear\n"), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(directory, "activate.sh"),
+		[]byte("uncommitted source must not appear\n"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
-	fixture := new(inspectionGitFixture)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		switch {
-		case request.URL.Path == "/app/installations/99/access_tokens":
-			serviceWriteJSON(writer, http.StatusCreated, map[string]string{"token": "inspection-test-token", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339)})
-		case strings.Contains(request.URL.Path, ".git/"):
-			if request.Method == http.MethodPost {
-				fixture.mu.Lock()
-				fixture.revisions = append(fixture.revisions, head)
-				fixture.mu.Unlock()
-			}
 
-			gitHandler.ServeHTTP(writer, request)
-		case strings.Contains(request.URL.Path, "/contents/") || request.URL.Path == "/search/code":
-			t.Errorf("Repository inspection attempted a per-file or indexed API request: %s", request.URL.Path)
-			http.Error(writer, "per-file and indexed reads are forbidden", http.StatusForbidden)
-		default:
-			http.Error(writer, "unexpected inspection request", http.StatusNotFound)
-		}
-	}))
+	fixture := new(inspectionGitFixture)
+	server := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			switch {
+			case request.URL.Path == "/app/installations/99/access_tokens":
+				serviceWriteJSON(
+					writer,
+					http.StatusCreated,
+					map[string]string{
+						"token":      "inspection-test-token",
+						"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+					},
+				)
+			case strings.Contains(request.URL.Path, ".git/"):
+				if request.Method == http.MethodPost {
+					fixture.mu.Lock()
+					fixture.revisions = append(fixture.revisions, head)
+					fixture.mu.Unlock()
+				}
+
+				gitHandler.ServeHTTP(writer, request)
+			case strings.Contains(
+				request.URL.Path,
+				"/contents/",
+			) || request.URL.Path == "/search/code":
+				t.Errorf(
+					"Repository inspection attempted a per-file or indexed API request: %s",
+					request.URL.Path,
+				)
+				http.Error(writer, "per-file and indexed reads are forbidden", http.StatusForbidden)
+			default:
+				http.Error(writer, "unexpected inspection request", http.StatusNotFound)
+			}
+		}),
+	)
 	t.Cleanup(server.Close)
 	address, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	examplePrivateKey := serviceTestPrivateKey(t)
 
 	var githubConfig config.Config
@@ -88,58 +130,147 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 	githubConfig.GitHubAppID = testGitHubAppID
 	githubConfig.GitHubPrivateKey = examplePrivateKey
 	githubConfig.GitHubAPIBaseURL = address
-	fixture.source = githubapp.NewClient(githubConfig,
-		testgit.Client(t,
-			server),
+	fixture.source = githubapp.NewClient(
+		githubConfig,
+		testgit.Client(t, server),
 		time.Now,
-		slog.New(slog.DiscardHandler))
+		slog.New(slog.DiscardHandler),
+	)
 	t.Cleanup(func() { _ = fixture.source.Close() })
-	fixture.ref = domain.PullRequestRef{Repository: domain.Repository{Owner: "owner", Name: "repo"}, Number: 982, InstallationID: 99, Head: domain.HeadSHA(head)}
-	fixture.files = []diff.FileContext{{Path: "network.tf", CurrentContent: sources["network.tf"], Status: "modified", CoverageComplete: true}, {Path: "new_ref.go", CurrentContent: sources["new_ref.go"], Status: "added", CoverageComplete: true}}
+	fixture.ref = domain.PullRequestRef{
+		Repository:     domain.Repository{Owner: "owner", Name: "repo"},
+		Number:         982,
+		InstallationID: 99,
+		Head:           domain.HeadSHA(head),
+	}
+	fixture.files = []diff.FileContext{
+		{
+			Path:             "network.tf",
+			CurrentContent:   sources["network.tf"],
+			Status:           "modified",
+			CoverageComplete: true,
+		},
+		{
+			Path:             "new_ref.go",
+			CurrentContent:   sources["new_ref.go"],
+			Status:           "added",
+			CoverageComplete: true,
+		},
+	}
+
 	return fixture
 }
 
 func TestInspectorVerifiesRepositoryEvidenceAtTheReviewedGitHead(t *testing.T) {
 	fixture := newInspectionGitFixture(t)
-	ctx, closeSnapshot, err := fixture.source.OpenRepositorySnapshot(t.Context(), fixture.ref.InstallationID, fixture.ref.Repository, fixture.ref.Head)
+	ctx, closeSnapshot, err := fixture.source.OpenRepositorySnapshot(
+		t.Context(),
+		fixture.ref.InstallationID,
+		fixture.ref.Repository,
+		fixture.ref.Head,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	t.Cleanup(func() {
 		if err := closeSnapshot(); err != nil {
 			t.Error(err)
 		}
 	})
 	head := string(fixture.ref.Head)
-	inspector, err := review.NewInspector(fixture.source, fixture.ref, fixture.files, policytest.Load(t), 8192, 6)
+	inspector, err := review.NewInspector(
+		fixture.source,
+		fixture.ref,
+		fixture.files,
+		policytest.Load(t),
+		8192,
+		6,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := inspector.Inspect(ctx, review.InspectionRequest{Operation: "read_file", Target: "activate.sh", StartLine: 2, EndLine: 3, Reason: "Check the activation order."})
-	if err != nil || !strings.Contains(result, "Head: "+head) || !strings.Contains(result, "2: activate_bridge") || !strings.Contains(result, "Lines: 2-3 of 3") || strings.Contains(result, "uncommitted source") {
-		t.Fatalf("The source inspection did not retain pinned lines and provenance: %s, %v", result, err)
+
+	result, err := inspector.Inspect(
+		ctx,
+		review.InspectionRequest{
+			Operation: "read_file",
+			Target:    "activate.sh",
+			StartLine: 2,
+			EndLine:   3,
+			Reason:    "Check the activation order.",
+		},
+	)
+	if err != nil || !strings.Contains(result, "Head: "+head) ||
+		!strings.Contains(result, "2: activate_bridge") ||
+		!strings.Contains(result, "Lines: 2-3 of 3") ||
+		strings.Contains(result, "uncommitted source") {
+		t.Fatalf(
+			"The source inspection did not retain pinned lines and provenance: %s, %v",
+			result,
+			err,
+		)
 	}
-	result, err = inspector.Inspect(ctx, review.InspectionRequest{Operation: "search_repository", Query: "activate_bridge", Reason: "Find callers of the renamed activation operation."})
-	if err != nil || !strings.Contains(result, "new_ref.go") || !strings.Contains(result, "activate.sh") || strings.Contains(result, "Verified repository match: stale.go") || !strings.Contains(result, "private snapshot at the reviewed head") {
-		t.Fatalf("Repository discovery supplied unverified or incomplete evidence: %s, %v", result, err)
+
+	result, err = inspector.Inspect(
+		ctx,
+		review.InspectionRequest{
+			Operation: "search_repository",
+			Query:     "activate_bridge",
+			Reason:    "Find callers of the renamed activation operation.",
+		},
+	)
+	if err != nil || !strings.Contains(result, "new_ref.go") ||
+		!strings.Contains(result, "activate.sh") ||
+		strings.Contains(result, "Verified repository match: stale.go") ||
+		!strings.Contains(result, "private snapshot at the reviewed head") {
+		t.Fatalf(
+			"Repository discovery supplied unverified or incomplete evidence: %s, %v",
+			result,
+			err,
+		)
 	}
+
 	for _, excluded := range []string{"generated.go", "attributed.tf", "binary.bin"} {
-		if result, err := inspector.Inspect(ctx, review.InspectionRequest{Operation: "read_file", Target: excluded, Reason: "Inspect the supplied dependency."}); err == nil || result != "" {
+		if result, err := inspector.Inspect(
+			ctx,
+			review.InspectionRequest{
+				Operation: "read_file",
+				Target:    excluded,
+				Reason:    "Inspect the supplied dependency.",
+			},
+		); err == nil ||
+			result != "" {
 			t.Fatalf("Inspection bypassed the content policy for %s.", excluded)
 		}
 	}
-	if result, err := inspector.Inspect(ctx, review.InspectionRequest{Operation: "read_file", Target: "missing.go", Reason: "Check a required source reference."}); err == nil || result != "" {
+
+	if result, err := inspector.Inspect(
+		ctx,
+		review.InspectionRequest{
+			Operation: "read_file",
+			Target:    "missing.go",
+			Reason:    "Check a required source reference.",
+		},
+	); err == nil ||
+		result != "" {
 		t.Fatal("Required missing evidence did not fail explicitly.")
 	}
+
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	if len(fixture.revisions) != 1 {
-		t.Fatalf("Collection and inspection must reuse one Git transfer, got %d downloads.", len(fixture.revisions))
+		t.Fatalf(
+			"Collection and inspection must reuse one Git transfer, got %d downloads.",
+			len(fixture.revisions),
+		)
 	}
+
 	for _, revision := range fixture.revisions {
 		if revision != head {
 			t.Fatalf("A repository read did not use the immutable reviewed head: %s", revision)
 		}
 	}
+
 	t.Logf("Verified %d repository reads at pinned head %s.", len(fixture.revisions), head)
 }

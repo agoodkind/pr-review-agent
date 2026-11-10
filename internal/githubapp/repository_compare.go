@@ -89,7 +89,12 @@ func (client *Client) compareRepositoryCommits(
 		return Comparison{}, err
 	}
 
-	changes, err := object.DiffTreeWithOptions(ctx, baseTree, headTree, object.DefaultDiffTreeOptions)
+	changes, err := object.DiffTreeWithOptions(
+		ctx,
+		baseTree,
+		headTree,
+		object.DefaultDiffTreeOptions,
+	)
 	if err != nil {
 		return Comparison{}, repositoryAccessError("compareRepositoryCommits", err)
 	}
@@ -157,7 +162,15 @@ func (client *Client) repositoryMergeBase(
 		queue = queue[1:]
 		state := states[hash]
 
-		commit, nextDepth, loadErr := client.loadAncestryCommit(ctx, key, entry, hash, queue, states, depth)
+		commit, nextDepth, loadErr := client.loadAncestryCommit(
+			ctx,
+			key,
+			entry,
+			hash,
+			queue,
+			states,
+			depth,
+		)
 		if loadErr != nil {
 			return nil, loadErr
 		}
@@ -200,7 +213,10 @@ func (client *Client) repositoryMergeBase(
 	}
 
 	if len(candidates) == 0 {
-		return nil, newAPIError(http.StatusUnprocessableEntity, "Git revisions do not share an ancestor")
+		return nil, newAPIError(
+			http.StatusUnprocessableEntity,
+			"Git revisions do not share an ancestor",
+		)
 	}
 
 	if len(candidates) == 1 {
@@ -214,8 +230,14 @@ func localChangedFile(change *object.Change) (ChangedFile, error) {
 	var err error
 
 	file := ChangedFile{
-		Path: change.To.Name, Status: "modified", PatchPresent: true, ChangeCountsKnown: true,
-		PreviousPath: "", Patch: "", Additions: 0, Deletions: 0,
+		Path:              change.To.Name,
+		Status:            "modified",
+		PatchPresent:      true,
+		ChangeCountsKnown: true,
+		PreviousPath:      "",
+		Patch:             "",
+		Additions:         0,
+		Deletions:         0,
 	}
 	switch {
 	case change.From.Name == "":
@@ -264,8 +286,11 @@ func localChangedFile(change *object.Change) (ChangedFile, error) {
 	}
 
 	patch, err := udiff.ToUnified(
-		repositoryPatchBaseLabel, repositoryPatchHeadLabel,
-		previous, udiff.Lines(previous, current), udiff.DefaultContextLines,
+		repositoryPatchBaseLabel,
+		repositoryPatchHeadLabel,
+		previous,
+		udiff.Lines(previous, current),
+		udiff.DefaultContextLines,
 	)
 	if err != nil {
 		return ChangedFile{}, repositoryAccessError("localChangedFile", err)
@@ -345,6 +370,7 @@ func missingRepositoryAncestors(
 	missing := []plumbing.Hash{hash}
 
 	seen := map[plumbing.Hash]bool{hash: true}
+
 	for _, pending := range queue {
 		if seen[pending] || states[pending].stale {
 			continue

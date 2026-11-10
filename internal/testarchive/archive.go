@@ -12,7 +12,13 @@ import (
 	"strings"
 )
 
-// Write creates a compressed tar archive with sorted fixture entries.
+// Write creates a compressed tar archive of fixture entries.
+//
+// The function sorts entry names and returns archive or compression errors.
+//
+// For example:
+//
+//	err := Write(writer, "repository", contents)
 func Write(writer io.Writer, root string, contents map[string]string) (writeErr error) {
 	defer func() {
 		if writeErr != nil {
@@ -39,11 +45,14 @@ func Write(writer io.Writer, root string, contents map[string]string) (writeErr 
 	if err := archive.WriteHeader(&rootHeader); err != nil {
 		return fmt.Errorf("write fixture archive root: %w", err)
 	}
+
 	names := make([]string, 0, len(contents))
 	for name := range contents {
 		names = append(names, name)
 	}
+
 	slices.Sort(names)
+
 	for _, name := range names {
 		content := contents[name]
 		var header tar.Header
@@ -56,12 +65,15 @@ func Write(writer io.Writer, root string, contents map[string]string) (writeErr 
 			header.Size = 0
 			header.Typeflag = tar.TypeDir
 		}
+
 		if err := archive.WriteHeader(&header); err != nil {
 			return fmt.Errorf("write fixture archive entry %q: %w", name, err)
 		}
+
 		if _, err := io.WriteString(archive, content); err != nil {
 			return fmt.Errorf("write fixture archive entry data %q: %w", name, err)
 		}
 	}
+
 	return nil
 }

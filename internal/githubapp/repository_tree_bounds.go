@@ -16,6 +16,7 @@ type repositoryTreeUsage struct {
 
 func boundRepositoryTrees(ctx context.Context, trees ...*object.Tree) error {
 	known := make(map[plumbing.Hash]repositoryTreeUsage)
+
 	for _, tree := range trees {
 		_, err := countRepositoryTree(ctx, tree, 0, known)
 		if err != nil {

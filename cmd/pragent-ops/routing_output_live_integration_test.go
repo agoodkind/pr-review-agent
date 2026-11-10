@@ -45,7 +45,9 @@ func TestLiveRoutingOutputInterruptionPreservesSavedExplanation(t *testing.T) {
 	if endpoint := os.Getenv("PR_AGENT_LIVE_BASE_URL"); endpoint != "" {
 		parsed, err := url.Parse(endpoint)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-			t.Fatal("The optional live relay requires a valid HTTPS base URL without credentials, a query, or a fragment.")
+			t.Fatal(
+				"The optional live relay requires a valid HTTPS base URL without credentials, a query, or a fragment.",
+			)
 		}
 		provider.BaseURL = parsed
 	}
@@ -58,7 +60,10 @@ func TestLiveRoutingOutputInterruptionPreservesSavedExplanation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	preflight := gklog.WithLogger(ctx, slog.New(slog.NewJSONHandler(io.Discard, nil)))
-	_, preflightErr := openai.NewClient(cfg, http.DefaultClient).Review(preflight, liveFailoverPrompt(t, cfg))
+	_, preflightErr := openai.NewClient(cfg, http.DefaultClient).Review(
+		preflight,
+		liveFailoverPrompt(t, cfg),
+	)
 	var truncated *openai.TruncatedError
 	if !errors.As(preflightErr, &truncated) {
 		t.Fatal("The actual provider did not establish token interruption before GitHub mutation.")
@@ -85,8 +90,14 @@ func TestLiveRoutingOutputInterruptionPreservesSavedExplanation(t *testing.T) {
 		t.Fatal("The explicit fixture repository is invalid.")
 	}
 	before := liveReviewBodyCapture(t, ctx, client, opts, repository)
-	if before.PullRequest.State != "closed" || !before.PullRequest.Draft || !liveReviewBodyFixture(t, opts, before.PullRequest.Title) || githubapp.LatestDecisionReview(before.Reviews, cfg.GitHubBotLogin).State != "APPROVED" {
-		t.Fatal("The dedicated fixture requires a closed draft pull request and an existing bot approval.")
+	if before.PullRequest.State != "closed" || !before.PullRequest.Draft || !liveReviewBodyFixture(
+		t,
+		opts,
+		before.PullRequest.Title,
+	) || githubapp.LatestDecisionReview(before.Reviews, cfg.GitHubBotLogin).State != "APPROVED" {
+		t.Fatal(
+			"The dedicated fixture requires a closed draft pull request and an existing bot approval.",
+		)
 	}
 	var original githubapp.IssueComment
 	for _, comment := range before.Comments {
@@ -98,7 +109,10 @@ func TestLiveRoutingOutputInterruptionPreservesSavedExplanation(t *testing.T) {
 		}
 	}
 	state, valid := marker.DecodeState(original.Body)
-	if original.ID == 0 || !valid || !strings.Contains(original.Body, "<!-- pr-review-agent:metadata:v1 ") {
+	if original.ID == 0 || !valid || !strings.Contains(
+		original.Body,
+		"<!-- pr-review-agent:metadata:v1 ",
+	) {
 		t.Fatal("The existing summary requires valid saved state and review metadata.")
 	}
 	if err := writeReviewBodyBackup(filepath.Join(directory, "before.json"), before); err != nil {
@@ -107,7 +121,13 @@ func TestLiveRoutingOutputInterruptionPreservesSavedExplanation(t *testing.T) {
 	t.Cleanup(func() {
 		recovery, stop := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer stop()
-		if _, err := client.UpdateIssueComment(recovery, opts.installationID, repository, original.ID, original.Body); err != nil {
+		if _, err := client.UpdateIssueComment(
+			recovery,
+			opts.installationID,
+			repository,
+			original.ID,
+			original.Body,
+		); err != nil {
 			t.Error("The original fixture summary could not be restored.")
 		}
 		after := liveReviewBodyCapture(t, recovery, client, opts, repository)
@@ -127,39 +147,64 @@ func TestLiveRoutingOutputInterruptionPreservesSavedExplanation(t *testing.T) {
 	state.Completed = nil
 	record, findings, originalMetadata := liveRoutingMetadata(t, original.Body)
 	var previousExplanation string
-	if json.Unmarshal(findings[0]["body"], &previousExplanation) != nil || previousExplanation == "" || !strings.Contains(original.Body, previousExplanation) {
+	if json.Unmarshal(
+		findings[0]["body"],
+		&previousExplanation,
+	) != nil || previousExplanation == "" || !strings.Contains(original.Body, previousExplanation) {
 		t.Fatal("The saved metadata finding requires its corresponding visible explanation.")
 	}
 	var ruleID reviewrules.ID
 	if json.Unmarshal(findings[0]["rule_id"], &ruleID) != nil {
 		t.Fatal("The saved metadata finding requires a rule identifier.")
 	}
-	if _, err := cfg.ReviewPolicy.Catalog().FindingImportance(ruleID, 10, cfg.RuleImportance); err != nil {
+	if _, err := cfg.ReviewPolicy.Catalog().FindingImportance(
+		ruleID,
+		10,
+		cfg.RuleImportance,
+	); err != nil {
 		t.Fatal("The current catalog must support the saved finding rule.")
 	}
 	findings[0]["body"] = liveFailureEncode(t, explanation)
 	record["findings"] = liveFailureEncode(t, findings)
 	record["head"] = liveFailureEncode(t, string(before.PullRequest.Head))
 	record["revision"] = liveFailureEncode(t, diff.PullRequestRevision(before.PullRequest))
-	metadata := "<!-- pr-review-agent:metadata:v1 " + base64.RawURLEncoding.EncodeToString(liveFailureEncode(t, record)) + " -->"
+	metadata := "<!-- pr-review-agent:metadata:v1 " + base64.RawURLEncoding.EncodeToString(
+		liveFailureEncode(t, record),
+	) + " -->"
 	seeded := strings.Replace(original.Body, originalMetadata, metadata, 1)
 	seeded = strings.Replace(seeded, previousExplanation, explanation, 1)
 	seeded = strings.Replace(seeded, originalState, marker.EncodeState(state), 1)
 	if seeded == original.Body {
 		t.Fatal("The saved state marker could not identify the explanation insertion point.")
 	}
-	if err := os.WriteFile(filepath.Join(directory, "seeded.md"), []byte(seeded), 0o600); err != nil {
+	if err := os.WriteFile(
+		filepath.Join(directory, "seeded.md"),
+		[]byte(seeded),
+		0o600,
+	); err != nil {
 		t.Fatal("The seeded summary could not be saved privately.")
 	}
-	if _, err := client.UpdateIssueComment(ctx, opts.installationID, repository, original.ID, seeded); err != nil {
+	if _, err := client.UpdateIssueComment(
+		ctx,
+		opts.installationID,
+		repository,
+		original.ID,
+		seeded,
+	); err != nil {
 		t.Fatal("The existing summary could not publish the long explanation.")
 	}
 	if livePartialSummary(t, ctx, client, opts, original.ID) != seeded {
 		t.Fatal("GitHub did not preserve the complete published explanation.")
 	}
 	job := domain.ReviewJob{
-		PullRequestRef: domain.PullRequestRef{Repository: repository, Number: opts.pullRequest, InstallationID: opts.installationID, Head: before.PullRequest.Head},
-		DeliveryID:     "live-routing-output-" + rand.Text(), Forced: true,
+		PullRequestRef: domain.PullRequestRef{
+			Repository:     repository,
+			Number:         opts.pullRequest,
+			InstallationID: opts.installationID,
+			Head:           before.PullRequest.Head,
+		},
+		DeliveryID: "live-routing-output-" + rand.Text(),
+		Forced:     true,
 	}
 	admitted, accepted, err := service.Admit(ctx, job)
 	if err != nil || !accepted {
@@ -177,26 +222,48 @@ func TestLiveRoutingOutputInterruptionPreservesSavedExplanation(t *testing.T) {
 		t.Fatal("The private service log could not be synchronized.")
 	}
 	liveRoutingAssertTruncation(t, logPath, provider.Model)
-	if after.PullRequest != before.PullRequest || !reflect.DeepEqual(after.Reviews, before.Reviews) || !reflect.DeepEqual(after.Threads, before.Threads) || len(after.Comments) != len(before.Comments) {
-		t.Fatal("The interrupted review changed fixture metadata, verdicts, threads, or the summary count.")
+	if after.PullRequest != before.PullRequest || !reflect.DeepEqual(
+		after.Reviews,
+		before.Reviews,
+	) || !reflect.DeepEqual(
+		after.Threads,
+		before.Threads,
+	) || len(after.Comments) != len(before.Comments) {
+		t.Fatal(
+			"The interrupted review changed fixture metadata, verdicts, threads, or the summary count.",
+		)
 	}
 	body := livePartialSummary(t, ctx, client, opts, original.ID)
 	stored, valid := marker.DecodeState(body)
-	if !valid || stored.RunID != job.DeliveryID || stored.Status == marker.StateDone || stored.LastReviewed != "" || len(stored.Pending)+len(stored.Unread) == 0 || outcome.CoverageComplete {
+	if !valid || stored.RunID != job.DeliveryID || stored.Status == marker.StateDone || stored.LastReviewed != "" || len(
+		stored.Pending,
+	)+len(stored.Unread) == 0 || outcome.CoverageComplete {
 		t.Fatal("The interrupted review incorrectly completed or discarded unread work.")
 	}
 	persisted, retainedFindings, _ := liveRoutingMetadata(t, body)
 	var retainedExplanation string
-	if json.Unmarshal(retainedFindings[0]["body"], &retainedExplanation) != nil || retainedExplanation != explanation || !strings.Contains(body, explanation) {
+	if json.Unmarshal(
+		retainedFindings[0]["body"],
+		&retainedExplanation,
+	) != nil || retainedExplanation != explanation || !strings.Contains(body, explanation) {
 		t.Fatal("The interrupted review erased or shortened the saved metadata explanation.")
 	}
-	if string(persisted["head"]) != string(record["head"]) || string(persisted["revision"]) != string(record["revision"]) {
+	if string(
+		persisted["head"],
+	) != string(record["head"]) || string(persisted["revision"]) != string(record["revision"]) {
 		t.Fatal("The interrupted review changed the saved metadata context.")
 	}
-	t.Logf("The real token interruption preserved the published explanation and incomplete checkpoint. Private evidence: %s", directory)
+	t.Logf(
+		"The real token interruption preserved the published explanation and incomplete checkpoint. Private evidence: %s",
+		directory,
+	)
 }
 
-func liveRoutingMetadata(t *testing.T, body string) (map[string]json.RawMessage, []map[string]json.RawMessage, string) {
+func liveRoutingMetadata(t *testing.T, body string) (
+	map[string]json.RawMessage,
+	[]map[string]json.RawMessage,
+	string,
+) {
 	t.Helper()
 	const prefix = "<!-- pr-review-agent:metadata:v1 "
 	start := strings.LastIndex(body, prefix)

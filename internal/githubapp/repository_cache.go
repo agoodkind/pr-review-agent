@@ -18,21 +18,39 @@ import (
 )
 
 var (
-	errRepositoryCacheClosed        = errors.New("repository cache is closed")
-	errRepositoryCacheFull          = errors.New("repository Git object cache exceeds its disk byte limit")
+	errRepositoryCacheClosed = errors.New("repository cache is closed")
+	errRepositoryCacheFull   = errors.New(
+		"repository Git object cache exceeds its disk byte limit",
+	)
 	errRepositoryEndpoint           = errors.New("invalid repository Git HTTPS endpoint")
-	errRepositoryShallowUnsupported = errors.New("repository Git server must support bounded shallow acquisition")
-	errRepositoryTransferLimit      = errors.New("repository Git transfer exceeds its compressed byte limit")
-	errRepositoryPackEntries        = errors.New("repository Git pack exceeds its object entry limit")
-	errRepositoryPackBytes          = errors.New("repository Git pack exceeds its extracted byte limit")
-	errRepositoryAncestryLimit      = errors.New("repository Git comparison exceeds its ancestry entry limit")
-	errRepositoryContentLimit       = errors.New("repository file exceeds the existing content response byte limit")
-	errRepositoryTreeDepth          = errors.New("repository tree exceeds its depth limit")
-	errRepositoryTreeEntries        = errors.New("repository tree exceeds its entry limit")
-	errRepositoryTreePath           = errors.New("repository tree entry contains a path separator")
-	errRepositoryTreeBytes          = errors.New("repository tree exceeds its extracted byte limit")
-	errRepositoryFileMode           = errors.New("repository tree contains an unsupported file mode")
-	errRepositoryBlobSize           = errors.New("repository Git blob does not match its declared size")
+	errRepositoryShallowUnsupported = errors.New(
+		"repository Git server must support bounded shallow acquisition",
+	)
+	errRepositoryTransferLimit = errors.New(
+		"repository Git transfer exceeds its compressed byte limit",
+	)
+	errRepositoryPackEntries = errors.New(
+		"repository Git pack exceeds its object entry limit",
+	)
+	errRepositoryPackBytes = errors.New(
+		"repository Git pack exceeds its extracted byte limit",
+	)
+	errRepositoryAncestryLimit = errors.New(
+		"repository Git comparison exceeds its ancestry entry limit",
+	)
+	errRepositoryContentLimit = errors.New(
+		"repository file exceeds the existing content response byte limit",
+	)
+	errRepositoryTreeDepth   = errors.New("repository tree exceeds its depth limit")
+	errRepositoryTreeEntries = errors.New("repository tree exceeds its entry limit")
+	errRepositoryTreePath    = errors.New("repository tree entry contains a path separator")
+	errRepositoryTreeBytes   = errors.New("repository tree exceeds its extracted byte limit")
+	errRepositoryFileMode    = errors.New(
+		"repository tree contains an unsupported file mode",
+	)
+	errRepositoryBlobSize = errors.New(
+		"repository Git blob does not match its declared size",
+	)
 )
 
 const (
@@ -136,7 +154,8 @@ func (cache *repositoryCache) open(key repositoryCacheKey) (*cachedRepository, e
 	}
 
 	repository := filesystem.NewStorageWithOptions(
-		osfs.New(directory), gitcache.NewObjectLRU(repositoryMemoryCacheBytes),
+		osfs.New(directory),
+		gitcache.NewObjectLRU(repositoryMemoryCacheBytes),
 		filesystem.Options{LargeObjectThreshold: maxResponseBytes},
 	)
 
@@ -145,7 +164,13 @@ func (cache *repositoryCache) open(key repositoryCacheKey) (*cachedRepository, e
 		return nil, repositoryAccessError("open", err)
 	}
 
-	entry := &cachedRepository{repository: repository, directory: directory, used: cache.sequence, size: 0, failed: false}
+	entry := &cachedRepository{
+		repository: repository,
+		directory:  directory,
+		used:       cache.sequence,
+		size:       0,
+		failed:     false,
+	}
 	cache.entries[key] = entry
 
 	return entry, nil
@@ -168,7 +193,10 @@ func (cache *repositoryCache) discard(key repositoryCacheKey, entry *cachedRepos
 		entry.size = size
 	}
 
-	return repositoryAccessError("discard failed Git cache entry", errors.Join(removeError, accountingError))
+	return repositoryAccessError(
+		"discard failed Git cache entry",
+		errors.Join(removeError, accountingError),
+	)
 }
 
 func (cache *repositoryCache) evict(active *cachedRepository) error {
@@ -209,6 +237,7 @@ func (cache *repositoryCache) bound(active *cachedRepository) error {
 
 	for {
 		var total int64
+
 		for _, entry := range cache.entries {
 			total += entry.size
 		}
@@ -227,24 +256,27 @@ func (cache *repositoryCache) bound(active *cachedRepository) error {
 func repositoryDiskBytes(directory string) (int64, error) {
 	var size int64
 
-	err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
+	err := filepath.WalkDir(
+		directory,
+		func(path string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
 
-		if entry.IsDir() {
+			if entry.IsDir() {
+				return nil
+			}
+
+			info, err := os.Stat(path)
+			if err != nil {
+				return repositoryAccessError("repositoryDiskBytes", err)
+			}
+
+			size += info.Size()
+
 			return nil
-		}
-
-		info, err := os.Stat(path)
-		if err != nil {
-			return repositoryAccessError("repositoryDiskBytes", err)
-		}
-
-		size += info.Size()
-
-		return nil
-	})
+		},
+	)
 	if err != nil {
 		return 0, repositoryAccessError("measure Git cache", err)
 	}

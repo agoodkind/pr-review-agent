@@ -45,6 +45,7 @@ func (github *summaryCommentGitHub) CreateIssueComment(
 		Body:   body,
 	}
 	github.comments = append(github.comments, created)
+
 	return created, nil
 }
 
@@ -60,10 +61,13 @@ func (github *summaryCommentGitHub) UpdateIssueComment(
 		if comment.ID != commentID {
 			continue
 		}
+
 		comment.Body = body
 		github.comments[index] = comment
+
 		return comment, nil
 	}
+
 	return githubapp.IssueComment{ID: 0, Author: "", Body: ""}, errors.New("comment not found")
 }
 
@@ -99,9 +103,11 @@ func TestUpsertSummaryCommentCreatesOnceThenUpdatesInPlace(t *testing.T) {
 	if err := service.upsertSummaryComment(context.Background(), job, first); err != nil {
 		t.Fatalf("first upsertSummaryComment: %v", err)
 	}
+
 	if len(github.comments) != 1 {
 		t.Fatalf("comments = %d, want 1", len(github.comments))
 	}
+
 	firstID := github.comments[0].ID
 
 	second := summaryCommentContent{
@@ -116,15 +122,19 @@ func TestUpsertSummaryCommentCreatesOnceThenUpdatesInPlace(t *testing.T) {
 	if err := service.upsertSummaryComment(context.Background(), job, second); err != nil {
 		t.Fatalf("second upsertSummaryComment: %v", err)
 	}
+
 	if len(github.comments) != 1 {
 		t.Fatalf("comments = %d, want still 1 after the second call", len(github.comments))
 	}
+
 	if github.comments[0].ID != firstID {
 		t.Fatal("comment id changed, want the first comment updated in place")
 	}
+
 	if github.updates != 1 {
 		t.Fatalf("updates = %d, want 1", github.updates)
 	}
+
 	if !strings.Contains(github.comments[0].Body, "second summary") {
 		t.Fatalf("body = %q, want the second call's prose", github.comments[0].Body)
 	}
@@ -133,9 +143,11 @@ func TestUpsertSummaryCommentCreatesOnceThenUpdatesInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readState: %v", err)
 	}
+
 	if !found {
 		t.Fatal("readState: want the state found")
 	}
+
 	if readBack.RunID != "delivery-2" {
 		t.Fatalf("readState run id = %q, want delivery-2", readBack.RunID)
 	}
@@ -145,16 +157,18 @@ func TestUpsertSummaryCommentCreatesOnceThenUpdatesInPlace(t *testing.T) {
 // service's own comment carries state it can trust.
 func TestReadStateIgnoresAForeignComment(t *testing.T) {
 	github := &summaryCommentGitHub{
-		comments: []githubapp.IssueComment{{
-			ID:     1,
-			Author: "someone-else",
-			Body: marker.EncodeState(marker.State{
-				LastReviewed: domain.HeadSHA(internalTestHeadSHA),
-				RunID:        "delivery-1",
-				Status:       marker.StateDone,
-				Pending:      nil,
-			}),
-		}},
+		comments: []githubapp.IssueComment{
+			{
+				ID:     1,
+				Author: "someone-else",
+				Body: marker.EncodeState(marker.State{
+					LastReviewed: domain.HeadSHA(internalTestHeadSHA),
+					RunID:        "delivery-1",
+					Status:       marker.StateDone,
+					Pending:      nil,
+				}),
+			},
+		},
 	}
 	service := &Service{github: github, botLogin: summaryCommentTestBotLogin}
 
@@ -162,6 +176,7 @@ func TestReadStateIgnoresAForeignComment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readState: %v", err)
 	}
+
 	if found {
 		t.Fatal("readState: want no state found for a foreign comment")
 	}

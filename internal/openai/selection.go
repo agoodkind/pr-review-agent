@@ -20,6 +20,7 @@ func resolveRequestTimeout(timeout time.Duration) time.Duration {
 	if timeout == 0 {
 		return config.DefaultReviewChunkTimeout
 	}
+
 	return timeout
 }
 
@@ -42,12 +43,14 @@ func (client *Client) attemptCompletion(
 	if timeout == 0 {
 		timeout = modelrequest.Timeout(ctx, client.requestTimeout)
 	}
+
 	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	defer func() {
 		if recover() != nil {
 			content, model, err = "", "", &providerPanicError{}
 		}
+
 		if timeoutErr := attemptCtx.Err(); timeoutErr != nil {
 			err = errors.Join(err, timeoutErr)
 		}
@@ -56,19 +59,45 @@ func (client *Client) attemptCompletion(
 	if err != nil {
 		return "", "", budget, err
 	}
+
 	report := func(usage responses.ResponseUsage, serviceTier string, sdkUsage *quota.SDKUsage) {
 		client.reportBudget(attemptCtx, target, budget, usage, serviceTier, sdkUsage)
 	}
 	switch target.api {
 	case config.GeminiAPI:
-		content, model, err = completeGemini(attemptCtx, target, prompt, instructions, schema, report)
+		content, model, err = completeGemini(
+			attemptCtx,
+			target,
+			prompt,
+			instructions,
+			schema,
+			report,
+		)
 	case config.ChatCompletionsAPI:
-		content, model, err = completeChat(attemptCtx, target, prompt, instructions, schemaName, schema, report)
+		content, model, err = completeChat(
+			attemptCtx,
+			target,
+			prompt,
+			instructions,
+			schemaName,
+			schema,
+			report,
+		)
 	case config.ResponsesAPI:
-		content, model, err = completeWith(attemptCtx, target, prompt, instructions, schemaName, schema, report)
+		content, model, err = completeWith(
+			attemptCtx,
+			target,
+			prompt,
+			instructions,
+			schemaName,
+			schema,
+			report,
+		)
 	}
+
 	if err == nil {
 		err = accept(content)
 	}
+
 	return content, model, budget, err
 }

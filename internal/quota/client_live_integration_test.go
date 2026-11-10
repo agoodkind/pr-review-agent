@@ -45,12 +45,15 @@ func TestLiveReviewChargesReportedUsageAndDeniesNextRequest(t *testing.T) {
 	provider.TokenLimit = 1
 	provider.TokenTypes = []config.TokenType{config.InputTokens, config.OutputTokens}
 	provider.TokenWindow = quota.Window{Mode: quota.Rolling, Duration: "24h"}
-	client := openai.NewClient(config.Config{
-		MinimumImportance:   minimumImportance,
-		ProviderBudgetURL:   budgetURL,
-		GitHubWebhookSecret: []byte("test-review-budget-secret"), // gitleaks:allow
-		Providers:           []config.ProviderConfig{provider},
-	}, nil)
+	client := openai.NewClient(
+		config.Config{
+			MinimumImportance:   minimumImportance,
+			ProviderBudgetURL:   budgetURL,
+			GitHubWebhookSecret: []byte("test-review-budget-secret"), // gitleaks:allow
+			Providers:           []config.ProviderConfig{provider},
+		},
+		nil,
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	ctx, usageRecorder := review.WithUsageRecorder(ctx)
@@ -72,7 +75,8 @@ func TestLiveReviewChargesReportedUsageAndDeniesNextRequest(t *testing.T) {
 		t.Fatal("second review did not return a classified quota denial")
 	}
 	status := statusError.ProviderStatus()
-	if status.Cause != review.ProviderAppBudgetDenied || !status.QuotaKnown || status.Limit != 1 || status.Used != usage.InputTokens+usage.OutputTokens {
+	if status.Cause != review.ProviderAppBudgetDenied || !status.QuotaKnown || status.Limit != 1 ||
+		status.Used != usage.InputTokens+usage.OutputTokens {
 		t.Fatalf("quota denial = %+v", status)
 	}
 	bounds, err := provider.TokenWindow.Bounds(time.Now())
@@ -84,10 +88,19 @@ func TestLiveReviewChargesReportedUsageAndDeniesNextRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports.Events) != 1 || reports.Events[0].InputTokens != usage.InputTokens || reports.Events[0].OutputTokens != usage.OutputTokens || reports.Events[0].TotalTokens != usage.TotalTokens {
+	if len(reports.Events) != 1 || reports.Events[0].InputTokens != usage.InputTokens ||
+		reports.Events[0].OutputTokens != usage.OutputTokens ||
+		reports.Events[0].TotalTokens != usage.TotalTokens {
 		t.Fatal("durable accounting differs from actual provider usage")
 	}
-	t.Logf("live provider=%s model=%s input_tokens=%d output_tokens=%d total_tokens=%d quota_limit=1 next_request=app_budget_denied", provider.ID, provider.Model, usage.InputTokens, usage.OutputTokens, usage.TotalTokens)
+	t.Logf(
+		"live provider=%s model=%s input_tokens=%d output_tokens=%d total_tokens=%d quota_limit=1 next_request=app_budget_denied",
+		provider.ID,
+		provider.Model,
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.TotalTokens,
+	)
 }
 
 func loadLiveProvider(t *testing.T) (config.ProviderConfig, int) {
@@ -129,7 +142,9 @@ func loadLiveProvider(t *testing.T) (config.ProviderConfig, int) {
 			continue
 		}
 		baseURL, err := url.Parse(provider.BaseURL)
-		if err != nil || baseURL.Scheme != "https" || baseURL.Hostname() == "" || provider.Disabled || provider.Model == "" {
+		if err != nil || baseURL.Scheme != "https" || baseURL.Hostname() == "" ||
+			provider.Disabled ||
+			provider.Model == "" {
 			t.Fatal("the selected runtime provider must be an enabled HTTPS endpoint")
 		}
 		api := provider.API
@@ -137,8 +152,15 @@ func loadLiveProvider(t *testing.T) (config.ProviderConfig, int) {
 			api = config.ResponsesAPI
 		}
 		return config.ProviderConfig{
-			ID: provider.ID, BaseURL: baseURL, Model: provider.Model, APIKey: apiKey, ReasoningEffort: config.ResolveReasoningEffort(provider.ReasoningEffort),
-			API: api, MaxOutputTokens: provider.MaxOutputTokens, OmitMaxOutputTokens: provider.OmitMaxOutputTokens, OmitTextFormat: provider.OmitTextFormat,
+			ID:                  provider.ID,
+			BaseURL:             baseURL,
+			Model:               provider.Model,
+			APIKey:              apiKey,
+			ReasoningEffort:     config.ResolveReasoningEffort(provider.ReasoningEffort),
+			API:                 api,
+			MaxOutputTokens:     provider.MaxOutputTokens,
+			OmitMaxOutputTokens: provider.OmitMaxOutputTokens,
+			OmitTextFormat:      provider.OmitTextFormat,
 		}, minimumImportance
 	}
 	t.Fatal("the selected provider ID is absent from runtime configuration")
@@ -157,19 +179,31 @@ func TestLiveReviewChecksMultipleWindowsAndChargesEachResponseOnce(t *testing.T)
 	provider.DailyTokenLimit = quota.MaximumInteger
 	provider.DailyTokenTypes = []config.TokenType{config.InputTokens, config.OutputTokens}
 	provider.TokenLimits = []quota.Limit{
-		{Limit: 1, TokenTypes: []quota.TokenType{quota.OutputTokens}, Window: quota.Window{Mode: quota.Rolling, Duration: "1m"}},
-		{Limit: quota.MaximumInteger, TokenTypes: []quota.TokenType{quota.InputTokens, quota.OutputTokens}, Window: quota.Window{Mode: quota.Rolling, Duration: "24h"}},
+		{
+			Limit:      1,
+			TokenTypes: []quota.TokenType{quota.OutputTokens},
+			Window:     quota.Window{Mode: quota.Rolling, Duration: "1m"},
+		},
+		{
+			Limit:      quota.MaximumInteger,
+			TokenTypes: []quota.TokenType{quota.InputTokens, quota.OutputTokens},
+			Window:     quota.Window{Mode: quota.Rolling, Duration: "24h"},
+		},
 	}
 	fallback := provider
 	fallback.ID += "_fallback"
 	fallback.DailyTokenLimit = 0
 	fallback.DailyTokenTypes = nil
 	fallback.TokenLimits = nil
-	client := openai.NewClient(config.Config{
-		MinimumImportance: minimumImportance, ProviderBudgetURL: budgetURL,
-		GitHubWebhookSecret: []byte("test-review-budget-secret"), // gitleaks:allow
-		Providers:           []config.ProviderConfig{provider, fallback},
-	}, nil)
+	client := openai.NewClient(
+		config.Config{
+			MinimumImportance:   minimumImportance,
+			ProviderBudgetURL:   budgetURL,
+			GitHubWebhookSecret: []byte("test-review-budget-secret"), // gitleaks:allow
+			Providers:           []config.ProviderConfig{provider, fallback},
+		},
+		nil,
+	)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	const prompt = "Review changed lines in sum.go. Return concrete findings using the required schema.\n@@ -1 +1 @@\n-func sum(left, right int) int { return left + right }\n+func sum(first, second int) int { return first + second }"
@@ -180,10 +214,19 @@ func TestLiveReviewChecksMultipleWindowsAndChargesEachResponseOnce(t *testing.T)
 		t.Fatal(err)
 	}
 	history, err := storage.Query(ctx, provider.ID, provider.Model, bounds)
-	if err != nil || len(history.Events) != 1 || history.Events[0].InputTokens != first.InputTokens || history.Events[0].OutputTokens != first.OutputTokens {
+	if err != nil || len(history.Events) != 1 ||
+		history.Events[0].InputTokens != first.InputTokens ||
+		history.Events[0].OutputTokens != first.OutputTokens {
 		t.Fatal("the first response did not produce exactly one actual usage report")
 	}
-	minute, err := quota.Evaluate(provider.TokenLimits[0].Window, time.Now(), 1, provider.TokenLimits[0].TokenTypes, history.Events, history.HistoryStartMS)
+	minute, err := quota.Evaluate(
+		provider.TokenLimits[0].Window,
+		time.Now(),
+		1,
+		provider.TokenLimits[0].TokenTypes,
+		history.Events,
+		history.HistoryStartMS,
+	)
 	if err != nil || minute.Allowed || minute.Used != first.OutputTokens {
 		t.Fatal("the minute limit did not count the first response's output")
 	}
@@ -193,7 +236,9 @@ func TestLiveReviewChecksMultipleWindowsAndChargesEachResponseOnce(t *testing.T)
 		t.Fatal(err)
 	}
 	fallbackHistory, err := storage.Query(ctx, fallback.ID, fallback.Model, bounds)
-	if err != nil || len(fallbackHistory.Events) != 1 || fallbackHistory.Events[0].InputTokens != second.InputTokens || fallbackHistory.Events[0].OutputTokens != second.OutputTokens {
+	if err != nil || len(fallbackHistory.Events) != 1 ||
+		fallbackHistory.Events[0].InputTokens != second.InputTokens ||
+		fallbackHistory.Events[0].OutputTokens != second.OutputTokens {
 		t.Fatal("the denied primary request did not complete through the fallback provider")
 	}
 	legacy, err := storage.CheckDaily(ctx, provider.ID, provider.Model, provider.DailyTokenLimit)
@@ -223,16 +268,29 @@ func TestLiveReviewChecksMultipleWindowsAndChargesEachResponseOnce(t *testing.T)
 		*legacy.Used != first.InputTokens+first.OutputTokens+third.InputTokens+third.OutputTokens {
 		t.Fatal("the resumed response did not update the daily counter exactly once")
 	}
-	t.Logf("provider=%s model=%s primary_responses=2 fallback_responses=1 recorded_primary_events=2", provider.ID, provider.Model)
+	t.Logf(
+		"provider=%s model=%s primary_responses=2 fallback_responses=1 recorded_primary_events=2",
+		provider.ID,
+		provider.Model,
+	)
 }
 
-func liveReviewUsage(t *testing.T, ctx context.Context, client *openai.Client, prompt string) review.UsageSummary {
+func liveReviewUsage(
+	t *testing.T,
+	ctx context.Context,
+	client *openai.Client,
+	prompt string,
+) review.UsageSummary {
 	t.Helper()
 	ctx, recorder := review.WithUsageRecorder(ctx)
 	if _, err := client.Review(ctx, prompt); err != nil {
 		var apiError *openai.ProviderError
 		if errors.As(err, &apiError) {
-			t.Fatalf("live provider review failed with status %d and code %s", apiError.StatusCode, apiError.Code)
+			t.Fatalf(
+				"live provider review failed with status %d and code %s",
+				apiError.StatusCode,
+				apiError.Code,
+			)
 		}
 		t.Fatal("live provider review failed")
 	}
