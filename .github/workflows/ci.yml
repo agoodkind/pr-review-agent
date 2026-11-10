@@ -29,7 +29,6 @@ jobs:
       id-token: write
       attestations: write
     with:
-      job_layout: single
       release_platforms: linux/amd64
     secrets: inherit
 
