@@ -92,7 +92,14 @@ func newContentCollectionFixture(
 
 				fixture.state.mu.Lock()
 				currentHead := fixture.state.headSHA
+				status := fixture.state.pullRequestStatus
 				fixture.state.mu.Unlock()
+				if status != http.StatusOK {
+					http.Error(writer, "Pull request unavailable", status)
+
+					return
+				}
+
 				serviceWriteJSON(
 					writer,
 					http.StatusOK,

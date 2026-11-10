@@ -545,7 +545,7 @@ func (service *Service) applyRefreshedVerdict(
 	job domain.ReviewJob,
 	refreshed refreshedVerdict,
 ) (Summary, error) {
-	var summary Summary
+	summary := service.refreshedSummary(ctx, job, refreshed)
 
 	logger := gklog.L(ctx)
 	// A verdict written at a moved head would judge a commit nobody is looking
@@ -561,7 +561,6 @@ func (service *Service) applyRefreshedVerdict(
 		return summary, fmt.Errorf("refresh verdict head check: %w", err)
 	}
 
-	summary = service.refreshedSummary(ctx, job, refreshed)
 	if currentPullRequest.Head != job.Head {
 		logger.InfoContext(ctx, "verdict refresh skipped", slog.String("reason", "head_moved"))
 		return summary, errHeadMoved

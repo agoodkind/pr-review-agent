@@ -41,6 +41,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 		{name: "current reassessment usage", success: true},
 		{name: "unchanged metadata avoids provider work", success: true, unchanged: true},
 		{name: "head moves during model work", success: true, moveHead: true},
+		{name: "publication head read fails", success: true, publicationFailure: "head-read"},
 		{name: "checkpoint publication fails", success: true, publicationFailure: "checkpoint"},
 		{name: "native publication fails", success: true, publicationFailure: "native"},
 		{name: "summary publication fails", success: true, publicationFailure: "summary"},
@@ -84,6 +85,8 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 								}
 
 								switch scenario.publicationFailure {
+								case "head-read":
+									fixture.state.pullRequestStatus = http.StatusServiceUnavailable
 								case "checkpoint":
 									fixture.state.issueUpdateStatuses = []int{
 										http.StatusServiceUnavailable,
@@ -248,6 +251,17 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				}
 
 				assertMetadataRejectionStillStands(t, fixture)
+				reviews, err := fixture.github.ListReviews(
+					t.Context(),
+					job.InstallationID,
+					job.Repository,
+					job.Number,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				originalReview := githubapp.LatestDecisionReview(reviews, testBotLogin)
 				original := fixture.state.submittedReviews[0]
 				original["body"] = ""
 
@@ -418,6 +432,38 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 								coverage,
 							)
 						}
+					}
+				}
+
+				if scenario.publicationFailure == "head-read" {
+					if !strings.Contains(err.Error(), "refresh verdict head check") {
+						t.Fatalf(
+							"The refresh must report its final publication read error: %v.",
+							err,
+						)
+					}
+
+					if !strings.Contains(checkSummary, "| Bot threads open | `1` |") ||
+						!strings.Contains(checkSummary, "standing-file-finding") {
+						t.Fatal("The failed check must retain its computed open file finding.")
+					}
+
+					reviews, err = fixture.github.ListReviews(
+						t.Context(),
+						job.InstallationID,
+						job.Repository,
+						job.Number,
+					)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					standing := githubapp.LatestDecisionReview(reviews, testBotLogin)
+					if standing.ID != originalReview.ID || standing.State != "CHANGES_REQUESTED" {
+						t.Fatalf(
+							"The failed publication read changed the persisted rejection: %+v.",
+							standing,
+						)
 					}
 				}
 

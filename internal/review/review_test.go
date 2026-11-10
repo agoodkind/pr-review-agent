@@ -2860,7 +2860,11 @@ func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing
 	if len(fixture.state.submittedReviews) != 1 ||
 		fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
 		len(fixture.state.dismissals) != 0 {
-		t.Fatalf("The failure withdrew the inline rejection: %v.", fixture.state.submittedReviews)
+		t.Fatalf(
+			"reviews = %v, dismissals = %v; expected one CHANGES_REQUESTED review without dismissals.",
+			fixture.state.submittedReviews,
+			fixture.state.dismissals,
+		)
 	}
 
 	if fixture.state.checkRuns[0]["status"] != "completed" ||
