@@ -22,6 +22,7 @@ func TestInlineVerdictDismissalFailureCannotApproveOnRetry(t *testing.T) {
 			reviewPages:         blockingVerdictReviewPage(domain.HeadSHA(testHeadSHA), true),
 		},
 	)
+
 	fixture.state.dismissReviewStatus = http.StatusForbidden
 	if err := fixture.run(context.Background(), fixture.forcedJob()); err == nil {
 		t.Fatal("Run succeeded although GitHub refused dismissal of the old review")
@@ -45,6 +46,7 @@ func TestInlineVerdictDismissalFailureCannotApproveOnRetry(t *testing.T) {
 
 	fixture.state.dismissReviewStatus = http.StatusOK
 	job := fixture.job()
+
 	job.DeliveryID = "retry-after-dismissal-restored"
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("retry Run: %v", err)

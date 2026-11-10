@@ -14,6 +14,7 @@ import (
 // Load resolves policy paths from the repository runtime configuration.
 func Load(tb testing.TB) reviewrules.Policy {
 	tb.Helper()
+
 	directory, err := os.Getwd()
 	if err != nil {
 		tb.Fatal(err)
@@ -21,6 +22,7 @@ func Load(tb testing.TB) reviewrules.Policy {
 
 	for {
 		runtimePath := filepath.Join(directory, "runtime.json")
+
 		data, readErr := os.ReadFile(runtimePath)
 		if readErr == nil {
 			var paths struct {
@@ -35,6 +37,7 @@ func Load(tb testing.TB) reviewrules.Policy {
 				"REVIEW_RULES_FILE":   paths.Rules,
 				"REVIEW_PROMPTS_FILE": paths.Prompts,
 			}
+
 			policy, err := config.LoadReviewPolicy(func(name string) (string, bool) {
 				path, found := values[name]
 				if !found || path == "" {

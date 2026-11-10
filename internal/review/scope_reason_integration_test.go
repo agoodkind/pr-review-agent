@@ -61,8 +61,10 @@ func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
 			scenario.name,
 			func(t *testing.T) {
 				var assessments []domain.FileAssessment
+
 				input := diff.ReviewInput{PullRequest: pr, Files: []diff.FileContext{file}}
 				planned := input
+
 				if scenario.action != "" {
 					assessment := classificationAssessment(
 						t,
@@ -72,7 +74,9 @@ func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
 						scenario.action,
 						reviewrules.ContentEncrypted,
 					)
+
 					var err error
+
 					planned, assessments, err = review.PlanFileContentReview(
 						input,
 						[]domain.FileAssessment{assessment},
@@ -89,6 +93,7 @@ func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
 				}
 
 				var summary review.Summary
+
 				summary.Head = pr.Head
 				summary.Decision = domain.ReviewDecisionRequestChanges
 				summary.CoverageComplete = !excluded
@@ -96,6 +101,7 @@ func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
 				summary.FileAssessments = assessments
 				summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 				summary.MetadataRevision = diff.PullRequestRevision(pr)
+
 				body := review.RenderBody(summary)
 				if !strings.Contains(body, "| Review scope assessed | "+scenario.scope+" |") {
 					t.Fatal(
@@ -177,6 +183,7 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 			scenario.name,
 			func(t *testing.T) {
 				var assessments []domain.FileAssessment
+
 				if scenario.action != "" {
 					assessment := classificationAssessment(
 						t,
@@ -186,6 +193,7 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 						scenario.action,
 						scenario.kind,
 					)
+
 					planned, decisions, err := review.PlanFileContentReview(
 						diff.ReviewInput{PullRequest: pullRequest, Files: []diff.FileContext{file}},
 						[]domain.FileAssessment{assessment},
@@ -197,6 +205,7 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 
 					if scenario.reviewed {
 						assertPlannedChangedRows(t, planned, file)
+
 						decisions[0].Reviewed = true
 					}
 
@@ -204,7 +213,9 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 				}
 
 				const reason = "The model reported a reason about the available review scope."
+
 				var summary review.Summary
+
 				summary.Head = pullRequest.Head
 				summary.Decision = domain.ReviewDecisionApprove
 				summary.DecisionReason = reason
@@ -213,6 +224,7 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 				summary.FileAssessments = assessments
 				summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 				summary.MetadataRevision = diff.PullRequestRevision(pullRequest)
+
 				body := review.RenderBody(summary)
 				if strings.Contains(body, "#### Review scope\n\n"+reason) != scenario.wantReason ||
 					strings.Contains(
@@ -242,12 +254,14 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 
 func scopeReasonMetadataRecord(t *testing.T, body string) string {
 	t.Helper()
+
 	_, encoded, found := strings.Cut(body, "<!-- pr-review-agent:metadata:v1 ")
 	if !found {
 		t.Fatal("The published summary omitted its metadata record.")
 	}
 
 	encoded, _, _ = strings.Cut(encoded, " -->")
+
 	payload, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		t.Fatal(err)

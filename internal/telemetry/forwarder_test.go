@@ -128,17 +128,20 @@ func (recorder *batchRecorder) ServeHTTP(writer http.ResponseWriter, request *ht
 
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	recorder.captured = append(recorder.captured, batch)
 	recorder.valid = request.Header.Get(telemetry.SignatureHeader) == telemetry.Sign(
 		[]byte(testSigningKey),
 		body,
 	)
+
 	writer.WriteHeader(http.StatusOK)
 }
 
 func (recorder *batchRecorder) batches() []telemetry.Batch {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	copied := make([]telemetry.Batch, len(recorder.captured))
 	copy(copied, recorder.captured)
 

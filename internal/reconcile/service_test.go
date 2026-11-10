@@ -25,6 +25,7 @@ const (
 
 func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -67,6 +68,7 @@ func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 
 func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 	finding := sampleFinding()
+
 	ownedBody, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -117,6 +119,7 @@ func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 		config.MaximumPromptBytes,
 		policytest.Load(t),
 	)
+
 	job := testJob()
 	if _, err := service.Reconcile(context.Background(), job); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -137,6 +140,7 @@ func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 
 func TestReconcileIgnoresForeignMalformedAndCurrentHeadThreads(t *testing.T) {
 	finding := sampleFinding()
+
 	oldBody, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody old: %v", err)
@@ -197,6 +201,7 @@ func TestReconcileIgnoresForeignMalformedAndCurrentHeadThreads(t *testing.T) {
 
 func TestReconcileResolvesOnlyProvenFixedOrInvalidFindings(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -242,6 +247,7 @@ func TestReconcileResolvesOnlyProvenFixedOrInvalidFindings(t *testing.T) {
 		config.MaximumPromptBytes,
 		policytest.Load(t),
 	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -262,6 +268,7 @@ func TestReconcileResolvesOnlyProvenFixedOrInvalidFindings(t *testing.T) {
 
 func TestReconcileLeavesOpenAndUncertainFindingsOpen(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -318,6 +325,7 @@ func TestReconcileLeavesOpenAndUncertainFindingsOpen(t *testing.T) {
 
 func TestReconcilePostsNoReplies(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -368,6 +376,7 @@ func TestReconcilePostsNoReplies(t *testing.T) {
 
 func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -408,6 +417,7 @@ func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 		config.MaximumPromptBytes,
 		policytest.Load(t),
 	)
+
 	_, err = service.Reconcile(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("Reconcile: want aggregate error")
@@ -428,6 +438,7 @@ func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 
 func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -469,6 +480,7 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 		config.MaximumPromptBytes,
 		policytest.Load(t),
 	)
+
 	_, err = service.Reconcile(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("Reconcile: want head changed error")
@@ -485,6 +497,7 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 
 func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -512,6 +525,7 @@ func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 		config.MaximumPromptBytes,
 		policytest.Load(t),
 	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -532,6 +546,7 @@ func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 
 func TestReconcileSendsShortenedFileAnchorToModel(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -579,6 +594,7 @@ func TestReconcileSendsShortenedFileAnchorToModel(t *testing.T) {
 
 func TestReconcileShowsTheLatestPullRequestDiffAfterInsertions(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -667,6 +683,7 @@ const shiftedInsertionCount = 30
 // instead of refusing to reason about an unresolved finding.
 func TestReconcileUsesTheLatestPullRequestAfterARestack(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -723,6 +740,7 @@ func TestReconcileUsesTheLatestPullRequestAfterARestack(t *testing.T) {
 		config.MaximumPromptBytes,
 		policytest.Load(t),
 	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -743,6 +761,7 @@ func TestReconcileUsesTheLatestPullRequestAfterARestack(t *testing.T) {
 
 func TestReconcileResolvesARemovedFileInTheLatestPullRequest(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -770,6 +789,7 @@ func TestReconcileResolvesARemovedFileInTheLatestPullRequest(t *testing.T) {
 		config.MaximumPromptBytes,
 		policytest.Load(t),
 	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -798,6 +818,7 @@ func TestReconcileResolvesARemovedFileInTheLatestPullRequest(t *testing.T) {
 // satisfied by the diff section of the prompt.
 func currentCodeSection(t *testing.T, prompt string) string {
 	t.Helper()
+
 	_, after, found := strings.Cut(prompt, "Current file excerpt")
 	if !found {
 		t.Fatalf("prompt has no current code section: %q", prompt)
@@ -813,12 +834,14 @@ func currentCodeSection(t *testing.T, prompt string) string {
 
 func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	const renamedPath = "internal/app/server.go"
+
 	github := &fakeGitHub{
 		head: domain.HeadSHA(testCurrentHead),
 		threads: []githubapp.ReviewThread{
@@ -872,12 +895,14 @@ func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
 // must carry it, or a reply disproving the finding can never move the model.
 func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testCurrentHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	const replyText = "Declined: the compose file configures no authorizer, so this check cannot fire."
+
 	thread := ownedThread("thread-replied", body, finding, false)
 	thread.RootComment.DatabaseID = 99
 	thread.Replies = []domain.ReviewComment{
@@ -925,6 +950,7 @@ func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
 		policytest.Load(t),
 	)
 	job := testJob()
+
 	job.ThreadRootCommentID = 99
 	if _, err := service.Reconcile(context.Background(), job); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -955,12 +981,14 @@ func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
 // The prompt keeps the most recent replies and says how many it left out.
 func TestReconcileBoundsALongThreadAndSaysWhatItOmitted(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	const replyCount = 60
+
 	thread := ownedThread("thread-long", body, finding, false)
 
 	for index := range replyCount {
@@ -1164,6 +1192,7 @@ func (fake *fakeGitHub) GetPullRequest(
 	_ int,
 ) (githubapp.PullRequest, error) {
 	fake.getPullCount++
+
 	head := fake.head
 	if fake.headAfterModel != "" && fake.getPullCount > 1 {
 		head = fake.headAfterModel

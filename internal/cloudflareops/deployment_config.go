@@ -40,6 +40,7 @@ type wranglerConfiguration map[string]json.RawMessage
 
 func readDeploymentConfiguration(path string) (DeploymentConfiguration, error) {
 	var configuration DeploymentConfiguration
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Warn("Deployment configuration read failed", "path", path)
@@ -48,6 +49,7 @@ func readDeploymentConfiguration(path string) (DeploymentConfiguration, error) {
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
+
 	if err := decoder.Decode(&configuration); err != nil {
 		return configuration, errors.New("deployment configuration must contain valid JSON")
 	}
@@ -129,6 +131,7 @@ func readWrangler(path string) (wranglerConfiguration, error) {
 
 func (configuration wranglerConfiguration) stringField(name string) string {
 	var value string
+
 	_ = json.Unmarshal(configuration[name], &value)
 
 	return value
@@ -156,6 +159,7 @@ func setWranglerValue[Value wranglerValue](
 
 func writeWrangler(path string, configuration wranglerConfiguration) (string, error) {
 	slog.Info("Private Wrangler configuration creation started", "template", path)
+
 	file, err := os.CreateTemp(filepath.Dir(path), "wrangler.deploy.*.jsonc")
 	if err != nil {
 		slog.Warn("Private Wrangler configuration creation failed")

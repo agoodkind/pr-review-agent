@@ -140,6 +140,7 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 
 	var builder strings.Builder
 	builder.WriteString("<details>\n<summary>Review details</summary>\n\n")
+
 	if acceptedFileScope(summary) && summary.FileAssessmentNote != "" {
 		builder.WriteString(summary.FileAssessmentNote + "\n\n")
 	}
@@ -323,6 +324,7 @@ func renderFallbackFindings(findings []domain.Finding) string {
 
 	sorted := append([]domain.Finding{}, findings...)
 	sortFindings(sorted)
+
 	explanation := "GitHub could not place the finding inline, so it appears here."
 	if len(sorted) != 1 {
 		explanation = "GitHub could not place the findings inline, so they appear here."
@@ -337,6 +339,7 @@ func renderFallbackFindings(findings []domain.Finding) string {
 		}
 
 		finding = sanitizeFinding(finding)
+
 		parts := []string{
 			fmt.Sprintf("#### %s:%d: %s", codeSpan(normalizedPath), finding.EndLine, finding.Title),
 			finding.Body,
@@ -355,6 +358,7 @@ func renderFallbackFindings(findings []domain.Finding) string {
 // and for native reviews that require a body. Native approvals omit this data.
 func RenderVerdictBody(summary Summary) string {
 	parts := make([]string, 0, 5)
+
 	parts = append(parts, marker.Review(summary.Head, summary.Decision))
 	if assessments := encodeFileAssessments(
 		summary.FileAssessments,
@@ -436,6 +440,7 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 	}
 
 	prose := stripMaintenanceFailure(stripDurableStateMarker(existingBody))
+
 	fallbackRecord, recordedFallback := readFallbackRecord(prose, summary.Head)
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && recordedFallback {
 		summary.Fallback = fallbackRecord.Findings
@@ -462,6 +467,7 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 	}
 
 	end := start + endOffset + len(verdictSectionEnd)
+
 	verdict := renderVerdictSection(summary, blockWithdrawn)
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && !recordedFallback {
 		if fallbackStart := strings.Index(
@@ -482,6 +488,7 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 	}
 
 	updated := renderVerdictBeforeReport(strings.TrimSpace(prose[:start]), verdict) + prose[end:]
+
 	updated = refreshThreadDetails(updated, summary)
 	if markerStart := strings.LastIndex(updated, marker.Summary()); markerStart >= 0 {
 		updated = strings.TrimSpace(updated[:markerStart]) + "\n\n" + marker.Summary() + "\n" +
@@ -494,6 +501,7 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 func renderVerdictBeforeReport(reportPrefix, verdict string) string {
 	heading, report, _ := strings.Cut(reportPrefix, "\n\n")
 	parts := []string{heading, verdict}
+
 	if report != "" {
 		if !strings.HasPrefix(report, reportSectionStart) {
 			report = reportSectionStart + "\n\n" + report + "\n\n" + reportSectionEnd
@@ -638,6 +646,7 @@ func RenderStartedBody(head domain.HeadSHA) string {
 // untrusted text in this body to contain.
 func RenderFailureBody(summary Summary, title string, detail string) string {
 	summary.Failed = true
+
 	parts := []string{"## Review", strings.TrimSpace(title)}
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
 		parts = append(parts, trimmedDetail)
@@ -732,6 +741,7 @@ func RenderIncompleteBody(
 		chunkCount(pending),
 		shortHead(summary.Head),
 	)
+
 	if reason == checkFailureDailyBudget || reason == checkFailureMixedUsage {
 		legacyDaily := false
 

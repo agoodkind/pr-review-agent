@@ -34,6 +34,7 @@ func (client *Client) recordProviderAttempt(
 	fallback bool,
 ) {
 	failure := &providerAttemptError{provider: target, budget: budget, cause: err}
+
 	status := failure.ProviderStatus()
 	if err == nil {
 		status.Cause = review.ProviderSucceeded
@@ -52,6 +53,7 @@ func (client *Client) recordProviderAttempt(
 		Count:            1,
 		Sequence:         0,
 	}
+
 	var providerError *ProviderError
 	if errors.As(err, &providerError) {
 		attempt.HTTPStatus = providerError.StatusCode
@@ -90,6 +92,7 @@ func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 		TokenWindow:   attempt.budget.window,
 		QuotaSnapshot: attempt.budget.accounting,
 	}
+
 	var admission *budgetAdmissionError
 	if errors.As(attempt.cause, &admission) {
 		status.Used = admission.snapshot.used
@@ -97,6 +100,7 @@ func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 		status.Remaining = admission.snapshot.remaining
 		status.QuotaKnown = admission.snapshot.known
 		status.TokenWindow = admission.snapshot.window
+
 		status.QuotaSnapshot = admission.snapshot.accounting
 		if admission.DailyBudgetExhausted() {
 			status.Cause = review.ProviderAppBudgetDenied

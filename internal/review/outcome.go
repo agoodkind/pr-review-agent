@@ -108,6 +108,7 @@ func persistAssessment(ctx context.Context, checkID int64) (domain.AssessmentOut
 	if ok {
 		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
+
 		outcome, err := sink(persistCtx, recorder.job, recorder.outcome)
 		if err != nil {
 			return recorder.outcome, err
@@ -127,16 +128,22 @@ func reassessmentNotice(ctx context.Context) string {
 		return ""
 	}
 
-	return "\n\n<!-- pr-review-agent:reassessment:start -->\nThe queue will reassess this pull request after `" + time.UnixMilli(
+	return "\n\n<!-- pr-review-agent:reassessment:start -->\n" +
+		"The queue will reassess this pull request after `" + time.UnixMilli(
 		recorder.outcome.RetryAtMS,
 	).UTC().Format(
 		time.RFC3339,
-	) + "`. The reassessment identifier is `" + recorder.outcome.ReassessmentID + "`.\n<!-- pr-review-agent:reassessment:end -->"
+	) + "`. The reassessment identifier is `" +
+		recorder.outcome.ReassessmentID +
+		"`.\n<!-- pr-review-agent:reassessment:end -->"
 }
 
 func stripReassessmentNotice(body string) string {
-	const start = "<!-- pr-review-agent:reassessment:start -->"
-	const end = "<!-- pr-review-agent:reassessment:end -->"
+	const (
+		start = "<!-- pr-review-agent:reassessment:start -->"
+		end   = "<!-- pr-review-agent:reassessment:end -->"
+	)
+
 	first := strings.Index(body, start)
 	if first < 0 {
 		return body
@@ -178,6 +185,7 @@ func (service *Service) RunWithOutcome(
 		},
 	}
 	ctx := context.WithValue(parent, outcomeKey{}, recorder)
+
 	err := service.run(ctx, job)
 	if err != nil && recorder.outcome.Disposition == domain.AssessmentDeclined {
 		disposition := domain.AssessmentFailed

@@ -28,7 +28,9 @@ func jsonNull(value json.RawMessage) bool {
 // ReadQueueSnapshot preserves unavailable legacy fields instead of reporting empty diagnostics.
 func ReadQueueSnapshot(data []byte, capturedAt time.Time, status int) QueueSnapshot {
 	var snapshot QueueSnapshot
+
 	snapshot.CapturedAt, snapshot.HTTPStatus = capturedAt, status
+
 	var payload queuePayload
 	if json.Unmarshal(data, &payload) != nil {
 		snapshot.UnavailableReason = "The queue response could not be decoded."

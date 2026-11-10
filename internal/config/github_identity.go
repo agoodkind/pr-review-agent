@@ -25,6 +25,7 @@ func LoadGitHubIdentity(appID int64, botLogin string, privateKey []byte) (Config
 	cfg.GitHubPrivateKey = key // gitleaks:allow
 	cfg.GitHubAppID = appID
 	cfg.GitHubBotLogin = botLogin
+
 	cfg.GitHubAPIBaseURL, err = url.Parse("https://api.github.com")
 	if err != nil {
 		return cfg, errors.New("GitHub REST API URL could not be configured")

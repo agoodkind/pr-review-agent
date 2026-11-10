@@ -401,8 +401,10 @@ func (collector *Collector) collectMetadata(
 	pullRequest githubapp.PullRequest,
 ) ([]MetadataSource, error) {
 	var commits []githubapp.PullRequestCommit
+
 	if pullRequest.CommitCount > 0 {
 		var err error
+
 		commits, err = collector.source.ListPullRequestCommits(
 			ctx,
 			ref.InstallationID,
@@ -518,6 +520,7 @@ func (collector *Collector) collectFiles(
 		}
 
 		attributes.remember(file, pullRequest.Head)
+
 		file.Attributes, err = attributes.forChange(ctx, changedFile, recovery)
 		if err != nil {
 			return nil, "", err
@@ -554,6 +557,7 @@ func collectFile(
 
 	needsRecovery := patchNeedsRecovery(changedFile)
 	canRecover := recovery.base != "" || recovery.pr.Base != ""
+
 	if !changedFile.PatchPresent {
 		fileContext.markGap(CoverageGapPatchAbsent)
 	} else {
@@ -602,6 +606,7 @@ func collectFile(
 
 		fileContext.Patch = patch
 		fileContext.Gap = CoverageGapNone
+
 		fileContext.CoverageComplete = true
 		if !fileContext.collectChangedLines() {
 			return FileContext{}, fmt.Errorf("recovered patch for %s is invalid", changedFile.Path)
@@ -726,6 +731,7 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 
 		if current.hasText() {
 			current.appendSeparator()
+
 			currentSize++
 		}
 

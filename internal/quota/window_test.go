@@ -25,6 +25,7 @@ func TestRollingAdmissionWaitsForEnoughReportedUsageToExpire(t *testing.T) {
 			Usage:        quota.Usage{InputTokens: 49, OutputTokens: 100},
 		},
 	}
+
 	snapshot, err := quota.Evaluate(
 		window,
 		now,
@@ -70,6 +71,7 @@ func TestFixedWindowChargesUsageToAdmissionInterval(t *testing.T) {
 		},
 		{AdmittedAtMS: midnight.UnixMilli(), Usage: quota.Usage{TotalTokens: 7}},
 	}
+
 	before, err := quota.Evaluate(
 		window,
 		midnight.Add(-time.Millisecond),

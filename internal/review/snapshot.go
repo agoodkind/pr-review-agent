@@ -14,6 +14,7 @@ func withRepositorySnapshot(
 	ref domain.PullRequestRef,
 ) (context.Context, func(), error) {
 	logger := gklog.L(ctx)
+
 	snapshotContext, closeSnapshot, err := github.OpenRepositorySnapshot(
 		ctx,
 		ref.InstallationID,

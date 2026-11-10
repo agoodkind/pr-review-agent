@@ -231,6 +231,7 @@ func (cfg Config) PromptBytes() int {
 // LoadReviewLimits validates optional runtime limits shared by service and diagnostic callers.
 func LoadReviewLimits(lookup LookupEnv, cfg *Config) error {
 	var err error
+
 	cfg.ReviewChunkConcurrency, err = loadPositiveSetting(lookup, "REVIEW_CHUNK_CONCURRENCY")
 	if err != nil {
 		return err
@@ -267,6 +268,7 @@ func FindModelPricing(pricingByModel map[string]ModelPricing, model string) (Mod
 	}
 
 	matchedPrefix := ""
+
 	var matchedPricing ModelPricing
 
 	for prefix, pricing := range pricingByModel {
@@ -316,6 +318,7 @@ func LoadRuntime(data []byte, lookup LookupEnv) (Config, error) {
 			}
 
 			values[name] = strconv.FormatBool(value)
+
 			continue
 		}
 
@@ -377,24 +380,28 @@ func Load(lookup LookupEnv) (Config, error) {
 	}
 
 	cfg.ReviewPolicy = policy
+
 	pricing, err := loadModelPricing(lookup)
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg.ReviewModelPricing = pricing
+
 	ruleImportance, err := loadRuleImportance(lookup, policy.Catalog())
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg.RuleImportance = ruleImportance
+
 	appearances, err := loadFailureAppearances(lookup)
 	if err != nil {
 		return Config{}, err
 	}
 
 	cfg.ServiceFailureAppearance = appearances
+
 	cfg.FailureVerdictPolicy, err = loadFailureVerdictPolicy(lookup)
 	if err != nil {
 		return Config{}, err
@@ -410,6 +417,7 @@ func Load(lookup LookupEnv) (Config, error) {
 	}
 
 	cfg.ProviderFailurePolicy = failurePolicy
+
 	if _, configured := lookup("PROVIDERS"); configured {
 		providers, err := LoadProviders(lookup)
 		if err != nil {
@@ -453,7 +461,9 @@ func loadRuleImportance(
 	catalog reviewrules.Catalog,
 ) (reviewrules.Importance, error) {
 	raw, configured := lookup("REVIEW_RULE_IMPORTANCE")
+
 	var importance reviewrules.Importance
+
 	if configured {
 		decoder := json.NewDecoder(strings.NewReader(raw))
 		if err := decoder.Decode(&importance); err != nil || importance == nil {
@@ -485,6 +495,7 @@ func loadModelPricing(lookup LookupEnv) (map[string]ModelPricing, error) {
 	pricing := make(map[string]ModelPricing)
 	decoder := json.NewDecoder(strings.NewReader(value))
 	decoder.DisallowUnknownFields()
+
 	if err := decoder.Decode(&pricing); err != nil {
 		return nil, errors.New("REVIEW_MODEL_PRICING must be a JSON object of token rates")
 	}
@@ -517,6 +528,7 @@ func loadFailureAppearances(lookup LookupEnv) (FailureAppearances, error) {
 	}
 
 	decoder := json.NewDecoder(strings.NewReader(raw))
+
 	var parsed map[FailureClass]FailureAppearance
 	if err := decoder.Decode(&parsed); err != nil {
 		return nil, errors.New("SERVICE_FAILURE_APPEARANCE must be a JSON object")
@@ -556,10 +568,13 @@ var knownFailureClasses = map[FailureClass]struct{}{
 }
 
 func loadBase(lookup LookupEnv) (Config, []string) {
-	var cfg Config
-	var missing []string
+	var (
+		cfg     Config
+		missing []string
+	)
 
 	cfg.Port = loadPort(lookup)
+
 	reviewWorkers, ok := loadReviewWorkers(lookup)
 	if !ok {
 		missing = append(missing, "REVIEW_WORKERS")
@@ -797,6 +812,7 @@ func loadClyde(lookup LookupEnv, cfg *Config) []string {
 	}
 
 	cfClientID, hasClientID := loadRequiredText(lookup, "CF_ACCESS_CLIENT_ID")
+
 	cfAccessValue, hasClientSecret := loadRequiredText(lookup, "CF_ACCESS_CLIENT_SECRET")
 	if hasClientID != hasClientSecret {
 		if !hasClientID {
@@ -841,6 +857,7 @@ func loadFallback(lookup LookupEnv, cfg *Config) []string {
 	}
 
 	var missing []string
+
 	baseURL, ok := loadRequiredText(lookup, "FALLBACK_BASE_URL")
 	if !ok {
 		missing = append(missing, "FALLBACK_BASE_URL")
@@ -880,6 +897,7 @@ func loadFallback(lookup LookupEnv, cfg *Config) []string {
 // without the other would send an incomplete credential.
 func loadFallbackAccess(lookup LookupEnv, cfg *Config) []string {
 	clientID, hasClientID := loadRequiredText(lookup, "FALLBACK_CF_ACCESS_CLIENT_ID")
+
 	clientSecret, hasClientSecret := loadRequiredText(lookup, "FALLBACK_CF_ACCESS_CLIENT_SECRET")
 	if !hasClientID && !hasClientSecret {
 		return nil

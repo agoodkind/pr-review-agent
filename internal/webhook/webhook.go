@@ -90,6 +90,7 @@ func VerifySHA256(signatureHeader string, secret []byte, body []byte) error {
 	}
 
 	providedHex := strings.TrimPrefix(signatureHeader, prefix)
+
 	provided, err := hex.DecodeString(providedHex)
 	if err != nil {
 		return ErrInvalidSignature
@@ -97,6 +98,7 @@ func VerifySHA256(signatureHeader string, secret []byte, body []byte) error {
 
 	mac := hmac.New(sha256.New, secret)
 	_, _ = mac.Write(body)
+
 	expected := mac.Sum(nil)
 	if !hmac.Equal(provided, expected) {
 		return ErrInvalidSignature
@@ -273,6 +275,7 @@ func mentionsBot(body string, botLogin string) bool {
 		index += offset
 		end := index + len(mention)
 		beforeValid := index == 0 || !isLoginCharacter(text[index-1])
+
 		afterValid := end == len(text) || !isLoginCharacter(text[end])
 		if beforeValid && afterValid {
 			return true
@@ -346,6 +349,7 @@ func ParsePullRequest(
 	// label on any pull request would otherwise start a review, which is the
 	// opposite of what a person adding a label expects.
 	metadataOnly := action == actionEdited && metadataChangesOnly(payload.Changes)
+
 	forced := action == actionEdited && !metadataOnly
 	if action == actionLabeled {
 		if !domain.ForcesReview(payload.Label.Name) {

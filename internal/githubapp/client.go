@@ -200,6 +200,7 @@ func (client *Client) doREST(
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("Accept", githubAcceptHeader)
 	request.Header.Set(githubAPIVersionHeader, githubAPIVersionValue)
+
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
 	}
@@ -270,6 +271,7 @@ func (client *Client) doRESTPaginated(
 
 		responseBody, readErr := readLimitedBody(response.Body)
 		closeErr := response.Body.Close()
+
 		if readErr != nil {
 			client.logger.ErrorContext(
 				ctx,
@@ -326,6 +328,7 @@ func (client *Client) doGraphQL(
 		Query:     query,
 		Variables: variables,
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		client.logger.ErrorContext(ctx, "marshal graphql request", slog.String("err", err.Error()))
@@ -423,6 +426,7 @@ func formatGraphQLErrors(errorsList []graphQLError) string {
 
 func readLimitedBody(reader io.Reader) ([]byte, error) {
 	limited := io.LimitReader(reader, maxResponseBytes+1)
+
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, errors.New("read response body")
@@ -472,6 +476,7 @@ func parseNextLink(linkHeader string) (string, bool) {
 		}
 
 		start := strings.Index(part, "<")
+
 		end := strings.Index(part, ">")
 		if start < 0 || end <= start {
 			continue

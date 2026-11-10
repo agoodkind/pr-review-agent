@@ -26,6 +26,7 @@ func completeGemini(
 	report usageReporter,
 ) (string, string, error) {
 	attempts := int32(1)
+
 	sdk, err := genai.NewClient(
 		ctx,
 		&genai.ClientConfig{
@@ -53,13 +54,16 @@ func completeGemini(
 	}
 
 	var content strings.Builder
+
 	model := ""
 	usage := responses.ResponseUsage{}
 	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	hasUsage := false
 	finishReason := genai.FinishReasonUnspecified
+
 	defer func() {
 		review.RecordModelUsage(ctx, modelUsage(model, usage, hasUsage, target, ""))
+
 		if hasUsage {
 			sdkUsage.Model = model
 			report(usage, "", &sdkUsage)
@@ -102,27 +106,7 @@ func completeGemini(
 		}
 	}
 
-	if finishReason == genai.FinishReasonMaxTokens {
-		return "", "", &TruncatedError{Model: target.model}
-	}
-
-	if finishReason != genai.FinishReasonStop {
-		return "", "", fmt.Errorf(
-			"gemini completion ended without a successful finish reason: %s",
-			finishReason,
-		)
-	}
-
-	result := strings.TrimSpace(content.String())
-	if result == "" {
-		return "", "", errors.New("gemini completion missing message content")
-	}
-
-	if model == "" {
-		return result, target.model, nil
-	}
-
-	return result, model, nil
+	return geminiCompletion(target, &content, model, finishReason)
 }
 
 func appendGeminiContent(builder *strings.Builder, content *genai.Content) {
@@ -151,6 +135,7 @@ func newGeminiParams(
 		SystemInstruction: genai.NewContentFromText(policy, genai.RoleUser),
 		ThinkingConfig:    &genai.ThinkingConfig{ThinkingLevel: level},
 	}
+
 	if !target.omitMaxOutputTokens {
 		limit := target.maxOutputTokens
 		if limit == 0 {

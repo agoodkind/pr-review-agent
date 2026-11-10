@@ -13,6 +13,7 @@ import (
 
 func deploymentTest(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	var options cloudflareops.DeploymentTestOptions
+
 	set := flag.NewFlagSet("deployment-test", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(
@@ -77,20 +78,25 @@ func deploymentTest(ctx context.Context, args []string, stdout, stderr io.Writer
 		"",
 		"New private evidence directory.",
 	)
+
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+
 		return err
 	}
+
 	if set.NArg() != 0 || (options.Deployment.TokenFile == "") == (options.Deployment.AccountTokenFile == "") {
 		return errors.New(
 			"deployment-test requires exactly one token file and accepts no positional arguments",
 		)
 	}
+
 	result, err := cloudflareops.TestDeployment(ctx, options)
 	if err != nil {
 		return err
 	}
+
 	return json.NewEncoder(stdout).Encode(result)
 }

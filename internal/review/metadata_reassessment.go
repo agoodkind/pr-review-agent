@@ -55,6 +55,7 @@ func MetadataReassessmentPolicy(policy reviewrules.Policy) (string, error) {
 	}
 
 	var data reviewrules.PromptData
+
 	untrusted, err := policy.Render("untrusted.policy", data)
 	if err != nil {
 		slog.Warn("Metadata reassessment input policy rendering failed", "err", err)
@@ -62,6 +63,7 @@ func MetadataReassessmentPolicy(policy reviewrules.Policy) (string, error) {
 	}
 
 	data.Rules, data.WritingPolicy, data.UntrustedPolicy = rules, writing, untrusted
+
 	text, err := policy.Render("metadata.reassess.system", data)
 	if err != nil {
 		slog.Warn("Metadata reassessment system policy rendering failed", "err", err)
@@ -80,6 +82,7 @@ func (service *Service) reassessMetadataFindings(
 	settings reviewSettings,
 ) ([]domain.Finding, error) {
 	logger := gklog.L(ctx)
+
 	if len(prior) == 0 {
 		return nil, nil
 	}
@@ -89,22 +92,8 @@ func (service *Service) reassessMetadataFindings(
 		return prior, errors.New("model does not support explicit metadata reassessment")
 	}
 
-	index := BuildMetadataIndex(sources)
-	// Empty mutable fields still supply complete current evidence.
-	index[domain.FindingTarget{Surface: domain.FindingPullRequestTitle, CommitSHA: ""}] = diff.MetadataSource{
-		Surface:   domain.FindingPullRequestTitle,
-		CommitSHA: "",
-		Text:      pullRequest.Title,
-		StartLine: 1,
-		EndLine:   1,
-	}
-	index[domain.FindingTarget{Surface: domain.FindingPullRequestDescription, CommitSHA: ""}] = diff.MetadataSource{
-		Surface:   domain.FindingPullRequestDescription,
-		CommitSHA: "",
-		Text:      pullRequest.Body,
-		StartLine: 1,
-		EndLine:   len(strings.Split(pullRequest.Body, "\n")),
-	}
+	index := currentMetadataIndex(sources, pullRequest)
+
 	removed, err := service.restoreMissingCommitMetadata(ctx, job, prior, index, pullRequest)
 	if err != nil {
 		return prior, err
@@ -128,6 +117,7 @@ func (service *Service) reassessMetadataFindings(
 		}
 
 		identifier := strconv.Itoa(number + 1)
+
 		prompt, err := service.metadataReassessmentPrompt(
 			ctx,
 			finding,
@@ -154,7 +144,9 @@ func (service *Service) reassessMetadataFindings(
 		}
 		callContext, cancel := modelRequestContext(ctx, service.model, settings.chunkTimeout)
 		assessments, err := model.ReassessMetadata(callContext, request)
+
 		cancel()
+
 		if err != nil {
 			logger.WarnContext(
 				ctx,
@@ -186,6 +178,30 @@ func (service *Service) reassessMetadataFindings(
 	return retained, nil
 }
 
+func currentMetadataIndex(
+	sources []diff.MetadataSource,
+	pullRequest githubapp.PullRequest,
+) map[domain.FindingTarget]diff.MetadataSource {
+	index := BuildMetadataIndex(sources)
+	// Empty mutable fields still supply complete current evidence.
+	index[domain.FindingTarget{Surface: domain.FindingPullRequestTitle, CommitSHA: ""}] = diff.MetadataSource{
+		Surface:   domain.FindingPullRequestTitle,
+		CommitSHA: "",
+		Text:      pullRequest.Title,
+		StartLine: 1,
+		EndLine:   1,
+	}
+	index[domain.FindingTarget{Surface: domain.FindingPullRequestDescription, CommitSHA: ""}] = diff.MetadataSource{
+		Surface:   domain.FindingPullRequestDescription,
+		CommitSHA: "",
+		Text:      pullRequest.Body,
+		StartLine: 1,
+		EndLine:   len(strings.Split(pullRequest.Body, "\n")),
+	}
+
+	return index
+}
+
 func currentMetadataFinding(
 	finding domain.Finding,
 	assessment domain.MetadataFindingAssessment,
@@ -196,6 +212,7 @@ func currentMetadataFinding(
 	finding.Body = assessment.Reason
 	// Historical replacements can edit unrelated lines after a prose revision.
 	finding.CorrectionAction = domain.CorrectionNone
+
 	finding.Suggestion = ""
 	if err := finding.Validate(); err != nil {
 		slog.Warn("Current metadata finding validation failed", "err", err)
@@ -213,6 +230,7 @@ func (service *Service) metadataReassessmentPrompt(
 	identifier string,
 ) (string, error) {
 	logger := gklog.L(ctx)
+
 	encoded, err := json.Marshal(finding)
 	if err != nil {
 		logger.WarnContext(ctx, "Saved metadata finding encoding failed", "err", err)
@@ -225,7 +243,8 @@ func (service *Service) metadataReassessmentPrompt(
 	}
 
 	body := fmt.Sprintf(
-		"Finding ID: %s\nCurrent head: %s\nCurrent revision: %s\nDeduplication mode: %s\nSaved finding (historical assessment):\n%s\nComplete current field %s, lines 1-%d:\n%s",
+		"Finding ID: %s\nCurrent head: %s\nCurrent revision: %s\nDeduplication mode: %s\n"+
+			"Saved finding (historical assessment):\n%s\nComplete current field %s, lines 1-%d:\n%s",
 		identifier,
 		pullRequest.Head,
 		diff.PullRequestRevision(pullRequest),
@@ -235,8 +254,11 @@ func (service *Service) metadataReassessmentPrompt(
 		len(strings.Split(source.Text, "\n")),
 		source.Text,
 	)
+
 	var data reviewrules.PromptData
+
 	data.Input = service.reviewPolicy.WrapUntrusted(service.reviewPolicy.EscapeUntrusted(body))
+
 	prompt, err := service.reviewPolicy.Render("metadata.reassess.input", data)
 	if err != nil {
 		logger.WarnContext(ctx, "Metadata reassessment prompt rendering failed", "err", err)
@@ -252,6 +274,7 @@ func (service *Service) checkMetadataReassessmentSize(
 	maximumBytes int,
 ) error {
 	logger := gklog.L(ctx)
+
 	size := len(prompt)
 	if sizer, supported := service.model.(MetadataReassessmentRequestSizer); supported {
 		measured, err := sizer.MetadataReassessmentRequestBytes(prompt)
@@ -286,6 +309,7 @@ func (request MetadataReassessmentRequest) ValidateAssessments(
 	assessments []domain.MetadataFindingAssessment,
 ) (domain.MetadataFindingAssessment, error) {
 	var empty domain.MetadataFindingAssessment
+
 	if err := domain.ValidateMetadataAssessments(assessments); err != nil {
 		slog.Warn("Metadata reassessment validation failed", "err", err)
 		return empty, fmt.Errorf("validate metadata reassessment: %w", err)
@@ -296,6 +320,7 @@ func (request MetadataReassessmentRequest) ValidateAssessments(
 	}
 
 	assessment := assessments[0]
+
 	lines := strings.Split(request.Source.Text, "\n")
 	if assessment.EndLine > len(lines) {
 		return empty, errors.New("metadata assessment coordinates exceed the current field")

@@ -48,6 +48,7 @@ func TestEachReviewRefreshOwnsAPendingCheckUntilItsReconciliationFinishes(t *tes
 	secondJob := fixture.job()
 	secondJob.DeliveryID = "refresh-two"
 	secondJob.RefreshVerdict = true
+
 	second, secondAdmitted, err := fixture.service.Admit(context.Background(), secondJob)
 	if err != nil {
 		t.Fatalf("second Admit: %v", err)
@@ -179,6 +180,7 @@ func TestAnOlderReviewRefreshRetryCreatesANewVisibleCheck(t *testing.T) {
 	newerJob := fixture.job()
 	newerJob.DeliveryID = "refresh-newer"
 	newerJob.RefreshVerdict = true
+
 	newer, _, err := fixture.service.Admit(context.Background(), newerJob)
 	if err != nil {
 		t.Fatalf("newer Admit: %v", err)

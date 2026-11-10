@@ -12,14 +12,20 @@ import (
 
 func TestRenderDetailsSeparatesPeriodTotalsFromReviewUsage(t *testing.T) {
 	ctx, recorder := review.WithUsageRecorder(t.Context())
+
 	var usage review.ModelUsage
+
 	usage.ProviderID, usage.RequestedModel, usage.Model = "provider", "model", "model"
 	usage.Requests, usage.ReportedRequests, usage.TotalTokens = 1, 1, 10
 	usage.Priced, usage.EstimatedCostUSD = true, 0.02
 	review.RecordModelUsage(ctx, usage)
+
 	var attempt review.ProviderAttempt
+
 	attempt.Status.ProviderID, attempt.Status.Model, attempt.Count = "provider", "model", 1
+
 	var daily review.ProviderPeriodUsage
+
 	daily.ProviderID, daily.RequestedModel = "provider", "model"
 	daily.Window.Mode, daily.Window.Duration = quota.Rolling, "24h"
 	daily.TotalTokens, daily.EstimatedCostUSD = 1_200_000, 0.24
@@ -39,7 +45,9 @@ func TestRenderDetailsSeparatesPeriodTotalsFromReviewUsage(t *testing.T) {
 	weekly.TotalTokens, weekly.PricedRequests, weekly.CostComplete = 1_000, 0, false
 	unavailable := daily
 	unavailable.Window.Duration, unavailable.Available = "1h", false
+
 	var summary review.Summary
+
 	summary.Usage = recorder.Summary()
 	summary.Usage.ProviderAttempts = []review.ProviderAttempt{attempt}
 	summary.Usage.ProviderColumns = []reviewrules.ProviderDetailColumn{
@@ -51,6 +59,7 @@ func TestRenderDetailsSeparatesPeriodTotalsFromReviewUsage(t *testing.T) {
 	summary.Usage.PeriodUsage = []review.ProviderPeriodUsage{daily, monthly, weekly, unavailable}
 	for index := range summary.Usage.PeriodUsage {
 		period := &summary.Usage.PeriodUsage[index]
+
 		bounds, err := period.Window.Bounds(time.UnixMilli(period.AsOfMS))
 		if err != nil {
 			t.Fatal(err)
@@ -130,12 +139,14 @@ func TestRenderDetailsSeparatesPeriodTotalsFromReviewUsage(t *testing.T) {
 	}
 
 	periods := summary.Usage.PeriodUsage
+
 	summary.Usage.PeriodUsage = nil
 	if unknown := review.RenderDetails(summary); !strings.Contains(unknown, "| unavailable |") {
 		t.Fatalf("The period column substituted a value for an unavailable snapshot.\n%s", unknown)
 	}
 
 	summary.Usage.PeriodUsage = periods
+
 	summary.Usage.ProviderColumns = []reviewrules.ProviderDetailColumn{
 		reviewrules.ProviderCostColumn,
 	}
@@ -146,6 +157,7 @@ func TestRenderDetailsSeparatesPeriodTotalsFromReviewUsage(t *testing.T) {
 
 func TestRenderDetailsShowsRecordedUsageWithoutQuotaWindow(t *testing.T) {
 	var period review.ProviderPeriodUsage
+
 	period.ProviderID, period.RequestedModel = "uncapped", "model"
 	period.Available, period.CostComplete = true, true
 	period.TotalTokens, period.EstimatedCostUSD = 1_200_000, 0.24
@@ -153,9 +165,13 @@ func TestRenderDetailsShowsRecordedUsageWithoutQuotaWindow(t *testing.T) {
 	period.HistoryStartMS = time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).UnixMilli()
 	period.AsOfMS = time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC).UnixMilli()
 	period.Bounds.StartMS, period.Bounds.EndMS = period.HistoryStartMS-1_000, period.AsOfMS
+
 	var attempt review.ProviderAttempt
+
 	attempt.Status.ProviderID, attempt.Status.Model, attempt.Count = "uncapped", "model", 1
+
 	var summary review.Summary
+
 	summary.Usage.ProviderColumns = []reviewrules.ProviderDetailColumn{
 		reviewrules.ProviderIdentityColumn,
 		reviewrules.ProviderPeriodUsageColumn,
@@ -163,6 +179,7 @@ func TestRenderDetailsShowsRecordedUsageWithoutQuotaWindow(t *testing.T) {
 	summary.Usage.ProviderAttempts = []review.ProviderAttempt{attempt}
 	summary.Usage.PeriodUsage = []review.ProviderPeriodUsage{period}
 	body := review.RenderDetails(summary)
+
 	providerTable, periodDetails := splitProviderPeriodDisplay(t, body)
 	if !strings.Contains(
 		providerTable,
@@ -198,6 +215,7 @@ func TestRenderDetailsShowsRecordedUsageWithoutQuotaWindow(t *testing.T) {
 	}
 
 	period.EstimatedCostUSD = 0.000041
+
 	summary.Usage.PeriodUsage = []review.ProviderPeriodUsage{period}
 	if tinyCost := review.RenderDetails(summary); !strings.Contains(
 		tinyCost,
@@ -209,6 +227,7 @@ func TestRenderDetailsShowsRecordedUsageWithoutQuotaWindow(t *testing.T) {
 
 func splitProviderPeriodDisplay(t *testing.T, body string) (string, string) {
 	t.Helper()
+
 	_, providerDetails, found := strings.Cut(body, "#### Provider details")
 	if !found {
 		t.Fatalf("The review does not include provider details.\n%s", body)

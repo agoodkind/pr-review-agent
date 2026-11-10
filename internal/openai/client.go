@@ -94,13 +94,21 @@ type Client struct {
 	maximumRequestBytes     int
 }
 
-// NewClient constructs an SDK client for each configured provider.
+// NewClient constructs a client for the configured providers.
+//
+// The client uses the supplied HTTP client, or the default HTTP client when
+// the argument is nil.
+//
+// For example:
+//
+//	client := NewClient(cfg, http.DefaultClient)
 func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 
 	configuredProviders, fallbackOnUsageExceeded := configuredModelProviders(cfg)
+
 	client := &Client{
 		providers:               make([]provider, 0, len(configuredProviders)),
 		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
@@ -170,6 +178,7 @@ func configuredModelProviders(cfg config.Config) ([]config.ProviderConfig, bool)
 	}
 
 	var emptyWindow quota.Window
+
 	providers := []config.ProviderConfig{
 		{
 			ID:                   "primary",
@@ -254,8 +263,14 @@ func newProviderSDK(
 	return openaigo.NewClient(opts...)
 }
 
-// Review requests one structured review completion and reports the model that
-// served it, which is the fallback model whenever the primary refused.
+// Review requests one structured review completion.
+//
+// The result reports the model that completed the request, including a
+// fallback model after a primary refusal.
+//
+// For example:
+//
+//	completion, err := client.Review(ctx, prompt)
 func (client *Client) Review(ctx context.Context, prompt string) (review.Completion, error) {
 	schema, err := MarshalReviewSchema(client.reviewPolicy)
 	if err != nil {
@@ -274,8 +289,11 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 		return review.Completion{}, fmt.Errorf("render review policy: %w", err)
 	}
 
-	var result domain.ReviewResult
-	var inspections []review.InspectionRequest
+	var (
+		result      domain.ReviewResult
+		inspections []review.InspectionRequest
+	)
+
 	model, err := client.complete(
 		ctx,
 		prompt,
@@ -294,6 +312,7 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 			}
 
 			result = candidate
+
 			inspections, decodeErr = inspectionRequests(ctx, []byte(content), reviewSchemaName)
 			if decodeErr != nil {
 				return decodeErr
@@ -315,6 +334,7 @@ func inspectionRequests(
 	schemaName string,
 ) ([]review.InspectionRequest, error) {
 	logger := gklog.L(ctx)
+
 	var envelope struct {
 		Requests json.RawMessage `json:"inspection_requests"`
 	}
@@ -325,6 +345,7 @@ func inspectionRequests(
 
 	present := len(envelope.Requests) > 0
 	null := bytes.Equal(bytes.TrimSpace(envelope.Requests), []byte("null"))
+
 	attributes := []slog.Attr{
 		slog.String("schema_name", schemaName),
 		slog.Bool("inspection_requests_present", present),
@@ -368,7 +389,14 @@ func inspectionRequests(
 	return requests, nil
 }
 
-// Report requests the final prose for a completed deterministic review.
+// Report requests prose for a completed deterministic review.
+//
+// The client applies the configured report policy and decodes the structured
+// report.
+//
+// For example:
+//
+//	completion, err := client.Report(ctx, prompt)
 func (client *Client) Report(ctx context.Context, prompt string) (review.ReportCompletion, error) {
 	policy, err := review.ReportPolicy(client.reviewPolicy)
 	if err != nil {
@@ -379,6 +407,7 @@ func (client *Client) Report(ctx context.Context, prompt string) (review.ReportC
 	}
 
 	var report review.Report
+
 	model, err := client.complete(
 		ctx,
 		prompt,
@@ -408,7 +437,14 @@ func (client *Client) Report(ctx context.Context, prompt string) (review.ReportC
 	return review.ReportCompletion{Report: report, Model: model}, nil
 }
 
-// Reconcile requests one structured thread reconciliation completion.
+// Reconcile requests structured thread decisions.
+//
+// The client applies the reconciliation policy before decoding thread
+// resolutions.
+//
+// For example:
+//
+//	resolutions, err := client.Reconcile(ctx, prompt)
 func (client *Client) Reconcile(
 	ctx context.Context,
 	prompt string,
@@ -422,6 +458,7 @@ func (client *Client) Reconcile(
 	}
 
 	var resolutions []domain.ThreadResolution
+
 	_, err = client.complete(
 		ctx,
 		prompt,
@@ -454,12 +491,20 @@ func (client *Client) Reconcile(
 	return resolutions, nil
 }
 
-// Consolidate requests one structured grouping of a chunk's own findings.
+// Consolidate requests a grouping of one chunk's findings.
+//
+// The client applies the consolidation policy and decodes the resulting
+// groups.
+//
+// For example:
+//
+//	consolidation, err := client.Consolidate(ctx, prompt)
 func (client *Client) Consolidate(
 	ctx context.Context,
 	prompt string,
 ) (review.Consolidation, error) {
 	logger := gklog.L(ctx)
+
 	policy, err := review.ConsolidationPolicy(client.reviewPolicy)
 	if err != nil {
 		logger.WarnContext(ctx, "Consolidation policy rendering failed")
@@ -467,6 +512,7 @@ func (client *Client) Consolidate(
 	}
 
 	var consolidation review.Consolidation
+
 	_, err = client.complete(
 		ctx,
 		prompt,
@@ -506,6 +552,7 @@ func (client *Client) complete(
 	accept func(string) error,
 ) (string, error) {
 	logger := gklog.L(ctx)
+
 	instructions, err := structuredOutputPrompt(
 		ctx,
 		client.reviewPolicy,
@@ -549,6 +596,7 @@ func (client *Client) complete(
 		client.recordProviderAttempt(ctx, target, budget, attemptErr, fallback)
 		logProviderAttempt(ctx, failure)
 		failures = append(failures, failure)
+
 		if !fallback {
 			if parentErr := ctx.Err(); parentErr != nil {
 				failures = append(failures, parentErr)
@@ -565,6 +613,7 @@ func (client *Client) complete(
 
 func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 	status := failure.ProviderStatus()
+
 	attributes := []slog.Attr{
 		slog.String("provider_id", status.ProviderID),
 		slog.String("configured_model", status.Model),
@@ -576,6 +625,7 @@ func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 	}
 	if status.QuotaKnown && status.QuotaSnapshot.Bounds.EndMS > 0 {
 		accounting := status.QuotaSnapshot
+
 		mode := status.TokenWindow.Mode
 		if mode == "" {
 			mode = quota.Fixed
@@ -653,22 +703,26 @@ func completeWith(
 		_ = stream.Close()
 	}()
 
-	var content strings.Builder
 	var (
+		content       strings.Builder
 		responseModel string
 		serviceTier   string
 		usage         responses.ResponseUsage
 		hasUsage      bool
 	)
+
 	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	completed := false
 	incompleteReason := ""
+
 	var streamFailure error
+
 	defer func() {
 		review.RecordModelUsage(
 			ctx,
 			modelUsage(responseModel, usage, hasUsage, target, serviceTier),
 		)
+
 		if hasUsage {
 			sdkUsage.Model = responseModel
 			report(usage, serviceTier, &sdkUsage)
@@ -677,6 +731,7 @@ func completeWith(
 
 	for stream.Next() {
 		event := stream.Current()
+
 		sdkUsage.ResponseID = cmp.Or(event.Response.ID, sdkUsage.ResponseID)
 		switch responseEventType(event.Type) {
 		case responseOutputTextDelta:
@@ -684,6 +739,7 @@ func completeWith(
 		case responseCompleted, responseIncomplete, responseFailed:
 			logResponseOutputShape(ctx, target.id, schemaName, event.Response)
 			serviceTier = string(event.Response.ServiceTier)
+
 			responseModel = cmp.Or(event.Response.Model, responseModel)
 			if event.Response.JSON.Usage.Valid() {
 				usage = event.Response.Usage
@@ -694,6 +750,7 @@ func completeWith(
 			switch responseTerminalEventType(event.Type) {
 			case terminalCompleted:
 				completed = true
+
 				if text := event.Response.OutputText(); text != "" {
 					content.Reset()
 					content.WriteString(text)
@@ -720,30 +777,7 @@ func completeWith(
 		return "", "", modelProviderError(target.model, err)
 	}
 
-	if incompleteReason == "max_output_tokens" {
-		return "", "", &TruncatedError{Model: target.model}
-	}
-
-	if incompleteReason != "" {
-		return "", "", errors.New("openai response incomplete: " + incompleteReason)
-	}
-
-	if !completed {
-		return "", "", errors.New("openai response ended without a completion event")
-	}
-
-	result := strings.TrimSpace(content.String())
-	if result == "" {
-		return "", "", errors.New("openai response missing message content")
-	}
-
-	completionModel := target.model
-	if (target.model == config.AutoRouterModel || target.model == config.FreeRouterModel) &&
-		responseModel != "" {
-		completionModel = responseModel
-	}
-
-	return result, completionModel, nil
+	return responseCompletion(target, &content, responseModel, completed, incompleteReason)
 }
 
 func logResponseOutputShape(
@@ -888,9 +922,11 @@ func modelUsage(
 		usage.OutputTokens,
 		serviceTier,
 	)
+
 	priced := usageReported && pricingFound && ratesKnown
 	if !priced {
 		var unknownCost config.TokenCost
+
 		cost = unknownCost
 	}
 
@@ -976,9 +1012,11 @@ func structuredOutputPrompt(
 	schema json.RawMessage,
 ) (string, error) {
 	var data reviewrules.PromptData
+
 	data.Input = policy
 	data.SchemaName = schemaName
 	data.Schema = string(schema)
+
 	output, err := configuration.Render("structured.output", data)
 	if err != nil {
 		logger := gklog.L(ctx)

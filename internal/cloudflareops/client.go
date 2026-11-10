@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -92,6 +91,7 @@ func (client *Client) request(
 
 	request.Header.Set("Authorization", "Bearer "+client.token)
 	request.Header.Set("Content-Type", "application/json")
+
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		slog.WarnContext(ctx, "Cloudflare transport failed")
@@ -99,6 +99,7 @@ func (client *Client) request(
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
 	if err != nil {
 		return envelope{}, response.StatusCode, errors.New("cloudflare response could not be read")
@@ -280,6 +281,7 @@ func AcquireCredentials(
 		"ephemeral",
 		options.AccountTokenFile != "",
 	)
+
 	if (options.TokenFile == "") == (options.AccountTokenFile == "") {
 		return nil, errors.New("provide exactly one scoped token file or account token file")
 	}
@@ -304,7 +306,9 @@ func AcquireCredentials(
 	}
 
 	var handle Credentials
+
 	credentials = &handle
+
 	credentials.Client = client
 	if options.TokenFile != "" {
 		return credentials, nil
@@ -321,6 +325,7 @@ func AcquireCredentials(
 	}
 
 	credentials.accountClient = client
+
 	credentials.directory, err = os.MkdirTemp("", "pragent-ops-credentials.")
 	if err != nil {
 		slog.WarnContext(ctx, "Private credential directory creation failed")
@@ -328,58 +333,15 @@ func AcquireCredentials(
 	}
 
 	acquired := credentials
+
 	defer func() {
 		if returnErr != nil {
 			returnErr = errors.Join(returnErr, acquired.Close(ctx))
 		}
 	}()
-	body, err := client.tokenBody(ctx, options)
-	if err != nil {
+
+	if err := credentials.acquireScoped(ctx, options); err != nil {
 		return nil, err
-	}
-
-	created, err := client.createToken(ctx, body)
-	if err != nil {
-		return nil, err
-	}
-
-	var scoped tokenResult
-	if json.Unmarshal(created.Result, &scoped) != nil {
-		return nil, errors.New("cloudflare returned an invalid scoped credential")
-	}
-
-	credentials.id = scoped.ID
-	if scoped.ID == "" || scoped.Value == "" {
-		return nil, errors.New("cloudflare did not return a complete scoped credential")
-	}
-
-	credentials.Client, err = NewClient(options.APIURL, scoped.Value, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if err = os.WriteFile(
-		filepath.Join(credentials.directory, "token"),
-		[]byte(scoped.Value),
-		0o600,
-	); err != nil {
-		slog.WarnContext(ctx, "Private temporary credential write failed")
-		return nil, fmt.Errorf("write private temporary credential: %w", err)
-	}
-
-	if err = os.WriteFile(
-		filepath.Join(credentials.directory, "id"),
-		[]byte(scoped.ID),
-		0o600,
-	); err != nil {
-		slog.WarnContext(ctx, "Temporary credential identifier write failed")
-		return nil, fmt.Errorf("write temporary credential identifier: %w", err)
-	}
-
-	_, _, err = credentials.Client.request(ctx, http.MethodGet, "/user/tokens/verify", nil)
-	if err != nil {
-		slog.WarnContext(ctx, "Scoped credential verification failed")
-		return nil, fmt.Errorf("scoped credential verification failed: %w", err)
 	}
 
 	return credentials, nil
@@ -400,6 +362,7 @@ func (client *Client) tokenBody(ctx context.Context, options CredentialOptions) 
 		}
 
 		seen[name] = true
+
 		permissionID, err := client.permissionID(ctx, name)
 		if err != nil {
 			return nil, err
@@ -478,6 +441,7 @@ func (client *Client) createToken(ctx context.Context, body []byte) (envelope, e
 		45*time.Second,
 	)
 	defer cancelCreation()
+
 	created, _, err := client.request(creationContext, http.MethodPost, "/user/tokens", body)
 
 	return created, err
@@ -492,6 +456,7 @@ func (credentials *Credentials) Close(ctx context.Context) error {
 	if credentials.id != "" && !credentials.Revoked {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 		defer cancel()
+
 		_, _, err := credentials.accountClient.request(
 			ctx,
 			http.MethodDelete,

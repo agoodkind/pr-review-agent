@@ -12,6 +12,7 @@ import (
 // captured runs one logger against a recorder and hands back the recorder.
 func captured(t *testing.T, write func(logger *slog.Logger)) *runlog.Recorder {
 	t.Helper()
+
 	recorder := runlog.NewRecorder()
 	write(slog.New(recorder))
 

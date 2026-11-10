@@ -109,6 +109,7 @@ func TestRouterRequestsRequireCapabilitiesAcrossProviderAPIs(t *testing.T) {
 
 						server := newProviderServer(state)
 						defer server.Close()
+
 						client := openai.NewClient(
 							config.Config{
 								ReviewPolicy:      policytest.Load(t),
@@ -180,6 +181,7 @@ func TestDirectOpenRouterRequestsRequireSupportedParameters(t *testing.T) {
 						},
 						nil,
 					)
+
 					payloads, err := client.ReviewRequestPayloads("Review the supplied source.")
 					if err != nil || len(payloads) != 1 {
 						t.Fatal("The direct-model request could not be serialized.")

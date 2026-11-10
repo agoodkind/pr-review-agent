@@ -31,6 +31,7 @@ func TestCommitMetadataReassessmentUsesTheCompleteCurrentCommitSet(t *testing.T)
 					}
 					model := &sequenceModel{results: []domain.ReviewResult{{}}}
 					options := contentCollectionOptions{onlyMetadata: true}
+
 					switch scenario {
 					case "surviving target":
 						commits = append(
@@ -69,6 +70,7 @@ func TestCommitMetadataReassessmentUsesTheCompleteCurrentCommitSet(t *testing.T)
 					job := fixture.job()
 					job.MetadataOnly = mode == "metadata edit"
 					err := fixture.run(t.Context(), job)
+
 					failureExpected := scenario == "incomplete list" || scenario == "duplicate list"
 					if (err != nil) != failureExpected {
 						t.Fatalf(
@@ -79,6 +81,7 @@ func TestCommitMetadataReassessmentUsesTheCompleteCurrentCommitSet(t *testing.T)
 					}
 
 					stored := retainedMetadataFindings(t, failureSummaryComment(t, fixture))
+
 					switch scenario {
 					case "surviving target":
 						if len(stored) != 1 || stored[0].CommitSHA != prior.CommitSHA ||

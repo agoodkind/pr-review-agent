@@ -27,7 +27,9 @@ func TestMetadataReassessmentUsesStructuredProviderCompletion(t *testing.T) {
 			func(t *testing.T) {
 				client, server, state := newTestClient(t)
 				defer server.Close()
+
 				state.completionContent = `{"assessments":[{"finding_id":"1","resolution":"` + scenario + `","reason":"Current text establishes the decision.","evidence":"Current field.","start_line":1,"end_line":1}]}`
+
 				expectError := scenario != "resolved" && scenario != "open" &&
 					scenario != "uncertain"
 				if scenario == "duplicate" {
@@ -51,6 +53,7 @@ func TestMetadataReassessmentUsesStructuredProviderCompletion(t *testing.T) {
 				}
 
 				ctx, usage := review.WithUsageRecorder(context.Background())
+
 				assessments, err := client.ReassessMetadata(
 					ctx,
 					review.MetadataReassessmentRequest{

@@ -309,6 +309,7 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 
 				assertMetadataRejectionStillStands(t, fixture)
 				initialSummaryID := fixture.state.issueComments[0]["id"]
+
 				originalRejection := fixture.state.submittedReviews[0]
 				if scenario.emptyNativeBody {
 					originalRejection["body"] = ""

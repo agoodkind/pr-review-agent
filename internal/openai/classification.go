@@ -11,12 +11,20 @@ import (
 
 var _ review.FileContentClassifier = (*Client)(nil)
 
-// ClassifyFileContent requests a scope decision with the configured provider chain.
+// ClassifyFileContent requests a file scope decision.
+//
+// The client uses the configured provider chain and a schema that forbids
+// review findings.
+//
+// For example:
+//
+//	completion, err := client.ClassifyFileContent(ctx, prompt)
 func (client *Client) ClassifyFileContent(
 	ctx context.Context,
 	prompt string,
 ) (review.Completion, error) {
 	logger := gklog.L(ctx)
+
 	schema, err := MarshalClassificationSchema(client.reviewPolicy)
 	if err != nil {
 		return review.Completion{}, err
@@ -29,6 +37,7 @@ func (client *Client) ClassifyFileContent(
 	}
 
 	var result domain.ReviewResult
+
 	model, err := client.complete(
 		ctx,
 		prompt,

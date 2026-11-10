@@ -90,6 +90,7 @@ func inspectReviewEvidence(
 	for _, request := range requests {
 		state.requests++
 		key := request
+
 		key.Reason = ""
 		if _, cached := state.completed[key]; cached {
 			continue
@@ -131,9 +132,11 @@ func inspectReviewEvidence(
 	}
 
 	var data reviewrules.PromptData
+
 	data.Total = policy.Limits().InspectionRequests - state.requests
 	data.ContentBytes = policy.Limits().InspectionBytes - state.bytes
 	data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(state.evidence.String()))
+
 	support, err := renderPrompt(policy, "inspection.input", data)
 	if err != nil {
 		return "", err

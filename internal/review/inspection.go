@@ -56,7 +56,21 @@ var errInspectionExcluded = errors.New("content policy excludes this inspection 
 
 var errInspectionBytes = errors.New("inspection source exceeds the configured byte limit")
 
-// NewInspector binds inspection to the original repository, head, and content policy.
+// NewInspector creates an inspector for one immutable review head.
+//
+// The inspector restricts source operations to the supplied repository,
+// content policy, byte limit, and result limit.
+//
+// For example:
+//
+//	inspector, err := NewInspector(
+//		source,
+//		ref,
+//		files,
+//		policy,
+//		byteLimit,
+//		resultLimit,
+//	)
 func NewInspector(
 	source InspectionSource,
 	ref domain.PullRequestRef,
@@ -126,6 +140,7 @@ func (inspector *repositoryInspector) loadFile(
 	filePath string,
 ) (diff.FileContext, error) {
 	logger := gklog.L(ctx)
+
 	if err := inspectionPath(filePath, false); err != nil {
 		return diff.FileContext{}, err
 	}
@@ -224,6 +239,7 @@ func (inspector *repositoryInspector) readFile(
 	}
 
 	identity := "Repository file: " + file.Path + "\nHead: " + string(inspector.ref.Head)
+
 	start, end, err := inspectionQueryRange(file.CurrentContent, request)
 	if err != nil {
 		return "", err
@@ -244,6 +260,7 @@ func (inspector *repositoryInspector) search(
 	request InspectionRequest,
 ) (string, error) {
 	logger := gklog.L(ctx)
+
 	if err := inspectionPath(request.Target, true); err != nil {
 		return "", err
 	}
@@ -269,9 +286,11 @@ func (inspector *repositoryInspector) search(
 		request,
 		inspector.maximumResults,
 	)
+
 	var output strings.Builder
 	output.WriteString(
-		"Repository search checks the private snapshot at the reviewed head. Content policy and result limits restrict the returned evidence.\n",
+		"Repository search checks the private snapshot at the reviewed head. " +
+			"Content policy and result limits restrict the returned evidence.\n",
 	)
 	fmt.Fprintf(
 		&output,
@@ -279,6 +298,7 @@ func (inspector *repositoryInspector) search(
 		request.Query,
 		inspector.ref.Head,
 	)
+
 	if output.Len() > inspector.maximumBytes {
 		return "", errors.New("inspection search metadata exceeds the configured byte limit")
 	}
@@ -305,6 +325,7 @@ func (inspector *repositoryInspector) search(
 		}
 
 		output.WriteString(excerpt + "\n")
+
 		matched++
 	}
 
@@ -362,6 +383,7 @@ func (inspector *repositoryInspector) searchMatch(
 	maximumBytes int,
 ) (string, error) {
 	logger := gklog.L(ctx)
+
 	file, err := inspector.loadFile(ctx, filePath)
 	if err != nil {
 		var apiError githubapp.APIError
@@ -424,11 +446,13 @@ func inspectionExcerpt(
 		sha256.Sum256([]byte(content)),
 		len(content),
 	)
+
 	var excerpt strings.Builder
 
 	returnedEnd := max(0, startLine-1)
 	for index := startLine; index > 0 && index <= endLine; index++ {
 		line := fmt.Sprintf("%d: %s\n", index, lines[index-1])
+
 		metadata := inspectionMetadata(
 			provenance,
 			startLine,
@@ -441,6 +465,7 @@ func inspectionExcerpt(
 		}
 
 		excerpt.WriteString(line)
+
 		returnedEnd = index
 	}
 

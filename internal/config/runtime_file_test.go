@@ -16,6 +16,7 @@ import (
 
 func TestRepositoryRuntimeLoadsServiceConfiguration(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
+
 	data, err := os.ReadFile("runtime.json")
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +50,7 @@ func TestRepositoryRuntimeLoadsServiceConfiguration(t *testing.T) {
 
 	for _, provider := range runtime.Providers {
 		prefix := "PROVIDER_" + strings.ToUpper(provider.ID)
+
 		credentials[prefix+"_API_KEY"] = "fixture-runtime-api-key"
 		if provider.AccessClientIDBinding != "" {
 			credentials[prefix+"_CF_ACCESS_CLIENT_ID"] = "fixture-runtime-access-id"

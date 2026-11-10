@@ -29,6 +29,7 @@ type Event struct {
 
 func text(fields map[string]json.RawMessage, key string) string {
 	var value string
+
 	_ = json.Unmarshal(fields[key], &value)
 
 	return value
@@ -175,6 +176,7 @@ func PrivateDirectory(path string) (string, error) {
 // WriteJSON sets private permissions because telemetry evidence can contain provider error payloads.
 func WriteJSON(path string, value json.Marshaler) error {
 	slog.Info("Private evidence artifact write started", "path", path)
+
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return errors.New("output could not be encoded")
@@ -191,6 +193,7 @@ func WriteJSON(path string, value json.Marshaler) error {
 // MarshalJSON uses a distinct wire type because encoding Manifest directly would recurse.
 func (manifest Manifest) MarshalJSON() ([]byte, error) {
 	type wireManifest Manifest
+
 	data, err := json.Marshal(wireManifest(manifest))
 	if err != nil {
 		return nil, fmt.Errorf("encode capture manifest: %w", err)
@@ -217,6 +220,7 @@ func (client *Client) Capture(
 	manifest.To = options.To.UTC()
 	manifest.Account = options.Account
 	manifest.Script = options.Script
+
 	manifest.Completeness = "incomplete"
 	if options.Script == "" || !options.From.Before(options.To) || options.PageSize <= 0 ||
 		options.PageSize > 2000 ||
@@ -227,6 +231,7 @@ func (client *Client) Capture(
 	}
 
 	manifest.EventsFile = filepath.Join(options.Directory, "events.ndjson")
+
 	file, err := os.OpenFile(manifest.EventsFile, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		slog.WarnContext(ctx, "Telemetry output file creation failed")
@@ -247,6 +252,7 @@ func (client *Client) Capture(
 			WriteJSON(filepath.Join(options.Directory, "manifest.json"), manifest),
 		)
 	}()
+
 	parameters, err := json.Marshal(Parameters{
 		Datasets:          []string{"cloudflare-workers"},
 		FilterCombination: "and",
@@ -269,65 +275,9 @@ func (client *Client) Capture(
 		encoder:  json.NewEncoder(writer),
 		seen:     make(map[string]struct{}),
 	}
+	err = collector.capture(ctx, client, parameters)
 
-	upper := options.To.UnixMilli()
-	for page := 1; page <= options.MaxPages; page++ {
-		if err := ctx.Err(); err != nil {
-			return manifest, fmt.Errorf("telemetry capture canceled: %w", err)
-		}
-
-		result, err := client.Query(
-			ctx,
-			options.Account,
-			QueryRequest{
-				QueryID:    "pragent-ops-capture",
-				Timeframe:  Timeframe{From: options.From.UnixMilli(), To: upper},
-				Parameters: parameters,
-				Limit:      options.PageSize,
-				View:       "events",
-			},
-		)
-		if err != nil {
-			return manifest, err
-		}
-
-		if err = os.WriteFile(
-			filepath.Join(options.Directory, fmt.Sprintf("page-%04d.json", page)),
-			result,
-			0o600,
-		); err != nil {
-			slog.WarnContext(ctx, "Telemetry page recording failed", "page", page)
-			return manifest, fmt.Errorf("write telemetry page: %w", err)
-		}
-
-		manifest.Pages = page
-		events, err := ReadQueryEvents(result)
-		if err != nil {
-			return manifest, err
-		}
-
-		if len(events) == 0 {
-			manifest.Complete = true
-			manifest.Completeness = "available telemetry exhausted; retention and sampling are not proven"
-
-			return manifest, nil
-		}
-
-		oldest, newRecords, err := collector.page(events, upper)
-		if err != nil {
-			return manifest, err
-		}
-
-		if oldest >= upper || newRecords == 0 {
-			return manifest, errors.New(
-				"cloudflare pagination did not advance; saved results are partial",
-			)
-		}
-
-		upper = oldest
-	}
-
-	return manifest, errors.New("cloudflare page safety limit exceeded; saved results are partial")
+	return manifest, err
 }
 
 // ReadQueryEvents requires the event array because a missing field cannot prove zero results.
@@ -369,6 +319,7 @@ func (collector *captureCollector) page(events []Event, upper int64) (int64, int
 		}
 
 		oldest = min(oldest, event.Timestamp)
+
 		identity, err := event.identity()
 		if err != nil {
 			return oldest, newRecords, err
@@ -380,6 +331,7 @@ func (collector *captureCollector) page(events []Event, upper int64) (int64, int
 		}
 
 		collector.seen[identity] = struct{}{}
+
 		newRecords++
 		if event.script() == "" {
 			return oldest, newRecords, errors.New("cloudflare event omitted script metadata")
@@ -396,6 +348,7 @@ func (collector *captureCollector) page(events []Event, upper int64) (int64, int
 		}
 
 		collector.manifest.Records++
+
 		observed := time.UnixMilli(event.Timestamp).UTC()
 		if collector.manifest.ObservedFrom == nil ||
 			observed.Before(*collector.manifest.ObservedFrom) {
@@ -419,7 +372,9 @@ func ReadEvents(path string) ([]Event, error) {
 	}
 
 	defer func() { _ = file.Close() }()
+
 	reader := bufio.NewReader(file)
+
 	first, err := reader.Peek(1)
 	if errors.Is(err, io.EOF) {
 		return []Event{}, nil
@@ -443,10 +398,12 @@ func ReadEvents(path string) ([]Event, error) {
 	}
 
 	var events []Event
+
 	decoder := json.NewDecoder(reader)
 
 	for {
 		var event Event
+
 		err := decoder.Decode(&event)
 		if errors.Is(err, io.EOF) {
 			return events, nil
@@ -463,6 +420,7 @@ func ReadEvents(path string) ([]Event, error) {
 // LoadManifest reads the original interval before cached metrics can narrow the range.
 func LoadManifest(path string) (Manifest, error) {
 	var manifest Manifest
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Warn("Capture manifest read failed", "path", path)

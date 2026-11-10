@@ -13,6 +13,7 @@ func readSourceRevision() string {
 	information, available := debug.ReadBuildInfo()
 	revision := ""
 	modified := ""
+
 	if available {
 		for _, setting := range information.Settings {
 			if setting.Key == "vcs.revision" {

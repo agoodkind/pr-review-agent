@@ -38,6 +38,7 @@ func (service *Service) validateInlineVerdict(
 	}
 
 	logger := gklog.L(ctx)
+
 	threads, err := service.github.ListReviewThreads(
 		ctx,
 		job.InstallationID,
@@ -79,6 +80,7 @@ func (service *Service) withdrawUnsupportedVerdicts(
 	approvalWithheld bool,
 ) error {
 	logger := gklog.L(ctx)
+
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.ErrorContext(
@@ -91,6 +93,7 @@ func (service *Service) withdrawUnsupportedVerdicts(
 	}
 
 	latest := githubapp.LatestDecisionReview(reviews, service.botLogin)
+
 	message := unsupportedInlineVerdictMessage
 	if latest.State == reviewStateApproved && approvalWithheld {
 		message = withheldApprovalMessage

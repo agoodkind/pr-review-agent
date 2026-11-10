@@ -58,10 +58,12 @@ type counterCapture struct {
 
 func (capture counterCapture) MarshalJSON() ([]byte, error) {
 	type wireCapture counterCapture
+
 	data, err := json.Marshal(wireCapture(capture))
 	if err != nil {
 		return nil, fmt.Errorf("encode counter capture: %w", err)
 	}
+
 	return data, nil
 }
 
@@ -70,19 +72,23 @@ func counterClient(endpoint, signingKeyPath, operatorTokenPath string) (*quota.C
 	if operatorTokenPath != "" {
 		credentialPath = operatorTokenPath
 	}
+
 	key, err := cloudflareops.ReadCredential(credentialPath)
 	if err != nil {
 		return nil, err
 	}
+
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	if operatorTokenPath != "" {
 		return quota.NewOperatorClient(endpoint, key, httpClient)
 	}
+
 	return quota.NewClient(endpoint, key, httpClient), nil
 }
 
 func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
 	var runtimePath, signingKeyPath, operatorTokenPath, output, providerID string
+
 	set := flag.NewFlagSet("counters", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&runtimePath, "runtime", "runtime.json", "Public provider runtime configuration.")
@@ -110,34 +116,43 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		"",
 		"Optional exact provider ID; defaults to every enabled capped provider.",
 	)
+
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+
 		return err
 	}
+
 	if set.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
+
 	if (signingKeyPath == "") == (operatorTokenPath == "") {
 		return errors.New(
 			"counters requires exactly one --operator-token-file or --signing-key-file",
 		)
 	}
+
 	data, err := os.ReadFile(runtimePath)
 	if err != nil {
 		slog.WarnContext(ctx, "Public runtime configuration read failed", "path", runtimePath)
 		return fmt.Errorf("read public runtime configuration: %w", err)
 	}
+
 	var runtime counterRuntime
 	if json.Unmarshal(data, &runtime) != nil || runtime.URL == "" || len(runtime.Providers) == 0 {
 		return errors.New("runtime configuration requires PROVIDER_BUDGET_URL and PROVIDERS")
 	}
+
 	client, err := counterClient(runtime.URL, signingKeyPath, operatorTokenPath)
 	if err != nil {
 		return err
 	}
+
 	var capture counterCapture
+
 	capture.CapturedAt = clock.System().UTC()
 	capture.Runtime = runtimePath
 	capture.Counters = []providerCounter{}
@@ -145,21 +160,28 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		"Legacy snapshots cover the current UTC day only. Event history starts at the stored history_start_ms; earlier history is not fabricated.",
 		"A history query may initialize the provider history boundary. The command does not report usage or change token limits.",
 	}
+
 	for _, provider := range runtime.Providers {
 		if providerID != "" && provider.ID != providerID {
 			continue
 		}
+
 		if provider.Disabled && providerID == "" {
 			continue
 		}
+
 		if provider.ID == "" || provider.Model == "" {
 			return errors.New("runtime provider ID and model are required")
 		}
+
 		if provider.TokenLimit > 0 && provider.DailyTokenLimit > 0 {
 			return errors.New("runtime provider configures both legacy and generic token limits")
 		}
+
 		var result providerCounter
+
 		result.Provider = provider.ID
+
 		result.Model = provider.Model
 		switch {
 		case provider.TokenLimit > 0:
@@ -177,6 +199,7 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			if counterErr != nil {
 				return counterErr
 			}
+
 			result.ConfiguredLimit = provider.TokenLimit
 			result.Window = &counter.Window
 			result.History = &counter.History
@@ -195,8 +218,10 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 					"provider",
 					provider.ID,
 				)
+
 				return fmt.Errorf("provider %s daily snapshot failed: %w", provider.ID, queryErr)
 			}
+
 			result.ConfiguredLimit = provider.DailyTokenLimit
 			result.Legacy = &snapshot
 		default:
@@ -204,6 +229,7 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 				continue
 			}
 		}
+
 		for _, limit := range provider.TokenLimits {
 			counter, counterErr := readWindowCounter(
 				ctx,
@@ -215,21 +241,27 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			if counterErr != nil {
 				return counterErr
 			}
+
 			result.TokenLimits = append(result.TokenLimits, counter)
 		}
+
 		capture.Counters = append(capture.Counters, result)
 	}
+
 	if len(capture.Counters) == 0 {
 		return errors.New("runtime selection contains no enabled capped provider")
 	}
+
 	directory, err := cloudflareops.PrivateDirectory(output)
 	if err != nil {
 		return err
 	}
+
 	path := filepath.Join(directory, "counters.json")
 	if err = cloudflareops.WriteJSON(path, capture); err != nil {
 		return err
 	}
+
 	_, err = fmt.Fprintf(
 		stdout,
 		"Provider counter snapshots: %d. Captured at: %s.\nPrivate counters: %s\n",
@@ -237,6 +269,7 @@ func counters(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		capture.CapturedAt.Format(time.RFC3339),
 		path,
 	)
+
 	return err
 }
 
@@ -248,22 +281,27 @@ func readWindowCounter(
 	limit quota.Limit,
 ) (windowCounter, error) {
 	var result windowCounter
+
 	result.Configuration = limit
 	if err := limit.Validate(); err != nil {
 		slog.WarnContext(ctx, "Provider token limit validation failed", "provider", provider.ID)
 		return result, fmt.Errorf("provider %s token limit is invalid: %w", provider.ID, err)
 	}
+
 	var err error
+
 	result.Window, err = limit.Window.Bounds(now)
 	if err != nil {
 		slog.WarnContext(ctx, "Provider token window validation failed", "provider", provider.ID)
 		return result, fmt.Errorf("provider %s token window is invalid: %w", provider.ID, err)
 	}
+
 	result.History, err = client.Query(ctx, provider.ID, provider.Model, result.Window)
 	if err != nil {
 		slog.WarnContext(ctx, "Provider counter query failed", "provider", provider.ID)
 		return result, fmt.Errorf("provider %s counter query failed: %w", provider.ID, err)
 	}
+
 	result.Snapshot, err = quota.Evaluate(
 		limit.Window,
 		now,
@@ -276,5 +314,6 @@ func readWindowCounter(
 		slog.WarnContext(ctx, "Provider counter evaluation failed", "provider", provider.ID)
 		return result, fmt.Errorf("provider %s counter evaluation failed: %w", provider.ID, err)
 	}
+
 	return result, nil
 }

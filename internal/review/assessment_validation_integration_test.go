@@ -27,6 +27,7 @@ func TestFileScopePlanReportsSafeValidationCategories(t *testing.T) {
 		domain.FileActionReview,
 		reviewrules.ContentSource,
 	)
+
 	const privateValue = "private-model-value-must-not-appear"
 
 	for _, scenario := range []struct {
@@ -100,6 +101,7 @@ func TestFileScopePlanReportsSafeValidationCategories(t *testing.T) {
 					[]domain.FileAssessment{assessment},
 					policy,
 				)
+
 				var rejection *review.AssessmentValidationError
 				if !errors.Is(err, review.ErrAssessmentIncomplete) || !errors.As(err, &rejection) ||
 					rejection.Code != scenario.code ||
@@ -132,6 +134,7 @@ func TestFileScopePlanReportsSafeValidationCategories(t *testing.T) {
 		[]domain.FileAssessment{assessment},
 		limited,
 	)
+
 	var rejection *review.AssessmentValidationError
 	if !errors.As(err, &rejection) || !errors.Is(err, review.ErrAssessmentIncomplete) ||
 		rejection.Code != review.AssessmentPersistenceLimit ||
@@ -147,12 +150,14 @@ func TestFileScopePlanReportsSafeValidationCategories(t *testing.T) {
 func TestIncompleteClassificationRetainsUnknownScopeAfterContentInspection(t *testing.T) {
 	file := classificationGitFile(t, "values.txt", "earlier payload\n", "current opaque payload\n")
 	policy := policytest.Load(t)
+
 	assessment, err := review.UnresolvedFileAssessment(file, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	assessment.Reviewed = true
+
 	planned, decisions, err := review.PlanFileContentReview(
 		diff.ReviewInput{Files: []diff.FileContext{file}},
 		[]domain.FileAssessment{assessment},
@@ -163,6 +168,7 @@ func TestIncompleteClassificationRetainsUnknownScopeAfterContentInspection(t *te
 	}
 
 	assertPlannedChangedRows(t, planned, file)
+
 	if len(decisions) != 1 || decisions[0].ContentKind != reviewrules.ContentUnknown ||
 		decisions[0].ContentReviewRequirement != domain.ContentReviewUncertain ||
 		decisions[0].Action != domain.FileActionGap ||
@@ -174,8 +180,10 @@ func TestIncompleteClassificationRetainsUnknownScopeAfterContentInspection(t *te
 	}
 
 	var summary review.Summary
+
 	summary.FileAssessments = decisions
 	summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
+
 	summary.FileAssessmentsDisplay = reviewrules.FindingsCollapsed
 	if !strings.Contains(review.RenderBody(summary), "| Review scope assessed | no |") {
 		t.Fatal("The published result must retain the unresolved scope assessment.")
@@ -231,6 +239,7 @@ func TestStructuredAssessmentContractErrorsRetainTheirType(t *testing.T) {
 				}
 
 				_, err = domain.UnmarshalReviewResult(data, policy.Catalog(), nil)
+
 				var contract *domain.FileAssessmentValidationError
 				if !errors.As(err, &contract) || contract.Field != scenario.field {
 					t.Fatalf(
@@ -249,6 +258,7 @@ func TestStructuredAssessmentContractErrorsRetainTheirType(t *testing.T) {
 					decoded.FileAssessments,
 					policy,
 				)
+
 				var diagnostic *review.AssessmentValidationError
 				if !errors.Is(
 					err,
@@ -272,6 +282,7 @@ func TestStructuredAssessmentContractErrorsRetainTheirType(t *testing.T) {
 	}
 
 	invalidFinding := domain.Finding{RuleID: policy.Catalog().IDs()[0], Importance: 7}
+
 	data, err := json.Marshal(domain.ReviewResult{
 		FileAssessments: []domain.FileAssessment{assessment},
 		Findings:        []domain.Finding{invalidFinding},
@@ -281,6 +292,7 @@ func TestStructuredAssessmentContractErrorsRetainTheirType(t *testing.T) {
 	}
 
 	_, err = domain.UnmarshalReviewResult(data, policy.Catalog(), nil)
+
 	var contract *domain.FileAssessmentValidationError
 	if err == nil || errors.As(err, &contract) || errors.Is(err, review.ErrAssessmentIncomplete) {
 		t.Fatal("An invalid finding must remain distinct from an incomplete file assessment.")
@@ -289,6 +301,7 @@ func TestStructuredAssessmentContractErrorsRetainTheirType(t *testing.T) {
 
 func assessmentPolicyStorageLimit(t *testing.T, maximum int) reviewrules.Policy {
 	t.Helper()
+
 	data, err := os.ReadFile(filepath.Join("..", "..", "config", "review-prompts.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -305,6 +318,7 @@ func assessmentPolicyStorageLimit(t *testing.T, maximum int) reviewrules.Policy 
 	}
 
 	settings.MaximumPersistedBytes = maximum
+
 	prompts["file_classification"], err = json.Marshal(settings)
 	if err != nil {
 		t.Fatal(err)

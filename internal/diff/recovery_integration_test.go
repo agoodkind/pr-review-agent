@@ -43,6 +43,7 @@ func TestCollectorRecoversIncompleteGitChangesAtTheMergeBase(t *testing.T) {
 			mode,
 			func(t *testing.T) {
 				source, mergeBase, expected := newRecoveryRepository(t, mode)
+
 				input, err := diff.NewCollector(source).Collect(
 					t.Context(),
 					recoveryRef(source.head),
@@ -64,6 +65,7 @@ func TestCollectorRecoversIncompleteGitChangesAtTheMergeBase(t *testing.T) {
 				}
 
 				assertRecoveredRepositoryFiles(t, source, input, expected)
+
 				foundOldRename := false
 
 				for _, read := range source.contentReads {
@@ -88,6 +90,7 @@ func TestCollectorRecoversIncompleteGitChangesAtTheMergeBase(t *testing.T) {
 
 func TestCollectorRangeReusesItsActualGitComparisonBase(t *testing.T) {
 	source, mergeBase, expected := newRecoveryRepository(t, "absent")
+
 	input, err := diff.NewCollector(source).CollectRange(
 		t.Context(),
 		recoveryRef(source.head),
@@ -113,6 +116,7 @@ func TestCollectorDoesNotRecoverBinaryGitObjectsAsText(t *testing.T) {
 	source.head = domain.HeadSHA(
 		strings.TrimSpace(largeGitCommand(t, source.directory, "rev-parse", "HEAD")),
 	)
+
 	input, err := diff.NewCollector(source).Collect(
 		t.Context(),
 		recoveryRef(source.head),
@@ -154,8 +158,12 @@ func TestCollectorPreservesGitlinkCoordinatesAndRepositoryContext(t *testing.T) 
 				second := strings.TrimSpace(largeGitCommand(t, library, "rev-parse", "HEAD"))
 				directory := t.TempDir()
 				largeGitCommand(t, directory, "init", "--quiet")
-				const repositoryURL = "https://example.invalid/library.git"
-				const submodulePath = "vendor/sdk"
+
+				const (
+					repositoryURL = "https://example.invalid/library.git"
+					submodulePath = "vendor/sdk"
+				)
+
 				writeRecoveryFile(
 					t,
 					directory,
@@ -198,6 +206,7 @@ func TestCollectorPreservesGitlinkCoordinatesAndRepositoryContext(t *testing.T) 
 					comparisons:  0,
 					contentReads: nil,
 				}
+
 				input, err := diff.NewCollector(source).Collect(
 					t.Context(),
 					recoveryRef(head),
@@ -219,6 +228,7 @@ func TestCollectorPreservesGitlinkCoordinatesAndRepositoryContext(t *testing.T) 
 				}
 
 				policy := policytest.Load(t)
+
 				assessments, unresolved, err := review.PlanFileAssessments(input, policy)
 				if err != nil || len(unresolved) != 0 || len(assessments) != 1 ||
 					assessments[0].Action != domain.FileActionReview ||
@@ -283,6 +293,7 @@ func assertRecoveredRepositoryFiles(
 	expected map[string]map[int]string,
 ) {
 	t.Helper()
+
 	if len(input.Files) != len(expected) {
 		t.Fatalf("Recovered %d files; expected %d.", len(input.Files), len(expected))
 	}
@@ -375,6 +386,7 @@ func newRecoveryRepository(
 	)
 	lines[4], lines[70] = "first café change", "later 雪 change"
 	writeRecoveryFile(t, directory, "modified.txt", strings.Join(lines, "\n")+"\n")
+
 	if err := os.Rename(
 		filepath.Join(directory, "original.txt"),
 		filepath.Join(directory, "renamed.txt"),
@@ -386,6 +398,7 @@ func newRecoveryRepository(
 	renameLines[39] = "renamed source change"
 	writeRecoveryFile(t, directory, "renamed.txt", strings.Join(renameLines, "\n")+"\n")
 	writeRecoveryFile(t, directory, "added.txt", "added café\nadded 雪")
+
 	if err := os.Remove(filepath.Join(directory, "removed.txt")); err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +447,7 @@ func newRecoveryRepository(
 
 func writeRecoveryFile(t *testing.T, directory, path, content string) {
 	t.Helper()
+
 	if err := os.WriteFile(filepath.Join(directory, path), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -497,6 +511,7 @@ func (source *repositorySource) compare(
 	}
 
 	mergeBase := domain.HeadSHA(strings.TrimSpace(string(ancestor)))
+
 	paths, err := source.command(
 		ctx,
 		"diff",
@@ -586,6 +601,7 @@ func (source *repositorySource) changedFile(
 	}
 
 	file.Patch = string(patch)
+
 	switch source.patchMode {
 	case "absent":
 		file.Patch, file.PatchPresent = "", false
@@ -629,6 +645,7 @@ func (source *repositorySource) GetFileContent(
 		source.contentReads,
 		repositoryContentRead{path: path, revision: revision},
 	)
+
 	entry, err := source.command(ctx, "ls-tree", string(revision), "--", path)
 	if err != nil {
 		return githubapp.FileContent{}, err

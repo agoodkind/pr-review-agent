@@ -26,12 +26,14 @@ type LiveSnapshot struct {
 // Reconcile reads live state before proposing a version-checked tracking repair.
 func (coordinator *Coordinator) Reconcile(ctx context.Context, target Target) Reconciliation {
 	now := coordinator.Clock()
+
 	response, err := coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "query", Key: target.Key, ExpectedVersion: 0, Record: nil},
 	)
 	if err != nil {
 		var snapshot LiveSnapshot
+
 		snapshot.FailureStage = "queue_read"
 		plan := coordinator.Repair(target, nil, snapshot, now)
 		plan.QueueVersionKnown = false
@@ -47,6 +49,7 @@ func (coordinator *Coordinator) Reconcile(ctx context.Context, target Target) Re
 // ReadLive keeps transport and malformed-state failures separate from empty results.
 func (coordinator *Coordinator) ReadLive(ctx context.Context, job domain.ReviewJob) LiveSnapshot {
 	var snapshot LiveSnapshot
+
 	pullRequest, err := coordinator.GitHub.GetPullRequest(
 		ctx,
 		job.InstallationID,
@@ -59,6 +62,7 @@ func (coordinator *Coordinator) ReadLive(ctx context.Context, job domain.ReviewJ
 			"read tracked pull request",
 			slog.String("err", err.Error()),
 		)
+
 		snapshot.FailureStage = "pull_request"
 
 		return snapshot
@@ -87,6 +91,7 @@ func (coordinator *Coordinator) ReadLive(ctx context.Context, job domain.ReviewJ
 			"read tracked review check",
 			slog.String("err", err.Error()),
 		)
+
 		snapshot.FailureStage = "check"
 
 		return snapshot
@@ -94,6 +99,7 @@ func (coordinator *Coordinator) ReadLive(ctx context.Context, job domain.ReviewJ
 
 	snapshot.Check = check
 	snapshot.CheckFound = found
+
 	comments, err := coordinator.GitHub.ListIssueComments(
 		ctx,
 		job.InstallationID,
@@ -106,6 +112,7 @@ func (coordinator *Coordinator) ReadLive(ctx context.Context, job domain.ReviewJ
 			"read tracked checkpoints",
 			slog.String("err", err.Error()),
 		)
+
 		snapshot.FailureStage = "summary"
 
 		return snapshot
@@ -124,6 +131,7 @@ func (coordinator *Coordinator) ReadLive(ctx context.Context, job domain.ReviewJ
 
 		snapshot.Summary = state
 		snapshot.SummaryFound = true
+
 		break
 	}
 
@@ -138,10 +146,12 @@ func (coordinator *Coordinator) Repair(
 	now time.Time,
 ) Reconciliation {
 	var plan Reconciliation
+
 	plan.Key = target.Key
 	plan.QueueVersionKnown = true
 	plan.ExpectedTargetVersion = target.Version
 	plan.Target = target
+
 	plan.Target.NotBeforeMS = coordinator.nextReconciliation(now).UnixMilli()
 	if record != nil {
 		plan.ExpectedQueueVersion = record.Version
@@ -153,6 +163,7 @@ func (coordinator *Coordinator) Repair(
 	}
 
 	coordinator.confirmObservation(&plan.Target, observation, now)
+
 	pr := snapshot.PullRequest
 	if pr.State != "open" || pr.Merged || pr.Draft {
 		return coordinator.repairIneligible(plan, record, pr, now)
@@ -187,6 +198,7 @@ func (coordinator *Coordinator) Repair(
 	renewed, _ := coordinator.Reactivate(record, job, pr, now)
 	plan.Record = &renewed
 	plan.RepairKind = "missing_queue"
+
 	if record != nil {
 		if record.Phase == "terminal" {
 			plan.RepairKind = "reactivated"
@@ -205,6 +217,7 @@ func (coordinator *Coordinator) repairCompletion(
 	now time.Time,
 ) (Reconciliation, bool) {
 	target := plan.Target
+
 	pr := snapshot.PullRequest
 	if completionConfirmed(target, snapshot) {
 		if plan.Target.Confirmations < coordinator.Settings.StateConfirmations {
@@ -258,6 +271,7 @@ func (coordinator *Coordinator) repairCompletion(
 
 func observeLive(snapshot LiveSnapshot) Observation {
 	var observation Observation
+
 	pr := snapshot.PullRequest
 	observation.EligibilityKnown = pr.EligibilityKnown && pr.MetadataKnown &&
 		(pr.State != "open" || !pr.Merged)

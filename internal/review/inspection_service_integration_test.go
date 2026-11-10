@@ -48,6 +48,7 @@ func TestServiceInspectionLoadsUnchangedSourceWithoutAddingFindingAnchors(t *tes
 	assertInspectionSnapshotRemoved(t, capture)
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
+
 	if len(capture.reviewRequests) != 2 {
 		t.Fatalf(
 			"The real SDK sent %d review requests; expected an inspection request and its continuation.",
@@ -121,6 +122,7 @@ func TestServiceInspectionFailurePreservesFindingsAndPendingWork(t *testing.T) {
 	fixture, job, capture := newInspectionServiceFixture(t, "missing")
 	_ = fixture.run(t.Context(), job)
 	assertInspectionSnapshotRemoved(t, capture)
+
 	if len(fixture.state.streamedComments) != 1 ||
 		fixture.state.streamedComments[0]["path"] != "network.tf" {
 		t.Fatal(
@@ -145,6 +147,7 @@ func TestServiceInspectionFailurePreservesFindingsAndPendingWork(t *testing.T) {
 
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
+
 	if len(capture.reviewRequests) != 1 {
 		t.Fatal("The service continued model analysis without the required inspection evidence.")
 	}
@@ -157,6 +160,7 @@ func TestServiceInspectionCancelsPublicationAfterTheHeadChanges(t *testing.T) {
 	}
 
 	assertInspectionSnapshotRemoved(t, capture)
+
 	if len(fixture.state.streamedComments) != 0 || len(fixture.state.submittedReviews) != 0 ||
 		fixture.state.lastUpdateCheckRun["conclusion"] != "cancelled" {
 		t.Fatalf(
@@ -169,6 +173,7 @@ func TestServiceInspectionCancelsPublicationAfterTheHeadChanges(t *testing.T) {
 
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
+
 	if len(capture.revisions) != 1 || capture.revisions[0] != string(job.Head) {
 		t.Fatal("A head change altered the pinned inspection revision.")
 	}
@@ -180,6 +185,7 @@ func TestServiceInspectionSetupFailureSkipsModelReview(t *testing.T) {
 	assertInspectionSnapshotRemoved(t, capture)
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
+
 	if len(capture.reviewRequests) != 0 {
 		t.Fatal("The service requested model review after inspection setup failed.")
 	}
@@ -206,6 +212,7 @@ func newInspectionServiceFixture(
 
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 	fixture.state.headSHA = head
+
 	capture := &inspectionServiceCapture{snapshotDirectory: snapshotDirectory}
 	if scenario == "head_moved" {
 		capture.beforeContinuation = func() {
@@ -277,12 +284,14 @@ func newInspectionServiceFixture(
 
 			fixture.state.mu.Lock()
 			defer fixture.state.mu.Unlock()
+
 			handleServiceRequest(writer, request, fixture.state)
 		}),
 	)
 	t.Cleanup(githubServer.Close)
 	providerServer := inspectionServiceProvider(t, capture, scenario)
 	logger := slog.New(slog.DiscardHandler)
+
 	apiAddress, err := url.Parse(githubServer.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -316,6 +325,7 @@ func newInspectionServiceFixture(
 		logger,
 	)
 	t.Cleanup(func() { _ = github.Close() })
+
 	model := openai.NewClient(
 		config.Config{
 			ReviewPolicy:      policy,
@@ -334,6 +344,7 @@ func newInspectionServiceFixture(
 	)
 	fixture.github = github
 	fixture.model = model
+
 	var serviceGitHub review.GitHub = github
 	if scenario == "unavailable" {
 		serviceGitHub = struct{ review.GitHub }{GitHub: github}
@@ -365,6 +376,7 @@ func newInspectionServiceFixture(
 
 func assertInspectionSnapshotRemoved(t *testing.T, capture *inspectionServiceCapture) {
 	t.Helper()
+
 	entries, err := os.ReadDir(capture.snapshotDirectory)
 	if err != nil {
 		t.Fatal(err)
@@ -389,6 +401,7 @@ func inspectionServiceProvider(
 	scenario string,
 ) *httptest.Server {
 	t.Helper()
+
 	server := httptest.NewServer(
 		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			payload, err := io.ReadAll(request.Body)
@@ -412,7 +425,9 @@ func inspectionServiceProvider(
 			capture.mu.Lock()
 			capture.requests++
 			requestIndex := capture.requests
+
 			var content []byte
+
 			switch native.Text.Format.Name {
 			case "review_result":
 				capture.reviewRequests = append(capture.reviewRequests, string(payload))
@@ -430,8 +445,11 @@ func inspectionServiceProvider(
 					Evidence:   "bridge = \"uplink\"",
 					Importance: 9,
 				}
+
 				var result domain.ReviewResult
+
 				result.OmissionsAcceptable = true
+
 				inspections := []review.InspectionRequest{}
 				if iteration == 1 {
 					inspections = []review.InspectionRequest{
@@ -446,6 +464,7 @@ func inspectionServiceProvider(
 							Reason:    "Check whether activation creates the renamed bridge before loading its settings.",
 						},
 					}
+
 					if scenario == "missing" {
 						result.Findings = []domain.Finding{finding}
 					}
@@ -486,6 +505,7 @@ func inspectionServiceProvider(
 			}
 
 			capture.mu.Unlock()
+
 			if err != nil {
 				http.Error(writer, err.Error(), http.StatusBadRequest)
 				return

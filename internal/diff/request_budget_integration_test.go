@@ -21,6 +21,7 @@ import (
 func TestRealGitPartitionIncludesCompleteProviderRequests(t *testing.T) {
 	policy := policytest.Load(t)
 	client := requestBudgetClient(policy, 80000)
+
 	overhead, err := client.ReviewRequestBytes("")
 	if err != nil {
 		t.Fatal(err)
@@ -30,6 +31,7 @@ func TestRealGitPartitionIncludesCompleteProviderRequests(t *testing.T) {
 	client = requestBudgetClient(policy, maximum)
 	change := largeGitFixture("replacement", 450)
 	input := largeGitReviewInput(t, change)
+
 	chunks, err := diff.ChunkInput(input, maximum)
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +85,7 @@ func TestRealGitPartitionIncludesCompleteProviderRequests(t *testing.T) {
 func TestGitReviewKeepsRequiredSourceWhenOptionalContextExceedsTheRequest(t *testing.T) {
 	policy := policytest.Load(t)
 	client := requestBudgetClient(policy, 80000)
+
 	overhead, err := client.ReviewRequestBytes("")
 	if err != nil {
 		t.Fatal(err)
@@ -91,13 +94,16 @@ func TestGitReviewKeepsRequiredSourceWhenOptionalContextExceedsTheRequest(t *tes
 	maximum := overhead + 5000
 	change := largeGitFixture("replacement", 30)
 	input := largeGitReviewInput(t, change)
+
 	chunks, err := diff.ChunkInput(input, maximum)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	const required = "Required omission evidence: current-file-identity.\n"
+
 	optional := strings.Repeat("Optional pull request and discussion context café 雪.\n", 5000)
+
 	bounded, err := review.BoundModelReviewChunksWithContext(
 		client,
 		chunks,
@@ -113,6 +119,7 @@ func TestGitReviewKeepsRequiredSourceWhenOptionalContextExceedsTheRequest(t *tes
 	}
 
 	var data reviewrules.PromptData
+
 	notice, err := policy.Render("review.context_omitted", data)
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +160,7 @@ func TestClientRejectsOversizedCompleteRequestBeforeProviderCalls(t *testing.T) 
 	policy := policytest.Load(t)
 	prompt := "Review the supplied change."
 	client := requestBudgetClient(policy, 80000)
+
 	size, err := client.ReviewRequestBytes(prompt)
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +168,7 @@ func TestClientRejectsOversizedCompleteRequestBeforeProviderCalls(t *testing.T) 
 
 	client = requestBudgetClient(policy, size-1)
 	completion, err := client.Review(t.Context(), prompt)
+
 	var refusal *diff.PromptSizeError
 	if !errors.As(err, &refusal) || refusal.Actual != size || refusal.Limit != size-1 ||
 		completion.Model != "" {
@@ -175,6 +184,7 @@ func TestClientUsesDeliveryRequestBudget(t *testing.T) {
 	policy := policytest.Load(t)
 	prompt := "Review the supplied change."
 	client := requestBudgetClient(policy, config.MaximumPromptBytes)
+
 	size, err := client.ReviewRequestBytes(prompt)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +195,7 @@ func TestClientUsesDeliveryRequestBudget(t *testing.T) {
 		func(t *testing.T) {
 			ctx := modelrequest.WithMaximumBytes(t.Context(), size-1)
 			_, err := client.Review(ctx, prompt)
+
 			var refusal *diff.PromptSizeError
 			if !errors.As(err, &refusal) || refusal.Actual != size || refusal.Limit != size-1 {
 				t.Fatalf(
@@ -200,7 +211,9 @@ func TestClientUsesDeliveryRequestBudget(t *testing.T) {
 			client := requestBudgetClient(policy, size-1)
 			ctx, cancel := context.WithCancel(modelrequest.WithMaximumBytes(t.Context(), size))
 			cancel()
+
 			_, err := client.Review(ctx, prompt)
+
 			var refusal *diff.PromptSizeError
 			if errors.As(err, &refusal) || !errors.Is(err, context.Canceled) {
 				t.Fatalf(
@@ -215,6 +228,7 @@ func TestClientUsesDeliveryRequestBudget(t *testing.T) {
 func TestCompleteProviderBudgetPreservesIndivisibleGitGap(t *testing.T) {
 	policy := policytest.Load(t)
 	client := requestBudgetClient(policy, 80000)
+
 	overhead, err := client.ReviewRequestBytes("")
 	if err != nil {
 		t.Fatal(err)
@@ -230,6 +244,7 @@ func TestCompleteProviderBudgetPreservesIndivisibleGitGap(t *testing.T) {
 		removed: nil,
 	}
 	input := largeGitReviewInput(t, change)
+
 	chunks, err := diff.ChunkInput(input, maximum)
 	if err != nil {
 		t.Fatal(err)
@@ -263,6 +278,7 @@ func TestFullRequestContextBudgetPreservesRequiredUnicodeEvidence(t *testing.T) 
 	policy := policytest.Load(t)
 	client := requestBudgetClient(policy, 80000)
 	required := "Required source evidence: café 雪.\n"
+
 	size, err := client.ReviewRequestBytes(required)
 	if err != nil {
 		t.Fatal(err)
@@ -270,6 +286,7 @@ func TestFullRequestContextBudgetPreservesRequiredUnicodeEvidence(t *testing.T) 
 
 	maximum := size + 3000
 	optional := strings.Repeat("Supplementary café 雪 context.\n", 2000)
+
 	prompt, err := review.BoundReviewPrompt(client, required, optional, maximum)
 	if err != nil {
 		t.Fatal(err)
@@ -326,13 +343,17 @@ func assertProviderRequestContent(
 	payload openai.ReviewRequestPayload,
 ) {
 	t.Helper()
+
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(payload.Body, &body); err != nil {
 		t.Fatal(err)
 	}
 
-	var instructions string
-	var schema json.RawMessage
+	var (
+		instructions string
+		schema       json.RawMessage
+	)
+
 	switch payload.API {
 	case config.ResponsesAPI:
 		if err := json.Unmarshal(body["instructions"], &instructions); err != nil {
@@ -360,6 +381,7 @@ func assertProviderRequestContent(
 		}
 
 		instructions = messages[0].Content
+
 		var native struct {
 			JSONSchema struct {
 				Schema json.RawMessage `json:"schema"`
@@ -382,6 +404,7 @@ func assertProviderRequestContent(
 		}
 
 		instructions = system.Parts[0].Text
+
 		var native struct {
 			Schema json.RawMessage `json:"responseJsonSchema"`
 		}
@@ -403,9 +426,11 @@ func assertProviderRequestContent(
 	}
 
 	var data reviewrules.PromptData
+
 	data.Input, data.SchemaName, data.Schema = configuredPolicy, "review_result", string(
 		configuredSchema,
 	)
+
 	expectedInstructions, err := policy.Render("structured.output", data)
 	if err != nil {
 		t.Fatal(err)

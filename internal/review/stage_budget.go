@@ -82,6 +82,7 @@ func boundStagePrompt(
 	lower, upper := 0, len(optional)
 	for lower <= upper {
 		middle := lower + (upper-lower)/2
+
 		candidate, err := render(truncateUTF8(optional, middle), true)
 		if err != nil {
 			return "", err

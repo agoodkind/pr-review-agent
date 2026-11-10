@@ -26,8 +26,10 @@ func (service *Service) publishPendingScope(
 	progress *reviewProgress,
 ) error {
 	service.enrichProviderPeriodUsage(ctx, &publication.summary)
+
 	publicationCtx, cancel := service.publicationContext(ctx)
 	defer cancel()
+
 	if _, err := persistAssessment(publicationCtx, publication.checkRunID); err != nil {
 		return err
 	}

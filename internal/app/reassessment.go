@@ -67,6 +67,7 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 
 	job := payload.Record.Job
 	job.Settings = readReviewSettings(request, body, handler.webhookHMACKey, handler.logger)
+
 	response, err := handler.reassessment.Store.Send(
 		request.Context(),
 		reassessment.Mutation{
@@ -110,6 +111,7 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 
 	if !handler.dispatcher.Enqueue(job) {
 		handler.cache.Release(job.DeliveryID)
+
 		if handler.admitter.Reject(request.Context(), job, errReviewQueueFull) != nil {
 			http.Error(writer, "review cancellation failed", http.StatusBadGateway)
 			return
@@ -120,15 +122,24 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		return
 	}
 
+	handler.logReassessmentStart(request.Context(), payload.Record, job)
+	writer.WriteHeader(http.StatusAccepted)
+}
+
+func (handler *handler) logReassessmentStart(
+	ctx context.Context,
+	record reassessment.Record,
+	job domain.ReviewJob,
+) {
 	handler.logger.InfoContext(
-		request.Context(),
+		ctx,
 		"reassessment started",
 		"reassessment_id",
-		payload.Record.ID,
+		record.ID,
 		"generation",
-		payload.Record.Generation,
+		record.Generation,
 		"origin_delivery_id",
-		payload.Record.OriginDeliveryID,
+		record.OriginDeliveryID,
 		"attempt_id",
 		job.DeliveryID,
 		"check_run_id",
@@ -140,9 +151,8 @@ func (handler *handler) handleReassessment(writer http.ResponseWriter, request *
 		"head",
 		string(job.Head),
 		"attempts",
-		payload.Record.Attempts,
+		record.Attempts,
 	)
-	writer.WriteHeader(http.StatusAccepted)
 }
 
 func (handler *handler) planReassessment(
@@ -162,6 +172,7 @@ func (handler *handler) planReassessment(
 	}
 
 	writer.Header().Set("Content-Type", "application/json")
+
 	if err := json.NewEncoder(writer).Encode(planned); err != nil {
 		handler.logger.WarnContext(
 			request.Context(),
@@ -178,6 +189,7 @@ func (handler *handler) handleDriftReassessment(
 	payload reassessmentRequest,
 ) {
 	writer.Header().Set("Content-Type", "application/json")
+
 	if payload.Action == callbackInventory && payload.Sweep != nil {
 		result := handler.reassessment.Inventory(request.Context(), *payload.Sweep)
 		if err := json.NewEncoder(writer).Encode(result); err != nil {
@@ -226,8 +238,10 @@ func (handler *handler) suppressScheduledDelivery(
 		return true
 	}
 
-	var scheduled bool
-	var err error
+	var (
+		scheduled bool
+		err       error
+	)
 	if restart {
 		scheduled, err = handler.reassessment.Reevaluate(ctx, *job)
 	} else {

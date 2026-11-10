@@ -91,11 +91,15 @@ func TestChatCompletionsReview(t *testing.T) {
 			},
 		)
 	}
+
 	geminiServer := newProviderServer(geminiState)
 	defer geminiServer.Close()
+
 	fallbackState := &testServerState{completionContent: validReviewContent()}
+
 	fallbackServer := newProviderServer(fallbackState)
 	defer fallbackServer.Close()
+
 	client := openai.NewClient(
 		config.Config{
 			ReviewPolicy: policytest.Load(t),
@@ -118,6 +122,7 @@ func TestChatCompletionsReview(t *testing.T) {
 		geminiServer.Client(),
 	)
 	ctx, recorder := review.WithUsageRecorder(context.Background())
+
 	completion, err := client.Review(ctx, "review input")
 	if err != nil {
 		t.Fatalf("Review with Gemini: %v", err)
@@ -144,9 +149,12 @@ func TestRoutersReportSelectedModel(t *testing.T) {
 			routerModel,
 			func(t *testing.T) {
 				state := &testServerState{completionContent: validReviewContent()}
+
 				server := newProviderServer(state)
 				defer server.Close()
+
 				const selectedModel = "fixture-selected-model"
+
 				state.streamResponse = func(writer http.ResponseWriter) {
 					writeStreamFrames(
 						writer,
@@ -164,6 +172,7 @@ func TestRoutersReportSelectedModel(t *testing.T) {
 						},
 					)
 				}
+
 				autoRouterCostTier := config.AutoRouterCostTier("")
 				if routerModel == config.AutoRouterModel {
 					autoRouterCostTier = config.AutoRouterCostLow
@@ -185,6 +194,7 @@ func TestRoutersReportSelectedModel(t *testing.T) {
 					server.Client(),
 				)
 				ctx, recorder := review.WithUsageRecorder(context.Background())
+
 				completion, err := client.Review(ctx, "review input")
 				if err != nil {
 					t.Fatalf("Review: %v", err)
@@ -441,6 +451,7 @@ func TestReviewRejectsInvalidFindings(t *testing.T) {
 	defer server.Close()
 
 	state.completionContent = `{"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
+
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review with invalid importance: want error")
@@ -859,6 +870,7 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 		config.Config{ReviewPolicy: policytest.Load(t), Providers: providers, MinimumImportance: 7},
 		nil,
 	)
+
 	completion, err := client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
@@ -884,8 +896,6 @@ func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 }
 
 func TestDisabledProviderReceivesNoRequests(t *testing.T) {
-	disabledKey := testFallbackAPIKeyValue()
-
 	primary := &testServerState{
 		completionContent: validReviewContent(),
 		statusSequence:    []int{http.StatusBadRequest},
@@ -903,29 +913,37 @@ func TestDisabledProviderReceivesNoRequests(t *testing.T) {
 		t.Cleanup(server.Close)
 	}
 
+	policy := policytest.Load(t)
+	primaryURL := mustParseURL(t, servers[0].URL)
+	primaryKey := testAPIKeyValue()
+	disabledURL := mustParseURL(t, servers[1].URL)
+	fixtureAPIKey := testFallbackAPIKeyValue()
+	secondaryURL := mustParseURL(t, servers[2].URL)
+	secondaryKey := testAPIKeyValue()
+
 	client := openai.NewClient(
 		config.Config{
-			ReviewPolicy:      policytest.Load(t),
+			ReviewPolicy:      policy,
 			MinimumImportance: 7,
 			Providers: []config.ProviderConfig{
 				{
 					ID:      "primary",
-					BaseURL: mustParseURL(t, servers[0].URL),
+					BaseURL: primaryURL,
 					Model:   "primary-model",
-					APIKey:  testAPIKeyValue(),
+					APIKey:  primaryKey,
 				},
 				{
 					ID:       "clyde",
-					BaseURL:  mustParseURL(t, servers[1].URL),
+					BaseURL:  disabledURL,
 					Model:    "clyde-model",
-					APIKey:   disabledKey,
+					APIKey:   fixtureAPIKey,
 					Disabled: true,
 				},
 				{
 					ID:      "secondary",
-					BaseURL: mustParseURL(t, servers[2].URL),
+					BaseURL: secondaryURL,
 					Model:   "secondary-model",
-					APIKey:  testAPIKeyValue(),
+					APIKey:  secondaryKey,
 				},
 			},
 		},
@@ -951,11 +969,10 @@ func TestDisabledProviderReceivesNoRequests(t *testing.T) {
 }
 
 func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
-	fallbackKey := testFallbackAPIKeyValue()
-
 	primaryState := &testServerState{completionContent: validReviewContent()}
 	primaryServer := newProviderServer(primaryState)
 	t.Cleanup(primaryServer.Close)
+
 	secondaryState := &testServerState{completionContent: validReviewContent()}
 	secondaryServer := newProviderServer(secondaryState)
 	t.Cleanup(secondaryServer.Close)
@@ -1000,6 +1017,7 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 			}
 
 			reservationCount++
+
 			writeJSON(
 				writer,
 				http.StatusOK,
@@ -1015,30 +1033,38 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 	)
 	t.Cleanup(budgetServer.Close)
 
+	policy := policytest.Load(t)
+	budgetURL := mustParseURL(t, budgetServer.URL)
+	primaryURL := mustParseURL(t, primaryServer.URL)
+	primaryKey := testAPIKeyValue()
+	secondaryURL := mustParseURL(t, secondaryServer.URL)
+	fixtureAPIKey := testFallbackAPIKeyValue()
+
 	client := openai.NewClient(
 		config.Config{
-			ReviewPolicy:        policytest.Load(t),
+			ReviewPolicy:        policy,
 			MinimumImportance:   7,
 			GitHubWebhookSecret: signingKey, // gitleaks:allow
-			ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
+			ProviderBudgetURL:   budgetURL,
 			Providers: []config.ProviderConfig{
 				{
 					ID:              "capped",
-					BaseURL:         mustParseURL(t, primaryServer.URL),
+					BaseURL:         primaryURL,
 					Model:           testPrimaryModel,
-					APIKey:          testAPIKeyValue(),
+					APIKey:          primaryKey,
 					DailyTokenLimit: 2_000_000,
 				},
 				{
 					ID:      "uncapped",
-					BaseURL: mustParseURL(t, secondaryServer.URL),
+					BaseURL: secondaryURL,
 					Model:   testFallbackModel,
-					APIKey:  fallbackKey,
+					APIKey:  fixtureAPIKey,
 				}, // gitleaks:allow
 			},
 		},
 		budgetServer.Client(),
 	)
+
 	completion, err := client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
@@ -1074,6 +1100,7 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 		budgetServer.Client(),
 	)
 	_, err = cappedClient.Review(context.Background(), "prompt")
+
 	var reported interface{ ProviderStatus() review.ProviderStatus }
 	if !errors.As(err, &reported) {
 		t.Fatalf("denied review error = %v, want provider status", err)
@@ -1143,6 +1170,7 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 
 			if payload.Day == "" {
 				checkCount++
+
 				writeJSON(
 					writer,
 					http.StatusOK,
@@ -1165,6 +1193,7 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 
 			reportCount++
 			reportedTokens += payload.Tokens
+
 			writeJSON(writer, http.StatusOK, map[string]bool{"reported": true})
 		}),
 	)
@@ -1468,6 +1497,7 @@ func brokenStreamPayload() string {
 func writeBrokenStream(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
+
 	encoded, _ := json.Marshal(responseTextDelta(`{"findings":`))
 	_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	_, _ = writer.Write([]byte("data: " + brokenStreamPayload() + "\n\n"))
@@ -1542,6 +1572,7 @@ func TestReviewDoesNotRetryATruncatedAnswer(t *testing.T) {
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
+
 	var truncatedError *openai.TruncatedError
 	if !errors.As(err, &truncatedError) {
 		t.Fatalf("error = %q, want a *openai.TruncatedError", err)
@@ -1633,6 +1664,7 @@ func TestReviewRecordsFailedRequestWithoutReportedUsage(t *testing.T) {
 	defer server.Close()
 
 	state.statusSequence = []int{http.StatusBadRequest}
+
 	ctx, recorder := review.WithUsageRecorder(context.Background())
 	if _, err := client.Review(ctx, "prompt"); err == nil {
 		t.Fatal("Review: want provider error")
@@ -1698,6 +1730,7 @@ func newFallbackTestClient(t *testing.T, withAccessHeaders bool) *fallbackFixtur
 	fallbackState := &testServerState{completionContent: validReviewContent()}
 	primaryServer := newProviderServer(primaryState)
 	t.Cleanup(primaryServer.Close)
+
 	fallbackServer := newProviderServer(fallbackState)
 	t.Cleanup(fallbackServer.Close)
 
@@ -1728,6 +1761,7 @@ func newFallbackTestClient(t *testing.T, withAccessHeaders bool) *fallbackFixtur
 
 func mustParseURL(t *testing.T, value string) *url.URL {
 	t.Helper()
+
 	parsed, err := url.Parse(value)
 	if err != nil {
 		t.Fatalf("Parse URL %q: %v", value, err)
@@ -1741,6 +1775,7 @@ func newProviderServer(state *testServerState) *httptest.Server {
 		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			atomic.AddInt32(&state.requestCount, 1)
 			state.lastRequest = request
+
 			body, err := readJSONBody(request)
 			if err != nil {
 				http.Error(writer, err.Error(), http.StatusBadRequest)
@@ -1757,6 +1792,7 @@ func newProviderServer(state *testServerState) *httptest.Server {
 
 			if status < http.StatusOK || status >= http.StatusMultipleChoices {
 				writer.Header().Set("Retry-After-Ms", "0")
+
 				payload := state.errorPayload
 				if payload == nil {
 					payload = map[string]any{
@@ -1890,6 +1926,7 @@ func readJSONBody(request *http.Request) (map[string]any, error) {
 	defer func() {
 		_ = request.Body.Close()
 	}()
+
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, err

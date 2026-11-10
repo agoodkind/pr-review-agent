@@ -42,6 +42,7 @@ func (cache *DeliveryCache) Claim(deliveryID string) bool {
 	defer cache.mu.Unlock()
 
 	cache.evictExpiredLocked()
+
 	if entry, ok := cache.entries[deliveryID]; ok {
 		if cache.clock().Before(entry.expiresAt) {
 			return false
@@ -66,6 +67,7 @@ func (cache *DeliveryCache) Claim(deliveryID string) bool {
 func (cache *DeliveryCache) Settled(deliveryID string) bool {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+
 	cache.evictExpiredLocked()
 	entry, ok := cache.entries[deliveryID]
 
@@ -76,6 +78,7 @@ func (cache *DeliveryCache) Settled(deliveryID string) bool {
 func (cache *DeliveryCache) Settle(deliveryID string) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+
 	entry, ok := cache.entries[deliveryID]
 	if !ok {
 		return

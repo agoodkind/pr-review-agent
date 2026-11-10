@@ -24,6 +24,7 @@ func (cfg Config) BudgetReportPolicy() quota.ReportPolicy {
 
 func loadBudgetReportPolicy(lookup LookupEnv) (quota.ReportPolicy, error) {
 	policy := quota.DefaultReportPolicy()
+
 	raw, present := lookup("PROVIDER_BUDGET_REPORT")
 	if !present {
 		return policy, nil
@@ -34,8 +35,10 @@ func loadBudgetReportPolicy(lookup LookupEnv) (quota.ReportPolicy, error) {
 		AttemptTimeout *string `json:"attempt_timeout"`
 		Timeout        *string `json:"timeout"`
 	}
+
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
+
 	if err := decoder.Decode(&values); err != nil {
 		return quota.ReportPolicy{}, errors.New(
 			"PROVIDER_BUDGET_REPORT must contain attempts, attempt_timeout, and timeout",
@@ -54,6 +57,7 @@ func loadBudgetReportPolicy(lookup LookupEnv) (quota.ReportPolicy, error) {
 	}
 
 	policy.Attempts = *values.Attempts
+
 	attemptTimeout, err := time.ParseDuration(*values.AttemptTimeout)
 	if err != nil {
 		return quota.ReportPolicy{}, errors.New(
@@ -62,6 +66,7 @@ func loadBudgetReportPolicy(lookup LookupEnv) (quota.ReportPolicy, error) {
 	}
 
 	policy.AttemptTimeout = attemptTimeout
+
 	timeout, err := time.ParseDuration(*values.Timeout)
 	if err != nil {
 		return quota.ReportPolicy{}, errors.New("PROVIDER_BUDGET_REPORT.timeout must be a duration")
@@ -78,6 +83,7 @@ func loadBudgetReportPolicy(lookup LookupEnv) (quota.ReportPolicy, error) {
 
 func loadDeliveryPolicies(lookup LookupEnv, cfg *Config) error {
 	var err error
+
 	cfg.Reassessment, err = loadReassessment(lookup)
 	if err != nil {
 		return err

@@ -124,6 +124,7 @@ func upstreamStatus(providerError *ProviderError) (int, bool) {
 	}
 
 	message := strings.ToLower(strings.TrimSpace(providerError.Message))
+
 	const prefix = "upstream call failed:"
 	if !strings.HasPrefix(message, prefix) {
 		return 0, false
@@ -203,6 +204,7 @@ func decodeStreamErrorFrame(encoded string) (providerErrorFields, bool) {
 // nil and the stream error reports the transport cause.
 func providerErrorFromStream(err error) *ProviderError {
 	text := err.Error()
+
 	start := strings.Index(text, "{")
 	if start < 0 {
 		return nil

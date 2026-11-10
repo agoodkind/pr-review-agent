@@ -25,6 +25,7 @@ type handoffControlStatus struct {
 
 func (status handoffControlStatus) MarshalJSON() ([]byte, error) {
 	type wireStatus handoffControlStatus
+
 	data, err := json.Marshal(wireStatus(status))
 	if err != nil {
 		return nil, fmt.Errorf("encode handoff control status: %w", err)
@@ -147,6 +148,7 @@ func (operation *deployment) resumeHandoff(ctx context.Context) error {
 		"revision",
 		operation.handoff.Revision,
 	)
+
 	if err := operation.writeDeploymentToken(ctx, operation.name); err != nil {
 		return err
 	}
@@ -191,6 +193,7 @@ func (operation *deployment) finishHandoff(ctx context.Context) error {
 	}
 
 	revision := operation.handoff.Revision
+
 	selection := deploymentSelection{Mode: "service", Service: operation.handoff.Service}
 	if err := configureGateway(operation.gateway, selection, operation.before); err != nil {
 		return err
@@ -251,6 +254,7 @@ func (operation *deployment) gatewayHandoffControl(
 	revision string,
 ) (handoffControlStatus, error) {
 	var status handoffControlStatus
+
 	body, err := json.Marshal(
 		struct {
 			Action           string `json:"action"`
@@ -276,6 +280,7 @@ func (operation *deployment) gatewayHandoffControl(
 
 	request.Header.Set("Authorization", "Bearer "+operation.client.token)
 	request.Header.Set("Content-Type", "application/json")
+
 	response, err := operation.healthClient.Do(request)
 	if err != nil {
 		slog.WarnContext(ctx, "Gateway handoff transport failed")
@@ -283,6 +288,7 @@ func (operation *deployment) gatewayHandoffControl(
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	if response.StatusCode == http.StatusUnauthorized {
 		return status, errDeploymentCredentialInactive
 	}
@@ -307,7 +313,10 @@ func (operation *deployment) gatewayHandoffControl(
 	}
 
 	if *status.Complete &&
-		(!*status.Handoff || !*status.CandidateReady || *status.PreviousContainerRunning || status.CandidateRevision != revision) {
+		(!*status.Handoff ||
+			!*status.CandidateReady ||
+			*status.PreviousContainerRunning ||
+			status.CandidateRevision != revision) {
 		return status, errors.New(
 			"gateway handoff completion does not prove candidate readiness and stopped previous process",
 		)
@@ -323,13 +332,18 @@ func (operation *deployment) waitHandoffControl(
 	complete bool,
 ) error {
 	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	var confirmed handoffControlStatus
-	var lastError error
+
+	var (
+		confirmed handoffControlStatus
+		lastError error
+	)
 
 	for {
 		_, err := operation.probe(ctx, operation.configuration.GatewayOrigin, "")
+
 		var status handoffControlStatus
 		if err == nil {
 			status, err = operation.gatewayHandoffControl(ctx, action, revision)
@@ -351,6 +365,7 @@ func (operation *deployment) waitHandoffControl(
 		}
 
 		var readinessError *readinessHTTPError
+
 		retryableReadiness := errors.As(err, &readinessError) &&
 			readinessError.StatusCode == http.StatusServiceUnavailable
 		if err != nil && !retryableReadiness && !errors.Is(err, errDeploymentCredentialInactive) &&
@@ -359,6 +374,7 @@ func (operation *deployment) waitHandoffControl(
 		}
 
 		lastError = err
+
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
@@ -382,6 +398,7 @@ func (operation *deployment) waitHandoffControl(
 		"complete",
 		*confirmed.Complete,
 	)
+
 	if complete {
 		return WriteJSON(operation.directory+"/handoff-complete.json", confirmed)
 	}

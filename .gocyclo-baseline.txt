@@ -1,1 +1,1 @@
-# gocyclo: generated_at=2026-11-10T04:50:06Z
+# gocyclo: generated_at=2026-11-10T05:26:12Z

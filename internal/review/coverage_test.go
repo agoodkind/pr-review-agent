@@ -99,6 +99,7 @@ func (oversizedHunkCollector) CollectRange(
 	files := make([]diff.FileContext, 0, len(specs))
 	for _, spec := range specs {
 		patch := coveragePatch(spec.addedLines)
+
 		changed, hunks, err := diff.ChangedRightLines(patch)
 		if err != nil {
 			return diff.ReviewInput{}, err
@@ -151,6 +152,7 @@ func (readableOnlyCollector) CollectRange(
 	_ domain.HeadSHA,
 ) (diff.ReviewInput, error) {
 	patch := coveragePatch(1)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err

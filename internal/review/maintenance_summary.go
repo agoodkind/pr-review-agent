@@ -160,7 +160,9 @@ func RestoreReviewDetails(
 	}
 
 	var summary Summary
+
 	summary.Threads = traceThreads(threads, botLogin)
+
 	details := refreshThreadDetails(sourceDetails[sourceStart:sourceEnd], summary)
 	if existingBody[start:end] == details {
 		return existingBody, nil
@@ -194,6 +196,7 @@ func reviewDetailsRange(body, source string) (int, int, error) {
 
 			cursor += opening + openingEnd + 1
 			depth++
+
 			continue
 		}
 

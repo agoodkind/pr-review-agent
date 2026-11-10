@@ -18,6 +18,7 @@ func (model *sequenceModel) ReassessMetadata(
 ) ([]domain.MetadataFindingAssessment, error) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	model.metadataPrompts = append(model.metadataPrompts, request.Prompt)
 	if model.metadataHook != nil {
 		model.metadataHook()
@@ -59,7 +60,9 @@ func seedMetadataReassessment(
 	completed bool,
 ) {
 	t.Helper()
+
 	job := fixture.job()
+
 	pullRequest, err := fixture.github.GetPullRequest(
 		t.Context(),
 		job.InstallationID,
@@ -75,6 +78,7 @@ func seedMetadataReassessment(
 	summary.Decision = domain.ReviewDecisionRequestChanges
 	summary.Metadata = findings
 	summary.MetadataRevision = "previous-metadata-revision"
+
 	state := marker.State{
 		RunID:        "previous-review",
 		Status:       marker.StateDone,
@@ -140,6 +144,7 @@ func TestMetadataEditRequiresExplicitResolutionOfEachPriorFinding(t *testing.T) 
 					)
 					findings := []domain.Finding{reassessmentFinding()}
 					resolution := domain.Resolution(outcome)
+
 					approvalExpected := outcome == "resolved" || outcome == "invalid original"
 					if outcome != "resolved" && outcome != "uncertain" {
 						resolution = domain.ResolutionOpen
@@ -157,6 +162,7 @@ func TestMetadataEditRequiresExplicitResolutionOfEachPriorFinding(t *testing.T) 
 					}
 
 					expectError := false
+
 					switch outcome {
 					case "partial":
 						second := findings[0]
@@ -194,6 +200,7 @@ func TestMetadataEditRequiresExplicitResolutionOfEachPriorFinding(t *testing.T) 
 					job := fixture.job()
 					job.MetadataOnly = mode == "metadata edit"
 					job.Forced = mode == "forced"
+
 					err := fixture.run(t.Context(), job)
 					if (err != nil) != expectError {
 						t.Fatalf(
@@ -233,6 +240,7 @@ func TestMetadataEditRequiresExplicitResolutionOfEachPriorFinding(t *testing.T) 
 						}
 					} else {
 						stored := retainedMetadataFindings(t, body)
+
 						explanation := findings[0].Body
 						if !expectError {
 							explanation = model.metadataAssessments[0][0].Reason
@@ -276,9 +284,11 @@ func TestMetadataReassessmentRejectsConcurrentDescriptionEdits(t *testing.T) {
 					[]domain.Finding{finding},
 					mode == "metadata edit",
 				)
+
 				model.metadataHook = func() { current = "A later description edit changes the review source." }
 				job := fixture.job()
 				job.MetadataOnly = mode == "metadata edit"
+
 				job.Forced = mode == "forced"
 				if err := fixture.run(t.Context(), job); err == nil && mode == "metadata edit" {
 					t.Fatal("The review must reject a result for earlier description text.")
@@ -313,6 +323,7 @@ func TestMetadataReassessmentRequiresModelSupport(t *testing.T) {
 	seedMetadataReassessment(t, fixture, []domain.Finding{finding}, true)
 	job := fixture.job()
 	job.MetadataOnly = true
+
 	err := fixture.run(t.Context(), job)
 	if err == nil ||
 		!strings.Contains(err.Error(), "does not support explicit metadata reassessment") {
@@ -348,6 +359,7 @@ func TestMetadataReassessmentReanchorsAnOpenFindingAfterHeadingEdits(t *testing.
 	finding.Suggestion = "The repair updates timestamps without rebuilding the search index."
 	seedMetadataReassessment(t, fixture, []domain.Finding{finding}, true)
 	job := fixture.job()
+
 	job.MetadataOnly = true
 	if err := fixture.run(t.Context(), job); err != nil {
 		t.Fatal(err)
@@ -396,6 +408,7 @@ func TestMetadataReassessmentPreservesFindingsWhenCompleteEvidenceExceedsBudget(
 	job.MetadataOnly = true
 	job.Settings.MaxPromptBytes = 10000
 	err := fixture.run(t.Context(), job)
+
 	var sizeFailure *diff.PromptSizeError
 	if !errors.As(err, &sizeFailure) {
 		t.Fatal("The review must refuse an assessment that cannot include complete evidence.")
@@ -470,6 +483,7 @@ func TestMetadataRefreshMergesRediscoveredOpenFindings(t *testing.T) {
 					}
 
 					native := fixture.state.submittedReviews[len(fixture.state.submittedReviews)-1]
+
 					body, ok := native["body"].(string)
 					if !ok || strings.Count(body, finding.Body) != 1 ||
 						strings.Count(body, finding.Suggestion) != 1 {

@@ -105,6 +105,7 @@ func TestQuotaDeferralStartsNoAttemptAndUnlimitedPolicyDoesNotExpire(t *testing.
 	record := queued(now)
 	record.Attempts = 1000
 	available := now.Add(24 * time.Hour)
+
 	result := planner().Decide(
 		record,
 		reassessment.Snapshot{
@@ -160,6 +161,7 @@ func TestSuccessfulIncompleteCheckDoesNotCompleteAssessment(t *testing.T) {
 			},
 		},
 	}
+
 	result := planner().Decide(queued(now), snapshot, now)
 	if !result.Dispatch {
 		t.Fatalf("successful incomplete check suppressed retry: %+v", result)
@@ -168,6 +170,7 @@ func TestSuccessfulIncompleteCheckDoesNotCompleteAssessment(t *testing.T) {
 	snapshot.LatestCheck.Outcome.Disposition = domain.AssessmentCompleted
 	snapshot.LatestCheck.Outcome.CoverageComplete = true
 	snapshot.LatestCheck.Outcome.MetadataRevision = diff.PullRequestRevision(snapshot.PullRequest)
+
 	result = planner().Decide(queued(now), snapshot, now)
 	if result.Dispatch || result.Phase != "terminal" || result.Reason != "completed" {
 		t.Fatalf("completed assessment did not terminate retry: %+v", result)
@@ -196,6 +199,7 @@ func TestMetadataEditCannotReuseEarlierCompletion(t *testing.T) {
 		},
 	}
 	snapshot.PullRequest.Title = "Changed purpose"
+
 	result := planner().Decide(queued(now), snapshot, now)
 	if !result.Dispatch || result.Phase == "terminal" {
 		t.Fatalf("changed metadata reused an earlier assessment: %+v", result)
@@ -209,6 +213,7 @@ func TestNewHeadReplacesQueuedTargetAndRunningAttemptResumesOnce(t *testing.T) {
 	record.AttemptID = "existing-attempt"
 	record.Attempts = 3
 	record.Job.DeliveryID = record.AttemptID
+
 	result := planner().Decide(
 		record,
 		reassessment.Snapshot{
@@ -248,6 +253,7 @@ func TestDeclinedAssessmentIsNotReportedAsCompleted(t *testing.T) {
 	now := time.Now()
 	record := queued(now)
 	record.Phase = "confirming"
+
 	result := planner().Decide(
 		record,
 		reassessment.Snapshot{

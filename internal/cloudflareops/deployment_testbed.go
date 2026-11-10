@@ -94,6 +94,7 @@ type observedTestDeployment struct {
 // MarshalJSON writes resource identifiers and generated test configuration privately.
 func (result DeploymentTestResult) MarshalJSON() ([]byte, error) {
 	type wireResult DeploymentTestResult
+
 	data, err := json.Marshal(wireResult(result))
 	if err != nil {
 		return nil, fmt.Errorf("encode deployment test result: %w", err)
@@ -108,6 +109,7 @@ func TestDeployment(
 	options DeploymentTestOptions,
 ) (result DeploymentTestResult, returnErr error) {
 	slog.InfoContext(ctx, "Isolated deployment test started")
+
 	result.ControllerRevision = version.SourceRevision()
 	if !revisionPattern.MatchString(result.ControllerRevision) {
 		return result, errors.New(
@@ -130,6 +132,7 @@ func TestDeployment(
 	}
 
 	result.Gateway, result.Slots, result.Directory = operation.name, operation.configuration.Slots, operation.directory
+
 	credentials, err := AcquireCredentials(
 		ctx,
 		CredentialOptions{
@@ -147,6 +150,7 @@ func TestDeployment(
 
 	operation.client = credentials.Client
 	cleanupAllowed := false
+
 	defer func() {
 		var diagnosticErr error
 		if returnErr != nil && cleanupAllowed {
@@ -166,6 +170,7 @@ func TestDeployment(
 			WriteJSON(filepath.Join(operation.directory, "result.json"), result),
 		)
 	}()
+
 	if err := operation.requireFreshTestWorkers(ctx); err != nil {
 		return result, err
 	}
@@ -182,6 +187,7 @@ func TestDeployment(
 	}
 
 	cleanupAllowed = true
+
 	if err := WriteJSON(filepath.Join(operation.directory, "resources.json"), result); err != nil {
 		return result, err
 	}
@@ -197,6 +203,7 @@ func (operation *deployment) runTestDeploymentCases(
 	result *DeploymentTestResult,
 ) (returnErr error) {
 	slog.InfoContext(ctx, "Isolated legacy bootstrap started", "gateway", operation.name)
+
 	if err := operation.bootstrapTestGateway(
 		ctx,
 		options.BaselineWrangler,
@@ -207,6 +214,7 @@ func (operation *deployment) runTestDeploymentCases(
 	}
 
 	var err error
+
 	result.Before, err = operation.testSnapshot(ctx)
 	if err != nil {
 		return err
@@ -224,10 +232,12 @@ func (operation *deployment) runTestDeploymentCases(
 	}
 
 	defer func() { returnErr = errors.Join(returnErr, os.Remove(tokenPath)) }()
+
 	deploymentOptions := options.Deployment
 	deploymentOptions.TokenFile, deploymentOptions.AccountTokenFile = tokenPath, ""
 	deploymentOptions.Directory = filepath.Join(operation.directory, "mismatched-candidate")
 	deploymentOptions.Revision = strings.Repeat("0", 40)
+
 	result.Samples, result.FailedSamples, err = operation.testRejectedCandidate(
 		ctx,
 		deploymentOptions,
@@ -264,6 +274,7 @@ func (operation *deployment) runTestDeploymentCases(
 		"promotion-availability.ndjson",
 	)
 	result.PromotionSamples = samples
+
 	if err != nil {
 		return err
 	}
@@ -303,6 +314,7 @@ func (operation *deployment) testSecondSlot(
 		Deploy,
 	)
 	result.SecondPromotionSamples = observed.samples
+
 	if err != nil {
 		return err
 	}
@@ -363,6 +375,7 @@ func (operation *deployment) testSecondSlot(
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	result.StoppedPreviousStatus = response.StatusCode
 	if response.StatusCode != http.StatusServiceUnavailable {
 		return errors.New("delayed source health request did not preserve the handoff fence")
@@ -541,6 +554,7 @@ func validateTestBaselineBindings(configuration wranglerConfiguration) error {
 
 func (operation *deployment) waitTestGateway(ctx context.Context, revision string) error {
 	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -565,6 +579,7 @@ func (operation *deployment) waitTestGateway(ctx context.Context, revision strin
 
 func (operation *deployment) testSnapshot(ctx context.Context) (testDeploymentSnapshot, error) {
 	var snapshot testDeploymentSnapshot
+
 	settings, _, err := operation.client.workerSettings(
 		ctx,
 		operation.account,
@@ -583,6 +598,7 @@ func (operation *deployment) testSnapshot(ctx context.Context) (testDeploymentSn
 	snapshot.Bindings = make(map[string]testBindingMetadata)
 	for _, binding := range settings.Bindings {
 		valueDigest := ""
+
 		if binding.Text != "" {
 			digest := sha256.Sum256([]byte(binding.Text))
 			valueDigest = hex.EncodeToString(digest[:])
@@ -758,6 +774,7 @@ func (operation *deployment) sampleTestGateway(
 		}
 
 		count++
+
 		if sample.Status != http.StatusOK || !testRevisionAllowed(sample.Revision, revisions) {
 			failed++
 		}
@@ -776,23 +793,11 @@ func (operation *deployment) sampleTestGateway(
 	}
 }
 
-func testRevisionAllowed(actual string, revisions []string) bool {
-	if !reportedRevisionPattern.MatchString(actual) {
-		return false
-	}
-
-	for _, revision := range revisions {
-		if strings.HasPrefix(revision, actual) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (operation *deployment) readTestGateway(ctx context.Context) testReadinessSample {
 	var sample testReadinessSample
+
 	sample.Timestamp = clock.System().UTC()
+
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
@@ -811,6 +816,7 @@ func (operation *deployment) readTestGateway(ctx context.Context) testReadinessS
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	sample.Status, sample.Revision = response.StatusCode, response.Header.Get("X-Pr-Agent-Revision")
 
 	return sample
@@ -896,13 +902,16 @@ func (operation *deployment) observeTestDeployment(
 	}
 
 	defer func() { _ = file.Close() }()
+
 	type sampleResult struct {
 		count  int
 		failed int
 		err    error
 	}
+
 	results := make(chan sampleResult, 1)
 	sampling, cancel := context.WithCancel(ctx)
+
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -912,6 +921,7 @@ func (operation *deployment) observeTestDeployment(
 					"err",
 					errors.New("availability sampler panicked"),
 				)
+
 				results <- sampleResult{
 					count:  0,
 					failed: 0,
@@ -919,12 +929,17 @@ func (operation *deployment) observeTestDeployment(
 				}
 			}
 		}()
+
 		count, failed, err := operation.sampleTestGateway(sampling, revisions, file)
 		results <- sampleResult{count: count, failed: failed, err: err}
 	}()
+
 	observed.deployment, observed.deploymentError = deploy(ctx, options)
+
 	cancel()
+
 	samples := <-results
+
 	observed.samples = testAvailabilityCounts{Count: samples.count, Failed: samples.failed}
 	if samples.count == 0 {
 		return observed, errors.New("availability proof did not measure any responses")
@@ -946,6 +961,7 @@ func (operation *deployment) observeTestDeployment(
 func (operation *deployment) cleanupTestbed(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
 	applications, err := operation.testApplications(ctx)
 	if err != nil {
 		return err

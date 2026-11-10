@@ -17,9 +17,11 @@ func (service *Service) postInlineFinding(
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
+
 	pass.nativeVerdictMu.Lock()
 	submitted, err := service.establishInlineRejection(ctx, job, head, comment, pass)
 	pass.nativeVerdictMu.Unlock()
+
 	if err != nil || submitted {
 		return err
 	}
@@ -58,6 +60,7 @@ func (service *Service) establishInlineRejection(
 	pass *chunkPass,
 ) (bool, error) {
 	logger := gklog.L(ctx)
+
 	if pass.nativeRejection {
 		return false, nil
 	}
@@ -111,6 +114,7 @@ func (service *Service) establishInlineRejection(
 	}
 
 	pass.nativeRejection = true
+
 	logger.InfoContext(
 		ctx,
 		"inline rejection published",

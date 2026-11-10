@@ -39,6 +39,7 @@ func TestLargeGitHunkRetainsChangedRowsWithinPromptBudget(t *testing.T) {
 			kind,
 			func(t *testing.T) {
 				change := largeGitFixture(kind, 450)
+
 				input := largeGitReviewInput(t, change)
 				if kind == "missing newline" &&
 					strings.Count(input.Files[0].Patch, `\ No newline at end of file`) != 2 {
@@ -51,6 +52,7 @@ func TestLargeGitHunkRetainsChangedRowsWithinPromptBudget(t *testing.T) {
 				}
 
 				policy := policytest.Load(t)
+
 				bounded, err := review.BoundReviewChunks(
 					chunks,
 					input.Files,
@@ -91,6 +93,7 @@ func TestLargeGitHunkRetainsChangedRowsWithinPromptBudget(t *testing.T) {
 func TestSingleGitHunkSplitsRecursivelyWithOriginalCoordinates(t *testing.T) {
 	change := largeGitFixture("replacement", 50)
 	input := largeGitReviewInput(t, change)
+
 	chunks, err := diff.ChunkInput(input, len(input.Files[0].Patch)*4)
 	if err != nil {
 		t.Fatal(err)
@@ -131,6 +134,7 @@ func TestGitPrefixDeletionKeepsBoundedContextAtZeroNewStart(t *testing.T) {
 		added:   map[int]string{},
 		removed: deleted,
 	}
+
 	input := largeGitReviewInput(t, change)
 	if !strings.Contains(input.Files[0].Patch, "@@ -1,100 +0,0 @@") {
 		t.Fatal("The Git fixture must delete a prefix with a zero new-side start.")
@@ -142,6 +146,7 @@ func TestGitPrefixDeletionKeepsBoundedContextAtZeroNewStart(t *testing.T) {
 	}
 
 	policy := policytest.Load(t)
+
 	bounded, err := review.BoundReviewChunks(
 		chunks,
 		input.Files,
@@ -161,6 +166,7 @@ func TestGitPrefixDeletionKeepsBoundedContextAtZeroNewStart(t *testing.T) {
 	}
 
 	assertLargeGitCoverage(t, change, input, bounded)
+
 	if !strings.Contains(bounded[0].Text, surviving[0]) {
 		t.Fatal("The deletion review must include context from the surviving file's first line.")
 	}
@@ -176,12 +182,14 @@ func TestIndivisibleGitLineRetainsAnExplicitCoverageGap(t *testing.T) {
 		removed: nil,
 	}
 	input := largeGitReviewInput(t, change)
+
 	chunks, err := diff.ChunkInput(input, largeGitPromptBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	policy := policytest.Load(t)
+
 	bounded, err := review.BoundReviewChunks(
 		chunks,
 		input.Files,
@@ -214,6 +222,7 @@ func TestIndivisibleGitLineRetainsAnExplicitCoverageGap(t *testing.T) {
 
 func splitLargeGitChunk(t *testing.T, chunk diff.Chunk, depth int) []diff.Chunk {
 	t.Helper()
+
 	if depth > 32 {
 		t.Fatal("Recursive hunk division did not terminate.")
 	}
@@ -233,9 +242,13 @@ func assertLargeGitCoverage(
 	chunks []diff.Chunk,
 ) {
 	t.Helper()
+
 	added := make(map[int]string)
+
 	var removed []string
+
 	newlineMarkers := 0
+
 	var fragments []string
 
 	for _, chunk := range chunks {
@@ -310,6 +323,7 @@ func assertLargeGitCoverage(
 func assertLargeGitApply(t *testing.T, change largeGitChange, fragments []string) {
 	t.Helper()
 	directory := t.TempDir()
+
 	path := filepath.Join(directory, "changed.go")
 	if change.before != "" {
 		if err := os.WriteFile(path, []byte(change.before), 0o600); err != nil {
@@ -332,6 +346,7 @@ func assertLargeGitApply(t *testing.T, change largeGitChange, fragments []string
 	command := exec.CommandContext(t.Context(), "git", "apply", "--unidiff-zero")
 	command.Dir = directory
 	command.Stdin = strings.NewReader(patch)
+
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf(
@@ -389,8 +404,10 @@ func largeGitFixture(kind string, count int) largeGitChange {
 		added:   make(map[int]string),
 		removed: nil,
 	}
+
 	before := append(append(append([]string{}, prefix...), oldLines...), suffix...)
 	after := append(append(append([]string{}, prefix...), newLines...), suffix...)
+
 	switch kind {
 	case "addition":
 		before = nil
@@ -442,6 +459,7 @@ func largeGitReviewInput(t *testing.T, change largeGitChange) diff.ReviewInput {
 	t.Helper()
 	directory := t.TempDir()
 	largeGitCommand(t, directory, "init", "--quiet")
+
 	path := filepath.Join(directory, "changed.go")
 	if change.before != "" {
 		if err := os.WriteFile(path, []byte(change.before), 0o600); err != nil {
@@ -453,6 +471,7 @@ func largeGitReviewInput(t *testing.T, change largeGitChange) diff.ReviewInput {
 
 	largeGitCommit(t, directory, "Create base content")
 	base := strings.TrimSpace(largeGitCommand(t, directory, "rev-parse", "HEAD"))
+
 	if change.after == "" {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
@@ -475,6 +494,7 @@ func largeGitReviewInput(t *testing.T, change largeGitChange) diff.ReviewInput {
 		"--",
 		"changed.go",
 	)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatal(err)
@@ -524,6 +544,7 @@ func largeGitCommand(t *testing.T, directory string, arguments ...string) string
 	t.Helper()
 	command := exec.CommandContext(t.Context(), "git", arguments...)
 	command.Dir = directory
+
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Git %s failed: %v\n%s", arguments[0], err, output)

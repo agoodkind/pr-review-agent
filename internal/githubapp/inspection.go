@@ -8,7 +8,19 @@ import (
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
-// SearchRepository finds literal matches in the private reviewed-head snapshot.
+// SearchRepository finds literal matches in the reviewed snapshot.
+//
+// The client requires an active snapshot and rejects empty or multiline
+// queries.
+//
+// For example:
+//
+//	matches, err := client.SearchRepository(
+//		ctx,
+//		installationID,
+//		repo,
+//		"OpenRoot",
+//	)
 func (client *Client) SearchRepository(
 	ctx context.Context,
 	installationID int64,

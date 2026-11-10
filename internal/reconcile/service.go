@@ -88,6 +88,7 @@ func (service *Service) Reconcile(
 		slog.Int("pull_request", job.Number),
 	)
 	ctx = gklog.WithLogger(ctx, logger)
+
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
 		job.InstallationID,
@@ -131,6 +132,7 @@ func (service *Service) Reconcile(
 		"review reconciliation selected",
 		slog.Any("thread_node_ids", ownedThreadIDs(owned)),
 	)
+
 	if len(owned) == 0 {
 		return threads, nil
 	}
@@ -150,55 +152,29 @@ func (service *Service) Reconcile(
 	maximumBytes := service.maximumPromptBytes
 	maximumBytes = deliveryMaximumBytes(job, maximumBytes)
 	ctx = modelrequest.WithMaximumBytes(ctx, maximumBytes)
-	removed := make([]domain.OwnedThread, 0)
-
-	for _, thread := range owned {
-		contextText, state := service.loadThreadContext(
-			ctx,
-			job,
-			thread,
-			currentHead,
-			changedFiles,
-			maximumBytes,
-		)
-		switch state {
-		case threadContextRemoved:
-			removed = append(removed, thread)
-			continue
-		case threadContextUnavailable:
-			continue
-		case threadContextPresent:
-		}
-
-		prepared = append(
-			prepared,
-			preparedThread{
-				thread: thread,
-				text:   formatThreadSection(thread, currentHead, contextText, service.botLogin),
-			},
-		)
-	}
-
-	batches, budgetErr := boundPreparedThreads(
-		service.model,
-		prepared,
+	plan, budgetErr := service.prepareReconciliation(
+		ctx,
+		job,
 		pullRequest,
-		service.policy,
+		currentHead,
+		owned,
+		changedFiles,
 		maximumBytes,
+		prepared,
 	)
 	logger.InfoContext(
 		ctx,
 		"review reconciliation analysis started",
-		slog.Int("batches", len(batches)),
-		slog.Any("thread_node_ids", preparedThreadIDs(prepared)),
+		slog.Int("batches", len(plan.batches)),
+		slog.Any("thread_node_ids", preparedThreadIDs(plan.prepared)),
 	)
 	currentThreads, reconcileErr := service.reconcilePrepared(
 		ctx,
 		job,
 		pullRequest,
 		threads,
-		removed,
-		batches,
+		plan.removed,
+		plan.batches,
 		logger,
 	)
 
@@ -223,54 +199,29 @@ func (service *Service) reconcilePrepared(
 	logger *slog.Logger,
 ) ([]githubapp.ReviewThread, error) {
 	currentHead := pullRequest.Head
-	var reconcileErrors []error
-	allResolutions := make([]domain.ThreadResolution, 0)
-	resolvedThreads := make([]resolvedThreadTrace, 0)
 
-	for _, thread := range removed {
-		resolution := domain.ThreadResolution{
-			ThreadNodeID: thread.NodeID,
-			Resolution:   domain.ResolutionResolved,
-			Reason:       "finding anchor no longer exists",
-		}
-		allResolutions = append(allResolutions, resolution)
-		if err := service.resolveAtHead(
-			ctx,
-			job,
-			currentHead,
-			thread,
-			threads,
-			logger,
-		); err != nil {
-			reconcileErrors = append(reconcileErrors, err)
-			if errors.Is(err, errHeadChanged) {
-				return threads, errors.Join(reconcileErrors...)
-			}
-
-			continue
-		}
-
-		resolvedThreads = append(
-			resolvedThreads,
-			resolvedThreadTrace{
-				NodeID:    thread.NodeID,
-				CommentID: thread.RootComment.DatabaseID,
-			},
-		)
+	progress := resolutionProgress{
+		errors:          nil,
+		resolutions:     make([]domain.ThreadResolution, 0),
+		resolvedThreads: make([]resolvedThreadTrace, 0),
+	}
+	if service.resolveRemoved(ctx, job, currentHead, threads, removed, logger, &progress) {
+		return threads, errors.Join(progress.errors...)
 	}
 
 	for batchIndex, batch := range batches {
 		resolutions, err := service.model.Reconcile(ctx, batch.prompt)
 		if err != nil {
-			reconcileErrors = append(
-				reconcileErrors,
+			progress.errors = append(
+				progress.errors,
 				fmt.Errorf("reconcile batch %d/%d: %w", batchIndex+1, len(batches), err),
 			)
+
 			continue
 		}
 
 		resolutionIndex := indexResolutions(resolutions)
-		allResolutions = append(allResolutions, resolutions...)
+		progress.resolutions = append(progress.resolutions, resolutions...)
 
 		for _, item := range batch.threads {
 			resolution, ok := resolutionIndex[item.thread.NodeID]
@@ -290,16 +241,16 @@ func (service *Service) reconcilePrepared(
 				threads,
 				logger,
 			); err != nil {
-				reconcileErrors = append(reconcileErrors, err)
+				progress.errors = append(progress.errors, err)
 				if errors.Is(err, errHeadChanged) {
-					return threads, errors.Join(reconcileErrors...)
+					return threads, errors.Join(progress.errors...)
 				}
 
 				continue
 			}
 
-			resolvedThreads = append(
-				resolvedThreads,
+			progress.resolvedThreads = append(
+				progress.resolvedThreads,
 				resolvedThreadTrace{
 					NodeID:    item.thread.NodeID,
 					CommentID: item.thread.RootComment.DatabaseID,
@@ -312,19 +263,19 @@ func (service *Service) reconcilePrepared(
 		ctx,
 		"review reconciliation analysis completed",
 		slog.Int("batches", len(batches)),
-		slog.Any("resolutions", allResolutions),
-		slog.Any("resolved_threads", resolvedThreads),
+		slog.Any("resolutions", progress.resolutions),
+		slog.Any("resolved_threads", progress.resolvedThreads),
 	)
 
-	if len(reconcileErrors) > 0 {
+	if len(progress.errors) > 0 {
 		logger.ErrorContext(
 			ctx,
 			"reconcile review threads",
-			slog.String("err", errors.Join(reconcileErrors...).Error()),
+			slog.String("err", errors.Join(progress.errors...).Error()),
 		)
 	}
 
-	return threads, errors.Join(reconcileErrors...)
+	return threads, errors.Join(progress.errors...)
 }
 
 func (service *Service) resolveAtHead(
@@ -424,6 +375,7 @@ func traceBotThreads(threads []githubapp.ReviewThread, botLogin string) []botThr
 			FindingHead: "",
 			Importance:  0,
 		}
+
 		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
 		if ok {
 			trace.FindingID = findingMarker.ID
@@ -578,6 +530,7 @@ func (service *Service) loadThreadContext(
 
 		currentDiff = formatCurrentDiff(file)
 		hasCurrentPatch = file.PatchPresent && strings.TrimSpace(file.Patch) != ""
+
 		break
 	}
 
@@ -593,6 +546,7 @@ func (service *Service) loadThreadContext(
 	}
 
 	originalAnchor := strings.TrimSpace(thread.Finding.Evidence)
+
 	originalAnchorKnown := originalAnchor != ""
 	if !originalAnchorKnown {
 		originalContent, originalErr := service.github.GetFile(
@@ -621,6 +575,7 @@ func (service *Service) loadThreadContext(
 
 	originalAnchorPresent := originalAnchorKnown &&
 		strings.Contains(string(fileBytes), originalAnchor)
+
 	currentContent := boundedCurrentFileContext(fileBytes, maximumBytes/2)
 	if hasCurrentPatch {
 		currentContent = extractAnchorWindow(
@@ -717,6 +672,7 @@ func formatThreadSection(
 	builder.WriteString(thread.Finding.Body)
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
+
 	mode := thread.Finding.Deduplication
 	if mode == "" {
 		mode = reviewrules.DeduplicateDefect
@@ -724,11 +680,13 @@ func formatThreadSection(
 
 	builder.WriteString("\nDeduplication mode: ")
 	builder.WriteString(string(mode))
+
 	if contextText.originalAnchorKnown {
 		builder.WriteString(
 			"\n\nOriginal finding source at the earlier commit (historical evidence):\n",
 		)
 		builder.WriteString(contextText.originalAnchor)
+
 		if mode != reviewrules.DeduplicateLocation {
 			fmt.Fprintf(
 				&builder,
@@ -746,9 +704,11 @@ func formatThreadSection(
 		// response would let a passer by, or this service quoting itself, stand as
 		// the answer that resolves a finding.
 		lines, omitted := review.FormatReplies(thread.Replies, botLogin, review.MaximumReplyBytes)
+
 		builder.WriteString(
 			"\n\nReplies on this thread, oldest first. The name before each one is who wrote it",
 		)
+
 		if omitted > 0 {
 			fmt.Fprintf(&builder, ", and %d older replies are not shown", omitted)
 		}
@@ -801,6 +761,7 @@ func batchPreparedThreads(threads []preparedThread, maxSize int) [][]preparedThr
 
 		if len(current) > 0 && currentSize+separator+len(thread.text) > maxSize {
 			flush()
+
 			separator = 0
 		}
 
@@ -841,9 +802,11 @@ func buildBatchPrompt(
 	}
 
 	var data reviewrules.PromptData
+
 	data.Input = policy.WrapUntrusted(body.String())
 	data.Index = index
 	data.Total = total
+
 	prompt, err := policy.Render("reconcile.input", data)
 	if err != nil {
 		slog.Warn("Reconciliation prompt rendering failed", "err", err)

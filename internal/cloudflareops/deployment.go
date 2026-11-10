@@ -54,6 +54,7 @@ type DeploymentResult struct {
 // MarshalJSON encodes public deployment identifiers without settings or credentials.
 func (result DeploymentResult) MarshalJSON() ([]byte, error) {
 	type wireResult DeploymentResult
+
 	data, err := json.Marshal(wireResult(result))
 	if err != nil {
 		return nil, fmt.Errorf("encode deployment result: %w", err)
@@ -109,6 +110,7 @@ func Deploy(ctx context.Context, options DeploymentOptions) (_ DeploymentResult,
 	}
 
 	defer func() { returnErr = errors.Join(returnErr, credentials.Close(ctx)) }()
+
 	operation.client = credentials.Client
 	if err := operation.preflight(ctx); err != nil {
 		return DeploymentResult{}, err
@@ -230,6 +232,7 @@ func (operation *deployment) preflight(ctx context.Context) error {
 	}
 
 	operation.before, operation.selection = settings, selection
+
 	operation.handoff, err = settings.handoff(operation.configuration)
 	if err != nil {
 		return err
@@ -412,6 +415,7 @@ func (operation *deployment) upload(
 	gateway bool,
 ) (returnErr error) {
 	slog.InfoContext(ctx, "Deployment stage started", "stage", stage)
+
 	path, err := writeWrangler(template, configuration)
 	if err != nil {
 		slog.WarnContext(ctx, "Wrangler configuration path failed")
@@ -419,6 +423,7 @@ func (operation *deployment) upload(
 	}
 
 	defer func() { returnErr = errors.Join(returnErr, os.Remove(path)) }()
+
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
 		slog.WarnContext(ctx, "Wrangler configuration path resolution failed")
@@ -442,6 +447,7 @@ func (operation *deployment) upload(
 	}
 
 	defer func() { returnErr = errors.Join(returnErr, log.Close()) }()
+
 	args := []string{
 		filepath.Join(directory, "node_modules", "wrangler", "bin", "wrangler.js"),
 		"deploy",
@@ -460,6 +466,7 @@ func (operation *deployment) upload(
 		operation.account,
 		operation.directory,
 	)
+
 	command.Stdout, command.Stderr = log, log
 	if err := command.Run(); err != nil {
 		slog.WarnContext(ctx, "Deployment stage failed", "stage", stage, "log", log.Name())
@@ -508,7 +515,9 @@ func (operation *deployment) probe(ctx context.Context, origin, revision string)
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
+
 	actual := response.Header.Get("X-Pr-Agent-Revision")
 	if response.StatusCode != http.StatusOK {
 		return actual, &readinessHTTPError{StatusCode: response.StatusCode}
@@ -527,8 +536,10 @@ func (operation *deployment) probe(ctx context.Context, origin, revision string)
 
 func (operation *deployment) waitCandidate(ctx context.Context) error {
 	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
 	var lastError error
 
 	for {

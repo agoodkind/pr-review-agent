@@ -136,6 +136,7 @@ func TestMetadataFeedbackWithoutAnExactCorrectionRequestsChanges(t *testing.T) {
 					Claim:            "The source line contains process narration.",
 					Importance:       1,
 				}
+
 				encoded, err := json.Marshal(domain.ReviewResult{
 					Overview:            "The review identified process narration.",
 					OmissionsAcceptable: true,

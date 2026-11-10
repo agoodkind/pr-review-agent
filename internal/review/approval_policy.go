@@ -30,6 +30,7 @@ func (service *Service) nativeVerdictBody(
 	}
 
 	logger := gklog.L(ctx)
+
 	comments, err := service.github.ListIssueComments(
 		ctx,
 		job.InstallationID,
@@ -44,6 +45,7 @@ func (service *Service) nativeVerdictBody(
 	comment, found := findSummaryComment(comments, service.botLogin)
 	if !found {
 		var state marker.State
+
 		state.RunID, state.Status = job.DeliveryID, marker.StateDone
 		if summary.CoverageComplete {
 			state.LastReviewed = summary.Head
@@ -114,7 +116,9 @@ func NativeReviewSummaryLink(
 	}
 
 	var data reviewrules.PromptData
+
 	data.SummaryURL = nativeSummaryURL(repo, number, commentID)
+
 	link, err := renderPrompt(policy, "native.summary_link", data)
 	if err != nil {
 		return "", err
@@ -242,6 +246,7 @@ func (service *Service) preserveDismissedRejection(
 	reviews []githubapp.Review,
 ) (bool, error) {
 	logger := gklog.L(ctx)
+
 	latest := githubapp.LatestDecisionReviewAtHead(reviews, service.botLogin, job.Head)
 	if latest.State != reviewStateDismissed || latest.CommitID != job.Head {
 		return false, nil

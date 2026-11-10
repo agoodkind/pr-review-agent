@@ -8,9 +8,18 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-// PlanFileContentReview validates scope decisions before selecting source for content review.
-// Conflicting exclusions become explicit gaps in the returned assessments.
-// The plan retains their source for content review and reports the unresolved requirement.
+// PlanFileContentReview validates file scope decisions.
+//
+// Conflicting exclusions produce explicit assessment gaps. The plan retains
+// their source for content review and reports the unresolved requirement.
+//
+// For example:
+//
+//	selected, assessments, err := PlanFileContentReview(
+//		input,
+//		assessments,
+//		policy,
+//	)
 func PlanFileContentReview(
 	input diff.ReviewInput,
 	assessments []domain.FileAssessment,
@@ -31,6 +40,7 @@ func normalizeFileAssessments(
 ) ([]domain.FileAssessment, error) {
 	decisions := slices.Clone(assessments)
 	files := BuildFileIndex(input.Files)
+
 	var shortfall structuralShortfall
 
 	for index := range decisions {
@@ -40,10 +50,12 @@ func normalizeFileAssessments(
 		}
 
 		assessment.Reviewed = false
+
 		file := files[assessment.Path]
 		if assessment.Action == domain.FileActionExclude &&
 			exclusionRequiresContentReview(*assessment, file, policy) {
 			var data reviewrules.PromptData
+
 			reason, err := renderPrompt(policy, "classification.required", data)
 			if err != nil {
 				return nil, err
@@ -56,6 +68,7 @@ func normalizeFileAssessments(
 
 		if assessment.Action == domain.FileActionExclude && !assessment.PermitsContentExclusion() {
 			var data reviewrules.PromptData
+
 			reason, err := renderPrompt(policy, "coverage.requirement_conflict", data)
 			if err != nil {
 				return nil, err

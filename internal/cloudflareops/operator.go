@@ -25,6 +25,7 @@ func (client *Client) RegisterOperatorToken(
 	}
 
 	digest := sha256.Sum256(token)
+
 	body, err := json.Marshal(
 		struct {
 			Name string `json:"name"`

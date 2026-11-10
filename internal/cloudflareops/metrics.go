@@ -105,6 +105,7 @@ var legacyProvider = regexp.MustCompile(`provider ([A-Za-z0-9_-]+) model ([A-Za-
 
 func newCounts() Counts {
 	var counts Counts
+
 	counts.FailureClasses = make(map[string]int)
 	counts.AttemptClasses = make(map[string]int)
 
@@ -157,6 +158,7 @@ func classify(fields map[string]json.RawMessage) (string, string) {
 	)
 	app := strings.Contains(errorText, "daily token limit exhausted") ||
 		strings.Contains(errorText, "app token limit exhausted")
+
 	api := strings.Contains(errorText, "insufficient_quota") ||
 		strings.Contains(errorText, "usage_limit_reached")
 	if app && api {
@@ -217,6 +219,7 @@ func isAttempt(message string) bool {
 // Summarize deduplicates record IDs before counting failures by repository and delivery identifier.
 func Summarize(events []Event, manifest Manifest) (Metrics, error) {
 	var metrics Metrics
+
 	metrics.Manifest = manifest
 	metrics.Total = newCounts()
 	metrics.Days = make(map[string]Counts)
@@ -235,7 +238,9 @@ func Summarize(events []Event, manifest Manifest) (Metrics, error) {
 	)
 	metrics.Limitations = append(
 		metrics.Limitations,
-		"Execution counts use explicit job start and failure events. Run outcome counts use distinct delivery identifiers with observed outcomes and can overlap after retries.",
+		"Execution counts use explicit job start and failure events. "+
+			"Run outcome counts use distinct delivery identifiers with observed outcomes "+
+			"and can overlap after retries.",
 	)
 	metrics.Limitations = append(
 		metrics.Limitations,
@@ -309,6 +314,7 @@ func (collector *metricCollector) record(event Event) error {
 	daily := collector.day(day)
 	daily.Records++
 	collector.metrics.Days[day] = daily
+
 	repository := text(event.Source, "repository")
 	if repository == "" {
 		repository = "unidentified"
@@ -317,6 +323,7 @@ func (collector *metricCollector) record(event Event) error {
 	repositoryCounts := collector.repository(repository)
 	repositoryCounts.Records++
 	collector.metrics.Repositories[repository] = repositoryCounts
+
 	id := text(event.Source, "delivery_id")
 	if id == "" {
 		id = text(event.Source, "run_id")
@@ -329,6 +336,7 @@ func (collector *metricCollector) record(event Event) error {
 
 	run := collector.run(id, repository, timestamp)
 	updateRun(run, event)
+
 	if isAttempt(text(event.Source, "message")) {
 		attempt := providerAttempt(event, run)
 		collector.metrics.Attempts = append(collector.metrics.Attempts, attempt)
@@ -354,6 +362,7 @@ func (collector *metricCollector) recordExecutionDay(event Event) {
 	}
 
 	day := sourceTimestamp(event).Format(time.DateOnly)
+
 	counts := collector.day(day)
 	if message == "review job started" {
 		counts.StartedExecutions++
@@ -386,9 +395,11 @@ func (collector *metricCollector) repository(key string) Counts {
 
 func (collector *metricCollector) run(id string, repository string, timestamp time.Time) *Run {
 	key := repository + ":" + id
+
 	run, exists := collector.runs[key]
 	if !exists {
 		var created Run
+
 		run = &created
 		run.ID = id
 		run.Repository = repository
@@ -404,6 +415,7 @@ func (collector *metricCollector) run(id string, repository string, timestamp ti
 
 func updateRun(run *Run, event Event) {
 	timestamp := time.UnixMilli(event.Timestamp).UTC()
+
 	run.Records++
 	if timestamp.Before(run.First) {
 		run.First = timestamp
@@ -423,8 +435,10 @@ func updateRun(run *Run, event Event) {
 
 	message := text(event.Source, "message")
 	updateLifecycle(run, event)
+
 	if failureRecord(message) {
 		run.FailureObserved = true
+
 		class, _ := classify(event.Source)
 		if !slices.Contains(run.Classes, class) {
 			run.Classes = append(run.Classes, class)
@@ -438,6 +452,7 @@ func updateRun(run *Run, event Event) {
 	if message == "review usage reported" || message == "review model usage" ||
 		message == "review usage summary" {
 		input, hasInput := number(event.Source, "input_tokens")
+
 		output, hasOutput := number(event.Source, "output_tokens")
 		if hasInput && hasOutput && input >= 0 && output >= 0 {
 			run.UsageReported = true
@@ -449,6 +464,7 @@ func updateRun(run *Run, event Event) {
 
 func providerAttempt(event Event, run *Run) Attempt {
 	var attempt Attempt
+
 	attempt.Timestamp = sourceTimestamp(event)
 	attempt.Message = text(event.Source, "message")
 	attempt.RunID = run.ID
@@ -457,6 +473,7 @@ func providerAttempt(event Event, run *Run) Attempt {
 	attempt.Model = text(event.Source, "configured_model")
 	attempt.APICode = text(event.Source, "api_code")
 	attempt.APIStatus, _ = number(event.Source, "api_status")
+
 	attempt.Class, attempt.Evidence = classify(event.Source)
 	if attempt.Evidence == "legacy_error_text" {
 		match := legacyProvider.FindStringSubmatch(
@@ -477,6 +494,7 @@ func providerAttempt(event Event, run *Run) Attempt {
 
 func quotaSnapshot(source map[string]json.RawMessage, attempt Attempt) *QuotaSnapshot {
 	var snapshot QuotaSnapshot
+
 	snapshot.Provider = attempt.Provider
 	snapshot.Model = attempt.Model
 	snapshot.Known = boolean(source, "quota_known")
@@ -529,9 +547,11 @@ func addRun(counts *Counts, run *Run) {
 
 	if run.UsageReported {
 		counts.RunsReportingUsage++
+
 		counts.UsageKnown = true
 		if counts.MeasuredInputTokens == nil {
 			var input, output int64
+
 			counts.MeasuredInputTokens = &input
 			counts.MeasuredOutputTokens = &output
 		}
@@ -576,6 +596,7 @@ func (collector *metricCollector) finishRun(run *Run) {
 // MarshalJSON uses a distinct wire type because encoding Metrics directly would recurse.
 func (metrics Metrics) MarshalJSON() ([]byte, error) {
 	type wireMetrics Metrics
+
 	data, err := json.Marshal(wireMetrics(metrics))
 	if err != nil {
 		return nil, fmt.Errorf("encode metrics: %w", err)

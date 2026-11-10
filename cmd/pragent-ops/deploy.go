@@ -13,6 +13,7 @@ import (
 
 func deploy(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	var options cloudflareops.DeploymentOptions
+
 	set := flag.NewFlagSet("deploy", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(
@@ -70,20 +71,25 @@ func deploy(ctx context.Context, args []string, stdout, stderr io.Writer) error 
 		false,
 		"Read deployed selections and verify active health without changing Cloudflare.",
 	)
+
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+
 		return err
 	}
+
 	if set.NArg() != 0 || (options.TokenFile == "") == (options.AccountTokenFile == "") {
 		return errors.New(
 			"deploy requires exactly one --token-file or --account-token-file and accepts no positional arguments",
 		)
 	}
+
 	result, err := cloudflareops.Deploy(ctx, options)
 	if err != nil {
 		return err
 	}
+
 	return json.NewEncoder(stdout).Encode(result)
 }

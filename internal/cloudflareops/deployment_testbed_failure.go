@@ -45,6 +45,7 @@ func captureTestFailureReadiness(
 ) (returnErr error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), testFailureCaptureTimeout)
 	defer cancel()
+
 	file, err := os.OpenFile(
 		filepath.Join(operation.directory, "failure-readiness.ndjson"),
 		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
@@ -56,8 +57,11 @@ func captureTestFailureReadiness(
 	}
 
 	defer func() { returnErr = errors.Join(returnErr, file.Close()) }()
+
 	encoder := json.NewEncoder(file)
+
 	var failure testFailureReadinessRecord
+
 	failure.Timestamp, failure.Kind, failure.Error = clock.System().UTC(), "failure", originalError.Error()
 	if err := encoder.Encode(failure); err != nil {
 		slog.WarnContext(
@@ -71,6 +75,7 @@ func captureTestFailureReadiness(
 	}
 
 	var identity testFailureReadinessRecord
+
 	identity.Timestamp, identity.Kind, identity.ControllerRevision = clock.System().UTC(), "controller", version.SourceRevision()
 	if err := encoder.Encode(identity); err != nil {
 		slog.WarnContext(ctx, "Controller readiness evidence write failed", "path", file.Name())
@@ -82,6 +87,7 @@ func captureTestFailureReadiness(
 		operation.configuration.Slots...,
 	)
 	records := make(chan testFailureReadinessRecord, len(targets))
+
 	var workers sync.WaitGroup
 
 	for _, target := range targets {
@@ -89,6 +95,7 @@ func captureTestFailureReadiness(
 	}
 
 	observerResult := make(chan error, 1)
+
 	go func() {
 		defer func() {
 			var observerError error
@@ -99,8 +106,10 @@ func captureTestFailureReadiness(
 			}
 
 			close(records)
+
 			observerResult <- observerError
 		}()
+
 		workers.Wait()
 	}()
 
@@ -124,6 +133,7 @@ func captureTestFailureReadiness(
 				file.Name(),
 				err,
 			)
+
 			cancel()
 		}
 	}
@@ -138,6 +148,7 @@ func observeTestFailureWorker(
 	records chan<- testFailureReadinessRecord,
 ) {
 	var presence testFailureReadinessRecord
+
 	presence.Timestamp, presence.Kind, presence.Worker, presence.Origin = clock.System().UTC(), "presence", target.Name, target.Origin
 	requestContext, cancel := context.WithTimeout(ctx, testFailureRequestTimeout)
 	_, exists, err := operation.client.workerSettings(
@@ -146,7 +157,9 @@ func observeTestFailureWorker(
 		target.Name,
 		true,
 	)
+
 	cancel()
+
 	if err != nil {
 		presence.Error = err.Error()
 	} else {
@@ -154,16 +167,19 @@ func observeTestFailureWorker(
 	}
 
 	records <- presence
+
 	if err != nil || !exists {
 		return
 	}
 
 	records <- readTestFailureSubdomain(ctx, operation, target)
+
 	ticker := time.NewTicker(testFailureProbeInterval)
 	defer ticker.Stop()
 
 	for ctx.Err() == nil {
 		records <- readTestFailureOrigin(ctx, operation, target)
+
 		select {
 		case <-ctx.Done():
 			return
@@ -178,15 +194,19 @@ func readTestFailureSubdomain(
 	target DeploymentSlot,
 ) testFailureReadinessRecord {
 	var record testFailureReadinessRecord
+
 	record.Timestamp, record.Kind, record.Worker, record.Origin = clock.System().UTC(), "subdomain", target.Name, target.Origin
+
 	ctx, cancel := context.WithTimeout(ctx, testFailureRequestTimeout)
 	defer cancel()
+
 	response, status, err := operation.client.request(
 		ctx,
 		http.MethodGet,
 		"/accounts/"+operation.account+"/workers/scripts/"+target.Name+"/subdomain",
 		nil,
 	)
+
 	record.Status = status
 	if err != nil {
 		record.Error = err.Error()
@@ -214,9 +234,12 @@ func readTestFailureOrigin(
 	target DeploymentSlot,
 ) testFailureReadinessRecord {
 	var record testFailureReadinessRecord
+
 	record.Timestamp, record.Kind, record.Worker, record.Origin = clock.System().UTC(), "readiness", target.Name, target.Origin
+
 	ctx, cancel := context.WithTimeout(ctx, testFailureRequestTimeout)
 	defer cancel()
+
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.Origin+"/", nil)
 	if err != nil {
 		record.Error = "failure readiness request could not be created"
@@ -230,6 +253,7 @@ func readTestFailureOrigin(
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	record.Status, record.Revision = response.StatusCode, response.Header.Get("X-Pr-Agent-Revision")
 	record.Server, record.CFRay = response.Header.Get("Server"), response.Header.Get("Cf-Ray")
 

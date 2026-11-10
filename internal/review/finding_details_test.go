@@ -29,6 +29,7 @@ func TestFindingDetailsExcludePublishedInlineFindings(t *testing.T) {
 	duplicate.Path = "src/./review.go"
 	duplicate.Title = " CHECK  the response "
 	duplicate.EndLine = 9
+
 	firstID, err := marker.FindingID(inline)
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +51,7 @@ func TestFindingDetailsExcludePublishedInlineFindings(t *testing.T) {
 	summary.Published = []domain.Finding{inline}
 	summary.Metadata = append(summary.Metadata, duplicate)
 	summary.Fallback = []domain.Finding{duplicate, refused}
+
 	body := review.RenderBody(summary)
 	if strings.Contains(body, inline.Body) || strings.Contains(body, duplicate.Title) {
 		t.Fatal("The summary repeats an already published inline finding.")
@@ -79,6 +81,7 @@ func TestFindingDetailsUseLoadedDisplayWithoutChangingCheckpoints(t *testing.T) 
 			func(t *testing.T) {
 				summary.MetadataFindingsDisplay = loadFindingDisplay(t, display)
 				body := review.RenderBody(summary)
+
 				finding := summary.Metadata[0]
 				if strings.Contains(body, finding.Body) || strings.Contains(body, finding.Title) {
 					t.Fatal(
@@ -106,6 +109,7 @@ func TestFailureMetadataFindingsRemainOnlyInTheCheckpoint(t *testing.T) {
 	summary := findingDetailsSummary()
 	summary.MetadataFindingsDisplay = loadFindingDisplay(t, reviewrules.FindingsExpanded)
 	summary.ApprovalWithheld = true
+
 	body := review.RenderFailureBody(
 		summary,
 		"The review could not finish.",
@@ -135,12 +139,14 @@ func TestRefusedFindingsRetainASeparateCheckpoint(t *testing.T) {
 	}
 	summary.Fallback = []domain.Finding{finding}
 	summary.ApprovalWithheld = true
+
 	body := review.RenderBody(summary)
 	if _, found := marker.FindFinding(body); found {
 		t.Fatal("A refused finding checkpoint must not claim an inline publication.")
 	}
 
 	const prefix = "<!-- pr-review-agent:fallback-record:v1 "
+
 	_, checkpoint, found := strings.Cut(body, prefix)
 	if !found {
 		t.Fatal("The summary must retain the refused finding for later refreshes.")
@@ -169,6 +175,7 @@ func TestRefusedFindingsRetainASeparateCheckpoint(t *testing.T) {
 	}
 
 	stored := record.Findings[0]
+
 	originalID, err := marker.FindingID(finding)
 	if err != nil {
 		t.Fatal(err)
@@ -217,8 +224,10 @@ func loadFindingDisplay(
 
 func loadFindingPolicy(t *testing.T, display reviewrules.FindingDisplay) reviewrules.Policy {
 	t.Helper()
+
 	catalogPath := filepath.Join("..", "..", "config", "review-rules.json")
 	promptsPath := filepath.Join("..", "..", "config", "review-prompts.json")
+
 	data, err := os.ReadFile(promptsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -235,6 +244,7 @@ func loadFindingPolicy(t *testing.T, display reviewrules.FindingDisplay) reviewr
 	}
 
 	prompts["metadata_findings_display"] = encodedDisplay
+
 	data, err = json.Marshal(prompts)
 	if err != nil {
 		t.Fatal(err)

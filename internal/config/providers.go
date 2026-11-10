@@ -145,9 +145,17 @@ type providerDefinition struct {
 
 var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+var (
+	errInvalidProviderPriority = errors.New(
+		"PROVIDER_PRIORITY must list each provider exactly once",
+	)
+	errNoEnabledProvider = errors.New("at least one provider must be enabled")
+)
+
 // LoadProviders requires normalized PROVIDER_<ID> credential variables.
 func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 	raw, _ := lookup("PROVIDERS")
+
 	definitions, err := unmarshalProviderDefinitions(raw)
 	if err != nil || len(definitions) == 0 {
 		return nil, errors.New("PROVIDERS must be a nonempty array of providers")
@@ -193,6 +201,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		}
 
 		prefix := "PROVIDER_" + strings.ToUpper(definition.ID)
+
 		apiKey, ok := loadRequiredText(lookup, prefix+"_API_KEY")
 		if !ok {
 			return nil, fmt.Errorf("%s_API_KEY is required", prefix)
@@ -201,6 +210,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		clientID, hasClientID := loadRequiredText(lookup, prefix+"_CF_ACCESS_CLIENT_ID")
 		clientSecret, hasClientSecret := loadRequiredText(lookup, prefix+"_CF_ACCESS_CLIENT_SECRET")
 		configuredID := definition.CFAccessClientIDBinding != ""
+
 		configuredSecret := definition.CFAccessClientSecretBinding != ""
 		if configuredID != configuredSecret || hasClientID != configuredID ||
 			hasClientSecret != configuredSecret {
@@ -231,29 +241,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		}
 	}
 
-	providers := make([]ProviderConfig, 0, len(priority))
-	seen := make(map[string]bool, len(priority))
-	enabled := 0
-
-	for _, id := range priority {
-		provider, exists := configured[id]
-		if !exists || seen[id] {
-			return nil, errors.New("PROVIDER_PRIORITY must list each provider exactly once")
-		}
-
-		seen[id] = true
-		if !provider.Disabled {
-			enabled++
-		}
-
-		providers = append(providers, provider)
-	}
-
-	if enabled == 0 {
-		return nil, errors.New("at least one provider must be enabled")
-	}
-
-	return providers, nil
+	return orderProviders(configured, priority)
 }
 
 func (definition providerDefinition) dailyLimit() int64 {
@@ -441,6 +429,7 @@ func validateProviderLimits(definition providerDefinition) (time.Duration, error
 func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
+
 	var definitions []providerDefinition
 	if err := decoder.Decode(&definitions); err != nil {
 		return nil, errors.New("invalid provider definitions JSON")
@@ -462,6 +451,7 @@ func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 
 func unmarshalProviderPriority(raw string) ([]string, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
+
 	var priority []string
 	if err := decoder.Decode(&priority); err != nil {
 		return nil, errors.New("invalid provider priority JSON")
@@ -481,4 +471,34 @@ func rejectTrailingProviderJSON(decoder *json.Decoder) error {
 	}
 
 	return nil
+}
+
+func orderProviders(
+	configured map[string]ProviderConfig,
+	priority []string,
+) ([]ProviderConfig, error) {
+	providers := make([]ProviderConfig, 0, len(priority))
+	seen := make(map[string]bool, len(priority))
+	enabled := 0
+
+	for _, providerID := range priority {
+		provider, exists := configured[providerID]
+		if !exists || seen[providerID] {
+			return nil, errInvalidProviderPriority
+		}
+
+		seen[providerID] = true
+
+		if !provider.Disabled {
+			enabled++
+		}
+
+		providers = append(providers, provider)
+	}
+
+	if enabled == 0 {
+		return nil, errNoEnabledProvider
+	}
+
+	return providers, nil
 }

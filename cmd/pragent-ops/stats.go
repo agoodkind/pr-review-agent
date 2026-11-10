@@ -28,7 +28,9 @@ func (values *exclusions) Set(value string) error {
 	if err != nil {
 		return err
 	}
+
 	*values = append(*values, target.String())
+
 	return nil
 }
 
@@ -43,6 +45,7 @@ type statsOptions struct {
 
 func statsFlags(args []string, stderr io.Writer) (statsOptions, error) {
 	var opts statsOptions
+
 	set := flag.NewFlagSet("stats", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(
@@ -124,12 +127,15 @@ func statsFlags(args []string, stderr io.Writer) (statsOptions, error) {
 		"exclude",
 		"Exclude OWNER/REPOSITORY#NUMBER from metrics and blockers; repeatable.",
 	)
+
 	if err := set.Parse(args); err != nil {
 		return opts, err
 	}
+
 	if set.NArg() != 0 {
 		return opts, errors.New("stats does not accept positional arguments")
 	}
+
 	return opts, nil
 }
 
@@ -139,17 +145,22 @@ func statsEvidence(ctx context.Context, opts options) (
 	string,
 	error,
 ) {
-	var manifest cloudflareops.Manifest
-	var directory string
-	var err error
+	var (
+		manifest  cloudflareops.Manifest
+		directory string
+		err       error
+	)
+
 	if opts.input == "" {
 		if opts.since == "" && opts.from == "" {
 			opts.since = "24h"
 		}
+
 		manifest, err = captureManifest(ctx, opts)
 		if err != nil {
 			return cloudflareops.Metrics{}, nil, "", err
 		}
+
 		directory = manifest.Directory
 		opts.input = manifest.EventsFile
 	} else {
@@ -157,52 +168,64 @@ func statsEvidence(ctx context.Context, opts options) (
 		if manifestPath == "" {
 			manifestPath = filepath.Join(filepath.Dir(opts.input), "manifest.json")
 		}
+
 		manifest, err = cloudflareops.LoadManifest(manifestPath)
 		if err != nil {
 			return cloudflareops.Metrics{}, nil, "", err
 		}
+
 		manifest.InputFile = opts.input
 		if opts.since != "" || opts.from != "" {
 			if opts.end == "" {
 				opts.end = manifest.To.Format(time.RFC3339Nano)
 			}
+
 			from, end, rangeErr := timeRange(opts)
 			if rangeErr != nil {
 				return cloudflareops.Metrics{}, nil, "", rangeErr
 			}
+
 			if from.Before(manifest.From) || end.After(manifest.To) {
 				return cloudflareops.Metrics{}, nil, "", errors.New(
 					"stats range exceeds the cached capture range",
 				)
 			}
+
 			manifest.From, manifest.To = from, end
 		} else if opts.end != "" {
 			return cloudflareops.Metrics{}, nil, "", errors.New(
 				"stats --end requires --since or --from",
 			)
 		}
+
 		if opts.script != "" {
 			manifest.Script = opts.script
 		}
+
 		if opts.account != "" {
 			manifest.Account = opts.account
 		}
+
 		directory, err = cloudflareops.PrivateDirectory(opts.output)
 		if err != nil {
 			return cloudflareops.Metrics{}, nil, "", err
 		}
 	}
+
 	if !manifest.Complete {
 		return cloudflareops.Metrics{}, nil, directory, errors.New(
 			"stats requires an exhausted available telemetry capture; the manifest is partial",
 		)
 	}
+
 	events, err := cloudflareops.ReadEvents(opts.input)
 	if err != nil {
 		return cloudflareops.Metrics{}, nil, directory, err
 	}
+
 	manifest.Directory = directory
 	metrics, err := cloudflareops.Summarize(events, manifest)
+
 	return metrics, events, directory, err
 }
 
@@ -211,10 +234,12 @@ func statsNumber(value json.RawMessage) int64 {
 	if json.Unmarshal(value, &number) == nil {
 		return number
 	}
+
 	var text string
 	if json.Unmarshal(value, &text) == nil {
 		number, _ = strconv.ParseInt(text, 10, 64)
 	}
+
 	return number
 }
 
@@ -225,6 +250,7 @@ func statsExcludedMetrics(
 	owner string,
 ) (cloudflareops.Metrics, error) {
 	excludedRuns := make(map[string]bool)
+
 	for _, run := range metrics.Runs {
 		target := opsstats.Target{Repository: run.Repository, Number: run.PullRequest}
 		if slices.Contains(
@@ -237,28 +263,37 @@ func statsExcludedMetrics(
 			excludedRuns[run.ID] = true
 		}
 	}
+
 	filtered := make([]cloudflareops.Event, 0, len(events))
 	for _, event := range events {
-		var delivery, runID, repository string
-		var number int64
+		var (
+			delivery, runID, repository string
+			number                      int64
+		)
+
 		_ = json.Unmarshal(event.Source["delivery_id"], &delivery)
 		_ = json.Unmarshal(event.Source["run_id"], &runID)
 		_ = json.Unmarshal(event.Source["repository"], &repository)
 		number = statsNumber(event.Source["pull_request"])
+
 		if excludedRuns[delivery] || excludedRuns[runID] {
 			continue
 		}
+
 		if slices.Contains(
 			excluded,
 			(opsstats.Target{Repository: repository, Number: number}).String(),
 		) {
 			continue
 		}
+
 		if repository != "" && !strings.EqualFold(strings.Split(repository, "/")[0], owner) {
 			continue
 		}
+
 		filtered = append(filtered, event)
 	}
+
 	return cloudflareops.Summarize(filtered, metrics.Manifest)
 }
 
@@ -267,14 +302,17 @@ func stats(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
 	}
+
 	if err != nil {
 		return err
 	}
+
 	data, err := os.ReadFile(opts.runtime)
 	if err != nil {
 		slog.WarnContext(ctx, "Stats runtime configuration read failed", "path", opts.runtime)
 		return fmt.Errorf("read stats runtime configuration: %w", err)
 	}
+
 	var runtime struct {
 		BotLogin          string `json:"GITHUB_BOT_LOGIN"`
 		MinimumImportance string `json:"REVIEW_MIN_IMPORTANCE"`
@@ -282,43 +320,53 @@ func stats(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err = json.Unmarshal(data, &runtime); err != nil {
 		return errors.New("stats runtime configuration could not be decoded")
 	}
+
 	if opts.botLogin == "" {
 		opts.botLogin = runtime.BotLogin
 	}
+
 	if opts.botLogin == "" {
 		return errors.New("stats requires --bot-login or runtime GITHUB_BOT_LOGIN")
 	}
+
 	minimumImportance, err := strconv.Atoi(runtime.MinimumImportance)
 	if err != nil || minimumImportance <= 0 {
 		return errors.New("stats runtime requires a positive REVIEW_MIN_IMPORTANCE")
 	}
+
 	if opts.owner == "" {
 		opts.owner, err = opsstats.DefaultOwner(ctx)
 		if err != nil {
 			return err
 		}
 	}
+
 	metrics, events, directory, err := statsEvidence(ctx, opts.telemetry)
 	if err != nil {
 		return err
 	}
+
 	logTargets := opsstats.LogTargets(metrics)
+
 	metrics, err = statsExcludedMetrics(metrics, events, opts.excluded, opts.owner)
 	if err != nil {
 		return err
 	}
+
 	if err = cloudflareops.WriteJSON(
 		filepath.Join(directory, "metrics.json"),
 		metrics,
 	); err != nil {
 		return err
 	}
+
 	if err = cloudflareops.WriteJSON(
 		filepath.Join(directory, "manifest.json"),
 		metrics.Manifest,
 	); err != nil {
 		return err
 	}
+
 	pullRequests, err := opsstats.CaptureGitHub(
 		ctx,
 		opts.owner,
@@ -328,12 +376,14 @@ func stats(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	)
 	if err != nil {
 		slog.WarnContext(ctx, "Stats GitHub capture failed", "directory", directory)
+
 		return fmt.Errorf(
 			"stats GitHub capture failed; telemetry remains in %s: %w",
 			directory,
 			err,
 		)
 	}
+
 	report := opsstats.Build(
 		metrics,
 		pullRequests,
@@ -361,17 +411,21 @@ func stats(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			report.QuotaUnavailableReason = "Current quota snapshots could not be queried."
 		} else {
 			report.QuotaCapturePath = filepath.Join(quotaDirectory, "counters.json")
+
 			report.CurrentQuota, err = os.ReadFile(report.QuotaCapturePath)
 			if err != nil {
 				report.QuotaUnavailableReason = "The current quota capture could not be read."
 			}
 		}
+
 		queue := statsQueue(ctx, data, opts.operatorTokenFile)
 		opsstats.ApplyQueue(&report, queue)
 	}
+
 	path := filepath.Join(directory, "stats.json")
 	if err = cloudflareops.WriteJSON(path, &report); err != nil {
 		return err
 	}
+
 	return printStats(stdout, report, path)
 }

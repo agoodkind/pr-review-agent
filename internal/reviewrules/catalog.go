@@ -131,7 +131,14 @@ type Policy struct {
 	failureCodes              []FailureCode
 }
 
-// LoadPolicy requires both configuration files and rejects malformed templates.
+// LoadPolicy loads and validates rule and prompt configuration.
+//
+// Both configuration files must exist, and every configured prompt template
+// must parse.
+//
+// For example:
+//
+//	policy, err := LoadPolicy(catalogPath, promptsPath)
 func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	rules, err := decodeFile[catalogFile](catalogPath)
 	if err != nil {
@@ -156,28 +163,9 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		return Policy{}, err
 	}
 
-	compiled := make(map[string]*template.Template, len(prompts.Templates))
-	for name, body := range prompts.Templates {
-		if strings.TrimSpace(name) == "" || strings.TrimSpace(body) == "" {
-			return Policy{}, fmt.Errorf("prompt template requires a name and nonempty body")
-		}
-
-		parsed, err := compileTemplate(name, body)
-		if err != nil {
-			return Policy{}, err
-		}
-
-		compiled[name] = parsed
-	}
-
-	for _, entry := range rules.Rules {
-		name := "rule." + string(entry.ID)
-		parsed, err := compileTemplate(name, entry.Instructions)
-		if err != nil {
-			return Policy{}, err
-		}
-
-		compiled[name] = parsed
+	compiled, err := compilePolicyTemplates(rules, prompts)
+	if err != nil {
+		return Policy{}, err
 	}
 
 	for _, name := range []string{
@@ -209,61 +197,8 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 	}
 
-	for _, name := range []string{
-		"report.context_omitted",
-		"consolidate.context_omitted",
-		"review.context_omitted",
-		"review.path_instructions",
-		"omissions.deferred",
-		"coverage.requirement_conflict",
-		"coverage.accepted",
-		"coverage.pending",
-		"coverage.check_title",
-		"coverage.verdict_pending",
-		"coverage.persistence_limit",
-		"inline.footer",
-		"failure.class.other",
-		"failure.class.deadline",
-		"failure.class.provider_unavailable",
-		"failure.class.panic",
-		"failure.class.daily_budget",
-		"failure.class.usage_exceeded",
-		"failure.class.rate_limited",
-		"failure.dismiss",
-		"failure.provider",
-		"failure.service",
-		"failure.details",
-		"failure.row",
-		"catalog.review",
-		"catalog.output",
-		"catalog.rule",
-		"review.system",
-		"review.input",
-		"report.system",
-		"report.input",
-		"reconcile.system",
-		"reconcile.input",
-		"consolidate.system",
-		"consolidate.input",
-		"consolidate.across.input",
-		"disputes.input",
-		"omissions.none",
-		"omissions.input",
-		"omissions.decision",
-		"pull_request.input",
-		"structured.output",
-		"untrusted.policy",
-		"probe.user",
-		"schema.finding.surface",
-		"schema.finding.commit_sha",
-		"schema.finding.correction_action",
-		"schema.finding.path",
-		"schema.finding.start_line",
-		"schema.finding.end_line",
-	} {
-		if _, exists := compiled[name]; !exists {
-			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
-		}
+	if err := requirePolicyTemplates(compiled); err != nil {
+		return Policy{}, err
 	}
 
 	encoded, err := json.Marshal(
@@ -300,10 +235,23 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	}, nil
 }
 
-// Fingerprint identifies the loaded rules and prompt configuration.
+// Fingerprint returns the loaded configuration identity.
+//
+// The fingerprint includes both rule and prompt configuration.
+//
+// For example:
+//
+//	fingerprint := policy.Fingerprint()
 func (policy Policy) Fingerprint() string { return policy.fingerprint }
 
-// FileAssessmentsDisplay controls file assessment details in the review summary.
+// FileAssessmentsDisplay returns the file assessment display setting.
+//
+// The setting controls whether the review summary expands, collapses, or
+// hides file assessment details.
+//
+// For example:
+//
+//	display := policy.FileAssessmentsDisplay()
 func (policy Policy) FileAssessmentsDisplay() FindingDisplay { return policy.fileAssessmentsDisplay }
 
 func validatePromptSettings(prompts promptsFile) error {
@@ -371,6 +319,7 @@ func compileTemplate(name, body string) (*template.Template, error) {
 
 func decodeFile[T catalogFile | promptsFile](path string) (T, error) {
 	var target T
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Warn("Policy configuration reading failed", "path", path, "err", err)
@@ -379,6 +328,7 @@ func decodeFile[T catalogFile | promptsFile](path string) (T, error) {
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
+
 	if err := decoder.Decode(&target); err != nil {
 		slog.Warn("Policy configuration decoding failed", "path", path, "err", err)
 		return target, fmt.Errorf("decode policy configuration %q: %w", path, err)
@@ -432,10 +382,22 @@ func validateCatalog(catalog catalogFile) error {
 	return nil
 }
 
-// Catalog exposes rule queries without exposing mutable rule storage.
+// Catalog returns the loaded rule catalog.
+//
+// Catalog methods query rules without exposing mutable rule storage.
+//
+// For example:
+//
+//	catalog := policy.Catalog()
 func (policy Policy) Catalog() Catalog { return policy.catalog }
 
-// Render applies configured formatting limits before evaluating a loaded template.
+// Render evaluates a loaded prompt template.
+//
+// The renderer supplies configured formatting limits to the template data.
+//
+// For example:
+//
+//	text, err := policy.Render(name, data)
 func (policy Policy) Render(name string, data PromptData) (string, error) {
 	return render(policy.templates, name, data, policy.limits)
 }
@@ -448,6 +410,7 @@ func render(
 ) (string, error) {
 	data.SummarySentences = limits.SummarySentences
 	data.WalkthroughItems = limits.WalkthroughItems
+
 	selected, exists := templates[name]
 	if !exists {
 		return "", fmt.Errorf("prompt template %q is not configured", name)
@@ -462,25 +425,57 @@ func render(
 	return output.String(), nil
 }
 
-// Limits supplies the same constraints used by prompt text and report processing.
+// Limits returns the configured formatting limits.
+//
+// Prompt rendering and report processing use these constraints.
+//
+// For example:
+//
+//	limits := policy.Limits()
 func (policy Policy) Limits() FormattingLimits { return policy.limits }
 
-// ProviderDetails returns the configured collapsed table columns.
+// ProviderDetails returns the configured provider detail columns.
+//
+// The method returns a separate slice that callers can change.
+//
+// For example:
+//
+//	columns := policy.ProviderDetails()
 func (policy Policy) ProviderDetails() []ProviderDetailColumn {
 	return slices.Clone(policy.providerDetails)
 }
 
-// RecognizesFailureCode uses failure_codes from the prompt configuration.
+// RecognizesFailureCode checks a configured failure code.
+//
+// The method compares the supplied code with the prompt configuration
+// entries.
+//
+// For example:
+//
+//	recognized := policy.RecognizesFailureCode(code)
 func (policy Policy) RecognizesFailureCode(code string) bool {
 	return slices.Contains(policy.failureCodes, FailureCode(code))
 }
 
-// WrapUntrusted delimits source material using the configured protocol markers.
+// WrapUntrusted adds the configured input boundary markers.
+//
+// The method inserts a line break between each marker and the source text.
+//
+// For example:
+//
+//	wrapped := policy.WrapUntrusted(input)
 func (policy Policy) WrapUntrusted(input string) string {
 	return policy.untrustedMarkers.Begin + "\n" + input + "\n" + policy.untrustedMarkers.End
 }
 
-// EscapeUntrusted prevents source text from closing a configured input boundary.
+// EscapeUntrusted replaces source text that matches boundary markers.
+//
+// The method uses the configured escaped forms for both the opening and
+// closing marker.
+//
+// For example:
+//
+//	escaped := policy.EscapeUntrusted(input)
 func (policy Policy) EscapeUntrusted(input string) string {
 	input = strings.ReplaceAll(
 		input,
@@ -495,7 +490,13 @@ func (policy Policy) EscapeUntrusted(input string) string {
 	)
 }
 
-// IDs returns a separate slice in configuration order for response schemas.
+// IDs returns rule IDs in configuration order.
+//
+// The method returns a separate slice for response schema construction.
+//
+// For example:
+//
+//	ids := catalog.IDs()
 func (catalog Catalog) IDs() []ID {
 	ids := make([]ID, 0, len(catalog.configuration.Rules))
 	for _, entry := range catalog.configuration.Rules {
@@ -505,7 +506,14 @@ func (catalog Catalog) IDs() []ID {
 	return ids
 }
 
-// ValidateImportance rejects overrides that disagree with category constraints.
+// ValidateImportance checks rule importance overrides.
+//
+// The method rejects unknown rule IDs and overrides that conflict with
+// category constraints.
+//
+// For example:
+//
+//	err := catalog.ValidateImportance(overrides)
 func (catalog Catalog) ValidateImportance(overrides Importance) error {
 	ids := make([]ID, 0, len(overrides))
 	for id := range overrides {
@@ -539,7 +547,14 @@ func (catalog Catalog) ValidateImportance(overrides Importance) error {
 	return nil
 }
 
-// FindingImportance applies category constraints before model or rule scores.
+// FindingImportance resolves the score for one finding.
+//
+// Category constraints take precedence over rule overrides and the reported
+// model score.
+//
+// For example:
+//
+//	score, err := catalog.FindingImportance(id, reported, overrides)
 func (catalog Catalog) FindingImportance(id ID, reported int, overrides Importance) (int, error) {
 	entry, err := catalog.findRule(id)
 	if err != nil {
@@ -566,7 +581,14 @@ func (catalog Catalog) FindingImportance(id ID, reported int, overrides Importan
 	return reported, nil
 }
 
-// Prompt evaluates configured instructions and score annotations for review input.
+// Prompt renders review instructions and rule scores.
+//
+// The renderer includes the configured catalog preamble and importance
+// annotations.
+//
+// For example:
+//
+//	prompt, err := catalog.Prompt(overrides)
 func (catalog Catalog) Prompt(overrides Importance) (string, error) {
 	rules, err := catalog.renderRules(overrides, false)
 	if err != nil {
@@ -574,13 +596,21 @@ func (catalog Catalog) Prompt(overrides Importance) (string, error) {
 	}
 
 	var data PromptData
+
 	data.Input = catalog.configuration.Preamble
 	data.Rules = rules
 
 	return render(catalog.templates, "catalog.review", data, catalog.limits)
 }
 
-// OutputPolicy includes only categories configured for generated text.
+// OutputPolicy renders rules for generated text.
+//
+// The renderer selects categories configured for output and includes the
+// output preamble.
+//
+// For example:
+//
+//	text, err := catalog.OutputPolicy()
 func (catalog Catalog) OutputPolicy() (string, error) {
 	rules, err := catalog.renderRules(nil, true)
 	if err != nil {
@@ -588,6 +618,7 @@ func (catalog Catalog) OutputPolicy() (string, error) {
 	}
 
 	var data PromptData
+
 	data.Input = catalog.configuration.OutputPreamble
 	data.Rules = rules
 
@@ -609,9 +640,11 @@ func (catalog Catalog) renderRules(overrides Importance, outputOnly bool) (strin
 		}
 
 		var data PromptData
+
 		data.MinimumImportance = importance
 		data.Rules = entry.Title
 		data.SchemaName = string(entry.ID)
+
 		instructions, err := render(
 			catalog.templates,
 			"rule."+string(entry.ID),
@@ -623,6 +656,7 @@ func (catalog Catalog) renderRules(overrides Importance, outputOnly bool) (strin
 		}
 
 		data.Input = instructions
+
 		text, err := render(catalog.templates, "catalog.rule", data, catalog.limits)
 		if err != nil {
 			return "", err

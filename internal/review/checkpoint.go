@@ -66,6 +66,7 @@ func concludeState(
 	state.Completed = tracker.finished()
 	state.Unread = tracker.unreadable()
 	state.RunID = job.DeliveryID
+
 	state.Status = marker.StateReviewing
 	if unreadable {
 		return state

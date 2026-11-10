@@ -196,6 +196,7 @@ func TestMissingHeadersReturns400(t *testing.T) {
 	defer fixture.close()
 
 	body := openedPayload(fixture.githubState.defectiveHead)
+
 	request, err := http.NewRequest(
 		http.MethodPost,
 		fixture.baseURL+"/api/v1/github_webhooks",
@@ -206,6 +207,7 @@ func TestMissingHeadersReturns400(t *testing.T) {
 	}
 
 	request.Header.Set("X-Hub-Signature-256", signBody(body))
+
 	response, err := fixture.client.Do(request)
 	if err != nil {
 		t.Fatalf("POST webhook: %v", err)
@@ -262,6 +264,7 @@ func TestUnsupportedEventReturns202(t *testing.T) {
 
 func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -269,6 +272,7 @@ func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
 		},
 	)
 	defer fixture.close()
+
 	request := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-replay-completion",
@@ -285,6 +289,7 @@ func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
 	}
 
 	_ = accepted.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -292,6 +297,7 @@ func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
 		replay := fixture.postWebhook(t, request)
 		state := replay.Header.Get(deliveryStateHeader)
 		_ = replay.Body.Close()
+
 		if state == deliveryStateSettled {
 			if starts := atomic.LoadInt32(&fixture.githubState.checkStarts); starts != 1 {
 				t.Fatalf("check starts = %d, want 1 after replay", starts)
@@ -312,6 +318,7 @@ func TestRepeatedWebhookSettlesAfterReviewCompletes(t *testing.T) {
 // submits an APPROVE.
 func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	withIntegrationLock(t)
+
 	defectiveFinding := domain.Finding{
 		Path:       testFindingPath,
 		StartLine:  3,
@@ -320,6 +327,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 		Body:       "Validate the webhook payload before enqueue.",
 		Importance: testMinimumImportance,
 	}
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -342,6 +350,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckConclusion(t, "success")
+
 	blocking := fixture.githubState.lastSubmitReview()
 	if blocking["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("first event = %v, want REQUEST_CHANGES", blocking["event"])
@@ -370,6 +379,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	}
 
 	fixture.waitForSubmitReviews(t, 2)
+
 	approval := fixture.githubState.lastSubmitReview()
 	if approval["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("refreshed event = %v, want APPROVE", approval["event"])
@@ -380,6 +390,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 	}
 
 	fixture.waitForCheckCompletions(t, 2)
+
 	if fixture.githubState.lastCheckConclusion() != "success" {
 		t.Fatalf("conclusion = %q, want success kept", fixture.githubState.lastCheckConclusion())
 	}
@@ -389,6 +400,7 @@ func TestResolvedThreadWebhookRefreshesTheVerdictWithoutAPush(t *testing.T) {
 // work; it must not approve a head nobody finished reading.
 func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -431,6 +443,7 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 	// runs apart. The completion count does.
 	fixture.waitForClydeCalls(t, 2)
 	fixture.waitForCheckCompletions(t, 2)
+
 	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "action_required" {
 		t.Fatalf("conclusion = %q, want action_required after the second run", conclusion)
 	}
@@ -447,6 +460,7 @@ func TestResolvedThreadWebhookDoesNotApproveAHeadWithPendingChunks(t *testing.T)
 // suppressed at, and review the whole pull request rather than a delta.
 func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -468,6 +482,7 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 	}
 
 	_ = opened.Body.Close()
+
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckCompletions(t, 1)
 	// This head now carries both gates a redelivery is stopped by: the review
@@ -493,6 +508,7 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 
 	fixture.waitForClydeCalls(t, 2)
 	fixture.waitForCheckCompletions(t, 2)
+
 	if fixture.githubState.submitReviewCount() != 1 {
 		t.Fatalf(
 			"submit review count = %d, want 1: an unchanged verdict must remain one review",
@@ -521,6 +537,7 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 // label is otherwise an ordinary thing to put on a pull request.
 func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -542,6 +559,7 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	}
 
 	_ = opened.Body.Close()
+
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckCompletions(t, 1)
 	before := fixture.githubState.summaryCommentBody()
@@ -562,6 +580,7 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 	_ = labeled.Body.Close()
 
 	time.Sleep(300 * time.Millisecond)
+
 	if calls := fixture.clydeState.requestCount(); calls != beforeCalls {
 		t.Fatalf("The unrelated label changed provider requests from %d to %d.", beforeCalls, calls)
 	}
@@ -587,6 +606,7 @@ func TestALabelThisServiceDoesNotOwnChangesNothing(t *testing.T) {
 // different versions work together at all.
 func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -609,6 +629,7 @@ func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 	}
 
 	_ = carried.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 
 	absent := fixture.postWebhook(
@@ -627,6 +648,7 @@ func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 	}
 
 	_ = absent.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 2)
 
 	started := fixture.logLinesContaining("review job started")
@@ -690,6 +712,7 @@ func TestReviewSettingsTravelWithTheDeliveryAndFallBackWithoutIt(t *testing.T) {
 // configuration is refused.
 func TestSettingsAlteredBesideAVerifiedBodyAreRefused(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -721,6 +744,7 @@ func TestSettingsAlteredBesideAVerifiedBodyAreRefused(t *testing.T) {
 	}
 
 	_ = response.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 
 	started := fixture.logLinesContaining("review job started")
@@ -757,6 +781,7 @@ func TestSettingsAlteredBesideAVerifiedBodyAreRefused(t *testing.T) {
 // front of another is the same attack one step along, and it fails the same way.
 func TestSettingsLiftedFromAnotherDeliveryAreRefused(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -787,6 +812,7 @@ func TestSettingsLiftedFromAnotherDeliveryAreRefused(t *testing.T) {
 	}
 
 	_ = response.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 
 	started := fixture.logLinesContaining("review job started")
@@ -812,6 +838,7 @@ func TestSettingsLiftedFromAnotherDeliveryAreRefused(t *testing.T) {
 // carried would describe a run nobody is having.
 func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -837,6 +864,7 @@ func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
 	}
 
 	_ = partial.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 
 	none := fixture.postWebhook(
@@ -855,6 +883,7 @@ func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
 	}
 
 	_ = none.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 2)
 
 	started := fixture.logLinesContaining("review job started")
@@ -894,6 +923,7 @@ func TestTheRunReportsWhichSettingsCameWithTheDelivery(t *testing.T) {
 // asked for reaches a review, because no review starts.
 func TestAnUnverifiedDeliveryAppliesNothingItCarried(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(t, appFixtureOptions{})
 	defer fixture.close()
 
@@ -927,6 +957,7 @@ func TestAnUnverifiedDeliveryAppliesNothingItCarried(t *testing.T) {
 // constructor applies to configuration has to hold on a delivery too.
 func TestANonPositiveCarriedSettingFallsBackToTheProcessValue(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -949,6 +980,7 @@ func TestANonPositiveCarriedSettingFallsBackToTheProcessValue(t *testing.T) {
 	}
 
 	_ = response.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 
 	started := fixture.logLinesContaining("review job started")
@@ -986,6 +1018,7 @@ func TestANonPositiveCarriedSettingFallsBackToTheProcessValue(t *testing.T) {
 // request with no defects rather than as a threshold nothing could meet.
 func TestAnImportanceFloorAboveTheScaleFallsBackToTheProcessValue(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1008,6 +1041,7 @@ func TestAnImportanceFloorAboveTheScaleFallsBackToTheProcessValue(t *testing.T) 
 	}
 
 	_ = response.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 
 	started := fixture.logLinesContaining("review job started")
@@ -1045,6 +1079,7 @@ func TestAnImportanceFloorAboveTheScaleFallsBackToTheProcessValue(t *testing.T) 
 // else.
 func TestAConfigurationShapedLabelChangesNoTimeoutAndNoBudget(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1073,6 +1108,7 @@ func TestAConfigurationShapedLabelChangesNoTimeoutAndNoBudget(t *testing.T) {
 		}
 
 		_ = response.Body.Close()
+
 		fixture.waitForCheckCompletions(t, int32(index+1))
 
 		// A budget the label had lowered would decline this delta instead of
@@ -1134,6 +1170,7 @@ func TestAConfigurationShapedLabelChangesNoTimeoutAndNoBudget(t *testing.T) {
 
 func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1143,6 +1180,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	defer fixture.close()
 
 	body := openedPayload(fixture.githubState.defectiveHead)
+
 	first := fixture.postWebhook(
 		t,
 		webhookRequestOptions{
@@ -1171,6 +1209,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 	}
 
 	time.Sleep(100 * time.Millisecond)
+
 	if calls := fixture.clydeState.requestCount(); calls != beforeCalls {
 		t.Fatalf(
 			"The duplicate delivery changed provider requests from %d to %d.",
@@ -1182,6 +1221,7 @@ func TestDuplicateDeliveryReturns202WithoutExtraWork(t *testing.T) {
 
 func TestWebhookStartsReviewCheckBeforeReturningAccepted(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1237,6 +1277,7 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForCheckConclusion(t, "success")
+
 	if fixture.githubState.submitReviewCount() != 1 {
 		t.Fatalf("submit review count = %d, want 1", fixture.githubState.submitReviewCount())
 	}
@@ -1270,6 +1311,7 @@ func TestEndToEndApprovesWithoutSevereFindings(t *testing.T) {
 // reviewBody returns the body of one submitted review.
 func reviewBody(t *testing.T, review map[string]any) string {
 	t.Helper()
+
 	body, ok := review["body"].(string)
 	if !ok {
 		t.Fatalf("review body = %v, want string", review["body"])
@@ -1287,6 +1329,7 @@ func reviewBody(t *testing.T, review map[string]any) string {
 // defect is that the pull request carries two of a thing it should carry one of.
 func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1319,6 +1362,7 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 
 	comment := fixture.githubState.summaryCommentBody()
 	verdict := ""
+
 	if body, exists := review["body"]; exists {
 		t.Fatalf("The approval request includes body %v; the body field must be omitted.", body)
 	}
@@ -1359,7 +1403,9 @@ func TestAnApprovingRunPublishesOneVisibleReviewBlock(t *testing.T) {
 
 func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 	withIntegrationLock(t)
+
 	const explanation = "Validate the webhook payload before enqueue."
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1393,12 +1439,14 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForSummaryHead(t, fixture.githubState.defectiveHead)
+
 	review := fixture.githubState.lastSubmitReview()
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
 	}
 
 	comment := fixture.githubState.summaryCommentBody()
+
 	visible, details, found := strings.Cut(comment, "<details>")
 	if !found || !strings.Contains(visible, "Resolve the open inline findings.") {
 		t.Fatalf("the comment does not direct the reader to the inline finding: %q", comment)
@@ -1424,6 +1472,7 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 
 func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 	withIntegrationLock(t)
+
 	blockingFinding := domain.Finding{
 		Path:       testFindingPath,
 		StartLine:  3,
@@ -1456,6 +1505,7 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
+
 	review := fixture.githubState.lastSubmitReview()
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
@@ -1468,6 +1518,7 @@ func TestEndToEndRequestChangesWithBlockingFinding(t *testing.T) {
 
 func TestEndToEndChangedDocumentationWritingFindingBlocks(t *testing.T) {
 	withIntegrationLock(t)
+
 	finding := domain.Finding{
 		Path:       "docs/review.md",
 		StartLine:  2,
@@ -1477,6 +1528,7 @@ func TestEndToEndChangedDocumentationWritingFindingBlocks(t *testing.T) {
 		Evidence:   "The service now caches every request.",
 		Importance: 10,
 	}
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1484,6 +1536,7 @@ func TestEndToEndChangedDocumentationWritingFindingBlocks(t *testing.T) {
 		},
 	)
 	defer fixture.close()
+
 	fixture.githubState.setChangedFiles(writingChangedFile(finding.Path, finding.Evidence))
 	fixture.githubState.setFileContent(
 		base64.StdEncoding.EncodeToString([]byte(finding.Evidence + "\n")),
@@ -1504,6 +1557,7 @@ func TestEndToEndChangedDocumentationWritingFindingBlocks(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
+
 	review := fixture.githubState.lastSubmitReview()
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
@@ -1521,6 +1575,7 @@ func TestEndToEndChangedDocumentationWritingFindingBlocks(t *testing.T) {
 
 func TestEndToEndChangedSourceCommentWritingFindingBlocks(t *testing.T) {
 	withIntegrationLock(t)
+
 	finding := domain.Finding{
 		Path:       "internal/app/handler.go",
 		StartLine:  2,
@@ -1541,6 +1596,7 @@ func TestEndToEndChangedSourceCommentWritingFindingBlocks(t *testing.T) {
 		},
 	)
 	defer fixture.close()
+
 	fixture.githubState.setChangedFiles(writingChangedFile(finding.Path, finding.Evidence))
 	fixture.githubState.setFileContent(
 		base64.StdEncoding.EncodeToString([]byte(finding.Evidence + "\n")),
@@ -1561,6 +1617,7 @@ func TestEndToEndChangedSourceCommentWritingFindingBlocks(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
+
 	review := fixture.githubState.lastSubmitReview()
 	if review["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("event = %v, want REQUEST_CHANGES", review["event"])
@@ -1578,6 +1635,7 @@ func TestEndToEndChangedSourceCommentWritingFindingBlocks(t *testing.T) {
 
 func TestEndToEndClearWritingHasNoWritingFinding(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1585,6 +1643,7 @@ func TestEndToEndClearWritingHasNoWritingFinding(t *testing.T) {
 		},
 	)
 	defer fixture.close()
+
 	fixture.githubState.setChangedFiles(
 		writingChangedFile(
 			"docs/review.md",
@@ -1612,6 +1671,7 @@ func TestEndToEndClearWritingHasNoWritingFinding(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
+
 	review := fixture.githubState.lastSubmitReview()
 	if review["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("event = %v, want APPROVE", review["event"])
@@ -1624,6 +1684,7 @@ func TestEndToEndClearWritingHasNoWritingFinding(t *testing.T) {
 
 func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 	withIntegrationLock(t)
+
 	finding := domain.Finding{
 		Path:       "a.go",
 		StartLine:  2,
@@ -1641,6 +1702,7 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 		},
 	)
 	defer fixture.close()
+
 	fixture.githubState.setChangedFiles([]map[string]any{
 		{
 			"filename": "a.go",
@@ -1669,6 +1731,7 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 	_ = response.Body.Close()
 
 	fixture.waitForSubmitReviews(t, 1)
+
 	comments := fixture.githubState.streamedCommentBodies()
 	if len(comments) != 1 {
 		t.Fatalf("streamed comments = %d, want one inline comment", len(comments))
@@ -1681,6 +1744,7 @@ func TestEndToEndMultilineFindingUsesItsOwnFileHunks(t *testing.T) {
 
 func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1706,6 +1770,7 @@ func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
 
 	fixture.waitForClydeCalls(t, 1)
 	time.Sleep(200 * time.Millisecond)
+
 	if fixture.githubState.submitReviewCount() != 0 {
 		t.Fatalf("submit review count = %d, want 0", fixture.githubState.submitReviewCount())
 	}
@@ -1717,6 +1782,7 @@ func TestEndToEndStaleHeadProducesNoReview(t *testing.T) {
 
 func TestEndToEndGitHubFailurePreservesPendingReview(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1751,6 +1817,7 @@ func TestEndToEndGitHubFailurePreservesPendingReview(t *testing.T) {
 
 	fixture.waitForClydeCalls(t, 1)
 	fixture.waitForCheckCompletions(t, 1)
+
 	if conclusion := fixture.githubState.lastCheckConclusion(); conclusion != "action_required" {
 		t.Fatalf(
 			"check conclusion = %q, want action_required while the finding remains unpublished",
@@ -1771,6 +1838,7 @@ func TestEndToEndGitHubFailurePreservesPendingReview(t *testing.T) {
 
 func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -1788,12 +1856,14 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 		},
 	)
 	_ = response.Body.Close()
+
 	fixture.waitForClydeCalls(t, 1)
 	queuedRequest := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown-queued",
 		body:       openedPayload(fixture.githubState.defectiveHead),
 	}
+
 	queued := fixture.postWebhook(t, queuedRequest)
 	if state := queued.Header.Get(deliveryStateHeader); state != deliveryStatePending {
 		t.Fatalf("The queued delivery reported state %q before shutdown", state)
@@ -1803,6 +1873,7 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+
 	if err := fixture.application.Shutdown(shutdownCtx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Shutdown returned %v while the active review required a deadline error", err)
 	}
@@ -1818,12 +1889,14 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	resumedState := newClydeServerState(appFixtureOptions{
 		clydeResponses: []string{approveReviewContent()},
 	})
+
 	resumedServer := httptest.NewServer(
 		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			resumedState.handle(writer, request)
 		}),
 	)
 	defer resumedServer.Close()
+
 	resumed := newAppFixtureOnServers(
 		t,
 		fixture.github,
@@ -1846,7 +1919,9 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 	}
 
 	_ = replay.Body.Close()
+
 	resumed.waitForCheckConclusion(t, "success")
+
 	settledRequest := webhookRequestOptions{
 		eventType:  "pull_request",
 		deliveryID: "delivery-shutdown",
@@ -1859,6 +1934,7 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 
 	for state == deliveryStatePending && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
+
 		settled = resumed.postWebhook(t, settledRequest)
 		state = settled.Header.Get(deliveryStateHeader)
 		_ = settled.Body.Close()
@@ -1872,6 +1948,7 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 		replayedQueued := resumed.postWebhook(t, queuedRequest)
 		state := replayedQueued.Header.Get(deliveryStateHeader)
 		_ = replayedQueued.Body.Close()
+
 		if state == deliveryStateSettled {
 			return
 		}
@@ -1884,7 +1961,9 @@ func TestShutdownLeavesInterruptedReviewForReplay(t *testing.T) {
 
 func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	withIntegrationLock(t)
+
 	githubState := newGitHubServerState(testDefectiveHead)
+
 	githubServer := httptest.NewServer(
 		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			if githubState.serveGit(writer, request) {
@@ -1904,6 +1983,7 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 	clydeState := newClydeServerState(appFixtureOptions{
 		clydeResponses: []string{approveReviewContent()},
 	})
+
 	clydeServer := httptest.NewServer(
 		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			clydeState.handle(writer, request)
@@ -1913,6 +1993,7 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 
 	runWebhook := func(t *testing.T, deliveryID string) {
 		t.Helper()
+
 		fixture := newAppFixtureOnServers(t, githubServer, clydeServer, githubState, clydeState)
 		defer fixture.close()
 
@@ -1929,11 +2010,14 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 		}
 
 		_ = response.Body.Close()
+
 		fixture.waitForCheckConclusion(t, "success")
 	}
 
 	runWebhook(t, "delivery-first-app")
+
 	beforeCalls := clydeState.requestCount()
+
 	if githubState.submitReviewCount() != 1 {
 		t.Fatalf(
 			"submit review count after first app = %d, want 1",
@@ -1943,6 +2027,7 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 
 	runWebhook(t, "delivery-second-app")
 	time.Sleep(200 * time.Millisecond)
+
 	if calls := clydeState.requestCount(); calls != beforeCalls {
 		t.Fatalf(
 			"The new app instance changed provider requests from %d to %d for the reviewed head.",
@@ -1961,6 +2046,7 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 
 func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -2001,7 +2087,9 @@ func TestEndToEndMoreThanOneHundredFilesAndThreads(t *testing.T) {
 // because nothing in this pipeline threads a reply onto another comment.
 func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T) {
 	withIntegrationLock(t)
+
 	const explanation = "The new fallback still breaks core behavior."
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -2037,6 +2125,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 		},
 	)
 	_ = opened.Body.Close()
+
 	fixture.waitForSubmitReviews(t, 1)
 	fixture.waitForCheckCompletions(t, 1)
 	fixture.waitForSummaryHead(t, fixture.githubState.defectiveHead)
@@ -2057,6 +2146,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 
 	fixture.waitForClydeCalls(t, 5)
 	fixture.waitForCheckCompletions(t, 2)
+
 	if count := fixture.githubState.submitReviewCount(); count != 1 {
 		t.Fatalf(
 			"submit review count = %d, want the existing requested-changes decision retained",
@@ -2086,6 +2176,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 		true,
 		explanation,
 	)
+
 	if fixture.githubState.forbiddenEndpointHits() != 0 {
 		t.Fatalf(
 			"forbidden endpoint hits = %d, want 0",
@@ -2108,6 +2199,7 @@ func TestEndToEndKeepsOneSummaryCommentAndNeverCallsReplyEndpoints(t *testing.T)
 	}
 
 	summaryBody := fixture.githubState.summaryCommentBody()
+
 	state, ok := marker.DecodeState(summaryBody)
 	if !ok {
 		t.Fatalf("summary comment body = %q, want a decodable state marker", summaryBody)
@@ -2157,6 +2249,7 @@ func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 
 func TestEndToEndPublishedProseHasNoTypographicDashes(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -2181,6 +2274,7 @@ func TestEndToEndPublishedProseHasNoTypographicDashes(t *testing.T) {
 
 	fixture.waitForSubmitReviews(t, 1)
 	review := fixture.githubState.lastSubmitReview()
+
 	body, _ := review["body"].(string)
 	if containsTypographicDash(body) {
 		t.Fatalf("published review body contains typographic dash: %q", body)
@@ -2202,6 +2296,7 @@ func TestEndToEndPublishedProseHasNoTypographicDashes(t *testing.T) {
 
 func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T) {
 	withIntegrationLock(t)
+
 	defectiveFinding := domain.Finding{
 		Path:       testFindingPath,
 		StartLine:  3,
@@ -2243,6 +2338,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	}
 
 	fixture.waitForCheckConclusion(t, "success")
+
 	firstReview := fixture.githubState.lastSubmitReview()
 	if firstReview["event"] != string(domain.ReviewDecisionRequestChanges) {
 		t.Fatalf("first event = %v, want REQUEST_CHANGES", firstReview["event"])
@@ -2269,6 +2365,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	}
 
 	time.Sleep(100 * time.Millisecond)
+
 	if fixture.githubState.submitReviewCount() != 1 {
 		t.Fatalf(
 			"submit review count after duplicate = %d, want 1",
@@ -2294,6 +2391,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 
 	fixture.waitForClydeCalls(t, 3)
 	fixture.waitForCheckConclusion(t, "success")
+
 	if fixture.githubState.submitReviewCount() != 2 {
 		t.Fatalf(
 			"submit review count after fix = %d, want 2",
@@ -2311,6 +2409,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 	}
 
 	fixture.waitForResolveCalls(t, 1)
+
 	if fixture.githubState.resolveCallCount() != 1 {
 		t.Fatalf("resolve count = %d, want 1", fixture.githubState.resolveCallCount())
 	}
@@ -2325,6 +2424,7 @@ func TestSignedWebhookProducesOneReviewCheckAndSilentReconciliation(t *testing.T
 
 func TestWebhookAdmissionMintsOneRunIdentifierPerDelivery(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(t, appFixtureOptions{})
 	defer fixture.close()
 
@@ -2339,6 +2439,7 @@ func TestWebhookAdmissionMintsOneRunIdentifierPerDelivery(t *testing.T) {
 	defer func() {
 		_ = response.Body.Close()
 	}()
+
 	if response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", response.StatusCode)
 	}
@@ -2458,6 +2559,7 @@ func wireAppFixture(
 	t.Helper()
 
 	privateKey := testPrivateKey(t)
+
 	apiURL, err := url.Parse(githubServer.URL)
 	if err != nil {
 		t.Fatalf("Parse github URL: %v", err)
@@ -2596,6 +2698,7 @@ func (fixture *appFixture) close() {
 	if fixture.application != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = fixture.application.Shutdown(shutdownCtx)
+
 		cancel()
 	}
 
@@ -2760,8 +2863,10 @@ func (fixture *appFixture) postWebhook(t *testing.T, options webhookRequestOptio
 	}
 
 	request.Header.Set("X-Hub-Signature-256", signature)
+
 	if options.settings != "" {
 		request.Header.Set("X-Pr-Agent-Review-Settings", options.settings)
+
 		settingsSignature := options.settingsSignature
 		if settingsSignature == "" {
 			settingsSignature = signReviewSettings(options.settings, options.body)
@@ -2816,6 +2921,7 @@ func openedPayload(head string) []byte {
 			},
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -2850,6 +2956,7 @@ func labeledPayload(head string, labelName string) []byte {
 			},
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -2878,6 +2985,7 @@ func reviewThreadPayload(action string, head string) []byte {
 			},
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -2906,6 +3014,7 @@ func synchronizePayload(head string) []byte {
 			},
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -2941,6 +3050,7 @@ func defectiveReviewContent(finding domain.Finding) string {
 			},
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -3029,6 +3139,7 @@ func reconcileResolvedContent(threadID string) string {
 			},
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -3186,6 +3297,7 @@ func (state *githubServerState) submitReviewCount() int {
 func (state *githubServerState) completedCheckCount() int {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	count := 0
 
 	for _, item := range state.checkRuns {
@@ -3200,6 +3312,7 @@ func (state *githubServerState) completedCheckCount() int {
 func (state *githubServerState) terminalCheckCount() int {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	count := 0
 
 	for _, item := range state.checkRuns {
@@ -3271,6 +3384,7 @@ func (state *githubServerState) recordReviewComment(body map[string]any) int {
 func (state *githubServerState) handleListIssueComments(writer http.ResponseWriter) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	writeJSON(writer, http.StatusOK, state.issueComments)
 }
 
@@ -3286,6 +3400,7 @@ func (state *githubServerState) handleCreateIssueComment(
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	created := map[string]any{
 		"id":   float64(2000 + len(state.issueComments)),
 		"body": body["body"],
@@ -3307,10 +3422,12 @@ func (state *githubServerState) handleUpdateIssueComment(
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	idText := strings.TrimPrefix(
 		request.URL.Path,
 		fmt.Sprintf("/repos/%s/%s/issues/comments/", testRepoOwner, testRepoName),
 	)
+
 	var updated map[string]any
 
 	for index, item := range state.issueComments {
@@ -3345,6 +3462,7 @@ func (state *githubServerState) issueCommentUpdateCount() int32 {
 func (state *githubServerState) summaryCommentBody() string {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	if len(state.issueComments) == 0 {
 		return ""
 	}
@@ -3366,6 +3484,7 @@ func (state *githubServerState) streamedCommentBodies() []map[string]any {
 func (state *githubServerState) lastSubmitReview() map[string]any {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	if len(state.submitReviews) == 0 {
 		return nil
 	}
@@ -3392,6 +3511,7 @@ func (state *githubServerState) summaryReviewBody() string {
 func (state *githubServerState) summaryReviewCount() int {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	count := 0
 
 	for _, page := range state.listReviewPages {
@@ -3431,6 +3551,7 @@ func (state *githubServerState) recordForbiddenEndpointHit() {
 func (state *githubServerState) lastCheckConclusion() string {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	if len(state.checkRuns) == 0 {
 		return ""
 	}
@@ -3443,6 +3564,7 @@ func (state *githubServerState) lastCheckConclusion() string {
 func (state *githubServerState) lastCheckStatus() string {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	if len(state.checkRuns) == 0 {
 		return ""
 	}
@@ -3471,14 +3593,17 @@ func (state *githubServerState) listedThreadPages() int32 {
 func (state *githubServerState) setHead(head string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	state.currentHead = head
 }
 
 func (state *githubServerState) setChangedFiles(files []map[string]any) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	state.changedFiles = files
 	state.changedFilePages = paginateMapPages(files, 100)
+
 	state.changedFilePageIndex = 0
 	if state.currentHead != state.correctedHead {
 		state.rebuildGit()
@@ -3488,6 +3613,7 @@ func (state *githubServerState) setChangedFiles(files []map[string]any) {
 func (state *githubServerState) setFileContent(content string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	state.fileContent = content
 }
 
@@ -3505,6 +3631,7 @@ func (state *githubServerState) markAllThreadsResolved() {
 func (state *githubServerState) setThreads(threads []map[string]any) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	state.threads = threads
 	state.threadPages = paginateMapPages(threads, 100)
 	state.threadPageIndex = 0
@@ -3561,6 +3688,7 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/timeline") {
 		state.mu.Lock()
 		defer state.mu.Unlock()
+
 		events := append([]map[string]any{}, state.reviewDismissals...)
 		writeJSON(writer, http.StatusOK, events)
 
@@ -3609,6 +3737,7 @@ func (state *githubServerState) handle(writer http.ResponseWriter, request *http
 	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/pulls/") {
 		readCount := atomic.AddInt32(&state.pullRequestReads, 1)
 		state.mu.Lock()
+
 		head := state.currentHead
 		if readCount > 1 && state.headAfterAnalysis != "" {
 			head = state.headAfterAnalysis
@@ -3640,6 +3769,7 @@ func (state *githubServerState) handleListCheckRuns(
 ) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	pathWithoutSuffix := strings.TrimSuffix(request.URL.Path, "/check-runs")
 	headSHA := pathWithoutSuffix[strings.LastIndex(pathWithoutSuffix, "/")+1:]
 	checkName := request.URL.Query().Get("check_name")
@@ -3704,6 +3834,7 @@ func (state *githubServerState) handleUpdateCheckRun(
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	checkID := strings.TrimPrefix(
 		request.URL.Path,
 		fmt.Sprintf("/repos/%s/%s/check-runs/", testRepoOwner, testRepoName),
@@ -3762,6 +3893,7 @@ func githubReviewStateForEvent(event any) string {
 func (state *githubServerState) handleListReviews(writer http.ResponseWriter) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	if len(state.listReviewPages) == 0 {
 		writeJSON(writer, http.StatusOK, []map[string]any{})
 		return
@@ -3773,6 +3905,7 @@ func (state *githubServerState) handleListReviews(writer http.ResponseWriter) {
 
 	page := state.listReviewPages[state.reviewPageIndex]
 	state.reviewPageIndex++
+
 	writeJSON(writer, http.StatusOK, page)
 }
 
@@ -3789,6 +3922,7 @@ func (state *githubServerState) handleSubmitReview(
 	state.mu.Lock()
 	submitStatus := state.submitReviewStatus
 	state.mu.Unlock()
+
 	if submitStatus != 0 && submitStatus != http.StatusOK {
 		writeJSON(
 			writer,
@@ -3803,6 +3937,7 @@ func (state *githubServerState) handleSubmitReview(
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
 	state.submitReviews = append(state.submitReviews, body)
 	commitID, _ := body["commit_id"].(string)
 	reviewBody, _ := body["body"].(string)
@@ -3839,6 +3974,7 @@ func (state *githubServerState) handleSubmitReview(
 	}
 
 	state.reviewPageIndex = 0
+
 	writeJSON(writer, http.StatusOK, review)
 }
 
@@ -3854,6 +3990,7 @@ func (state *githubServerState) handleUpdateReview(
 
 	reviewPath := strings.TrimSuffix(request.URL.Path, "/dismissals")
 	reviewIDText := reviewPath[strings.LastIndex(reviewPath, "/")+1:]
+
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
@@ -3902,6 +4039,7 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 	if strings.Contains(query, "resolveReviewThread") {
 		variables, _ := body["variables"].(map[string]any)
 		threadID, _ := variables["threadID"].(string)
+
 		state.mu.Lock()
 		state.resolveCalls = append(state.resolveCalls, threadID)
 		state.lastResolveID = threadID
@@ -3941,6 +4079,7 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 	threads := copyThreadNodes(state.threads)
 	threadPageCount := len(state.threadPages)
 	threadPageIndex := state.threadPageIndex
+
 	var page []map[string]any
 	if threadPageIndex < threadPageCount {
 		page = copyThreadNodes(state.threadPages[threadPageIndex])
@@ -3950,6 +4089,7 @@ func (state *githubServerState) handleGraphQL(writer http.ResponseWriter, reques
 
 	if threadPageCount > 0 {
 		atomic.AddInt32(&state.threadPageFetches, 1)
+
 		if threadPageIndex >= threadPageCount {
 			writeJSON(
 				writer,
@@ -4089,11 +4229,13 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 
 	isReconcile := false
 	isReport := false
+
 	if textFormat, ok := body["text"].(map[string]any); ok {
 		if jsonSchema, ok := textFormat["format"].(map[string]any); ok {
 			if name, ok := jsonSchema["name"].(string); ok {
 				if name == "thread_resolutions" {
 					isReconcile = true
+
 					atomic.AddInt32(&state.reconcileRequests, 1)
 				}
 
@@ -4113,6 +4255,7 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	}
 
 	failed := status != 0 && status != http.StatusOK
+
 	var content string
 	// A failing endpoint serves no content, and a fixture configured with only
 	// a status has no responses to index.
@@ -4158,6 +4301,7 @@ func failForbiddenEndpoint(writer http.ResponseWriter, request *http.Request) bo
 
 func testPrivateKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
+
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -4168,6 +4312,7 @@ func testPrivateKey(t *testing.T) *rsa.PrivateKey {
 
 func readResponseBody(t *testing.T, response *http.Response) string {
 	t.Helper()
+
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
@@ -4180,6 +4325,7 @@ func readJSONBody(request *http.Request) (map[string]any, error) {
 	defer func() {
 		_ = request.Body.Close()
 	}()
+
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, err
@@ -4219,6 +4365,7 @@ func assertVerdictBody(
 	explanation string,
 ) {
 	t.Helper()
+
 	if value != nil && value != "" {
 		t.Fatalf("The native review includes a standalone body: %v.", value)
 	}
@@ -4234,12 +4381,14 @@ func assertVerdictBody(
 
 	fixture.githubState.mu.Lock()
 	commentCount := len(fixture.githubState.issueComments)
+
 	var commentID any
 	if commentCount == 1 {
 		commentID = fixture.githubState.issueComments[0]["id"]
 	}
 
 	fixture.githubState.mu.Unlock()
+
 	if commentCount != 1 || commentID == nil {
 		t.Fatalf(
 			"The native review requires one canonical summary, but the fixture contains %d comments.",
@@ -4251,12 +4400,14 @@ func assertVerdictBody(
 
 	for _, comment := range fixture.githubState.streamedCommentBodies() {
 		inlineBody, _ := comment["body"].(string)
+
 		finding, marked := marker.FindFinding(inlineBody)
 		if !marked || finding.Head != domain.HeadSHA(head) {
 			continue
 		}
 
 		currentInlineCount++
+
 		if !strings.Contains(inlineBody, explanation) {
 			t.Fatalf(
 				"The inline finding does not preserve its blocking explanation: %q.",
@@ -4345,6 +4496,7 @@ func copyThreadNodes(nodes []map[string]any) []map[string]any {
 
 func TestMentionedPullRequestCommentReviewsTheCurrentHead(t *testing.T) {
 	withIntegrationLock(t)
+
 	fixture := newAppFixture(
 		t,
 		appFixtureOptions{
@@ -4368,6 +4520,7 @@ func TestMentionedPullRequestCommentReviewsTheCurrentHead(t *testing.T) {
 			testPRNumber,
 		),
 	)
+
 	response := fixture.postWebhook(
 		t,
 		webhookRequestOptions{
@@ -4381,8 +4534,10 @@ func TestMentionedPullRequestCommentReviewsTheCurrentHead(t *testing.T) {
 	}
 
 	_ = response.Body.Close()
+
 	fixture.waitForCheckCompletions(t, 1)
 	fixture.waitForSummaryHead(t, fixture.githubState.defectiveHead)
+
 	if fixture.githubState.lastCheckConclusion() != "success" {
 		t.Fatalf("check conclusion = %q, want success", fixture.githubState.lastCheckConclusion())
 	}

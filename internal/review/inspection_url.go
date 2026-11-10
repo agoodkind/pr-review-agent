@@ -84,6 +84,7 @@ func publicInspectionAddress(address netip.Addr) bool {
 
 func dialPublicInspection(ctx context.Context, network, target string) (net.Conn, error) {
 	logger := gklog.L(ctx)
+
 	host, port, err := net.SplitHostPort(target)
 	if err != nil {
 		return nil, errors.New("inspection could not parse the source network address")
@@ -105,8 +106,10 @@ func dialPublicInspection(ctx context.Context, network, target string) (net.Conn
 		}
 	}
 
-	var connectionError error
-	var dialer net.Dialer
+	var (
+		connectionError error
+		dialer          net.Dialer
+	)
 
 	for _, address := range addresses {
 		connection, err := dialer.DialContext(
@@ -133,26 +136,31 @@ func (inspector *repositoryInspector) readPublicURL(
 ) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, inspectionHTTPTimeout)
 	defer cancel()
+
 	response, err := inspector.publicResponse(ctx, address)
 	if err != nil {
 		return "", err
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	content, contentType, truncated, err := readPublicInspectionBody(response)
 	if err != nil {
 		return "", err
 	}
 
 	var file diff.FileContext
+
 	file.Path = strings.TrimPrefix(path.Clean(response.Request.URL.Path), "/")
 	file.CurrentContent = string(content)
+
 	file.CoverageComplete = true
 	if err := inspector.checkContent(file); err != nil {
 		return "", err
 	}
 
 	identity := "Public source URL: " + response.Request.URL.String()
+
 	text := string(content)
 	if contentType == "text/html" {
 		text, err = inspectionHTMLText(text)
@@ -197,6 +205,7 @@ func (inspector *repositoryInspector) publicResponse(
 		}
 
 		request.Header.Set("Accept", "text/plain, text/html, application/json")
+
 		response, err := inspector.publicClient.Do(request)
 		if err != nil {
 			logger.WarnContext(ctx, "Read public inspection source failed", "err", err)
@@ -218,6 +227,7 @@ func (inspector *repositoryInspector) publicResponse(
 
 		location, err := response.Location()
 		_ = response.Body.Close()
+
 		if err != nil {
 			logger.WarnContext(ctx, "Read public inspection redirect failed", "err", err)
 			return nil, fmt.Errorf("read public inspection redirect: %w", err)

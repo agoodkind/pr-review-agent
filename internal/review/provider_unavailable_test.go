@@ -70,6 +70,7 @@ func TestRequestTextCannotClaimProviderUnavailable(t *testing.T) {
 
 func assertProviderUnavailable(t *testing.T, providerError error) {
 	t.Helper()
+
 	model := &failThenSucceedModel{err: providerError}
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 
@@ -78,6 +79,7 @@ func assertProviderUnavailable(t *testing.T, providerError error) {
 	}
 
 	want := "The model provider is unavailable. Wait for it to recover."
+
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, want) {
 		t.Fatalf("summary comment = %q, want %q", body, want)

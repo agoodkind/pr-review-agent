@@ -13,7 +13,14 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-// PolicyHeader renders the configured finding policy with the loaded catalog.
+// PolicyHeader renders the finding policy and loaded catalog.
+//
+// The renderer applies the configured importance settings and untrusted
+// input policy.
+//
+// For example:
+//
+//	header, err := PolicyHeader(policy, minimumImportance, importance)
 func PolicyHeader(
 	policy reviewrules.Policy,
 	minimumImportance int,
@@ -26,6 +33,7 @@ func PolicyHeader(
 	}
 
 	var data reviewrules.PromptData
+
 	untrusted, err := renderPrompt(policy, "untrusted.policy", data)
 	if err != nil {
 		return "", err
@@ -34,6 +42,7 @@ func PolicyHeader(
 	data.MinimumImportance = minimumImportance
 	data.Rules = rules
 	data.UntrustedPolicy = untrusted
+
 	header, err := renderPrompt(policy, "review.system", data)
 	if err != nil {
 		return "", err
@@ -43,6 +52,7 @@ func PolicyHeader(
 	if policy.Limits().InspectionRequests > 0 {
 		data.Total = policy.Limits().InspectionRequests
 		data.ContentBytes = policy.Limits().InspectionBytes
+
 		inspection, err := renderPrompt(policy, "inspection.instructions", data)
 		if err != nil {
 			return "", err
@@ -54,17 +64,37 @@ func PolicyHeader(
 	return header, nil
 }
 
-// ClassificationPolicy renders scope instructions without the finding catalog.
+// ClassificationPolicy renders file scope instructions.
+//
+// The classification policy omits the finding catalog and includes file
+// review instructions.
+//
+// For example:
+//
+//	text, err := ClassificationPolicy(policy)
 func ClassificationPolicy(policy reviewrules.Policy) (string, error) {
 	return outputPolicyWithInput(policy, "classification.system", policy.FileReviewInstructions())
 }
 
-// ReconciliationPolicy applies the configured prose rules to thread decisions.
+// ReconciliationPolicy renders instructions for thread decisions.
+//
+// The renderer combines the configured prose rules with the reconciliation
+// template.
+//
+// For example:
+//
+//	text, err := ReconciliationPolicy(policy)
 func ReconciliationPolicy(policy reviewrules.Policy) (string, error) {
 	return outputPolicy(policy, "reconcile.system")
 }
 
-// ReportPolicy applies the configured prose rules to the final summary.
+// ReportPolicy renders instructions for the final review summary.
+//
+// The renderer combines the configured prose rules with the report template.
+//
+// For example:
+//
+//	text, err := ReportPolicy(policy)
 func ReportPolicy(policy reviewrules.Policy) (string, error) {
 	return outputPolicy(policy, "report.system")
 }
@@ -81,6 +111,7 @@ func outputPolicyWithInput(policy reviewrules.Policy, name, input string) (strin
 	}
 
 	var data reviewrules.PromptData
+
 	untrusted, err := renderPrompt(policy, "untrusted.policy", data)
 	if err != nil {
 		return "", err
@@ -118,17 +149,14 @@ const MaximumReplyBytes = 8000
 // truncatedReplyNote marks a single reply too long to include whole.
 const truncatedReplyNote = " [reply truncated]"
 
-// FormatReplies renders the replies that fit inside budget and reports how many
-// were left out.
+// FormatReplies selects recent replies within the byte budget.
 //
-// The most recent are kept, because they answer the state the code is in now.
-// The count of the rest travels with them so neither the model nor a reader
-// mistakes an excerpt for the whole discussion.
+// The result includes omitted reply counts and speaker labels. Labels
+// distinguish this service from people who answer a finding.
 //
-// Every line names its speaker, and this service's own replies say so. Anyone
-// who can comment can reply on a thread, so presenting them all as the pull
-// request author's answer would let a passer by, or the service quoting itself,
-// stand as the authority that settles a finding.
+// For example:
+//
+//	lines, omitted := FormatReplies(replies, botLogin, budget)
 func FormatReplies(replies []domain.ReviewComment, botLogin string, budget int) ([]string, int) {
 	lines := make([]string, 0, len(replies))
 	used := 0
@@ -154,12 +182,14 @@ func FormatReplies(replies []domain.ReviewComment, botLogin string, budget int) 
 	return lines, len(replies) - len(lines)
 }
 
-// ReplySpeaker names who wrote one reply, marking this service's own replies so
-// its own words never read back to it as somebody else's answer.
+// ReplySpeaker identifies the author of one reply.
 //
-// Logins are compared without case, because GitHub treats them that way. A reply
-// from this service under different casing would otherwise be presented to the
-// model as a person answering the finding.
+// The function compares logins without case and marks replies from this
+// service.
+//
+// For example:
+//
+//	speaker := ReplySpeaker(reply, botLogin)
 func ReplySpeaker(reply domain.ReviewComment, botLogin string) string {
 	if strings.EqualFold(reply.Author, botLogin) {
 		return reply.Author + " (this service, not a reply from a person)"
@@ -282,7 +312,14 @@ const (
 	InspectionReadURL InspectionOperation = "read_url"
 )
 
-// Validate rejects unsupported operations and malformed evidence requests.
+// Validate rejects unsupported or malformed inspection requests.
+//
+// Each operation requires the corresponding path, query, or URL and a valid
+// reason and line range.
+//
+// For example:
+//
+//	err := request.Validate()
 func (request InspectionRequest) Validate() error {
 	if strings.TrimSpace(request.Reason) == "" || request.StartLine < 0 || request.EndLine < 0 ||
 		(request.EndLine > 0 && request.EndLine < request.StartLine) {
@@ -317,7 +354,13 @@ type Report struct {
 	Walkthrough []string `json:"walkthrough"`
 }
 
-// Validate rejects incomplete prose that cannot form the final review report.
+// Validate rejects incomplete review report prose.
+//
+// The report requires complete sentences in its summary and walkthrough.
+//
+// For example:
+//
+//	err := report.Validate()
 func (report Report) Validate() error {
 	if err := validateFullSentence("report summary", report.Summary); err != nil {
 		return err
@@ -336,7 +379,14 @@ func (report Report) Validate() error {
 	return nil
 }
 
-// SanitizeReport makes model prose safe to place inside the top-level review comment.
+// SanitizeReport prepares report prose for a review comment.
+//
+// The function removes unsafe content, limits summary sentences, and removes
+// repeated walkthrough items.
+//
+// For example:
+//
+//	report = SanitizeReport(report, limits)
 func SanitizeReport(report Report, limits reviewrules.FormattingLimits) Report {
 	report.Summary = firstReportSentences(
 		sanitizeReportProse(report.Summary),
@@ -347,12 +397,14 @@ func SanitizeReport(report Report, limits reviewrules.FormattingLimits) Report {
 
 	for _, item := range report.Walkthrough {
 		item = sanitizeReportProse(item)
+
 		key := strings.ToLower(item)
 		if item == "" || seen[key] || strings.Contains(strings.ToLower(report.Summary), key) {
 			continue
 		}
 
 		seen[key] = true
+
 		walkthrough = append(walkthrough, item)
 		if len(walkthrough) == limits.WalkthroughItems {
 			break
@@ -437,7 +489,14 @@ type Analysis struct {
 	Models           []string
 }
 
-// DecisionFor requests changes only when a finding meets the configured level.
+// DecisionFor selects the review decision from finding importance.
+//
+// A finding at or above the configured minimum requests changes. Otherwise
+// the function approves the review.
+//
+// For example:
+//
+//	decision := DecisionFor(findings, minimumImportance)
 func DecisionFor(findings []domain.Finding, minimumImportance int) domain.ReviewDecision {
 	for _, finding := range findings {
 		if finding.Importance >= minimumImportance {
@@ -493,6 +552,7 @@ func normalizedFindingKey(finding domain.Finding) string {
 
 func sanitizeFinding(finding domain.Finding) domain.Finding {
 	finding.Title = sanitizeProse(strings.TrimSpace(finding.Title))
+
 	finding.Body = sanitizeProse(strings.TrimSpace(finding.Body))
 	if finding.EffectiveSurface() == domain.FindingFile {
 		finding.Suggestion = strings.TrimRight(finding.Suggestion, "\r\n")

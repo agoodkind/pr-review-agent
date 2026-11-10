@@ -51,6 +51,7 @@ func EncodeAssessmentOutcome(outcome AssessmentOutcome) string {
 // DecodeAssessmentOutcome treats missing or invalid records as unknown outcomes.
 func DecodeAssessmentOutcome(body string) AssessmentOutcome {
 	var outcome AssessmentOutcome
+
 	start := strings.LastIndex(body, assessmentOutcomePrefix)
 	if start < 0 {
 		return outcome

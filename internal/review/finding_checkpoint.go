@@ -90,6 +90,7 @@ func (progress *reviewProgress) restoreFindings(
 	progress.metadataCheckpoint = metadata.Checkpoint
 	progress.metadataRevision = metadata.Revision
 	progress.fallback = fallback.Findings
+
 	progress.fallbackCheckpoint = fallback.Checkpoint
 	if progress.metadataRevision == "" {
 		progress.metadataRevision = fallback.Revision

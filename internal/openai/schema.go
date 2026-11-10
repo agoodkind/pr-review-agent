@@ -9,7 +9,13 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-// MarshalReviewSchema constrains rule IDs to the catalog before a model returns findings.
+// MarshalReviewSchema encodes the structured review schema.
+//
+// The schema restricts finding rule IDs to the loaded catalog.
+//
+// For example:
+//
+//	schema, err := MarshalReviewSchema(policy)
 func MarshalReviewSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	ids, err := json.Marshal(policy.Catalog().IDs())
 	if err != nil {
@@ -67,7 +73,13 @@ func MarshalReviewSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	), nil
 }
 
-// MarshalClassificationSchema preserves assessment constraints and forbids findings.
+// MarshalClassificationSchema encodes the file classification schema.
+//
+// The schema preserves assessment constraints and forbids review findings.
+//
+// For example:
+//
+//	schema, err := MarshalClassificationSchema(policy)
 func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	schema, err := MarshalReviewSchema(policy)
 	if err != nil {
@@ -93,6 +105,7 @@ func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, er
 	properties["inspection_requests"] = json.RawMessage(
 		fmt.Sprintf(inspectionRequestSchemaTemplate, 0),
 	)
+
 	properties["findings"], err = json.Marshal(findings)
 	if err != nil {
 		return nil, requestEncodingError(err)
@@ -110,7 +123,9 @@ func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, er
 
 func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	var data reviewrules.PromptData
+
 	data.Total = policy.FileAssessmentMaximumReasonBytes()
+
 	description, err := policy.Render("schema.file_assessment.reason", data)
 	if err != nil {
 		slog.Warn("File assessment reason constraint rendering failed", "err", err)
@@ -126,6 +141,7 @@ func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, 
 		Pattern:     fmt.Sprintf(`^[\s\S]{1,%d}$`, data.Total),
 		Description: description,
 	}
+
 	encoded, err := json.Marshal(constraint)
 	if err != nil {
 		slog.Warn("File assessment reason constraint encoding failed", "err", err)
@@ -137,6 +153,7 @@ func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, 
 
 func marshalFindingDescriptions(policy reviewrules.Policy) (map[string]json.RawMessage, error) {
 	descriptions := make(map[string]json.RawMessage)
+
 	var data reviewrules.PromptData
 
 	for _, field := range []string{
@@ -165,7 +182,13 @@ func marshalFindingDescriptions(policy reviewrules.Policy) (map[string]json.RawM
 	return descriptions, nil
 }
 
-// MarshalReportSchema applies the configured walkthrough bound to structured output.
+// MarshalReportSchema encodes the structured report schema.
+//
+// The schema applies the configured maximum number of walkthrough items.
+//
+// For example:
+//
+//	schema := MarshalReportSchema(policy)
 func MarshalReportSchema(policy reviewrules.Policy) json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(reportSchemaTemplate, policy.Limits().WalkthroughItems))
 }
@@ -186,12 +209,20 @@ var (
 	reviewSchemaTemplate = `{"type":"object","additionalProperties":false,"properties":{"inspection_requests":%s,"overview":{"type":"string"},"omissions_acceptable":{"type":"boolean"},"decision_reason":{"type":"string"},"file_assessments":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string"},"identity":{"type":"string"},"content_review_requirement":{"type":"string","enum":["required","unnecessary","uncertain"]},"content_kind":{"type":"string","enum":["source","generated","encrypted","binary","dependency","data","external","unknown"]},"action":{"type":"string","enum":["review","inspect_related","exclude","gap"]},"reason":%s,"evidence":{"type":"array","minItems":1,"maxItems":%d,"items":{"type":"string"}}},"required":["path","identity","content_review_requirement","content_kind","action","reason","evidence"]}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"rule_id":{"type":"string","enum":%s},"surface":{"type":"string","enum":%s,"description":%s},"commit_sha":{"type":"string","description":%s},"correction_action":{"type":"string","enum":%s,"description":%s},"path":{"type":"string","description":%s},"start_line":{"type":"integer","minimum":1,"description":%s},"end_line":{"type":"integer","minimum":1,"description":%s},"title":{"type":"string"},"body":{"type":"string"},"evidence":{"type":"string"},"claim":{"type":"string"},"suggestion":{"type":"string"},"importance":{"type":"integer","minimum":1,"maximum":10}},"required":["rule_id","surface","commit_sha","correction_action","path","start_line","end_line","title","body","evidence","claim","suggestion","importance"]}}},"required":["inspection_requests","overview","omissions_acceptable","decision_reason","findings","file_assessments"]}`
 	reportSchemaTemplate = `{"type":"object","additionalProperties":false,"properties":{"summary":{"type":"string"},"walkthrough":{"type":"array","maxItems":%d,"items":{"type":"string"}}},"required":["summary","walkthrough"]}`
 	reconcileSchemaJSON  = json.RawMessage(
-		`{"type":"object","additionalProperties":false,"properties":{"resolutions":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"thread_node_id":{"type":"string"},"resolution":{"type":"string","enum":["resolved","open","uncertain"]},"reason":{"type":"string"}},"required":["thread_node_id","resolution","reason"]}}},"required":["resolutions"]}`,
+		`{"type":"object","additionalProperties":false,"properties":{"resolutions":` +
+			`{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{` +
+			`"thread_node_id":{"type":"string"},"resolution":{"type":"string",` +
+			`"enum":["resolved","open","uncertain"]},"reason":{"type":"string"}},` +
+			`"required":["thread_node_id","resolution","reason"]}}},"required":["resolutions"]}`,
 	)
 	// consolidateSchemaJSON groups a chunk's own findings. The candidate numbers
 	// are the ones the prompt showed, so the answer says nothing this service
 	// cannot check against the findings it asked about.
 	consolidateSchemaJSON = json.RawMessage(
-		`{"type":"object","additionalProperties":false,"properties":{"groups":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"candidates":{"type":"array","items":{"type":"integer"}},"restates_open_thread":{"type":"boolean"},"reason":{"type":"string"}},"required":["candidates","restates_open_thread","reason"]}}},"required":["groups"]}`,
+		`{"type":"object","additionalProperties":false,"properties":{"groups":` +
+			`{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{` +
+			`"candidates":{"type":"array","items":{"type":"integer"}},` +
+			`"restates_open_thread":{"type":"boolean"},"reason":{"type":"string"}},` +
+			`"required":["candidates","restates_open_thread","reason"]}}},"required":["groups"]}`,
 	)
 )

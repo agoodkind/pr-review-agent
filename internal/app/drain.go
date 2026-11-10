@@ -51,6 +51,7 @@ func (handler *handler) handleDrain(writer http.ResponseWriter, request *http.Re
 	}
 
 	writer.Header().Set("Content-Type", "application/json")
+
 	if err := json.NewEncoder(writer).Encode(status); err != nil {
 		handler.logger.ErrorContext(request.Context(), "encode drain status", "err", err.Error())
 	}

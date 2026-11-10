@@ -86,6 +86,7 @@ func TestFileReviewRequirementPreservesNecessaryGitSourceAndSemanticGaps(t *test
 					scenario.action,
 					scenario.kind,
 				)
+
 				planned, decisions, err := review.PlanFileContentReview(
 					diff.ReviewInput{Files: []diff.FileContext{file}},
 					[]domain.FileAssessment{assessment},
@@ -142,6 +143,7 @@ func TestFileReviewRequirementPreservesNecessaryGitSourceAndSemanticGaps(t *test
 					)
 					assessment.Reason = "The encrypted permission changes require evidence about authorization behavior."
 					assessment.Reviewed = true
+
 					planned, decisions, err := review.PlanFileContentReview(
 						diff.ReviewInput{Files: []diff.FileContext{vault}},
 						[]domain.FileAssessment{assessment},
@@ -152,6 +154,7 @@ func TestFileReviewRequirementPreservesNecessaryGitSourceAndSemanticGaps(t *test
 					}
 
 					assertPlannedChangedRows(t, planned, vault)
+
 					if decisions[0].Action != action || decisions[0].Reviewed {
 						t.Fatal(
 							"Reading ciphertext changed an unresolved authorization assessment into completed content review.",
@@ -159,12 +162,14 @@ func TestFileReviewRequirementPreservesNecessaryGitSourceAndSemanticGaps(t *test
 					}
 
 					var summary review.Summary
+
 					summary.Decision = domain.ReviewDecisionComment
 					summary.ApprovalWithheld = true
 					summary.FileAssessments = decisions
 					summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 					summary.FileAssessmentsDisplay = reviewrules.FindingsCollapsed
 					body := review.RenderBody(summary)
+
 					_, encoded, found := strings.Cut(
 						body,
 						"<!-- pr-review-agent:file-assessments:v1 ",
@@ -174,6 +179,7 @@ func TestFileReviewRequirementPreservesNecessaryGitSourceAndSemanticGaps(t *test
 					}
 
 					encoded, _, _ = strings.Cut(encoded, " -->")
+
 					payload, err := base64.RawURLEncoding.DecodeString(encoded)
 					if err != nil {
 						t.Fatal(err)
@@ -209,6 +215,7 @@ func TestFileScopePlannerRejectsMissingOrInvalidRequirement(t *testing.T) {
 			domain.FileActionExclude,
 			reviewrules.ContentData,
 		)
+
 		_, _, err := review.PlanFileContentReview(
 			diff.ReviewInput{Files: []diff.FileContext{file}},
 			[]domain.FileAssessment{assessment},
@@ -229,10 +236,12 @@ func classificationAssessment(
 	kind reviewrules.ContentKind,
 ) domain.FileAssessment {
 	t.Helper()
+
 	model := openai.NewClient(
 		config.Config{ReviewPolicy: policy, MinimumImportance: 7, ReviewModel: "configured-model"},
 		nil,
 	)
+
 	prompt, err := review.BuildFileAssessmentPrompt(
 		model,
 		githubapp.PullRequest{},
@@ -251,6 +260,7 @@ func classificationAssessment(
 	}
 
 	identity, _, _ = strings.Cut(identity, "\n")
+
 	_, evidence, found := strings.Cut(prompt, "Evidence ID: ")
 	if !found {
 		t.Fatal("The actual assessment request omitted the file evidence reference.")
@@ -271,6 +281,7 @@ func classificationAssessment(
 
 func assertPlannedChangedRows(t *testing.T, input diff.ReviewInput, file diff.FileContext) {
 	t.Helper()
+
 	chunks, err := diff.ChunkInput(input, config.MaximumPromptBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +321,7 @@ func classificationGitFile(t *testing.T, name, before, after string) diff.FileCo
 		t.Helper()
 		process := exec.CommandContext(t.Context(), "git", arguments...)
 		process.Dir = directory
+
 		output, err := process.CombinedOutput()
 		if err != nil {
 			t.Fatalf("Git %s failed: %v\n%s", arguments[0], err, output)
@@ -318,6 +330,7 @@ func classificationGitFile(t *testing.T, name, before, after string) diff.FileCo
 		return string(output)
 	}
 	command("init", "--quiet")
+
 	path := filepath.Join(directory, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
@@ -342,7 +355,9 @@ func classificationGitFile(t *testing.T, name, before, after string) diff.FileCo
 		"-m",
 		"Create classification source\n\nCo-authored-by: Codex <noreply@openai.com>",
 	)
+
 	status := "modified"
+
 	if after == "" {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
@@ -356,6 +371,7 @@ func classificationGitFile(t *testing.T, name, before, after string) diff.FileCo
 	}
 
 	patch := command("diff", "--unified=0", "--", name)
+
 	lines, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatal(err)

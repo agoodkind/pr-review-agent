@@ -224,12 +224,14 @@ func parsePatch(patch string) (parsedPatch, error) {
 	for _, line := range lines {
 		if strings.HasPrefix(line, "@@") {
 			parser.finishHunk()
+
 			header, err := parseHunkHeader(line)
 			if err != nil {
 				return parsedPatch{}, err
 			}
 
 			parser.startHunk(line, header)
+
 			continue
 		}
 
@@ -450,6 +452,7 @@ func boundedCurrentContent(content string, coordinates hunkHeader, maximumBytes 
 
 	for {
 		added := false
+
 		if left > 0 && selectedBytes+len(lines[left-1]) <= maximumBytes {
 			left--
 			selectedBytes += len(lines[left])

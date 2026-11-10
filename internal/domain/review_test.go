@@ -95,6 +95,7 @@ func TestFindingValidateRejectsEmptyFieldsInvalidLinesAndImportance(t *testing.T
 	}
 
 	invalidSuggestion := valid
+
 	invalidSuggestion.Suggestion = "```go\nunsafe()\n```"
 	if err := invalidSuggestion.Validate(); err == nil {
 		t.Fatal("fenced suggestion: want validation error")
@@ -150,6 +151,7 @@ func TestReviewResultValidateRejectsDuplicateFindings(t *testing.T) {
 		Body:       "Details",
 		Importance: 3,
 	}
+
 	result := ReviewResult{
 		Findings: []Finding{finding, finding},
 	}

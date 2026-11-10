@@ -97,7 +97,9 @@ func (service *Service) dismissFailureVerdict(
 
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
+
 	logger := gklog.L(ctx)
+
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.WarnContext(
@@ -146,30 +148,30 @@ func (service *Service) dismissFailureVerdict(
 	}
 
 	comment, found := findSummaryComment(comments, service.botLogin)
+
 	saved, recorded, err := decodeMetadataRecord(comment.Body)
 	if err != nil {
 		return fmt.Errorf("read saved findings before failure dismissal: %w", err)
 	}
 
-	if validNativeMetadataBlock(latest) || recorded && len(saved.Findings) > 0 {
-		blocked, verificationErr := service.savedMetadataStillBlocks(ctx, job, comments)
-		if verificationErr != nil {
-			return verificationErr
-		}
+	preserve, verificationErr := service.preserveMetadataRejection(
+		ctx,
+		job,
+		latest,
+		comments,
+		recorded && len(saved.Findings) > 0,
+		logger,
+	)
+	if verificationErr != nil {
+		return verificationErr
+	}
 
-		if blocked {
-			logger.InfoContext(
-				ctx,
-				"preserve unresolved metadata rejection after failure",
-				"review_id",
-				latest.ID,
-			)
-
-			return nil
-		}
+	if preserve {
+		return nil
 	}
 
 	var data reviewrules.PromptData
+
 	data.Input = service.terminalFailureLead(ctx, cause)
 	if found && comment.ID > 0 {
 		data.SummaryURL = nativeSummaryURL(job.Repository, job.Number, comment.ID)
@@ -184,8 +186,10 @@ func (service *Service) dismissFailureVerdict(
 	}
 
 	message += "\n\n" + marker.FailureDismissal(latest.ID)
+
 	dismissCtx, cancelDismiss := service.publicationContext(ctx)
 	defer cancelDismiss()
+
 	if _, err := service.github.DismissReview(
 		dismissCtx,
 		job.InstallationID,
@@ -212,6 +216,35 @@ func (service *Service) dismissFailureVerdict(
 	)
 
 	return nil
+}
+
+func (service *Service) preserveMetadataRejection(
+	ctx context.Context,
+	job domain.ReviewJob,
+	latest githubapp.Review,
+	comments []githubapp.IssueComment,
+	savedBlocked bool,
+	logger *slog.Logger,
+) (bool, error) {
+	if !validNativeMetadataBlock(latest) && !savedBlocked {
+		return false, nil
+	}
+
+	blocked, verificationErr := service.savedMetadataStillBlocks(ctx, job, comments)
+	if verificationErr != nil {
+		return false, verificationErr
+	}
+
+	if blocked {
+		logger.InfoContext(
+			ctx,
+			"preserve unresolved metadata rejection after failure",
+			"review_id",
+			latest.ID,
+		)
+	}
+
+	return blocked, nil
 }
 
 func automaticFailureDismissal(
@@ -273,6 +306,7 @@ func collectTerminalProviderFailures(cause error, failures *[]terminalProviderFa
 			httpStatus: 0,
 			code:       "",
 		}
+
 		var details providerFailureDetails
 		if errors.As(cause, &details) {
 			failure.httpStatus, failure.code = details.ProviderFailureDetails()
@@ -301,6 +335,7 @@ func (service *Service) terminalFailureDetail(
 	var failures []terminalProviderFailure
 	collectTerminalProviderFailures(cause, &failures)
 	visible := service.terminalFailureLead(ctx, cause)
+
 	var rows strings.Builder
 
 	for _, failure := range failures {
@@ -311,6 +346,7 @@ func (service *Service) terminalFailureDetail(
 
 	if rows.Len() > 0 {
 		var data reviewrules.PromptData
+
 		data.Input = rows.String()
 		visible += "\n\n" + service.renderFailureTemplate(ctx, "failure.details", data)
 	}
@@ -349,17 +385,22 @@ func terminalFailureCause(cause error) error {
 
 func (service *Service) terminalFailureLead(ctx context.Context, cause error) string {
 	terminal := terminalFailureCause(cause)
+
 	var failures []terminalProviderFailure
 	collectTerminalProviderFailures(terminal, &failures)
+
 	var data reviewrules.PromptData
+
 	data.FailureClass = string(failureClassOf(terminal))
 	data.FailureStatus = "not reported"
+
 	var githubFailure githubapp.APIError
 	if errors.As(terminal, &githubFailure) {
 		data.FailureStatus = fmt.Sprintf("HTTP %d", githubFailure.StatusCode)
 	}
 
 	template := "failure.service"
+
 	if len(failures) > 0 {
 		data = service.terminalFailureData(failures[len(failures)-1])
 		template = "failure.provider"
@@ -379,9 +420,11 @@ func (service *Service) terminalFailureData(
 	failure terminalProviderFailure,
 ) reviewrules.PromptData {
 	var data reviewrules.PromptData
+
 	data.Provider = usageModelCell(failure.status.ProviderID)
 	data.Model = usageModelCell(failure.status.Model)
 	data.FailureClass = string(failure.class)
+
 	data.FailureStatus = "not reported"
 	if failure.httpStatus >= 100 && failure.httpStatus <= 599 {
 		data.FailureStatus = fmt.Sprintf("HTTP %d", failure.httpStatus)

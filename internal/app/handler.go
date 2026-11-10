@@ -100,6 +100,7 @@ func readReviewSettings(
 		ChunkConcurrency:  0,
 		MaxPromptBytes:    0,
 	}
+
 	raw := request.Header.Get(reviewSettingsHeader)
 	if raw == "" {
 		return empty
@@ -127,6 +128,7 @@ func readReviewSettings(
 	}
 
 	timeout := time.Duration(0)
+
 	if payload.ChunkTimeout != "" {
 		parsed, err := time.ParseDuration(payload.ChunkTimeout)
 		if err != nil {
@@ -244,6 +246,7 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	deliveryID := request.Header.Get("X-Github-Delivery")
 
 	limited := io.LimitReader(request.Body, config.MaximumWebhookBytes+1)
+
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		handler.logger.ErrorContext(
@@ -314,6 +317,7 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 			"webhook delivery suppressed",
 			slog.String("reason", "duplicate_delivery"),
 		)
+
 		if handler.cache.Settled(deliveryID) {
 			writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		} else {
@@ -332,6 +336,7 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	// over themselves and the body together, and that is what makes them safe to
 	// honor at any point in this function.
 	job := event.Job()
+
 	job.Settings = readReviewSettings(request, body, handler.webhookHMACKey, logger)
 	if handler.suppressScheduledDelivery(ctx, writer, &job, event.RestartsQueue()) {
 		return
@@ -347,6 +352,7 @@ func (handler *handler) admitWebhookReview(
 	logger *slog.Logger,
 ) {
 	deliveryID := job.DeliveryID
+
 	job, admitted, err := handler.admitter.Admit(ctx, job)
 	if err != nil {
 		handler.cache.Release(deliveryID)
@@ -391,6 +397,7 @@ func (handler *handler) admitWebhookReview(
 
 	if !handler.dispatcher.Enqueue(job) {
 		handler.cache.Release(deliveryID)
+
 		if err := handler.admitter.Reject(ctx, job, errReviewQueueFull); err != nil {
 			logger.ErrorContext(
 				ctx,
@@ -477,12 +484,14 @@ func writeReviewEventError(writer http.ResponseWriter, err error) {
 func (handler *handler) writeReadiness(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Pr-Agent-Revision", version.SourceRevision())
+
 	if handler.dispatcher.Status().AdmissionClosed {
 		http.Error(writer, "review admission closed", http.StatusServiceUnavailable)
 		return
 	}
 
 	writer.WriteHeader(http.StatusOK)
+
 	if err := json.NewEncoder(writer).Encode(map[string]string{"status": "ok"}); err != nil {
 		http.Error(writer, "encode response failed", http.StatusInternalServerError)
 	}

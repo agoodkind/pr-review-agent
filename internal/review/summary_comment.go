@@ -51,6 +51,7 @@ func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob,
 		func(state marker.State, existingBody string) summaryCommentContent {
 			state.RunID = job.DeliveryID
 			state.Status = marker.StateReviewing
+
 			prose := RenderStartedBody(summary.Head)
 			if preserveCheckpointSummary(state, existingBody) {
 				prose = renderCheckpointNotice(
@@ -106,6 +107,7 @@ func (service *Service) upsertSummaryCommentFromChecked(
 	build func(marker.State, string) (summaryCommentContent, error),
 ) error {
 	logger := gklog.L(ctx)
+
 	comments, err := service.github.ListIssueComments(
 		ctx,
 		job.InstallationID,
@@ -215,6 +217,7 @@ func (service *Service) readState(
 	job domain.ReviewJob,
 ) (marker.State, bool, error) {
 	logger := gklog.L(ctx)
+
 	comments, err := service.github.ListIssueComments(
 		ctx,
 		job.InstallationID,
@@ -264,6 +267,7 @@ func (service *Service) loadDurableState(
 	job domain.ReviewJob,
 ) (marker.State, bool, error) {
 	logger := gklog.L(ctx)
+
 	state, hasState, err := service.readState(ctx, job)
 	if err != nil {
 		logger.WarnContext(ctx, "read durable review state", slog.String("err", err.Error()))

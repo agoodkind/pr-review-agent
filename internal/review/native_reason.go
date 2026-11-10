@@ -96,6 +96,7 @@ func (service *Service) nativeBlockingReason(
 	summaryURL string,
 ) (reviewrules.PromptData, error) {
 	logger := gklog.L(ctx)
+
 	var empty reviewrules.PromptData
 
 	candidates := make([]nativeBlockingFinding, 0, len(summary.Metadata))
@@ -119,6 +120,7 @@ func (service *Service) nativeBlockingReason(
 	}
 
 	var footerData reviewrules.PromptData
+
 	footer, err := renderPrompt(service.reviewPolicy, "inline.footer", footerData)
 	if err != nil {
 		return empty, err
@@ -134,6 +136,7 @@ func (service *Service) nativeBlockingReason(
 			finding.Path = thread.RootComment.Path
 			finding.StartLine, finding.EndLine = thread.RootComment.StartLine, thread.RootComment.EndLine
 			finding.Body = nativeLegacyExplanation(thread.RootComment.Body, footer)
+
 			finding.Title = strings.TrimSpace(
 				strings.TrimLeft(nativeHeading.FindString(thread.RootComment.Body), "# \t"),
 			)
@@ -179,7 +182,9 @@ func (service *Service) nativeBlockingReason(
 	label := strings.Join(strings.Fields(sanitizeReportText(selected.finding.Title)), " ")
 	label = strings.ReplaceAll(label, "`", "")
 	label = strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]").Replace(label)
+
 	var data reviewrules.PromptData
+
 	data.Input, data.SummaryURL = label, selected.url
 
 	return data, nil

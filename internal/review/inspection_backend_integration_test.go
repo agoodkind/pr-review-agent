@@ -118,6 +118,7 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 		}),
 	)
 	t.Cleanup(server.Close)
+
 	address, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +138,7 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 		slog.New(slog.DiscardHandler),
 	)
 	t.Cleanup(func() { _ = fixture.source.Close() })
+
 	fixture.ref = domain.PullRequestRef{
 		Repository:     domain.Repository{Owner: "owner", Name: "repo"},
 		Number:         982,
@@ -163,6 +165,7 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 
 func TestInspectorVerifiesRepositoryEvidenceAtTheReviewedGitHead(t *testing.T) {
 	fixture := newInspectionGitFixture(t)
+
 	ctx, closeSnapshot, err := fixture.source.OpenRepositorySnapshot(
 		t.Context(),
 		fixture.ref.InstallationID,
@@ -178,7 +181,9 @@ func TestInspectorVerifiesRepositoryEvidenceAtTheReviewedGitHead(t *testing.T) {
 			t.Error(err)
 		}
 	})
+
 	head := string(fixture.ref.Head)
+
 	inspector, err := review.NewInspector(
 		fixture.source,
 		fixture.ref,
@@ -259,6 +264,7 @@ func TestInspectorVerifiesRepositoryEvidenceAtTheReviewedGitHead(t *testing.T) {
 
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
+
 	if len(fixture.revisions) != 1 {
 		t.Fatalf(
 			"Collection and inspection must reuse one Git transfer, got %d downloads.",

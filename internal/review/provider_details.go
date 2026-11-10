@@ -51,7 +51,8 @@ func renderProviderDetails(summary UsageSummary) string {
 
 	if slices.Contains(summary.ProviderColumns, reviewrules.ProviderPeriodUsageColumn) {
 		builder.WriteString(
-			"\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. Dollar amounts estimate cost from configured prices and do not represent account charges.\n",
+			"\nPeriod totals cover recorded pr-review-agent usage for this provider and requested model. " +
+				"Dollar amounts estimate cost from configured prices and do not represent account charges.\n",
 		)
 		builder.WriteString(renderProviderPeriodDetails(rows))
 	}
@@ -72,6 +73,7 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 		)
 		if index < 0 {
 			var usage ModelUsage
+
 			rows = append(
 				rows,
 				providerDetailRow{
@@ -111,6 +113,7 @@ func providerDetailRows(summary UsageSummary) []providerDetailRow {
 			}
 
 			addUsage(&row.usage, model)
+
 			if model.Priced {
 				row.priced += model.ReportedRequests
 			}
@@ -155,6 +158,7 @@ func providerColumnHeading(column reviewrules.ProviderDetailColumn) string {
 
 func providerColumnValue(column reviewrules.ProviderDetailColumn, row providerDetailRow) string {
 	attempt := row.attempt
+
 	switch column {
 	case reviewrules.ProviderIdentityColumn:
 		return usageModelCell(attempt.Status.ProviderID)
@@ -251,6 +255,7 @@ func providerQuotaCell(status ProviderStatus) string {
 		formatTokenCount(status.Limit),
 		formatTokenCount(status.Remaining),
 	)
+
 	window := status.TokenWindow
 	if window.Mode != "" {
 		label += "<br>" + usageModelCell(string(window.Mode))
@@ -268,6 +273,7 @@ func providerQuotaCell(status ProviderStatus) string {
 
 func providerResultCell(attempts []ProviderAttempt) string {
 	results := make([]string, 0, len(attempts))
+
 	var fallbacks int
 
 	for _, attempt := range attempts {

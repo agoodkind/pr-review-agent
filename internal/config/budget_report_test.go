@@ -17,6 +17,7 @@ import (
 
 func TestRuntimeBudgetReportPolicy(t *testing.T) {
 	t.Chdir("../..")
+
 	values := make(map[string]json.RawMessage)
 
 	for name, value := range map[string]string{
@@ -121,6 +122,7 @@ func TestRuntimeBudgetReportPolicy(t *testing.T) {
 		`{"attempts":1,"attempt_timeout":"5s","timeout":"1s"}`,
 	} {
 		values["PROVIDER_BUDGET_REPORT"] = json.RawMessage(invalid)
+
 		data, err := json.Marshal(values)
 		if err != nil {
 			t.Fatal(err)

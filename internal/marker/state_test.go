@@ -47,6 +47,7 @@ func TestStateMarkerWithNoPendingDecodesEmpty(t *testing.T) {
 		Status:       StateDone,
 		Pending:      nil,
 	})
+
 	decoded, ok := DecodeState(body)
 	if !ok || len(decoded.Pending) != 0 {
 		t.Fatalf("decoded = %+v ok=%v, want ok with empty pending", decoded, ok)

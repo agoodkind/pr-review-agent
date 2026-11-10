@@ -70,6 +70,7 @@ func TestConsolidationPromptPreservesFindingsWithinActualProviderBudget(t *testi
 			"Related source discusses café values. "+markers[len(markers)-1]+"\n",
 			maximum,
 		)
+
 		prompt, err := review.BuildConsolidationPrompt(
 			client,
 			candidates,
@@ -108,6 +109,7 @@ func TestConsolidationPromptPreservesFindingsWithinActualProviderBudget(t *testi
 		}
 
 		assertStageBoundaries(t, policy, prompt, "consolidate.context_omitted")
+
 		oversized := append([]domain.Finding{}, candidates...)
 		oversized[0].Evidence = strings.Repeat("necessary source evidence", maximum)
 		prompt, err = review.BuildConsolidationPrompt(
@@ -118,6 +120,7 @@ func TestConsolidationPromptPreservesFindingsWithinActualProviderBudget(t *testi
 			maximum,
 			policy,
 		)
+
 		var refused *diff.PromptSizeError
 		if prompt != "" || !errors.As(err, &refused) || refused.Actual <= maximum ||
 			refused.Limit != maximum {
@@ -135,6 +138,7 @@ func TestReportPromptFitsActualProviderBudgetWithoutBreakingSourceBoundaries(t *
 		Title: "Preserve writer transactions",
 		Body:  "The writer deletes stale records within its transaction.",
 	}
+
 	minimumPrompt, err := review.BuildReportPrompt(
 		client,
 		pr,
@@ -157,6 +161,7 @@ func TestReportPromptFitsActualProviderBudgetWithoutBreakingSourceBoundaries(t *
 		"The change preserves café records. "+markers[len(markers)-1]+"\n",
 		maximum,
 	)
+
 	prompt, err := review.BuildReportPrompt(
 		client,
 		pr,
@@ -180,6 +185,7 @@ func TestReportPromptFitsActualProviderBudgetWithoutBreakingSourceBoundaries(t *
 
 	assertStageBoundaries(t, policy, prompt, "report.context_omitted")
 	_, err = review.BuildReportPrompt(client, pr, nil, 1, policy)
+
 	var refused *diff.PromptSizeError
 	if !errors.As(err, &refused) || refused.Actual <= refused.Limit {
 		t.Fatal(
@@ -205,6 +211,7 @@ func stageBudgetClient(policy reviewrules.Policy) *openai.Client {
 
 func assertStageBoundaries(t *testing.T, policy reviewrules.Policy, prompt, noteTemplate string) {
 	t.Helper()
+
 	markers := strings.Split(policy.WrapUntrusted(""), "\n")
 	if !utf8.ValidString(prompt) || strings.Count(prompt, markers[0]) == 0 ||
 		strings.Count(prompt, markers[0]) != strings.Count(prompt, markers[len(markers)-1]) {
@@ -214,6 +221,7 @@ func assertStageBoundaries(t *testing.T, policy reviewrules.Policy, prompt, note
 	}
 
 	var data reviewrules.PromptData
+
 	note, err := policy.Render(noteTemplate, data)
 	if err != nil || !strings.Contains(prompt, note) {
 		t.Fatal(

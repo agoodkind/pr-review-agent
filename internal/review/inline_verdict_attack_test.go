@@ -52,6 +52,7 @@ func TestInlineVerdictFinalThreadResolutionPreservesHistoricalReviews(t *testing
 			},
 		},
 	)
+
 	model.state = fixture.state
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run succeeded after the last actionable thread disappeared")

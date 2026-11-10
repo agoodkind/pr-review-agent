@@ -56,6 +56,7 @@ func TestMetadataRefreshRejectsAnUnterminatedSummaryCheckpoint(t *testing.T) {
 			),
 		},
 	}
+
 	err := fixture.run(t.Context(), job)
 	if err == nil ||
 		!strings.Contains(err.Error(), "cannot replace an incomplete metadata review state") {

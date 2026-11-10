@@ -61,7 +61,9 @@ func (client *Client) QueryTotals(
 		PageSize:            maximumPageSize,
 		RetentionGeneration: nil,
 	}
+
 	var result TotalsResponse
+
 	first := true
 
 	for {
@@ -154,6 +156,7 @@ func orderedTotalsGroups(previous, current UsageTotalsGroup) bool {
 	}
 
 	previousWrites := previous.CacheWriteTokens != nil && *previous.CacheWriteTokens > 0
+
 	currentWrites := current.CacheWriteTokens != nil && *current.CacheWriteTokens > 0
 	if previousWrites != currentWrites {
 		return !previousWrites
@@ -161,6 +164,7 @@ func orderedTotalsGroups(previous, current UsageTotalsGroup) bool {
 
 	previousReady := previous.InputTokens == 0 ||
 		(previous.CachedInputTokens != nil && previous.CacheWriteTokens != nil)
+
 	currentReady := current.InputTokens == 0 ||
 		(current.CachedInputTokens != nil && current.CacheWriteTokens != nil)
 	if previousReady != currentReady {

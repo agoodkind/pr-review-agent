@@ -17,7 +17,14 @@ import (
 const metadataAssessmentSchemaName = "metadata_finding_assessments"
 
 var metadataAssessmentSchema = json.RawMessage(
-	`{"type":"object","additionalProperties":false,"properties":{"assessments":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string"},"resolution":{"type":"string","enum":["resolved","open","uncertain"]},"reason":{"type":"string"},"evidence":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["finding_id","resolution","reason","evidence","start_line","end_line"]}}},"required":["assessments"]}`,
+	`{"type":"object","additionalProperties":false,"properties":{` +
+		`"assessments":{"type":"array","items":{"type":"object","additionalProperties":false,` +
+		`"properties":{"finding_id":{"type":"string"},"resolution":{"type":"string",` +
+		`"enum":["resolved","open","uncertain"]},"reason":{"type":"string"},` +
+		`"evidence":{"type":"string"},"start_line":{"type":"integer","minimum":1},` +
+		`"end_line":{"type":"integer","minimum":1}},` +
+		`"required":["finding_id","resolution","reason","evidence","start_line","end_line"]}}},` +
+		`"required":["assessments"]}`,
 )
 
 type metadataAssessmentJSON struct {
@@ -47,6 +54,7 @@ func (client *Client) ReassessMetadata(
 	request review.MetadataReassessmentRequest,
 ) ([]domain.MetadataFindingAssessment, error) {
 	logger := gklog.L(ctx)
+
 	policy, err := review.MetadataReassessmentPolicy(client.reviewPolicy)
 	if err != nil {
 		logger.WarnContext(ctx, "Metadata reassessment policy rendering failed", "err", err)
@@ -54,6 +62,7 @@ func (client *Client) ReassessMetadata(
 	}
 
 	var assessments []domain.MetadataFindingAssessment
+
 	_, err = client.complete(
 		ctx,
 		request.Prompt,
@@ -97,8 +106,10 @@ func UnmarshalMetadataAssessments(content []byte) ([]domain.MetadataFindingAsses
 	var response struct {
 		Assessments []metadataAssessmentJSON `json:"assessments"`
 	}
+
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()
+
 	if err := decoder.Decode(&response); err != nil {
 		slog.Warn("Metadata assessment decoding failed", "err", err)
 		return nil, fmt.Errorf("decode metadata assessments: %w", err)

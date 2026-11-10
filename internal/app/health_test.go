@@ -45,10 +45,12 @@ func TestHealthProbeChecksRunningServiceRevision(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+
 		if err := application.Shutdown(ctx); err != nil {
 			t.Error(err)
 		}
 	})
+
 	origin := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	revision := version.SourceRevision()
@@ -62,6 +64,7 @@ func TestHealthProbeChecksRunningServiceRevision(t *testing.T) {
 			t.Context(),
 			"../../deploy/cloudflare/scripts/probe-health.sh",
 		)
+
 		command.Env = append(
 			os.Environ(),
 			"HEALTH_URL="+origin+"/",
@@ -69,6 +72,7 @@ func TestHealthProbeChecksRunningServiceRevision(t *testing.T) {
 			"MAX_ATTEMPTS=10",
 			"RETRY_DELAY_SECONDS=0.1",
 		)
+
 		output, err := command.CombinedOutput()
 		if expected != "" && expected != revision {
 			var exit *exec.ExitError

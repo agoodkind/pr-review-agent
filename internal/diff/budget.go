@@ -37,6 +37,7 @@ func BoundChunks(
 		next := make([]Chunk, 0, len(current))
 		for index, chunk := range current {
 			chunk.Index, chunk.Total = index+1, len(current)
+
 			bounded, err := boundChunk(chunk, fileIndex, maximumBytes, measure)
 			if err != nil {
 				return nil, err
@@ -108,6 +109,7 @@ func boundChunk(
 	upper := len(piece.Text)
 	piece.Text = formatFileHunkChunk(&file, hunk, lower)
 	best := chunkFromPieces([]Piece{piece}, chunk.Index, chunk.Total)
+
 	minimumSize, err := measure(best)
 	if err != nil {
 		return nil, err
@@ -121,6 +123,7 @@ func boundChunk(
 		middle := lower + (upper-lower)/2
 		piece.Text = formatFileHunkChunk(&file, hunk, middle)
 		candidate := chunkFromPieces([]Piece{piece}, chunk.Index, chunk.Total)
+
 		candidateSize, err := measure(candidate)
 		if err != nil {
 			return nil, err
@@ -167,6 +170,7 @@ func oversizedChunk(
 	measure func(Chunk) (int, error),
 ) ([]Chunk, error) {
 	piece := chunk.Pieces[0]
+
 	piece.Text = formatOversizedHunkChunk(piece.Path, maximumBytes)
 	if piece.Metadata != nil {
 		piece.Text = formatOversizedMetadataSource(*piece.Metadata, maximumBytes)
@@ -176,6 +180,7 @@ func oversizedChunk(
 	piece.Oversized = true
 	bounded := chunkFromPieces([]Piece{piece}, chunk.Index, chunk.Total)
 	bounded.RelationshipReview = chunk.RelationshipReview
+
 	size, err := measure(bounded)
 	if err != nil {
 		return nil, err

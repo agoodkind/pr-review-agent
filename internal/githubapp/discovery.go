@@ -162,6 +162,7 @@ func (client *Client) ListOpenPullRequestsPage(
 	}
 
 	query := url.Values{"state": {"open"}}
+
 	body, next, err := client.discoveryPage(
 		ctx,
 		client.repoPath(repository, "/pulls"),
@@ -244,6 +245,7 @@ func (client *Client) discoveryPage(
 
 	query.Set("page", strconv.Itoa(page))
 	query.Set("per_page", strconv.Itoa(pageSize))
+
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
@@ -263,6 +265,7 @@ func (client *Client) discoveryPage(
 	request.Header.Set("Authorization", "Bearer "+credential)
 	request.Header.Set("Accept", githubAcceptHeader)
 	request.Header.Set(githubAPIVersionHeader, githubAPIVersionValue)
+
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		client.logger.ErrorContext(
@@ -276,6 +279,7 @@ func (client *Client) discoveryPage(
 
 	body, readErr := readLimitedBody(response.Body)
 	closeErr := response.Body.Close()
+
 	if readErr != nil {
 		client.logger.ErrorContext(
 			ctx,

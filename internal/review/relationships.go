@@ -46,12 +46,14 @@ func PrepareRelationshipChunks(
 	maximumBytes int,
 ) ([]diff.Chunk, error) {
 	support := relationshipPromptContext{required: required, optional: optional}
+
 	settings := policy.RelationshipReview()
 	if !settings.Enabled {
 		return chunks, nil
 	}
 
 	var err error
+
 	chunks, err = subdivideRelationshipSources(
 		model,
 		chunks,
@@ -81,6 +83,7 @@ func PrepareRelationshipChunks(
 			}
 
 			result = append(result, gap)
+
 			break
 		}
 
@@ -99,12 +102,32 @@ func PrepareRelationshipChunks(
 		result = append(result, joint)
 	}
 
+	return finalizeRelationshipChunks(
+		model,
+		result,
+		len(chunks),
+		minimumImportance,
+		support,
+		policy,
+		maximumBytes,
+	)
+}
+
+func finalizeRelationshipChunks(
+	model Model,
+	result []diff.Chunk,
+	sourceCount int,
+	minimumImportance int,
+	support relationshipPromptContext,
+	policy reviewrules.Policy,
+	maximumBytes int,
+) ([]diff.Chunk, error) {
 	for index := range result {
 		result[index].Index, result[index].Total = index+1, len(result)
 	}
 
 	// Final indices can change the rendered size across decimal boundaries.
-	for index := len(chunks); index < len(result); index++ {
+	for index := sourceCount; index < len(result); index++ {
 		if !result[index].CoverageComplete {
 			continue
 		}
@@ -150,6 +173,7 @@ func subdivideRelationshipSources(
 	maximumBytes int,
 ) ([]diff.Chunk, error) {
 	paths := make(map[string]bool)
+
 	pairs := sourceRelationshipPairs(chunks, files, policy.RelationshipReview().MaximumPairs+1)
 	if len(pairs) > policy.RelationshipReview().MaximumPairs {
 		return chunks, nil
@@ -163,14 +187,17 @@ func subdivideRelationshipSources(
 
 	for _, chunk := range chunks {
 		var parts []diff.Chunk
+
 		changed := false
 
 		for _, piece := range chunk.Pieces {
 			part := relationshipSourceChunk(piece)
 			divided := []diff.Chunk{part}
+
 			if paths[piece.Path] && piece.Metadata == nil && piece.CoverageComplete &&
 				!piece.Oversized {
 				var err error
+
 				divided, err = divideRelationshipSource(
 					model,
 					part,
@@ -208,6 +235,7 @@ func divideRelationshipSource(
 ) ([]diff.Chunk, error) {
 	piece := chunk.Pieces[0]
 	pair := relationshipPair{path: piece.Path, left: piece, right: piece, reason: "source_budget"}
+
 	joint, err := renderRelationshipPair(pair, true, policy)
 	if err != nil {
 		return nil, err
@@ -361,10 +389,15 @@ func renderRelationshipPair(
 
 	for _, piece := range []diff.Piece{pair.left, pair.right} {
 		content := piece.Text
+
 		if compact {
-			var err error
-			var data reviewrules.PromptData
+			var (
+				err  error
+				data reviewrules.PromptData
+			)
+
 			data.Path, data.Input = pair.path, piece.Patch
+
 			content, err = policy.Render("relationship.fragment", data)
 			if err != nil {
 				slog.Warn("Relationship fragment rendering failed", "err", err)
@@ -408,7 +441,9 @@ func relationshipGap(
 	policy reviewrules.Policy,
 ) (diff.Chunk, error) {
 	var data reviewrules.PromptData
+
 	data.Path, data.Relationship, data.Total = path, reason, remaining
+
 	body, err := policy.Render("relationship.gap", data)
 	if err != nil {
 		slog.Warn("Relationship gap rendering failed", "err", err)
@@ -517,6 +552,7 @@ func linkGoRelationships(
 	limit int,
 ) {
 	positions := token.NewFileSet()
+
 	source, err := parser.ParseFile(positions, file.Path, file.CurrentContent, 0)
 	if err != nil {
 		slog.Debug(
@@ -574,6 +610,7 @@ func scanGoRelationshipFunctions(
 
 		references := make(map[string]struct{})
 		shared := make(map[string]struct{})
+
 		ast.Inspect(
 			function.Body,
 			func(node ast.Node) bool {
@@ -587,6 +624,7 @@ func scanGoRelationshipFunctions(
 				return true
 			},
 		)
+
 		if function.Recv != nil {
 			for _, receiver := range function.Recv.List {
 				ast.Inspect(
@@ -637,7 +675,9 @@ func relationshipGlobals(source *ast.File) map[string]struct{} {
 
 func fragmentFunctionIndices(piece diff.Piece, functions []relationshipFunction) []int {
 	var chunk diff.Chunk
+
 	chunk.Pieces = []diff.Piece{piece}
+
 	rows, err := diff.ChangedSourceRows(chunk)
 	if err != nil {
 		return nil
@@ -659,6 +699,7 @@ func fragmentFunctionIndices(piece diff.Piece, functions []relationshipFunction)
 
 func functionsRelated(first, second relationshipFunction) bool {
 	_, forward := first.references[second.name]
+
 	_, backward := second.references[first.name]
 	if forward || backward {
 		return true

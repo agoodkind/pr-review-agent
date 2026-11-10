@@ -45,6 +45,7 @@ func (service *Service) confirmHead(
 	head domain.HeadSHA,
 ) error {
 	logger := gklog.L(ctx)
+
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
 		job.InstallationID,

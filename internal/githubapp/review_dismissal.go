@@ -42,6 +42,7 @@ func (client *Client) FindReviewDismissal(
 	result := ReviewDismissal{OriginalDecision: "", ReviewID: 0, Actor: "", Message: ""}
 	found := false
 	path := client.repoPath(repo, fmt.Sprintf("/issues/%d/timeline", number))
+
 	err := client.doRESTPaginated(
 		ctx,
 		installationID,

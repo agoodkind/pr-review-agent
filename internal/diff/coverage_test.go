@@ -21,6 +21,7 @@ import (
 // content that failed to load is one call that went wrong.
 func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 	const goodPatch = "@@ -1,1 +1,2 @@\n line\n+added\n"
+
 	cases := []struct {
 		name       string
 		file       githubapp.ChangedFile
@@ -148,6 +149,7 @@ func TestCollectorNamesWhyAFileWasNotReadWhole(t *testing.T) {
 					contents: testCase.contents,
 					getErr:   testCase.getErr,
 				}
+
 				input, err := diff.NewCollector(source).Collect(
 					context.Background(),
 					testRef(),
@@ -203,6 +205,7 @@ func TestACompletelyReadFileNamesNoGap(t *testing.T) {
 		},
 		contents: map[string][]byte{"pkg/a.go": []byte("line\nadded\n")},
 	}
+
 	input, err := diff.NewCollector(source).Collect(
 		context.Background(),
 		testRef(),
@@ -226,6 +229,7 @@ func TestACompletelyReadFileNamesNoGap(t *testing.T) {
 // this is the one shortfall a later run cannot close.
 func TestChunkInputMarksAnOversizedHunkAndNamesIt(t *testing.T) {
 	const small = "@@ -1,1 +1,2 @@\n a\n+one\n"
+
 	huge := "@@ -4,1 +5,3 @@\n d\n+" + strings.Repeat("x", 400) + "\n+" + strings.Repeat(
 		"y",
 		400,

@@ -45,13 +45,10 @@ func assessmentDecisionReason(assessments []domain.FileAssessment) string {
 }
 
 func assessmentIdentity(file diff.FileContext, policy reviewrules.Policy) string {
-	digest := sha256.Sum256(
-		[]byte(
-			policy.Fingerprint() + "\x00" + file.Path + "\x00" + file.Status + "\x00" + file.Patch + "\x00" + file.CurrentContent + "\x00" + string(
-				file.Gap,
-			) + "\x00" + classificationAttributes(file),
-		),
-	)
+	contents := policy.Fingerprint() + "\x00" + file.Path + "\x00" + file.Status +
+		"\x00" + file.Patch + "\x00" + file.CurrentContent + "\x00" +
+		string(file.Gap) + "\x00" + classificationAttributes(file)
+	digest := sha256.Sum256([]byte(contents))
 
 	return hex.EncodeToString(digest[:])
 }
@@ -120,6 +117,7 @@ func validateFileAssessmentsDetailed(
 		seen[assessment.Path] = true
 		assessment.Reason = sanitizeDecisionReason(assessment.Reason)
 		reviewed := assessment.Action == domain.FileActionReview && assessment.Reviewed
+
 		excluded := !assessment.Reviewed && permittedContentExclusion(assessment, file, policy)
 		if !reviewed && !excluded {
 			accepted = false
@@ -225,6 +223,7 @@ func validateAssessmentFields(
 func (pass *chunkPass) fileWasReviewed(path string) bool {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	file, exists := BuildFileIndex(pass.work.Files)[path]
 	if !exists || !file.CoverageComplete {
 		return false
@@ -238,6 +237,7 @@ func (pass *chunkPass) fileWasReviewed(path string) bool {
 		}
 
 		found = true
+
 		if !chunk.CoverageComplete || !pass.reviewedChunks[chunkID(chunk)] {
 			return false
 		}
@@ -310,6 +310,7 @@ func (pass *chunkPass) seedFileAssessments(policy reviewrules.Policy) {
 
 	pass.requests += pass.work.AssessmentRequests
 	pass.mu.Unlock()
+
 	var excluded []domain.FileAssessment
 
 	files := BuildFileIndex(pass.work.Files)
@@ -400,6 +401,7 @@ func decodeFileAssessments(body string) []domain.FileAssessment {
 
 func assessmentPromptRow(file diff.FileContext, policy reviewrules.Policy) (string, error) {
 	var data reviewrules.PromptData
+
 	data.Identity = assessmentIdentity(file, policy)
 	data.EvidenceID = assessmentEvidenceID(file, policy)
 	data.Status = escapeOmissionPromptText(file.Status, policy)
@@ -422,6 +424,7 @@ func classificationAttributes(file diff.FileContext) string {
 	}
 
 	slices.Sort(keys)
+
 	var attributes strings.Builder
 
 	for _, key := range keys {

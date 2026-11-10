@@ -16,10 +16,13 @@ import (
 func configuredScopeNotice(t *testing.T, shortfall structuralShortfall, pending int) string {
 	t.Helper()
 	policy := policytest.Load(t)
+
 	var data reviewrules.PromptData
+
 	data.Input = renderUnreadHunks(shortfall.Hunks)
 	data.Index = len(shortfall.Hunks)
 	data.Total = pending
+
 	notice, err := policy.Render("coverage.pending", data)
 	if err != nil {
 		t.Fatal(err)

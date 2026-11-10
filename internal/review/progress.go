@@ -25,6 +25,7 @@ func (service *Service) checkpoint(
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
+
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 
@@ -37,8 +38,10 @@ func (service *Service) checkpoint(
 	tracker.state.RunID = job.DeliveryID
 	tracker.state.Status = marker.StateReviewing
 	summary := service.progressSummary(ctx, job, pass, tracker.completed)
+
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
+
 	err := service.upsertSummaryComment(
 		ctx,
 		job,
@@ -74,7 +77,9 @@ func (service *Service) progressSummary(
 	completed []string,
 ) Summary {
 	pass.mu.Lock()
+
 	var summary Summary
+
 	summary.InProgress = true
 	summary.Head = job.Head
 	summary.Forced = job.Forced
@@ -129,6 +134,7 @@ func completedFileReview(file diff.FileContext, chunks []diff.Chunk, completed [
 		}
 
 		found = true
+
 		if !chunk.CoverageComplete || !slices.Contains(completed, chunkID(chunk)) {
 			return false
 		}

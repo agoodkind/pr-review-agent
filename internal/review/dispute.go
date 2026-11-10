@@ -108,13 +108,13 @@ func collectDisputes(
 			}
 
 			section := formatDiscussionSection(thread, normalizedPath, botLogin)
-			if owned, ok := ownedDisputeSection(
+			if owned, hasOwnedSection := ownedDisputeSection(
 				thread,
 				normalizedPath,
 				botLogin,
 				currentHead,
 				disputes.known,
-			); ok {
+			); hasOwnedSection {
 				section = owned
 			}
 
@@ -182,13 +182,16 @@ func formatDiscussionSection(
 	builder.WriteString(ReplySpeaker(thread.RootComment, botLogin))
 	builder.WriteString(": ")
 	builder.WriteString(thread.RootComment.Body)
+
 	if len(thread.Replies) == 0 {
 		builder.WriteString("\nReplies: none yet.")
 		return builder.String()
 	}
 
 	lines, omitted := FormatReplies(thread.Replies, botLogin, MaximumReplyBytes)
+
 	builder.WriteString("\nReplies, oldest first")
+
 	if omitted > 0 {
 		fmt.Fprintf(&builder, ", with %d older replies not shown", omitted)
 	}
@@ -220,6 +223,7 @@ func formatDisputeSection(
 	currentHead bool,
 ) string {
 	var builder strings.Builder
+
 	switch {
 	case resolved && currentHead:
 		builder.WriteString("Resolved finding from this commit\nPath: ")
@@ -234,13 +238,16 @@ func formatDisputeSection(
 	builder.WriteString(finding.Title)
 	builder.WriteString("\nBody: ")
 	builder.WriteString(finding.Body)
+
 	if len(replies) == 0 {
 		builder.WriteString("\nReplies: none yet.")
 		return builder.String()
 	}
 
 	lines, omitted := FormatReplies(replies, botLogin, MaximumReplyBytes)
+
 	builder.WriteString("\nReplies, oldest first. The name before each one is who wrote it")
+
 	if omitted > 0 {
 		fmt.Fprintf(&builder, ", and %d older replies are not shown", omitted)
 	}
@@ -267,6 +274,7 @@ func (disputes disputeContext) promptSection(policy reviewrules.Policy) (string,
 	}
 
 	var data reviewrules.PromptData
+
 	data.Input = policy.WrapUntrusted(strings.Join(disputes.sections, "\n\n"))
 
 	return renderPrompt(policy, "disputes.input", data)

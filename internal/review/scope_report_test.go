@@ -13,7 +13,9 @@ import (
 
 func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 	policy := policytest.Load(t)
+
 	var data reviewrules.PromptData
+
 	note, err := policy.Render("coverage.accepted", data)
 	if err != nil {
 		t.Fatal(err)
@@ -38,6 +40,7 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 			string(display),
 			func(t *testing.T) {
 				var summary review.Summary
+
 				summary.Head = domain.HeadSHA(strings.Repeat("a", 40))
 				summary.Decision = domain.ReviewDecisionApprove
 				summary.OmissionsAccepted = true
@@ -45,6 +48,7 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 				summary.FileAssessments = []domain.FileAssessment{assessment}
 				summary.FileAssessmentsDisplay = display
 				summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
+
 				body := review.RenderBody(summary)
 				if strings.Contains(body, "### Omissions") ||
 					strings.Contains(body, "could not be reviewed") {
@@ -78,6 +82,7 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 				summary.OmissionsAccepted = false
 				summary.ApprovalWithheld = true
 				summary.FileAssessments[0].Action = domain.FileActionGap
+
 				pending := review.RenderBody(summary)
 				if strings.Contains(pending, note) ||
 					!strings.Contains(pending, "| Review scope assessed | no |") {
@@ -96,13 +101,16 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 
 func TestCheckpointPolicySurvivesStorageAndRejectsChangedContext(t *testing.T) {
 	policy := policytest.Load(t)
+
 	var state marker.State
+
 	state.RunID = "checkpoint-policy-test"
 	state.Status = marker.StateReviewing
 	state = state.WithPolicyRevision(policy.Fingerprint())
 	state.LastReviewed = domain.HeadSHA(strings.Repeat("b", 40))
 	state.Completed = []string{"completed-fragment"}
 	state.Pending = []string{"pending-fragment"}
+
 	stored, valid := marker.DecodeState(marker.EncodeState(state))
 	if !valid || stored.PolicyRevision != state.PolicyRevision {
 		t.Fatal("The stored checkpoint did not retain its review policy identity.")

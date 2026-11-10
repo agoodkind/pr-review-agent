@@ -98,7 +98,9 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 								}
 
 								fixture.state.mu.Unlock()
+
 								result := domain.ReviewResult{OmissionsAcceptable: true}
+
 								if scenario.publicationFailure != "" {
 									finding := metadataPresentationFinding()
 									finding.Claim = "The description omits a subject and verb."
@@ -252,6 +254,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				useLegacyMetadataCheckpoint(t, fixture)
 				summaryID := fixture.state.issueComments[0]["id"]
 				initialRequests := requests.Load()
+
 				if scenario.publicationFailure != "" {
 					current, readErr := fixture.github.GetPullRequest(
 						t.Context(),
@@ -380,6 +383,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 
 				body := failureSummaryComment(t, fixture)
 				stored := retainedMetadataFindings(t, body)
+
 				expectedMetadata := 0
 				if scenario.publicationFailure == "native" ||
 					scenario.publicationFailure == "summary" {
@@ -420,6 +424,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				expectedRequests := int32(1)
 				if scenario.unchanged {
 					expectedRequests = 0
+
 					if output["title"] != "Already reviewed" {
 						t.Fatal(
 							"A refresh without provider work must retain the duplicate-suppression result.",
@@ -427,6 +432,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					}
 				} else {
 					assertMetadataRefreshUsage(t, checkSummary, expectedRequests)
+
 					if !strings.Contains(
 						checkSummary,
 						"| Model | `lifecycle`, `inspection-service-model` |",
@@ -465,6 +471,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				if scenario.modelDelay > 0 {
 					_, duration, found := strings.Cut(checkSummary, "| Duration | `")
 					secondsText, _, complete := strings.Cut(duration, "` seconds |")
+
 					seconds, parseErr := strconv.Atoi(secondsText)
 					if !found || !complete || parseErr != nil ||
 						time.Duration(seconds)*time.Second < scenario.modelDelay {
@@ -478,6 +485,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				}
 
 				assertMetadataRefreshUsage(t, body, initialRequests)
+
 				if requests.Load()-initialRequests != expectedRequests {
 					t.Fatal("The refresh completed an unexpected number of provider requests.")
 				}

@@ -13,6 +13,7 @@ import (
 func (pass *chunkPass) metadataSnapshot() ([]domain.Finding, *findingCheckpoint) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	findings := slices.Clone(pass.metadata)
 	checkpoint := &findingCheckpoint{Prior: nil}
 
@@ -28,6 +29,7 @@ func (pass *chunkPass) metadataSnapshot() ([]domain.Finding, *findingCheckpoint)
 		}
 
 		seen[key] = struct{}{}
+
 		checkpoint.Prior = append(checkpoint.Prior, len(findings))
 		findings = append(findings, finding)
 	}
@@ -94,6 +96,7 @@ func metadataFindingAnchored(finding domain.Finding, source diff.MetadataSource)
 	}
 
 	lines := strings.Split(source.Text, "\n")
+
 	start, end := finding.StartLine-source.StartLine, finding.EndLine-source.StartLine+1
 	if start < 0 || end > len(lines) || start >= end || strings.TrimSpace(finding.Evidence) == "" {
 		return false

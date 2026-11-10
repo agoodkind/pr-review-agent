@@ -57,6 +57,7 @@ func (coordinator *Coordinator) Reactivate(
 
 	job.Head = pullRequest.Head
 	job.Forced = false
+
 	job.RefreshVerdict = false
 	if prior != nil && prior.Head == pullRequest.Head {
 		job.ThreadRootCommentID = prior.Job.ThreadRootCommentID
@@ -110,6 +111,7 @@ func (coordinator *Coordinator) Reevaluate(
 	}
 
 	key := coordinator.key(job)
+
 	response, err := coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "query", Key: key, ExpectedVersion: 0, Record: nil},

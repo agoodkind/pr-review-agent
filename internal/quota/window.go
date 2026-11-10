@@ -116,6 +116,7 @@ func (window Window) Bounds(now time.Time) (Bounds, error) {
 		}
 
 		next := schedule.Next(now)
+
 		previous, err := previousOccurrence(schedule, now)
 		if err != nil || next.IsZero() {
 			return Bounds{}, errors.New("cron schedule has no surrounding accounting interval")
@@ -130,6 +131,7 @@ func (window Window) Bounds(now time.Time) (Bounds, error) {
 	}
 
 	duration, _ := time.ParseDuration(window.Duration)
+
 	durationMS := duration.Milliseconds()
 	if window.Mode == Rolling {
 		return Bounds{
@@ -142,6 +144,7 @@ func (window Window) Bounds(now time.Time) (Bounds, error) {
 
 	anchor, _ := time.Parse(time.RFC3339Nano, window.Anchor)
 	difference := nowMS - anchor.UnixMilli()
+
 	interval := difference / durationMS
 	if difference < 0 && difference%durationMS != 0 {
 		interval--
@@ -174,6 +177,7 @@ func (window Window) cronSchedule() (cron.Schedule, error) {
 	}
 
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+
 	schedule, err := parser.Parse("CRON_TZ=" + window.Timezone + " " + window.Schedule)
 	if err != nil {
 		slog.Warn("invalid cron schedule", slog.String("err", err.Error()))
@@ -194,10 +198,12 @@ func previousOccurrence(schedule cron.Schedule, now time.Time) (time.Time, error
 	const maximumLookback = int64(8 * 366 * 24 * 60 * 60)
 	for distance := int64(60); distance <= maximumLookback; distance *= 2 {
 		lower := max(0, upper-distance)
+
 		next := schedule.Next(time.Unix(lower, 0))
 		if !next.IsZero() && !next.After(now) {
 			for upper-lower > 1 {
 				middle := lower + (upper-lower)/2
+
 				candidate := schedule.Next(time.Unix(middle, 0))
 				if !candidate.IsZero() && !candidate.After(now) {
 					lower = middle
@@ -312,10 +318,12 @@ func Evaluate(
 		}
 
 		snapshot.Used += tokens
+
 		selected = append(selected, event)
 	}
 
 	snapshot.Allowed = limit == 0 || snapshot.Used < limit
+
 	snapshot.Remaining = max(0, limit-snapshot.Used)
 	if snapshot.Allowed {
 		return snapshot, nil
@@ -336,6 +344,7 @@ func rollingAvailableAt(window Window, events []Event, types []TokenType, used, 
 		events,
 		func(left, right Event) int { return cmp.Compare(left.AdmittedAtMS, right.AdmittedAtMS) },
 	)
+
 	duration, _ := time.ParseDuration(window.Duration)
 
 	for _, event := range events {

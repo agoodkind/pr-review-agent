@@ -67,8 +67,10 @@ func (transport *probeTransport) RoundTrip(request *http.Request) (*http.Respons
 	if err != nil {
 		return response, err
 	}
+
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
+
 	transport.statuses[response.StatusCode]++
 	if response.StatusCode < http.StatusBadRequest {
 		return response, nil
@@ -88,6 +90,7 @@ func (transport *probeTransport) RoundTrip(request *http.Request) (*http.Respons
 			Truncated: len(prefix) > probeErrorBodyLimit,
 		},
 	)
+
 	return response, nil
 }
 
@@ -95,8 +98,11 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	config.Config,
 	error,
 ) {
-	var cfg config.Config
-	var selected json.RawMessage
+	var (
+		cfg      config.Config
+		selected json.RawMessage
+	)
+
 	for _, definition := range runtime.Providers {
 		var identity struct {
 			ID string `json:"id"`
@@ -104,24 +110,30 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 		if err := json.Unmarshal(definition, &identity); err != nil {
 			return cfg, errors.New("runtime provider definition is invalid")
 		}
+
 		if identity.ID == providerID {
 			if selected != nil {
 				return cfg, errors.New("runtime provider selection is duplicated")
 			}
+
 			selected = definition
 		}
 	}
+
 	if selected == nil {
 		return cfg, errors.New("provider ID does not match a configured provider")
 	}
+
 	definitions, err := json.Marshal([]json.RawMessage{selected})
 	if err != nil {
 		return cfg, err
 	}
+
 	priority, err := json.Marshal([]string{providerID})
 	if err != nil {
 		return cfg, err
 	}
+
 	providers, err := config.LoadProviders(func(name string) (string, bool) {
 		switch name {
 		case "PROVIDERS":
@@ -137,7 +149,9 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	if err != nil {
 		return cfg, err
 	}
+
 	cfg.Providers = providers
+
 	cfg.ProviderFailurePolicy, err = config.LoadProviderFailurePolicy(
 		func(name string) (string, bool) {
 			return string(runtime.FailurePolicy), name == "PROVIDER_FAILURE_POLICY"
@@ -146,13 +160,16 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	if err != nil {
 		return cfg, err
 	}
+
 	reviewLimitValues := make(map[string]string)
 	if runtime.Concurrency != nil {
 		reviewLimitValues["REVIEW_CHUNK_CONCURRENCY"] = *runtime.Concurrency
 	}
+
 	if runtime.PromptBytes != nil {
 		reviewLimitValues["REVIEW_MAX_PROMPT_BYTES"] = *runtime.PromptBytes
 	}
+
 	if err = config.LoadReviewLimits(
 		func(name string) (string, bool) {
 			value, configured := reviewLimitValues[name]
@@ -162,43 +179,53 @@ func probeConfig(runtime probeRuntime, providerID string, credential string, sig
 	); err != nil {
 		return cfg, err
 	}
+
 	cfg.ReviewPolicy, err = reviewrules.LoadPolicy(runtime.RulesFile, runtime.PromptsFile)
 	if err != nil {
 		return cfg, err
 	}
+
 	cfg.MinimumImportance, err = strconv.Atoi(runtime.Minimum)
 	if err != nil || cfg.MinimumImportance < reviewrules.MinimumImportance || cfg.MinimumImportance > reviewrules.MaximumImportance {
 		return cfg, errors.New("runtime REVIEW_MIN_IMPORTANCE must be an integer in 1..10")
 	}
+
 	if err = cfg.ReviewPolicy.Catalog().ValidateImportance(runtime.Importance); err != nil {
 		return cfg, err
 	}
+
 	cfg.RuleImportance = runtime.Importance
 	cfg.ReviewModelPricing = runtime.Pricing
+
 	cfg.ReviewChunkTimeout, err = time.ParseDuration(runtime.Timeout)
 	if err != nil || cfg.ReviewChunkTimeout <= 0 {
 		return cfg, errors.New("runtime REVIEW_CHUNK_TIMEOUT must be a positive duration")
 	}
+
 	if providers[0].HasTokenLimit() {
 		if signingKeyPath == "" {
 			return cfg, errors.New(
 				"capped provider probe requires --signing-key-file; configured limits are not bypassed",
 			)
 		}
+
 		cfg.ProviderBudgetURL, err = url.Parse(runtime.BudgetURL)
 		if err != nil || cfg.ProviderBudgetURL.Scheme != "https" || cfg.ProviderBudgetURL.Host == "" {
 			return cfg, errors.New("capped provider requires an HTTPS PROVIDER_BUDGET_URL")
 		}
+
 		cfg.GitHubWebhookSecret, err = cloudflareops.ReadCredential(signingKeyPath)
 		if err != nil {
 			return cfg, err
 		}
 	}
+
 	return cfg, nil
 }
 
 func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
 	var providerID, credentialPath, runtimePath, promptPath, directoryPath, signingKeyPath string
+
 	set := flag.NewFlagSet("probe", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&providerID, "provider", "", "Exact provider ID in the runtime configuration.")
@@ -227,21 +254,26 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 		"",
 		"Production budget signing key; required for capped providers.",
 	)
+
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+
 		return err
 	}
+
 	if set.NArg() != 0 || providerID == "" || credentialPath == "" {
 		return errors.New(
 			"probe requires --provider and --credential-file with no positional arguments",
 		)
 	}
+
 	directory, err := cloudflareops.PrivateDirectory(directoryPath)
 	if err != nil {
 		return err
 	}
+
 	logFile, err := os.OpenFile(
 		filepath.Join(directory, "logs.ndjson"),
 		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
@@ -250,28 +282,36 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	if err != nil {
 		return err
 	}
+
 	defer func() { _ = logFile.Close() }()
+
 	logger := slog.New(slog.NewJSONHandler(logFile, nil))
 	ctx = gklog.WithLogger(ctx, logger)
+
 	runtime, err := ReadProbeRuntime(runtimePath)
 	if err != nil {
 		logger.WarnContext(ctx, "Public runtime configuration read failed", "path", runtimePath)
 		return fmt.Errorf("read public runtime configuration: %w", err)
 	}
+
 	credential, err := cloudflareops.ReadCredential(credentialPath)
 	if err != nil {
 		return err
 	}
+
 	cfg, err := probeConfig(runtime, providerID, string(credential), signingKeyPath)
 	if err != nil {
 		return err
 	}
+
 	prompt := ""
+
 	if promptPath != "" {
 		data, err := os.ReadFile(promptPath)
 		if err != nil {
 			return fmt.Errorf("read prompt file: %w", err)
 		}
+
 		prompt = string(data)
 	} else {
 		prompt, err = cfg.ReviewPolicy.Render("probe.user", reviewrules.PromptData{})
@@ -279,20 +319,25 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 			return err
 		}
 	}
+
 	if strings.TrimSpace(prompt) == "" || len(prompt) > cfg.PromptBytes() {
 		return errors.New(
 			"probe prompt must be nonempty and within the configured maximum prompt size",
 		)
 	}
+
 	ctx, recorder := review.WithUsageRecorder(ctx)
 	transport := &probeTransport{base: http.DefaultTransport, statuses: make(map[int]int)}
 	client := openai.NewClient(cfg, &http.Client{Transport: transport})
+
 	ctx, cancel := modelrequest.WithTimeout(ctx, client, cfg.ReviewChunkTimeout)
 	defer cancel()
+
 	completion, reviewErr := client.Review(ctx, prompt)
 	if reviewErr == nil && len(completion.InspectionRequests) > 0 {
 		reviewErr = errors.New("the review requires supporting evidence from the review service")
 	}
+
 	result := struct {
 		Provider        string                 `json:"provider"`
 		ConfiguredModel string                 `json:"configured_model"`
@@ -314,11 +359,14 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	if reviewErr != nil {
 		result.Error = reviewErr.Error()
 	}
+
 	resultJSON, resultErr := json.Marshal(result)
+
 	errorJSON, errorErr := json.Marshal(transport.errors)
 	if err = errors.Join(resultErr, errorErr); err != nil {
 		return errors.New("probe diagnostic encoding failed")
 	}
+
 	err = errors.Join(
 		cloudflareops.WriteJSON(
 			filepath.Join(directory, "result.json"),
@@ -333,6 +381,7 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	if err != nil {
 		return errors.New("probe diagnostic capture failed")
 	}
+
 	if _, err = fmt.Fprintf(
 		stdout,
 		"Provider: %s. Model: %s. Review succeeded: %t. HTTP status counts: %v.\nPrivate diagnostics: %s\n",
@@ -344,11 +393,13 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	); err != nil {
 		return err
 	}
+
 	if reviewErr != nil {
 		return errors.New(
 			"provider probe failed; the diagnostic directory contains the response details",
 		)
 	}
+
 	return nil
 }
 
@@ -357,14 +408,17 @@ func ReadProbeRuntime(path string) (probeRuntime, error) {
 	if err != nil {
 		return probeRuntime{}, err
 	}
+
 	var runtime probeRuntime
 	if err = json.Unmarshal(data, &runtime); err != nil {
 		return runtime, errors.New("runtime configuration is invalid")
 	}
+
 	for _, reference := range []*string{&runtime.RulesFile, &runtime.PromptsFile} {
 		if *reference != "" && !filepath.IsAbs(*reference) {
 			*reference = filepath.Join(filepath.Dir(path), *reference)
 		}
 	}
+
 	return runtime, nil
 }

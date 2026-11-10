@@ -31,6 +31,7 @@ func (service *Service) boundMetadataChunks(
 			Metadata:           input.Metadata,
 			Chunks:             bounded,
 		}
+
 		context, err := reviewContext(
 			input.PullRequest,
 			nil,

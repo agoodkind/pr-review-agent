@@ -150,11 +150,13 @@ func (application *App) Start(ctx context.Context) {
 				)
 			}
 		}()
+
 		application.logger.InfoContext(
 			runCtx,
 			"http server listening",
 			slog.String("addr", application.server.Addr),
 		)
+
 		err := application.server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			application.logger.ErrorContext(
@@ -169,6 +171,7 @@ func (application *App) Start(ctx context.Context) {
 // Shutdown stops HTTP admission and drains accepted review jobs.
 func (application *App) Shutdown(ctx context.Context) error {
 	var shutdownErr error
+
 	if application.server != nil {
 		if err := application.server.Shutdown(ctx); err != nil {
 			shutdownErr = fmt.Errorf("shutdown http server: %w", err)

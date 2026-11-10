@@ -53,6 +53,7 @@ func (attributes *repositoryAttributes) forChange(
 	recovery *patchRecovery,
 ) (map[string]string, error) {
 	revision := recovery.pr.Head
+
 	filePath := changed.Path
 	if changed.Status == "removed" {
 		if err := recovery.resolveBase(ctx); err != nil {
@@ -69,6 +70,7 @@ func (attributes *repositoryAttributes) forChange(
 		}
 
 		revision = recovery.base
+
 		if changed.PreviousPath != "" {
 			filePath = changed.PreviousPath
 		}
@@ -99,8 +101,11 @@ func (attributes *repositoryAttributes) stack(
 		return stack, nil
 	}
 
-	var stack []gitattributes.MatchAttribute
-	var domainPath []string
+	var (
+		stack      []gitattributes.MatchAttribute
+		domainPath []string
+	)
+
 	if directory != "." {
 		parent, err := attributes.stack(ctx, path.Dir(directory), revision)
 		if err != nil {
@@ -112,9 +117,11 @@ func (attributes *repositoryAttributes) stack(
 	}
 
 	attributePath := path.Join(directory, ".gitattributes")
+
 	content, exists := attributes.contents[location]
 	if !exists {
 		var err error
+
 		content, err = attributes.source.GetFile(
 			ctx,
 			attributes.ref.InstallationID,

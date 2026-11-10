@@ -56,6 +56,7 @@ func TestInlineVerdictIgnoresThreadsWithoutAnActionableBotFinding(t *testing.T) 
 			func(t *testing.T) {
 				thread := botThreadAt("existing-thread", 5, false)
 				test.alter(&thread)
+
 				fixture := newServiceFixture(
 					t,
 					serviceFixtureOptions{
@@ -80,6 +81,7 @@ func TestInlineVerdictIgnoresThreadsWithoutAnActionableBotFinding(t *testing.T) 
 
 func TestInlineVerdictSummaryFallbackStillBlocksForExistingActionableThread(t *testing.T) {
 	thread := botThreadAt("existing-actionable-thread", 5, false)
+
 	fixture := newServiceFixture(
 		t,
 		serviceFixtureOptions{
@@ -160,6 +162,7 @@ func TestInlineVerdictRechecksThreadsAfterFinalReport(t *testing.T) {
 		t,
 		serviceFixtureOptions{model: model, reconcileThreads: []githubapp.ReviewThread{thread}},
 	)
+
 	model.state = fixture.state
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run succeeded after the last actionable thread disappeared before publication")
@@ -196,6 +199,7 @@ func TestInlineVerdictFallbackUpdatesOnlyTheSummaryOnRepeatedRefresh(t *testing.
 						createCommentStatus: http.StatusUnprocessableEntity,
 					},
 				)
+
 				if priorState != "" {
 					decision := domain.ReviewDecisionApprove
 					if priorState == "CHANGES_REQUESTED" {
@@ -224,6 +228,7 @@ func TestInlineVerdictFallbackUpdatesOnlyTheSummaryOnRepeatedRefresh(t *testing.
 					"refresh-fallback-again",
 				} {
 					job := fixture.job()
+
 					job.DeliveryID = delivery
 					if err := fixture.run(context.Background(), job); err != nil {
 						t.Fatalf("Run %s: %v", delivery, err)

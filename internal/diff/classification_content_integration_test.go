@@ -40,6 +40,7 @@ func TestCollectorPreservesRemovedSourceForClassification(t *testing.T) {
 	largeGitCommit(t, directory, "Remove generated source and update its consumer")
 	head := domain.HeadSHA(strings.TrimSpace(largeGitCommand(t, directory, "rev-parse", "HEAD")))
 	source := &repositorySource{directory: directory, base: base, head: head, patchMode: "complete"}
+
 	input, err := diff.NewCollector(source).Collect(
 		t.Context(),
 		recoveryRef(head),

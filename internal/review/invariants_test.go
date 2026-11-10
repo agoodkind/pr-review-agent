@@ -97,6 +97,7 @@ func (sixChunkCollector) CollectRange(
 // can answer per chunk and a test can count what actually reached the model.
 func promptFilePath(prompt string) string {
 	const field = "File: "
+
 	start := strings.Index(prompt, field)
 	if start < 0 {
 		return ""
@@ -140,6 +141,7 @@ func chunkAnswer(path string) review.Completion {
 // than silently weakening them.
 func requireMultipleWaves(t *testing.T) {
 	t.Helper()
+
 	if invariantChunkCount <= config.MaximumChunkConcurrency {
 		t.Fatalf(
 			"delta of %d chunks fits one wave of %d: these tests need more than one wave",
@@ -182,12 +184,14 @@ func (model *killableModel) Review(ctx context.Context, prompt string) (review.C
 func (model *killableModel) release() {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	model.released = true
 }
 
 func (model *killableModel) timesAsked(path string) int {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	count := 0
 
 	for _, seen := range model.seen {
@@ -272,6 +276,7 @@ func postedPaths(fixture *serviceFixture) []string {
 // exactly once, none duplicated and none missing.
 func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 	requireMultipleWaves(t)
+
 	const heldPath = "file3.go"
 
 	model := &killableModel{holdPath: heldPath}
@@ -285,6 +290,7 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 	)
 
 	ctx, kill := context.WithCancel(context.Background())
+
 	killed := make(chan error, 1)
 	go func() {
 		killed <- fixture.run(ctx, fixture.job())
@@ -292,6 +298,7 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 
 	awaitCompletedChunks(t, fixture, invariantChunkCount-1)
 	kill()
+
 	if err := <-killed; err == nil {
 		t.Fatal("Run: want the killed run to report that it stopped")
 	}
@@ -324,6 +331,7 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 
 	// The next invocation finds the surviving state and finishes the work.
 	model.release()
+
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run after the kill: %v", err)
 	}
@@ -332,6 +340,7 @@ func TestKillingTheProcessLosesOnlyTheChunksInFlight(t *testing.T) {
 	// to the model would mean the death cost more than the one chunk in flight.
 	for index := range invariantChunkCount {
 		path := "file" + string(rune('0'+index)) + ".go"
+
 		want := 1
 		if path == heldPath {
 			want = 2
@@ -419,6 +428,7 @@ func (model *budgetProbeModel) Review(
 func (model *budgetProbeModel) shortestBudget() (time.Duration, int, int) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	shortest := time.Duration(0)
 
 	for index, budget := range model.budgets {
@@ -439,6 +449,7 @@ func (model *budgetProbeModel) shortestBudget() (time.Duration, int, int) {
 // through and throw away what was already read.
 func TestAnAdmittedDeltaCompletesInOneInvocation(t *testing.T) {
 	requireMultipleWaves(t)
+
 	const firstWaveWork = 500 * time.Millisecond
 
 	model := &budgetProbeModel{firstWait: firstWaveWork}
@@ -528,6 +539,7 @@ func (sink *syncBuffer) String() string {
 // test can prove one string reaches it rather than one string beside another.
 func runIdentifiersIn(text string) []string {
 	const field = "delivery_id="
+
 	found := make([]string, 0)
 	rest := text
 
@@ -538,6 +550,7 @@ func runIdentifiersIn(text string) []string {
 		}
 
 		rest = rest[start+len(field):]
+
 		end := strings.IndexAny(rest, " \n")
 		if end < 0 {
 			return append(found, rest)
@@ -652,6 +665,7 @@ func TestARunWhoseHeadMovedUnderItSubmitsNoVerdict(t *testing.T) {
 // no other, so a reader who filters on it gets this run and only this run.
 func assertOnlyRunIdentifier(t *testing.T, surface string, text string, want string) {
 	t.Helper()
+
 	found := runIdentifiersIn(text)
 	if len(found) == 0 {
 		t.Fatalf("%s names no run identifier:\n%s", surface, text)

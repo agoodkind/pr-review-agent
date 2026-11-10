@@ -81,6 +81,7 @@ func (recorder *Recorder) Handle(_ context.Context, record slog.Record) error {
 
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	captured := *recorder.entries
 	if len(captured) >= MaximumRecords {
 		captured = captured[1:]
@@ -123,6 +124,7 @@ func (recorder *Recorder) Entries() []Entry {
 
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	captured := *recorder.entries
 	copied := make([]Entry, len(captured))
 	copy(copied, captured)
@@ -244,6 +246,7 @@ func (recorder *Recorder) Render() string {
 
 func formatEntry(entry Entry) string {
 	stamp := entry.Time.UTC().Format("15:04:05.000")
+
 	line := fmt.Sprintf("%s %-5s %s", stamp, entry.Level.String(), entry.Message)
 	if len(entry.Fields) == 0 {
 		return line

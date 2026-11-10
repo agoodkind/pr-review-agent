@@ -21,7 +21,9 @@ func TestReviewBudgetPreservesRelationshipWorkOutsideTheContentCap(t *testing.T)
 		config.Config{ReviewPolicy: policy, MinimumImportance: 5, ReviewModel: "configured-model"},
 		nil,
 	)
+
 	var data reviewrules.PromptData
+
 	required, err := policy.Render("omissions.none", data)
 	if err != nil {
 		t.Fatal(err)
@@ -74,10 +76,12 @@ func TestReviewBudgetPreservesRelationshipWorkOutsideTheContentCap(t *testing.T)
 	}
 
 	const gapBytes = 4096
+
 	metadata := diff.PullRequestMetadata(
 		githubapp.PullRequest{Body: strings.Repeat("x", gapBytes+1)},
 		nil,
 	)
+
 	gap, err := diff.ChunkInput(diff.ReviewInput{Metadata: metadata}, gapBytes)
 	if err != nil || len(gap) != 1 || gap[0].CoverageComplete {
 		t.Fatalf("The actual oversized prose did not produce an explicit scope gap: %v", err)
@@ -109,9 +113,11 @@ func TestReviewBudgetPreservesRelationshipWorkOutsideTheContentCap(t *testing.T)
 }
 
 func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequests(t *testing.T) {
-	const generatedHunks = 5000
-	const sourceFiles = 30
-	const changedLiteralBytes = 65536
+	const (
+		generatedHunks      = 5000
+		sourceFiles         = 30
+		changedLiteralBytes = 65536
+	)
 
 	var before, after strings.Builder
 	for _, destination := range []*strings.Builder{&before, &after} {
@@ -124,6 +130,7 @@ func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequest
 	}
 
 	generated := classificationGitFile(t, "generated.go", before.String(), after.String())
+
 	hunks := strings.Count(generated.Patch, "@@ -")
 	if hunks != generatedHunks {
 		t.Fatalf(
@@ -153,6 +160,7 @@ func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequest
 
 	policy := policytest.Load(t)
 	input := diff.ReviewInput{Files: files}
+
 	decisions, unresolved, err := review.PlanFileAssessments(input, policy)
 	if err != nil || len(unresolved) != 0 {
 		t.Fatalf(
@@ -176,12 +184,14 @@ func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequest
 		config.Config{ReviewPolicy: policy, MinimumImportance: 5, ReviewModel: "configured-model"},
 		nil,
 	)
+
 	overhead, err := model.ReviewRequestBytes("")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	seedMaximum := overhead + 16*changedLiteralBytes
+
 	seed, err := diff.ChunkInput(diff.ReviewInput{Files: planned.Files[:1]}, seedMaximum)
 	if err != nil || len(seed) != 1 {
 		t.Fatalf("The source sizing sample did not produce one complete chunk: %v", err)
@@ -198,6 +208,7 @@ func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequest
 	}
 
 	maximumBytes := seedBytes + 1024
+
 	chunks, err := diff.ChunkInput(planned, maximumBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -232,6 +243,7 @@ func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequest
 	}
 
 	metadata := diff.PullRequestMetadata(githubapp.PullRequest{Title: "Review source changes"}, nil)
+
 	metadataChunks, err := diff.ChunkInput(diff.ReviewInput{Metadata: metadata}, maximumBytes)
 	if err != nil {
 		t.Fatal(err)

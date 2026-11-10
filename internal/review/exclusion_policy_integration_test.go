@@ -17,8 +17,11 @@ import (
 )
 
 func TestDisallowedExclusionPreservesRequiredSourceThroughReview(t *testing.T) {
-	const before = "net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\nnet.ipv6.conf.vmbr1.disable_ipv6=0\n"
-	const after = "net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\nnet.ipv6.conf.uplink.disable_ipv6=0\n"
+	const (
+		before = "net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\nnet.ipv6.conf.vmbr1.disable_ipv6=0\n"
+		after  = "net.ipv4.ip_forward=1\nnet.ipv6.conf.all.forwarding=1\nnet.ipv6.conf.uplink.disable_ipv6=0\n"
+	)
+
 	policy := policytest.Load(t)
 	file := classificationGitFile(t, "network/forwarding.conf", before, after)
 	input := diff.ReviewInput{Files: []diff.FileContext{file}}
@@ -31,6 +34,7 @@ func TestDisallowedExclusionPreservesRequiredSourceThroughReview(t *testing.T) {
 		reviewrules.ContentSource,
 	)
 	assessment.Reason = "The complete file content is visible in the supplied excerpt, so further inspection is unnecessary."
+
 	planned, decisions, err := review.PlanFileContentReview(
 		input,
 		[]domain.FileAssessment{assessment},
@@ -49,12 +53,14 @@ func TestDisallowedExclusionPreservesRequiredSourceThroughReview(t *testing.T) {
 	}
 
 	assertPlannedChangedRows(t, planned, file)
+
 	chunks, err := diff.ChunkInput(planned, config.MaximumPromptBytes)
 	if err != nil || len(chunks) != 1 {
 		t.Fatalf("The readable configuration must produce one complete review chunk: %v", err)
 	}
 
 	client := stageBudgetClient(policy)
+
 	prompt, err := review.BuildModelReviewPrompt(
 		client,
 		chunks[0],
@@ -80,6 +86,7 @@ func TestDisallowedExclusionPreservesRequiredSourceThroughReview(t *testing.T) {
 	}
 
 	decisions[0].Reviewed = true
+
 	body := review.RenderBody(review.Summary{
 		Decision:                   domain.ReviewDecisionApprove,
 		CoverageComplete:           true,
@@ -112,6 +119,7 @@ func TestDisallowedExclusionCannotHideSuppliedAssessmentEvidence(t *testing.T) {
 		reviewrules.ContentSource,
 	)
 	client := stageBudgetClient(policy)
+
 	prompt, err := review.BuildFileAssessmentPrompt(
 		client,
 		githubapp.PullRequest{},
@@ -157,6 +165,7 @@ func TestConfiguredExclusionPermissionsControlPlanningAndEvidence(t *testing.T) 
 					domain.FileActionExclude,
 					reviewrules.ContentSource,
 				)
+
 				planned, decisions, err := review.PlanFileContentReview(
 					diff.ReviewInput{Files: []diff.FileContext{file}},
 					[]domain.FileAssessment{assessment},
@@ -191,6 +200,7 @@ func TestConfiguredExclusionPermissionsControlPlanningAndEvidence(t *testing.T) 
 
 func exclusionPolicy(t *testing.T, allowSource bool) reviewrules.Policy {
 	t.Helper()
+
 	content, err := os.ReadFile(filepath.Join("..", "..", "config", "review-prompts.json"))
 	if err != nil {
 		t.Fatal(err)

@@ -206,11 +206,13 @@ func (writer *inspectionHTMLWriter) writeText(text string) {
 
 	first, _ := utf8.DecodeRuneInString(text)
 	last, _ := utf8.DecodeLastRuneInString(text)
+
 	if unicode.IsSpace(first) {
 		writer.output.WriteByte(' ')
 	}
 
 	writer.output.WriteString(strings.Join(strings.Fields(text), " "))
+
 	if unicode.IsSpace(last) {
 		writer.output.WriteByte(' ')
 	}

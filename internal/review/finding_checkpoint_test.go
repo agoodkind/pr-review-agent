@@ -11,14 +11,17 @@ import (
 
 func TestMetadataCheckpointRejectsInvalidFindingProvenance(t *testing.T) {
 	summary := findingDetailsSummary()
+
 	body := review.RenderBody(summary)
 	if !review.MetadataMatches(body, summary.Head, summary.MetadataRevision) {
 		t.Fatal("The legacy metadata checkpoint must remain readable.")
 	}
 
 	const prefix = "<!-- pr-review-agent:metadata:v1 "
+
 	_, remaining, _ := strings.Cut(body, prefix)
 	payload, _, _ := strings.Cut(remaining, " -->")
+
 	decoded, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +45,7 @@ func TestMetadataCheckpointRejectsInvalidFindingProvenance(t *testing.T) {
 		}
 
 		record["checkpoint"] = checkpoint
+
 		encoded, err := json.Marshal(record)
 		if err != nil {
 			t.Fatal(err)

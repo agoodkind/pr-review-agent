@@ -85,7 +85,9 @@ func (client *Client) registryRequest(
 	mutation registryMutation,
 ) (registryResponse, error) {
 	var result registryResponse
+
 	logger := gklog.L(ctx)
+
 	body, err := json.Marshal(mutation)
 	if err != nil {
 		logger.WarnContext(ctx, "encode target registry request", slog.String("err", err.Error()))
@@ -94,6 +96,7 @@ func (client *Client) registryRequest(
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -107,6 +110,7 @@ func (client *Client) registryRequest(
 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(SignatureHeader, telemetry.Sign(client.SigningKey, body))
+
 	response, err := client.HTTP.Do(request)
 	if err != nil {
 		logger.WarnContext(ctx, "read target registry", slog.String("err", err.Error()))
@@ -122,6 +126,7 @@ func (client *Client) registryRequest(
 			)
 		}
 	}()
+
 	if response.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("target registry returned HTTP %d", response.StatusCode)
 	}
@@ -154,6 +159,7 @@ func (client *Client) registryRequest(
 // NewTarget schedules independent reconciliation without replacing private outcomes.
 func (coordinator *Coordinator) NewTarget(job domain.ReviewJob, now time.Time) Target {
 	var target Target
+
 	target.Key = coordinator.key(job)
 	target.Job = job
 	interval, _ := time.ParseDuration(coordinator.Settings.ReconcileInterval)
@@ -178,13 +184,16 @@ func (coordinator *Coordinator) recordPrivateOutcome(
 	prior *Record,
 ) error {
 	key := coordinator.key(job)
+
 	target, err := coordinator.Store.ReadTarget(ctx, key)
 	if err != nil {
 		return err
 	}
 
 	var updated Target
+
 	version := int64(0)
+
 	if target == nil {
 		updated = coordinator.NewTarget(job, coordinator.Clock())
 	} else {
@@ -199,6 +208,7 @@ func (coordinator *Coordinator) recordPrivateOutcome(
 	updated.PrivateObservedAtMS = coordinator.Clock().UnixMilli()
 	queueVersion := int64(0)
 	queueGeneration := ""
+
 	if prior != nil {
 		queueVersion = prior.Version
 		queueGeneration = prior.Generation

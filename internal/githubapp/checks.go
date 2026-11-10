@@ -27,6 +27,7 @@ func TruncateCheckRunText(text string) string {
 	}
 
 	budget := MaximumCheckRunTextBytes - len(checkRunTextTruncationNotice)
+
 	tail := text[len(text)-budget:]
 	if newline := strings.IndexByte(tail, '\n'); newline >= 0 && newline+1 < len(tail) {
 		tail = tail[newline+1:]
@@ -137,6 +138,7 @@ func (client *Client) listCheckRuns(
 	) + "?" + query.Encode()
 
 	runs := make([]CheckRun, 0)
+
 	err := client.doRESTPaginated(
 		ctx,
 		installationID,
@@ -278,6 +280,7 @@ func (client *Client) CreateCheckRun(
 		Status:     "queued",
 		ExternalID: externalID,
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		client.logger.ErrorContext(
@@ -312,6 +315,7 @@ func (client *Client) StartCheckRun(
 		DetailsURL: detailsURL,
 		Output:     nil,
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		client.logger.ErrorContext(
@@ -351,6 +355,7 @@ func (client *Client) CompleteCheckRun(
 			Text:    TruncateCheckRunText(text),
 		},
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		client.logger.ErrorContext(

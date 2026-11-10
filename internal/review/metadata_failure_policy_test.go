@@ -38,6 +38,7 @@ func TestMetadataReassessmentFailurePreservesTheStandingRejection(t *testing.T) 
 							currentDescription: func() string { return current },
 						},
 					)
+
 					job := fixture.job()
 					if err := fixture.run(t.Context(), job); err != nil {
 						t.Fatal(err)
@@ -50,6 +51,7 @@ func TestMetadataReassessmentFailurePreservesTheStandingRejection(t *testing.T) 
 					original := fixture.state.submittedReviews[0]
 					originalBody := original["body"]
 					body := failureSummaryComment(t, fixture)
+
 					state, valid := marker.DecodeState(body)
 					if !valid {
 						t.Fatal("The original review must preserve durable source coverage.")
@@ -68,6 +70,7 @@ func TestMetadataReassessmentFailurePreservesTheStandingRejection(t *testing.T) 
 						domain.ResolutionResolved,
 						"Text absent from the current description",
 					)
+
 					switch failure {
 					case "ungrounded evidence":
 						model.metadataAssessments = [][]domain.MetadataFindingAssessment{decision}
@@ -79,6 +82,7 @@ func TestMetadataReassessmentFailurePreservesTheStandingRejection(t *testing.T) 
 
 					job.DeliveryID = "cosmetic-metadata-reassessment-failure"
 					job.MetadataOnly = metadataOnly
+
 					job.AutomaticReassessment = true
 					if err := fixture.run(t.Context(), job); err == nil {
 						t.Fatal("The invalid reassessment must fail its check.")
@@ -121,6 +125,7 @@ func TestAnEmptyMetadataCheckpointMustProveResolutionBeforeFailureDismissal(t *t
 					model,
 					contentCollectionOptions{onlyMetadata: true, description: finding.Evidence},
 				)
+
 				job := fixture.job()
 				if err := fixture.run(t.Context(), job); err != nil {
 					t.Fatal(err)
@@ -128,7 +133,9 @@ func TestAnEmptyMetadataCheckpointMustProveResolutionBeforeFailureDismissal(t *t
 
 				original := fixture.state.submittedReviews[0]
 				originalBody := original["body"]
+
 				seedMetadataReassessment(t, fixture, nil, scenario == "stale revision")
+
 				if scenario == "incomplete assessment" {
 					current, err := fixture.github.GetPullRequest(
 						t.Context(),
@@ -155,6 +162,7 @@ func TestAnEmptyMetadataCheckpointMustProveResolutionBeforeFailureDismissal(t *t
 				}
 
 				job.MetadataOnly = true
+
 				job.DeliveryID = "empty-checkpoint-failed-reassessment"
 				if err := fixture.run(t.Context(), job); err == nil {
 					t.Fatal("The operational failure must fail its check.")

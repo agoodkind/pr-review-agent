@@ -23,8 +23,10 @@ func (service *Service) concludeIncomplete(
 	progress *reviewProgress,
 ) error {
 	service.enrichProviderPeriodUsage(ctx, &summary)
+
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
+
 	logger := gklog.L(ctx)
 	pending := len(state.Pending)
 	unread := pass.unreadChunks()
@@ -40,7 +42,9 @@ func (service *Service) concludeIncomplete(
 	cause := joinedChunkFailures(ctx, unread)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
 	detail := service.terminalFailureDetail(ctx, job, cause)
+
 	addAttemptedModels(&summary, statuses)
+
 	if _, err := persistAssessment(ctx, checkRun.ID); err != nil {
 		return err
 	}
@@ -88,6 +92,7 @@ func (service *Service) concludeIncomplete(
 		slog.Int("pending", pending),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
+
 	if dismissErr != nil {
 		logger.WarnContext(
 			ctx,

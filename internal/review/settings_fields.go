@@ -15,6 +15,7 @@ func (service *Service) carriedSettingFields(job domain.ReviewJob) []string {
 		MaxPromptBytes:    0,
 	}
 	empty := service.settingsFor(unsettled)
+
 	resolved := service.settingsFor(job)
 	if resolved.approveEachCommit != empty.approveEachCommit {
 		carried = append(carried, "approve_each_commit")

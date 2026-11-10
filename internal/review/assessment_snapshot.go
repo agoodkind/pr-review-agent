@@ -26,6 +26,7 @@ type assessmentSnapshot struct {
 
 func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	metadata, recorded, err := decodeMetadataRecord(body)
+
 	snapshot := assessmentSnapshot{
 		fileAssessments:   decodeFileAssessments(body),
 		metadata:          metadata,
@@ -66,7 +67,9 @@ func (service *Service) completedSummaryAssessment(
 	job domain.ReviewJob,
 ) (assessmentSnapshot, bool, error) {
 	logger := gklog.L(ctx)
+
 	var empty assessmentSnapshot
+
 	comments, err := service.github.ListIssueComments(
 		ctx,
 		job.InstallationID,
@@ -84,6 +87,7 @@ func (service *Service) completedSummaryAssessment(
 	}
 
 	comment, found := findSummaryComment(comments, service.botLogin)
+
 	head, marked := marker.FindReview(comment.Body)
 	if !found || !marked || head != job.Head {
 		return empty, false, nil
@@ -93,6 +97,7 @@ func (service *Service) completedSummaryAssessment(
 	completed := hasState &&
 		(state.Status == marker.StateDone || state.Status == marker.StateFailed) &&
 		completedHeadState(state, job.Head)
+
 	snapshot := parseAssessmentSnapshot(comment.Body)
 	if !completed && !snapshot.approvalWithheld {
 		return empty, false, nil

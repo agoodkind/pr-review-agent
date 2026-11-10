@@ -55,6 +55,7 @@ func (client *Client) attemptCompletion(
 			err = errors.Join(err, timeoutErr)
 		}
 	}()
+
 	budget, err = client.checkBudget(attemptCtx, target)
 	if err != nil {
 		return "", "", budget, err
@@ -63,6 +64,7 @@ func (client *Client) attemptCompletion(
 	report := func(usage responses.ResponseUsage, serviceTier string, sdkUsage *quota.SDKUsage) {
 		client.reportBudget(attemptCtx, target, budget, usage, serviceTier, sdkUsage)
 	}
+
 	switch target.api {
 	case config.GeminiAPI:
 		content, model, err = completeGemini(

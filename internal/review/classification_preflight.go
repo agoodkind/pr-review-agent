@@ -17,8 +17,10 @@ func PlanFileAssessments(
 	input diff.ReviewInput,
 	policy reviewrules.Policy,
 ) ([]domain.FileAssessment, []diff.FileContext, error) {
-	var decisions []domain.FileAssessment
-	var unresolved []diff.FileContext
+	var (
+		decisions  []domain.FileAssessment
+		unresolved []diff.FileContext
+	)
 
 	for _, file := range input.Files {
 		kind, reason, excluded := deterministicExclusion(file, policy)
@@ -29,8 +31,12 @@ func PlanFileAssessments(
 			}
 
 			kind = reviewrules.ContentSource
-			var data reviewrules.PromptData
-			var err error
+
+			var (
+				data reviewrules.PromptData
+				err  error
+			)
+
 			reason, err = renderPrompt(policy, "classification.required", data)
 			if err != nil {
 				return nil, nil, err
@@ -62,6 +68,7 @@ func PlanFileAssessments(
 
 func clearReviewableContent(file diff.FileContext, policy reviewrules.Policy) bool {
 	settings := policy.FileClassification()
+
 	content := file.ClassificationContent()
 	if file.Gap != diff.CoverageGapNone || !utf8.ValidString(content) ||
 		enry.IsBinary([]byte(content)) {
@@ -109,6 +116,7 @@ func deterministicExclusion(
 		}
 
 		matched := false
+
 		switch detector.Detector {
 		case reviewrules.DetectorGenerated:
 			matched = enry.IsGenerated(file.Path, []byte(content))
