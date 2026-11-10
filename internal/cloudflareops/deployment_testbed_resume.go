@@ -38,18 +38,29 @@ func (receipt testHandoffResumeReceipt) MarshalJSON() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode handoff resume receipt: %w", err)
 	}
+
 	return data, nil
 }
 
-func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, options DeploymentOptions) (DeploymentResult, error) {
-	settings, _, err := operation.client.workerSettings(ctx, operation.account, operation.name, false)
+func (operation *deployment) deployWithInterruptedHandoff(
+	ctx context.Context,
+	options DeploymentOptions,
+) (DeploymentResult, error) {
+	settings, _, err := operation.client.workerSettings(
+		ctx,
+		operation.account,
+		operation.name,
+		false,
+	)
 	if err != nil {
 		return DeploymentResult{}, err
 	}
+
 	selection, err := settings.selection(operation.configuration)
 	if err != nil {
 		return DeploymentResult{}, err
 	}
+
 	candidate := inactiveSlot(operation.configuration, selection)
 	interrupted, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -59,7 +70,10 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 			if recovered := recover(); recovered != nil {
 				err := errors.New("persisted handoff observer panicked")
 				slog.ErrorContext(interrupted, "Persisted handoff observer panicked", "err", err)
-				observations <- testHandoffObservation{handoff: deploymentHandoff{Enabled: false, Revision: "", Service: ""}, err: err}
+				observations <- testHandoffObservation{
+					handoff: deploymentHandoff{Enabled: false, Revision: "", Service: ""},
+					err:     err,
+				}
 				cancel()
 			}
 		}()
@@ -73,130 +87,209 @@ func (operation *deployment) deployWithInterruptedHandoff(ctx context.Context, o
 	if observation.err != nil {
 		return result, errors.Join(deploymentErr, observation.err)
 	}
+
 	if deploymentErr == nil || !errors.Is(interrupted.Err(), context.Canceled) || result.Promoted {
 		return result, errors.New("test deployment did not stop after its persisted handoff")
 	}
-	if observation.handoff.Revision != options.Revision || observation.handoff.Service != candidate.Name {
-		return result, errors.New("interrupted test handoff did not retain the expected candidate and revision")
+
+	if observation.handoff.Revision != options.Revision ||
+		observation.handoff.Service != candidate.Name {
+		return result, errors.New(
+			"interrupted test handoff did not retain the expected candidate and revision",
+		)
 	}
+
 	_, before, err := operation.testWorkerVersionNamed(ctx, observation.handoff.Service)
 	if err != nil {
 		return result, err
 	}
-	configurationPath, readiness, err := prepareUnavailableTestResumeOrigin(ctx, operation, observation.handoff.Service, observation.handoff.Revision)
+
+	configurationPath, readiness, err := prepareUnavailableTestResumeOrigin(
+		ctx,
+		operation,
+		observation.handoff.Service,
+		observation.handoff.Revision,
+	)
 	if err != nil {
 		return result, err
 	}
-	settings, _, err = operation.client.workerSettings(ctx, operation.account, operation.name, false)
+
+	settings, _, err = operation.client.workerSettings(
+		ctx,
+		operation.account,
+		operation.name,
+		false,
+	)
 	if err != nil {
 		return result, err
 	}
+
 	retained, err := settings.handoff(operation.configuration)
 	if err != nil {
 		return result, err
 	}
+
 	if retained != observation.handoff {
-		return result, errors.New("saved candidate service binding or revision changed before handoff resume")
+		return result, errors.New(
+			"saved candidate service binding or revision changed before handoff resume",
+		)
 	}
+
 	receipt := readiness
 	receipt.Candidate, receipt.Revision, receipt.VersionBefore, receipt.Interrupted = observation.handoff.Service, observation.handoff.Revision, before, true
-	if err := WriteJSON(filepath.Join(operation.directory, "handoff-resume-readiness.json"), receipt); err != nil {
+	if err := WriteJSON(
+		filepath.Join(operation.directory, "handoff-resume-readiness.json"),
+		receipt,
+	); err != nil {
 		return result, err
 	}
+
 	options.Directory += "-resumed"
 	options.Configuration = configurationPath
 	result, err = Deploy(ctx, options)
 	if err != nil {
 		return result, err
 	}
+
 	_, after, err := operation.testWorkerVersionNamed(ctx, observation.handoff.Service)
 	if err != nil {
 		return result, err
 	}
-	if before != after || !result.Promoted || result.PendingHandoffRevision != observation.handoff.Revision {
-		return result, errors.New("resumed deployment replaced its candidate or did not finish its recorded handoff")
+
+	if before != after || !result.Promoted ||
+		result.PendingHandoffRevision != observation.handoff.Revision {
+		return result, errors.New(
+			"resumed deployment replaced its candidate or did not finish its recorded handoff",
+		)
 	}
+
 	receipt.VersionAfter, receipt.ResumedPromoted = after, result.Promoted
+
 	return result, WriteJSON(filepath.Join(operation.directory, "handoff-resume.json"), receipt)
 }
 
-func prepareUnavailableTestResumeOrigin(ctx context.Context, operation *deployment, candidate, revision string) (string, testHandoffResumeReceipt, error) {
+func prepareUnavailableTestResumeOrigin(
+	ctx context.Context,
+	operation *deployment,
+	candidate string,
+	revision string,
+) (string, testHandoffResumeReceipt, error) {
 	var readiness testHandoffResumeReceipt
 	gateway, err := url.Parse(operation.configuration.GatewayOrigin)
 	if err != nil {
 		slog.WarnContext(ctx, "Isolated gateway origin parsing failed")
 		return "", readiness, fmt.Errorf("parse isolated gateway origin: %w", err)
 	}
+
 	domain := strings.TrimPrefix(gateway.Hostname(), operation.name+".")
 	readiness.UnavailableWorker = strings.TrimSuffix(operation.name, "-gateway") + "-unavailable"
 	readiness.ConfiguredUnavailableOrigin = "https://" + readiness.UnavailableWorker + "." + domain
-	_, exists, err := operation.client.workerSettings(ctx, operation.account, readiness.UnavailableWorker, true)
+	_, exists, err := operation.client.workerSettings(
+		ctx,
+		operation.account,
+		readiness.UnavailableWorker,
+		true,
+	)
 	if err != nil {
 		return "", readiness, err
 	}
+
 	readiness.UnavailableWorkerExists = exists
 	if exists {
-		return "", readiness, errors.New("unavailable test origin already has a Worker; refusing to use it")
+		return "", readiness, errors.New(
+			"unavailable test origin already has a Worker; refusing to use it",
+		)
 	}
+
 	if err := operation.waitTestGateway(ctx, revision); err != nil {
 		return "", readiness, err
 	}
-	readiness.GatewayRevisionBeforeResume, err = operation.probe(ctx, operation.configuration.GatewayOrigin, revision)
+
+	readiness.GatewayRevisionBeforeResume, err = operation.probe(
+		ctx,
+		operation.configuration.GatewayOrigin,
+		revision,
+	)
 	if err != nil {
 		return "", readiness, err
 	}
+
 	_, err = operation.probe(ctx, readiness.ConfiguredUnavailableOrigin, "")
 	var readinessError *readinessHTTPError
 	if err == nil {
-		return "", readiness, errors.New("unavailable test origin returned HTTP 200 instead of HTTP 404")
+		return "", readiness, errors.New(
+			"unavailable test origin returned HTTP 200 instead of HTTP 404",
+		)
 	}
+
 	if !errors.As(err, &readinessError) || readinessError.StatusCode != http.StatusNotFound {
 		slog.WarnContext(ctx, "Unavailable test origin did not return HTTP 404")
 		return "", readiness, fmt.Errorf("unavailable test origin must return HTTP 404: %w", err)
 	}
+
 	readiness.ConfiguredPublicStatus = readinessError.StatusCode
 	configuration := operation.configuration
 	configuration.Slots = append([]DeploymentSlot(nil), operation.configuration.Slots...)
 	found := false
+
 	for index, slot := range configuration.Slots {
 		if slot.Name == candidate {
 			configuration.Slots[index].Origin = readiness.ConfiguredUnavailableOrigin
 			found = true
 		}
 	}
+
 	if !found {
-		return "", readiness, errors.New("recorded handoff candidate does not match a configured test slot")
+		return "", readiness, errors.New(
+			"recorded handoff candidate does not match a configured test slot",
+		)
 	}
+
 	data, err := json.Marshal(configuration)
 	if err != nil {
 		slog.WarnContext(ctx, "Isolated resume configuration encoding failed")
 		return "", readiness, fmt.Errorf("encode isolated resume configuration: %w", err)
 	}
+
 	configurationPath := filepath.Join(operation.directory, "unavailable-origin-deployment.json")
 	if err := WriteJSON(configurationPath, json.RawMessage(data)); err != nil {
 		return "", readiness, err
 	}
+
 	return configurationPath, readiness, nil
 }
 
-func (operation *deployment) observePersistedTestHandoff(ctx context.Context) (deploymentHandoff, error) {
+func (operation *deployment) observePersistedTestHandoff(
+	ctx context.Context,
+) (deploymentHandoff, error) {
 	for {
-		settings, _, err := operation.client.workerSettings(ctx, operation.account, operation.name, false)
+		settings, _, err := operation.client.workerSettings(
+			ctx,
+			operation.account,
+			operation.name,
+			false,
+		)
 		if err != nil {
 			return deploymentHandoff{}, err
 		}
+
 		handoff, err := settings.handoff(operation.configuration)
 		if err != nil {
 			return deploymentHandoff{}, err
 		}
+
 		if handoff.Enabled {
 			return handoff, nil
 		}
+
 		timer := time.NewTimer(250 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return deploymentHandoff{}, errors.New("test controller did not observe a persisted handoff before deployment ended")
+
+			return deploymentHandoff{}, errors.New(
+				"test controller did not observe a persisted handoff before deployment ended",
+			)
 		case <-timer.C:
 		}
 	}

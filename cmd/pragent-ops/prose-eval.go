@@ -129,21 +129,37 @@ func proseEvaluationFlags(args []string, stderr io.Writer) (proseEvaluationOptio
 	var options proseEvaluationOptions
 	set := flag.NewFlagSet("prose-eval", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	set.StringVar(&options.dataset, "dataset", "", "Source-derived evaluation cases and expected findings.")
+	set.StringVar(
+		&options.dataset,
+		"dataset",
+		"",
+		"Source-derived evaluation cases and expected findings.",
+	)
 	set.StringVar(&options.provider, "provider", "", "Exact configured provider ID.")
 	set.StringVar(&options.credentialFile, "credential-file", "", "Private provider API key file.")
 	set.StringVar(&options.runtime, "runtime", "runtime.json", "Public runtime configuration.")
-	set.StringVar(&options.signingKeyFile, "signing-key-file", "", "Budget signing key file; required for capped providers.")
+	set.StringVar(
+		&options.signingKeyFile,
+		"signing-key-file",
+		"",
+		"Budget signing key file; required for capped providers.",
+	)
 	set.StringVar(&options.output, "output-dir", "", "New private result directory.")
-	set.Func("case", "Evaluate one exact case ID; repeat to select several cases.", func(id string) error {
-		options.caseIDs = append(options.caseIDs, id)
-		return nil
-	})
+	set.Func(
+		"case",
+		"Evaluate one exact case ID; repeat to select several cases.",
+		func(id string) error {
+			options.caseIDs = append(options.caseIDs, id)
+			return nil
+		},
+	)
 	if err := set.Parse(args); err != nil {
 		return options, err
 	}
 	if set.NArg() != 0 || options.dataset == "" || options.provider == "" || options.credentialFile == "" {
-		return options, errors.New("prose-eval requires --dataset, --provider, and --credential-file with no positional arguments")
+		return options, errors.New(
+			"prose-eval requires --dataset, --provider, and --credential-file with no positional arguments",
+		)
 	}
 	return options, nil
 }
@@ -160,7 +176,11 @@ func proseEval(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	if err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(filepath.Join(directory, "logs.ndjson"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	logFile, err := os.OpenFile(
+		filepath.Join(directory, "logs.ndjson"),
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
+		0600,
+	)
 	if err != nil {
 		return err
 	}
@@ -188,15 +208,27 @@ func proseEval(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return err
 	}
 	selected := cfg.Providers[0]
-	policyHeader, err := review.PolicyHeader(cfg.ReviewPolicy, cfg.MinimumImportance, cfg.RuleImportance)
+	policyHeader, err := review.PolicyHeader(
+		cfg.ReviewPolicy,
+		cfg.MinimumImportance,
+		cfg.RuleImportance,
+	)
 	if err != nil {
 		return err
 	}
 	result := proseEvaluationResult{
-		Provider: selected.ID, ConfiguredModel: selected.Model, ReasoningEffort: selected.ReasoningEffort,
-		DatasetSHA256: proseSHA256(datasetBytes), PolicySHA256: proseSHA256([]byte(policyHeader)),
+		Provider:           selected.ID,
+		ConfiguredModel:    selected.Model,
+		ReasoningEffort:    selected.ReasoningEffort,
+		DatasetSHA256:      proseSHA256(datasetBytes),
+		PolicySHA256:       proseSHA256([]byte(policyHeader)),
 		MaximumPromptBytes: cfg.PromptBytes(),
-		Cases:              nil, Detected: 0, Missed: 0, FalsePositives: 0, FailedCases: 0, UnsafeCorrections: 0,
+		Cases:              nil,
+		Detected:           0,
+		Missed:             0,
+		FalsePositives:     0,
+		FailedCases:        0,
+		UnsafeCorrections:  0,
 	}
 	for _, scenario := range dataset.Cases {
 		caseResult, caseErr := evaluateProseCase(ctx, cfg, scenario)
@@ -215,14 +247,28 @@ func proseEval(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 			return err
 		}
 		if ctx.Err() != nil {
-			return errors.New("evaluation interrupted; partial results are saved in the private output directory")
+			return errors.New(
+				"evaluation interrupted; partial results are saved in the private output directory",
+			)
 		}
 	}
-	if _, err = fmt.Fprintf(stdout, "Cases: %d. Detected: %d. Missed: %d. Unexpected findings: %d. Unsafe corrections: %d. Failed cases: %d.\nPrivate results: %s\n", len(result.Cases), result.Detected, result.Missed, result.FalsePositives, result.UnsafeCorrections, result.FailedCases, filepath.Join(directory, "result.json")); err != nil {
+	if _, err = fmt.Fprintf(
+		stdout,
+		"Cases: %d. Detected: %d. Missed: %d. Unexpected findings: %d. Unsafe corrections: %d. Failed cases: %d.\nPrivate results: %s\n",
+		len(result.Cases),
+		result.Detected,
+		result.Missed,
+		result.FalsePositives,
+		result.UnsafeCorrections,
+		result.FailedCases,
+		filepath.Join(directory, "result.json"),
+	); err != nil {
 		return err
 	}
 	if result.Missed != 0 || result.FalsePositives != 0 || result.UnsafeCorrections != 0 || result.FailedCases != 0 {
-		return errors.New("prose evaluation did not pass; private results contain missed findings, unexpected findings, unsafe corrections, or incomplete cases")
+		return errors.New(
+			"prose evaluation did not pass; private results contain missed findings, unexpected findings, unsafe corrections, or incomplete cases",
+		)
 	}
 	return nil
 }
@@ -266,7 +312,9 @@ func validateProseDataset(dataset proseDataset, catalog reviewrules.Catalog) err
 	}
 	seen := make(map[string]bool)
 	for _, scenario := range dataset.Cases {
-		if scenario.ID == "" || seen[scenario.ID] || len(scenario.Files)+len(scenario.Metadata) == 0 {
+		if scenario.ID == "" || seen[scenario.ID] || len(
+			scenario.Files,
+		)+len(scenario.Metadata) == 0 {
 			return errors.New("evaluation cases require unique IDs and source content")
 		}
 		seen[scenario.ID] = true
@@ -274,8 +322,12 @@ func validateProseDataset(dataset proseDataset, catalog reviewrules.Catalog) err
 			return errors.New("evaluation cases require source provenance")
 		}
 		for _, expected := range scenario.Expected {
-			if expected.target().Surface == domain.FindingFile && expected.Path == "" || expected.StartLine <= 0 || expected.EndLine < expected.StartLine || len(expected.RuleIDs) == 0 {
-				return errors.New("expected findings require rule IDs, a valid source target, and a valid line range")
+			if expected.target().Surface == domain.FindingFile && expected.Path == "" || expected.StartLine <= 0 || expected.EndLine < expected.StartLine || len(
+				expected.RuleIDs,
+			) == 0 {
+				return errors.New(
+					"expected findings require rule IDs, a valid source target, and a valid line range",
+				)
 			}
 			for _, id := range expected.RuleIDs {
 				if !slices.Contains(catalog.IDs(), id) {
@@ -295,15 +347,24 @@ func validateProseDataset(dataset proseDataset, catalog reviewrules.Catalog) err
 }
 
 func proseCaseInput(scenario proseCase) (diff.ReviewInput, map[string]string, error) {
-	input := diff.ReviewInput{PullRequest: githubapp.PullRequest{}, Files: nil, Metadata: nil, MergeBase: ""}
+	input := diff.ReviewInput{
+		PullRequest: githubapp.PullRequest{},
+		Files:       nil,
+		Metadata:    nil,
+		MergeBase:   "",
+	}
 	hashes := make(map[string]string)
 	for _, file := range scenario.Files {
 		if file.Path == "" || file.Patch == "" || file.CurrentContent == "" || file.Status == "" {
-			return input, hashes, errors.New("evaluation source files require path, status, patch, and current_content")
+			return input, hashes, errors.New(
+				"evaluation source files require path, status, patch, and current_content",
+			)
 		}
 		hash := proseSHA256([]byte(file.CurrentContent))
 		if file.SourceSHA256 != "" && file.SourceSHA256 != hash {
-			return input, hashes, errors.New("evaluation source hash does not match current_content")
+			return input, hashes, errors.New(
+				"evaluation source hash does not match current_content",
+			)
 		}
 		if err := diff.ValidatePatchContent(file.Patch, file.CurrentContent); err != nil {
 			return input, hashes, err
@@ -313,10 +374,19 @@ func proseCaseInput(scenario proseCase) (diff.ReviewInput, map[string]string, er
 			return input, hashes, err
 		}
 		hashes[file.Path] = hash
-		input.Files = append(input.Files, diff.FileContext{
-			Path: file.Path, Status: file.Status, Patch: file.Patch, CurrentContent: file.CurrentContent,
-			ChangedRightLines: lines, ChangedRightHunks: hunks, CoverageComplete: true, Gap: diff.CoverageGapNone,
-		})
+		input.Files = append(
+			input.Files,
+			diff.FileContext{
+				Path:              file.Path,
+				Status:            file.Status,
+				Patch:             file.Patch,
+				CurrentContent:    file.CurrentContent,
+				ChangedRightLines: lines,
+				ChangedRightHunks: hunks,
+				CoverageComplete:  true,
+				Gap:               diff.CoverageGapNone,
+			},
+		)
 	}
 	for _, metadata := range scenario.Metadata {
 		hash := proseSHA256([]byte(metadata.Text))
@@ -324,8 +394,11 @@ func proseCaseInput(scenario proseCase) (diff.ReviewInput, map[string]string, er
 			return input, hashes, errors.New("evaluation metadata hash does not match text")
 		}
 		source := diff.MetadataSource{
-			Surface: metadata.Surface, CommitSHA: metadata.CommitSHA, Text: metadata.Text,
-			StartLine: metadata.StartLine, EndLine: metadata.EndLine,
+			Surface:   metadata.Surface,
+			CommitSHA: metadata.CommitSHA,
+			Text:      metadata.Text,
+			StartLine: metadata.StartLine,
+			EndLine:   metadata.EndLine,
 		}
 		hashes[source.Label()] = hash
 		input.Metadata = append(input.Metadata, source)
@@ -333,7 +406,10 @@ func proseCaseInput(scenario proseCase) (diff.ReviewInput, map[string]string, er
 	return input, hashes, nil
 }
 
-func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCase) (proseCaseResult, error) {
+func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCase) (
+	proseCaseResult,
+	error,
+) {
 	ctx = gklog.WithLogger(ctx, gklog.L(ctx).With("case_id", scenario.ID))
 	input, hashes, err := proseCaseInput(scenario)
 	if err != nil {
@@ -343,7 +419,14 @@ func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCas
 	if err != nil {
 		return proseCaseResult{}, err
 	}
-	chunks, err = review.BoundReviewChunks(chunks, input.Files, cfg.MinimumImportance, "", cfg.ReviewPolicy, cfg.PromptBytes())
+	chunks, err = review.BoundReviewChunks(
+		chunks,
+		input.Files,
+		cfg.MinimumImportance,
+		"",
+		cfg.ReviewPolicy,
+		cfg.PromptBytes(),
+	)
 	if err != nil {
 		return proseCaseResult{}, err
 	}
@@ -356,15 +439,35 @@ func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCas
 	transport := &probeTransport{base: http.DefaultTransport, statuses: make(map[int]int)}
 	client := openai.NewClient(cfg, &http.Client{Transport: transport})
 	result := proseCaseResult{
-		ID: scenario.ID, Provenance: scenario.Provenance, SourceSHA256: hashes, PromptSHA256: nil, PromptBytes: nil,
-		Completed: true, RawFindings: nil, Findings: nil, Detected: nil, Missed: nil, NotEvaluated: nil, FalsePositives: nil, UnsafeCorrections: nil,
-		Usage: review.UsageSummary{}, HTTPStatuses: nil, HTTPErrors: nil, Errors: nil,
+		ID:                scenario.ID,
+		Provenance:        scenario.Provenance,
+		SourceSHA256:      hashes,
+		PromptSHA256:      nil,
+		PromptBytes:       nil,
+		Completed:         true,
+		RawFindings:       nil,
+		Findings:          nil,
+		Detected:          nil,
+		Missed:            nil,
+		NotEvaluated:      nil,
+		FalsePositives:    nil,
+		UnsafeCorrections: nil,
+		Usage:             review.UsageSummary{},
+		HTTPStatuses:      nil,
+		HTTPErrors:        nil,
+		Errors:            nil,
 	}
 	for _, chunk := range chunks {
 		if !chunk.CoverageComplete {
 			return result, errors.New("evaluation input has incomplete hunk coverage")
 		}
-		prompt, promptErr := review.BuildPrompt(chunk, cfg.MinimumImportance, "", cfg.ReviewPolicy, cfg.PromptBytes())
+		prompt, promptErr := review.BuildPrompt(
+			chunk,
+			cfg.MinimumImportance,
+			"",
+			cfg.ReviewPolicy,
+			cfg.PromptBytes(),
+		)
 		if promptErr != nil {
 			return result, promptErr
 		}
@@ -379,11 +482,23 @@ func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCas
 			continue
 		}
 		result.RawFindings = append(result.RawFindings, completion.Result.Findings...)
-		grounded := review.GroundedFindings(ctx, completion.Result.Findings, fileIndex, metadataIndex, chunk.Text)
-		result.Findings = append(result.Findings, review.EligibleFindings(grounded, fileIndex, metadataIndex, cfg.MinimumImportance)...)
+		grounded := review.GroundedFindings(
+			ctx,
+			completion.Result.Findings,
+			fileIndex,
+			metadataIndex,
+			chunk.Text,
+		)
+		result.Findings = append(
+			result.Findings,
+			review.EligibleFindings(grounded, fileIndex, metadataIndex, cfg.MinimumImportance)...,
+		)
 		if len(completion.InspectionRequests) > 0 {
 			result.Completed = false
-			result.Errors = append(result.Errors, "the review requires supporting evidence from the review service")
+			result.Errors = append(
+				result.Errors,
+				"the review requires supporting evidence from the review service",
+			)
 		}
 	}
 	result.Usage = recorder.Summary()
@@ -406,10 +521,15 @@ func matchProseExpectations(result *proseCaseResult, expected []proseExpectation
 	for _, finding := range result.Findings {
 		found := false
 		for index, expectation := range expected {
-			if !matched[index] && finding.Target() == expectation.target() && finding.Path == expectation.Path && finding.StartLine <= expectation.EndLine && finding.EndLine >= expectation.StartLine && slices.Contains(expectation.RuleIDs, finding.RuleID) {
+			if !matched[index] && finding.Target() == expectation.target() && finding.Path == expectation.Path && finding.StartLine <= expectation.EndLine && finding.EndLine >= expectation.StartLine && slices.Contains(
+				expectation.RuleIDs,
+				finding.RuleID,
+			) {
 				matched[index] = true
 				result.Detected = append(result.Detected, expectation)
-				if len(expectation.AllowedActions) > 0 && !slices.Contains(expectation.AllowedActions, finding.CorrectionAction) {
+				if len(
+					expectation.AllowedActions,
+				) > 0 && !slices.Contains(expectation.AllowedActions, finding.CorrectionAction) {
 					result.UnsafeCorrections = append(result.UnsafeCorrections, finding)
 				}
 				found = true

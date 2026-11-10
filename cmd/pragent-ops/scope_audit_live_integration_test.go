@@ -42,12 +42,26 @@ func TestLiveReviewScopeWithoutProviderRequests(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
-	github := githubapp.NewClient(identity, &http.Client{Timeout: 30 * time.Second}, time.Now, slog.Default())
+	github := githubapp.NewClient(
+		identity,
+		&http.Client{Timeout: 30 * time.Second},
+		time.Now,
+		slog.Default(),
+	)
 	pr, err := github.GetPullRequest(ctx, opts.installationID, repo, opts.pullRequest)
 	if err != nil || string(pr.Head) != expectedHead {
 		t.Fatal("The live pull-request head does not match the requested audit revision.")
 	}
-	input, err := diff.NewCollector(github).Collect(ctx, domain.PullRequestRef{Repository: repo, Number: opts.pullRequest, InstallationID: opts.installationID, Head: pr.Head}, pr)
+	input, err := diff.NewCollector(github).Collect(
+		ctx,
+		domain.PullRequestRef{
+			Repository:     repo,
+			Number:         opts.pullRequest,
+			InstallationID: opts.installationID,
+			Head:           pr.Head,
+		},
+		pr,
+	)
 	if err != nil {
 		t.Fatalf("The production GitHub collector could not read the audit input: %v", err)
 	}
@@ -64,16 +78,31 @@ func TestLiveReviewScopeWithoutProviderRequests(t *testing.T) {
 	}
 	excluded := 0
 	for _, decision := range decisions {
-		if decision.PermitsContentExclusion() && cfg.ReviewPolicy.AllowsContentExclusion(decision.ContentKind) {
+		if decision.PermitsContentExclusion() && cfg.ReviewPolicy.AllowsContentExclusion(
+			decision.ContentKind,
+		) {
 			excluded++
 		}
 	}
-	t.Logf("head=%s files=%d raw_chunks=%d metadata_surfaces=%d deterministic_decisions=%d excluded_files=%d unresolved_files=%d maximum_bytes=%d configured_chunk_limit=%d", pr.Head, len(input.Files), len(raw), len(input.Metadata), len(decisions), excluded, len(unresolved), maximum, cfg.ReviewMaxChunks)
+	t.Logf(
+		"head=%s files=%d raw_chunks=%d metadata_surfaces=%d deterministic_decisions=%d excluded_files=%d unresolved_files=%d maximum_bytes=%d configured_chunk_limit=%d",
+		pr.Head,
+		len(input.Files),
+		len(raw),
+		len(input.Metadata),
+		len(decisions),
+		excluded,
+		len(unresolved),
+		maximum,
+		cfg.ReviewMaxChunks,
+	)
 	for _, file := range unresolved {
 		t.Logf("unresolved_file=%s gap=%s patch_bytes=%d", file.Path, file.Gap, len(file.Patch))
 	}
 	if len(unresolved) > 0 {
-		t.Fatal("The read-only audit cannot replace an unresolved file's model classification with an invented decision.")
+		t.Fatal(
+			"The read-only audit cannot replace an unresolved file's model classification with an invented decision.",
+		)
 	}
 	planned, _, err := review.PlanFileContentReview(input, decisions, cfg.ReviewPolicy)
 	if err != nil {
@@ -81,7 +110,11 @@ func TestLiveReviewScopeWithoutProviderRequests(t *testing.T) {
 	}
 	for _, file := range planned.Files {
 		if file.Gap != diff.CoverageGapNone || !file.CoverageComplete {
-			t.Fatalf("The audit cannot assume ordinary source coverage for %s with gap %s.", file.Path, file.Gap)
+			t.Fatalf(
+				"The audit cannot assume ordinary source coverage for %s with gap %s.",
+				file.Path,
+				file.Gap,
+			)
 		}
 	}
 	initial, err := diff.ChunkInput(planned, maximum)
@@ -93,15 +126,37 @@ func TestLiveReviewScopeWithoutProviderRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	optional, err := review.BuildPullRequestContext(input.PullRequest, input.Files, cfg.ReviewPolicy)
+	optional, err := review.BuildPullRequestContext(
+		input.PullRequest,
+		input.Files,
+		cfg.ReviewPolicy,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bounded, err := review.BoundModelReviewChunksWithContext(model, initial, input.Files, cfg.MinimumImportance, required, optional, cfg.ReviewPolicy, maximum)
+	bounded, err := review.BoundModelReviewChunksWithContext(
+		model,
+		initial,
+		input.Files,
+		cfg.MinimumImportance,
+		required,
+		optional,
+		cfg.ReviewPolicy,
+		maximum,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	combined, err := review.PrepareRelationshipChunks(model, bounded, input.Files, cfg.MinimumImportance, required, optional, cfg.ReviewPolicy, maximum)
+	combined, err := review.PrepareRelationshipChunks(
+		model,
+		bounded,
+		input.Files,
+		cfg.MinimumImportance,
+		required,
+		optional,
+		cfg.ReviewPolicy,
+		maximum,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,19 +176,50 @@ func TestLiveReviewScopeWithoutProviderRequests(t *testing.T) {
 			metadataOnly++
 		}
 		if !chunk.CoverageComplete {
-			t.Fatal("The SDK request-size audit requires explicit accounting for an ordinary source gap.")
+			t.Fatal(
+				"The SDK request-size audit requires explicit accounting for an ordinary source gap.",
+			)
 		}
 	}
 	current, err := github.GetPullRequest(ctx, opts.installationID, repo, opts.pullRequest)
-	if err != nil || current.Head != pr.Head || diff.PullRequestRevision(current) != diff.PullRequestRevision(pr) {
+	if err != nil || current.Head != pr.Head || diff.PullRequestRevision(
+		current,
+	) != diff.PullRequestRevision(pr) {
 		t.Fatal("The pull-request head or metadata changed during the read-only scope audit.")
 	}
-	t.Logf("reviewable_files=%d post_classification_chunks=%d sdk_bounded_ordinary_chunks=%d final_ordinary_chunks=%d metadata_only_chunks=%d joint_relationship_requests=%d relationship_gaps=%d total_assessment_chunks=%d", len(planned.Files), len(initial), len(bounded), ordinary, metadataOnly, relationships, gaps, len(combined))
-	decision := review.CheckReviewBudget(len(planned.Files), combined, cfg.ReviewMaxFiles, cfg.ReviewMaxChunks)
-	if decision.ReviewableChunks != ordinary || decision.Skip != (len(planned.Files) > cfg.ReviewMaxFiles || ordinary > cfg.ReviewMaxChunks) {
-		t.Fatalf("The production budget decision counted derived relationships or gap records as ordinary content: %+v; ordinary=%d total=%d.", decision, ordinary, len(combined))
+	t.Logf(
+		"reviewable_files=%d post_classification_chunks=%d sdk_bounded_ordinary_chunks=%d final_ordinary_chunks=%d metadata_only_chunks=%d joint_relationship_requests=%d relationship_gaps=%d total_assessment_chunks=%d",
+		len(planned.Files),
+		len(initial),
+		len(bounded),
+		ordinary,
+		metadataOnly,
+		relationships,
+		gaps,
+		len(combined),
+	)
+	decision := review.CheckReviewBudget(
+		len(planned.Files),
+		combined,
+		cfg.ReviewMaxFiles,
+		cfg.ReviewMaxChunks,
+	)
+	if decision.ReviewableChunks != ordinary || decision.Skip != (len(
+		planned.Files,
+	) > cfg.ReviewMaxFiles || ordinary > cfg.ReviewMaxChunks) {
+		t.Fatalf(
+			"The production budget decision counted derived relationships or gap records as ordinary content: %+v; ordinary=%d total=%d.",
+			decision,
+			ordinary,
+			len(combined),
+		)
 	}
-	t.Logf("production_admission_skip=%t reviewable_chunk_count=%d reason=%q", decision.Skip, decision.ReviewableChunks, decision.Reason)
+	t.Logf(
+		"production_admission_skip=%t reviewable_chunk_count=%d reason=%q",
+		decision.Skip,
+		decision.ReviewableChunks,
+		decision.Reason,
+	)
 }
 
 func scopeAuditConfiguration(t *testing.T, opts reviewBodyOptions) config.Config {
@@ -186,15 +272,18 @@ func scopeAuditConfiguration(t *testing.T, opts reviewBodyOptions) config.Config
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.LoadRuntime(data, func(name string) (string, bool) {
-		if name == "GITHUB_PRIVATE_KEY" {
-			return string(key), true
-		}
-		if secrets[name] {
-			return "scope-audit-unused-credential", true
-		}
-		return "", false
-	})
+	cfg, err := config.LoadRuntime(
+		data,
+		func(name string) (string, bool) {
+			if name == "GITHUB_PRIVATE_KEY" {
+				return string(key), true
+			}
+			if secrets[name] {
+				return "scope-audit-unused-credential", true
+			}
+			return "", false
+		},
+	)
 	if err != nil {
 		t.Fatalf("The public runtime could not configure SDK request serialization: %v", err)
 	}

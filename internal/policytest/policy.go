@@ -18,6 +18,7 @@ func Load(tb testing.TB) reviewrules.Policy {
 	if err != nil {
 		tb.Fatal(err)
 	}
+
 	for {
 		runtimePath := filepath.Join(directory, "runtime.json")
 		data, readErr := os.ReadFile(runtimePath)
@@ -29,6 +30,7 @@ func Load(tb testing.TB) reviewrules.Policy {
 			if err := json.Unmarshal(data, &paths); err != nil {
 				tb.Fatal(err)
 			}
+
 			values := map[string]string{
 				"REVIEW_RULES_FILE":   paths.Rules,
 				"REVIEW_PROMPTS_FILE": paths.Prompts,
@@ -38,23 +40,29 @@ func Load(tb testing.TB) reviewrules.Policy {
 				if !found || path == "" {
 					return "", false
 				}
+
 				if !filepath.IsAbs(path) {
 					path = filepath.Join(directory, path)
 				}
+
 				return path, true
 			})
 			if err != nil {
 				tb.Fatal(err)
 			}
+
 			return policy
 		}
+
 		if !os.IsNotExist(readErr) {
 			tb.Fatal(readErr)
 		}
+
 		parent := filepath.Dir(directory)
 		if parent == directory {
 			tb.Fatal("the repository runtime configuration was not found")
 		}
+
 		directory = parent
 	}
 }

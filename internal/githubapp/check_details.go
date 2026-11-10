@@ -23,10 +23,12 @@ func (details *checkRunDetailsResponse) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return fmt.Errorf("decode check run details: %w", err)
 	}
+
 	head, err := parseHeadSHA(decoded.HeadSHA)
 	if err != nil {
 		return err
 	}
+
 	*details = checkRunDetailsResponse{
 		Run: CheckRun{
 			ID:         decoded.ID,
@@ -40,20 +42,28 @@ func (details *checkRunDetailsResponse) UnmarshalJSON(data []byte) error {
 		AppID:   decoded.App.ID,
 		Summary: decoded.Output.Summary,
 	}
+
 	return nil
 }
 
 // GetCheckRunDetails reads one exact check run without selecting a newer run.
-func (client *Client) GetCheckRunDetails(ctx context.Context, installationID int64, repo domain.Repository, checkRunID int64) (CheckRunDetails, error) {
+func (client *Client) GetCheckRunDetails(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	checkRunID int64,
+) (CheckRunDetails, error) {
 	var details CheckRunDetails
 	path := client.repoPath(repo, fmt.Sprintf("/check-runs/%d", checkRunID))
 	body, err := client.doREST(ctx, installationID, http.MethodGet, path, nil)
 	if err != nil {
 		return details, err
 	}
+
 	var response checkRunDetailsResponse
 	if err := response.UnmarshalJSON(body); err != nil {
 		return details, err
 	}
+
 	return CheckRunDetails(response), nil
 }

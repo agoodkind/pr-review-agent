@@ -32,8 +32,10 @@ func (fixture *serviceFixture) job() domain.ReviewJob {
 
 	job.DeliveryID = gitFixtureDeliveryID
 	job.PullRequestRef = domain.PullRequestRef{
-		Repository: domain.Repository{Owner: "owner", Name: "repo"},
-		Number:     testPRNumber, InstallationID: 99, Head: head,
+		Repository:     domain.Repository{Owner: "owner", Name: "repo"},
+		Number:         testPRNumber,
+		InstallationID: 99,
+		Head:           head,
 	}
 
 	return job
@@ -56,7 +58,10 @@ func (fixture *serviceFixture) forcedJob() domain.ReviewJob {
 	return job
 }
 
-func contentCollectionRepository(t *testing.T, options []contentCollectionOptions) (string, string, string, string) {
+func contentCollectionRepository(
+	t *testing.T,
+	options []contentCollectionOptions,
+) (string, string, string, string) {
 	t.Helper()
 	directory := testgit.New(t)
 	modules := "[submodule \"zinit\"]\npath = " + collectionSubmodulePath + "\nurl = " + collectionSubmoduleURL + "\n"
@@ -90,7 +95,10 @@ func inspectionServiceRepository(t *testing.T, scenario string) (string, string,
 		"  provisioner \"remote-exec\" {\n" +
 		"    script = \"${path.module}/network/activate.sh\"\n  }\n}\n"
 
-	files := map[string]string{inspectionGitNetworkPath: before, inspectionGitActivationPath: inspectionActivationSource}
+	files := map[string]string{
+		inspectionGitNetworkPath:    before,
+		inspectionGitActivationPath: inspectionActivationSource,
+	}
 
 	if scenario == inspectionGitMissingScenario {
 		delete(files, inspectionGitActivationPath)
@@ -121,7 +129,11 @@ func (fixture *serviceFixture) gitFindingSummary() review.Summary {
 	return summary
 }
 
-func newCommitCollectionFixture(t *testing.T, model *sequenceModel, options contentCollectionOptions) *serviceFixture {
+func newCommitCollectionFixture(
+	t *testing.T,
+	model *sequenceModel,
+	options contentCollectionOptions,
+) *serviceFixture {
 	t.Helper()
 	fixture, _ := newContentCollectionFixture(t, model, options)
 
@@ -141,25 +153,39 @@ func newCommitCollectionFixture(t *testing.T, model *sequenceModel, options cont
 }
 
 func (fixture *serviceFixture) seedDismissedGitReview(head domain.HeadSHA) {
-	fixture.state.reviewPages = [][]map[string]any{{{
-		"id": float64(4100), collectionFixtureCommitIDKey: string(head),
-		collectionFixtureStateKey: collectionFixtureDismissedState,
-		collectionFixtureBodyKey:  marker.Review(head, domain.ReviewDecisionRequestChanges),
-		gitFixtureUserKey:         map[string]any{gitFixtureLoginKey: testBotLogin},
-	}}}
+	fixture.state.reviewPages = [][]map[string]any{
+		{
+			{
+				"id":                         float64(4100),
+				collectionFixtureCommitIDKey: string(head),
+				collectionFixtureStateKey:    collectionFixtureDismissedState,
+				collectionFixtureBodyKey: marker.Review(
+					head,
+					domain.ReviewDecisionRequestChanges,
+				),
+				gitFixtureUserKey: map[string]any{gitFixtureLoginKey: testBotLogin},
+			},
+		},
+	}
 }
 
-func assertGitReviewProjection(t *testing.T, native map[string]any, head domain.HeadSHA, finding domain.Finding) {
+func assertGitReviewProjection(
+	t *testing.T,
+	native map[string]any,
+	head domain.HeadSHA,
+	finding domain.Finding,
+) {
 	t.Helper()
 
 	body, ok := native[collectionFixtureBodyKey].(string)
 	if !ok ||
 		native[collectionFixtureCommitIDKey] != string(head) ||
 		native[collectionFixtureStateKey] != collectionFixtureRejectionState ||
-		strings.Count(body,
-			finding.Body) != 1 || strings.Count(body,
-		finding.Suggestion) != 1 {
-		t.Fatalf("The current-head rejection must contain the complete current metadata finding and correction: %v.", native)
+		strings.Count(body, finding.Body) != 1 || strings.Count(body, finding.Suggestion) != 1 {
+		t.Fatalf(
+			"The current-head rejection must contain the complete current metadata finding and correction: %v.",
+			native,
+		)
 	}
 
 	markerHead, found := marker.FindReview(body)
@@ -176,7 +202,12 @@ func newGitServiceFixture(
 	model review.Model,
 ) *serviceFixture {
 	return &serviceFixture{
-		head: domain.HeadSHA(testHeadSHA), gitBase: coveragePriorHead,
-		service: service, github: client, state: state, reconciler: reconciler, model: model,
+		head:       domain.HeadSHA(testHeadSHA),
+		gitBase:    coveragePriorHead,
+		service:    service,
+		github:     client,
+		state:      state,
+		reconciler: reconciler,
+		model:      model,
 	}
 }

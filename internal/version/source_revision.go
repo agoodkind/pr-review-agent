@@ -18,22 +18,28 @@ func readSourceRevision() string {
 			if setting.Key == "vcs.revision" {
 				revision = setting.Value
 			}
+
 			if setting.Key == "vcs.modified" {
 				modified = setting.Value
 			}
 		}
 	}
+
 	if revision != "" {
 		if modified == "false" {
 			return revision
 		}
+
 		if modified == "true" {
 			return revision + "-dirty"
 		}
+
 		return revision + "-unverified"
 	}
+
 	if len(Commit) == 40 {
 		return Commit + "-unversioned"
 	}
+
 	return Commit
 }

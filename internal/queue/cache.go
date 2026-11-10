@@ -46,6 +46,7 @@ func (cache *DeliveryCache) Claim(deliveryID string) bool {
 		if cache.clock().Before(entry.expiresAt) {
 			return false
 		}
+
 		delete(cache.entries, deliveryID)
 		cache.removeOrderLocked(deliveryID)
 	}
@@ -57,6 +58,7 @@ func (cache *DeliveryCache) Claim(deliveryID string) bool {
 	now := cache.clock()
 	cache.entries[deliveryID] = cacheEntry{expiresAt: now.Add(cache.ttl), settled: false}
 	cache.order = append(cache.order, deliveryID)
+
 	return true
 }
 
@@ -66,6 +68,7 @@ func (cache *DeliveryCache) Settled(deliveryID string) bool {
 	defer cache.mu.Unlock()
 	cache.evictExpiredLocked()
 	entry, ok := cache.entries[deliveryID]
+
 	return ok && entry.settled
 }
 
@@ -77,6 +80,7 @@ func (cache *DeliveryCache) Settle(deliveryID string) {
 	if !ok {
 		return
 	}
+
 	entry.settled = true
 	cache.entries[deliveryID] = entry
 }
@@ -92,18 +96,22 @@ func (cache *DeliveryCache) Release(deliveryID string) {
 
 func (cache *DeliveryCache) evictExpiredLocked() {
 	now := cache.clock()
+
 	remaining := cache.order[:0]
 	for _, deliveryID := range cache.order {
 		entry, ok := cache.entries[deliveryID]
 		if !ok {
 			continue
 		}
+
 		if now.Before(entry.expiresAt) {
 			remaining = append(remaining, deliveryID)
 			continue
 		}
+
 		delete(cache.entries, deliveryID)
 	}
+
 	cache.order = remaining
 }
 
@@ -111,6 +119,7 @@ func (cache *DeliveryCache) evictOldestLocked() {
 	if len(cache.order) == 0 {
 		return
 	}
+
 	oldest := cache.order[0]
 	delete(cache.entries, oldest)
 	cache.order = cache.order[1:]

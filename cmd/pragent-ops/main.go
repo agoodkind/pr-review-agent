@@ -50,20 +50,80 @@ func flags(command string, args []string, output io.Writer) (options, error) {
 	set := flag.NewFlagSet(command, flag.ContinueOnError)
 	set.SetOutput(output)
 	set.StringVar(&opts.since, "since", "", "Duration before --end, including 7d or 168h.")
-	set.StringVar(&opts.from, "from", "", "Start timestamp in RFC3339; mutually exclusive with --since.")
-	set.StringVar(&opts.end, "end", "", "End timestamp in RFC3339; defaults to the current UTC time for live capture.")
-	set.StringVar(&opts.account, "account", "", "Cloudflare account ID; defaults to --wrangler account_id.")
-	set.StringVar(&opts.script, "script", "", "Exact Worker script name; defaults to --wrangler name.")
-	set.StringVar(&opts.wrangler, "wrangler", "deploy/cloudflare/wrangler.jsonc", "Public Wrangler configuration.")
-	set.StringVar(&opts.tokenFile, "token-file", "", "Existing scoped Cloudflare token file; this token is not revoked.")
-	set.StringVar(&opts.accountTokenFile, "account-token-file", "", "Account token file used to mint and revoke a temporary observability token.")
-	set.DurationVar(&opts.ttl, "credential-ttl", 90*time.Minute, "Temporary token expiration; maximum 24h.")
-	set.StringVar(&opts.output, "output-dir", "", "New private output directory; defaults to a private temporary directory.")
-	set.StringVar(&opts.input, "input", "", "Cached event NDJSON or a bare event array; metrics performs no Cloudflare requests.")
-	set.StringVar(&opts.manifest, "manifest", "", "Input capture manifest; defaults to manifest.json beside --input.")
+	set.StringVar(
+		&opts.from,
+		"from",
+		"",
+		"Start timestamp in RFC3339; mutually exclusive with --since.",
+	)
+	set.StringVar(
+		&opts.end,
+		"end",
+		"",
+		"End timestamp in RFC3339; defaults to the current UTC time for live capture.",
+	)
+	set.StringVar(
+		&opts.account,
+		"account",
+		"",
+		"Cloudflare account ID; defaults to --wrangler account_id.",
+	)
+	set.StringVar(
+		&opts.script,
+		"script",
+		"",
+		"Exact Worker script name; defaults to --wrangler name.",
+	)
+	set.StringVar(
+		&opts.wrangler,
+		"wrangler",
+		"deploy/cloudflare/wrangler.jsonc",
+		"Public Wrangler configuration.",
+	)
+	set.StringVar(
+		&opts.tokenFile,
+		"token-file",
+		"",
+		"Existing scoped Cloudflare token file; this token is not revoked.",
+	)
+	set.StringVar(
+		&opts.accountTokenFile,
+		"account-token-file",
+		"",
+		"Account token file used to mint and revoke a temporary observability token.",
+	)
+	set.DurationVar(
+		&opts.ttl,
+		"credential-ttl",
+		90*time.Minute,
+		"Temporary token expiration; maximum 24h.",
+	)
+	set.StringVar(
+		&opts.output,
+		"output-dir",
+		"",
+		"New private output directory; defaults to a private temporary directory.",
+	)
+	set.StringVar(
+		&opts.input,
+		"input",
+		"",
+		"Cached event NDJSON or a bare event array; metrics performs no Cloudflare requests.",
+	)
+	set.StringVar(
+		&opts.manifest,
+		"manifest",
+		"",
+		"Input capture manifest; defaults to manifest.json beside --input.",
+	)
 	set.IntVar(&opts.pageSize, "page-size", 2000, "Maximum records per telemetry page.")
 	set.IntVar(&opts.maxPages, "max-pages", 200, "Page safety cap; exceeding it fails the capture.")
-	set.StringVar(&opts.apiURL, "api-url", cloudflareops.APIURL, "Cloudflare API URL; HTTP is permitted only for loopback verification.")
+	set.StringVar(
+		&opts.apiURL,
+		"api-url",
+		cloudflareops.APIURL,
+		"Cloudflare API URL; HTTP is permitted only for loopback verification.",
+	)
 	if err := set.Parse(args); err != nil {
 		return opts, err
 	}
@@ -98,7 +158,9 @@ func timeRange(opts options) (time.Time, time.Time, error) {
 		end = parsed.UTC()
 	}
 	if (opts.since == "") == (opts.from == "") {
-		return time.Time{}, time.Time{}, errors.New("provide exactly one --since duration or --from timestamp")
+		return time.Time{}, time.Time{}, errors.New(
+			"provide exactly one --since duration or --from timestamp",
+		)
 	}
 	var from time.Time
 	if opts.from != "" {
@@ -153,11 +215,24 @@ func capture(ctx context.Context, opts options, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "Records: %d. Pages: %d. Available telemetry exhausted: %t. Ephemeral credential revoked: %t.\nRange: %s through %s.\nPrivate evidence: %s\n", manifest.Records, manifest.Pages, manifest.Complete, manifest.CredentialRevoked, manifest.From.Format(time.RFC3339), manifest.To.Format(time.RFC3339), manifest.Directory)
+	_, err = fmt.Fprintf(
+		output,
+		"Records: %d. Pages: %d. Available telemetry exhausted: %t. Ephemeral credential revoked: %t.\nRange: %s through %s.\nPrivate evidence: %s\n",
+		manifest.Records,
+		manifest.Pages,
+		manifest.Complete,
+		manifest.CredentialRevoked,
+		manifest.From.Format(time.RFC3339),
+		manifest.To.Format(time.RFC3339),
+		manifest.Directory,
+	)
 	return err
 }
 
-func captureManifest(ctx context.Context, opts options) (manifest cloudflareops.Manifest, returnErr error) {
+func captureManifest(ctx context.Context, opts options) (
+	manifest cloudflareops.Manifest,
+	returnErr error,
+) {
 	if opts.input != "" {
 		return manifest, errors.New("logs captures live telemetry; cached input belongs to metrics")
 	}
@@ -172,7 +247,16 @@ func captureManifest(ctx context.Context, opts options) (manifest cloudflareops.
 	if err != nil {
 		return manifest, err
 	}
-	credentials, err := cloudflareops.AcquireCredentials(ctx, cloudflareops.CredentialOptions{TokenFile: opts.tokenFile, AccountTokenFile: opts.accountTokenFile, Account: opts.account, TTL: opts.ttl, APIURL: opts.apiURL})
+	credentials, err := cloudflareops.AcquireCredentials(
+		ctx,
+		cloudflareops.CredentialOptions{
+			TokenFile:        opts.tokenFile,
+			AccountTokenFile: opts.accountTokenFile,
+			Account:          opts.account,
+			TTL:              opts.ttl,
+			APIURL:           opts.apiURL,
+		},
+	)
 	if err != nil {
 		return manifest, err
 	}
@@ -183,12 +267,30 @@ func captureManifest(ctx context.Context, opts options) (manifest cloudflareops.
 		if cleanupErr != nil {
 			manifest.Error = "temporary credential cleanup failed; command error includes recovery identifiers"
 		}
-		returnErr = errors.Join(returnErr, cloudflareops.WriteJSON(filepath.Join(directory, "manifest.json"), manifest))
+		returnErr = errors.Join(
+			returnErr,
+			cloudflareops.WriteJSON(filepath.Join(directory, "manifest.json"), manifest),
+		)
 	}()
-	manifest, err = credentials.Client.Capture(ctx, cloudflareops.CaptureOptions{Account: opts.account, Script: opts.script, From: from, To: end, PageSize: opts.pageSize, MaxPages: opts.maxPages, Directory: directory})
+	manifest, err = credentials.Client.Capture(
+		ctx,
+		cloudflareops.CaptureOptions{
+			Account:   opts.account,
+			Script:    opts.script,
+			From:      from,
+			To:        end,
+			PageSize:  opts.pageSize,
+			MaxPages:  opts.maxPages,
+			Directory: directory,
+		},
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "Telemetry capture failed", "directory", directory)
-		return manifest, fmt.Errorf("capture failed; private partial evidence directory %s: %w", directory, err)
+		return manifest, fmt.Errorf(
+			"capture failed; private partial evidence directory %s: %w",
+			directory,
+			err,
+		)
 	}
 	return manifest, nil
 }
@@ -238,22 +340,42 @@ func metrics(opts options, output io.Writer) error {
 		return err
 	}
 	results.Manifest.Directory = directory
-	if err = cloudflareops.WriteJSON(filepath.Join(directory, "metrics.json"), results); err != nil {
+	if err = cloudflareops.WriteJSON(
+		filepath.Join(directory, "metrics.json"),
+		results,
+	); err != nil {
 		return err
 	}
-	if err = cloudflareops.WriteJSON(filepath.Join(directory, "manifest.json"), results.Manifest); err != nil {
+	if err = cloudflareops.WriteJSON(
+		filepath.Join(directory, "manifest.json"),
+		results.Manifest,
+	); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(output, "Records: %d. Runs: %d. Runs with observed failures: %d. Runs reporting measured token usage: %d.\nPrivate metrics: %s\n", results.Total.Records, results.Total.Runs, results.Total.RunsWithFailureObserved, results.Total.RunsReportingUsage, filepath.Join(directory, "metrics.json"))
+	_, err = fmt.Fprintf(
+		output,
+		"Records: %d. Runs: %d. Runs with observed failures: %d. Runs reporting measured token usage: %d.\nPrivate metrics: %s\n",
+		results.Total.Records,
+		results.Total.Runs,
+		results.Total.RunsWithFailureObserved,
+		results.Total.RunsReportingUsage,
+		filepath.Join(directory, "metrics.json"),
+	)
 	return err
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		if _, err := fmt.Fprintln(stdout, "pragent-ops deploy --preflight --token-file PATH\npragent-ops deployment-test --help"); err != nil {
+		if _, err := fmt.Fprintln(
+			stdout,
+			"pragent-ops deploy --preflight --token-file PATH\npragent-ops deployment-test --help",
+		); err != nil {
 			return err
 		}
-		_, err := fmt.Fprintln(stdout, "pragent-ops storage --runtime runtime.json --operator-token-file PATH\npragent-ops stats --since 24h --account-token-file PATH\npragent-ops logs --since 7d --account-token-file PATH\npragent-ops metrics --input CAPTURE/events.ndjson\npragent-ops counters --runtime runtime.json --operator-token-file PATH\npragent-ops operator-token --account-token-file PATH\npragent-ops probe --provider ID --credential-file PATH\npragent-ops prose-eval --dataset testdata/prose-eval.json --provider ID --credential-file PATH\npragent-ops review-bodies --repository OWNER/REPO --pull-request NUMBER --installation-id ID --app-private-key-file PATH\npragent-ops review-details --repository OWNER/REPO --pull-request NUMBER --installation-id ID --summary-comment-id ID --source-check-run-id ID --app-private-key-file PATH\nEach subcommand accepts --help. Raw telemetry is saved only in private files.")
+		_, err := fmt.Fprintln(
+			stdout,
+			"pragent-ops storage --runtime runtime.json --operator-token-file PATH\npragent-ops stats --since 24h --account-token-file PATH\npragent-ops logs --since 7d --account-token-file PATH\npragent-ops metrics --input CAPTURE/events.ndjson\npragent-ops counters --runtime runtime.json --operator-token-file PATH\npragent-ops operator-token --account-token-file PATH\npragent-ops probe --provider ID --credential-file PATH\npragent-ops prose-eval --dataset testdata/prose-eval.json --provider ID --credential-file PATH\npragent-ops review-bodies --repository OWNER/REPO --pull-request NUMBER --installation-id ID --app-private-key-file PATH\npragent-ops review-details --repository OWNER/REPO --pull-request NUMBER --installation-id ID --summary-comment-id ID --source-check-run-id ID --app-private-key-file PATH\nEach subcommand accepts --help. Raw telemetry is saved only in private files.",
+		)
 		return err
 	}
 	if args[0] == "stats" {
@@ -299,7 +421,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	case metricsCommand:
 		return metrics(opts, stdout)
 	default:
-		return errors.New("command must be deploy, deployment-test, stats, storage, logs, metrics, counters, operator-token, probe, prose-eval, review-bodies, or review-details")
+		return errors.New(
+			"command must be deploy, deployment-test, stats, storage, logs, metrics, counters, operator-token, probe, prose-eval, review-bodies, or review-details",
+		)
 	}
 }
 

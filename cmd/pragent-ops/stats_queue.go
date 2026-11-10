@@ -38,24 +38,36 @@ func statsQueue(ctx context.Context, runtimeData []byte, tokenFile string) opsst
 		snapshot.UnavailableReason = "The operator credential file could not be read."
 		return snapshot
 	}
-	body, err := json.Marshal(struct {
-		Action string `json:"action"`
-		Key    string `json:"key"`
-	}{Action: "query"})
+	body, err := json.Marshal(
+		struct {
+			Action string `json:"action"`
+			Key    string `json:"key"`
+		}{
+			Action: "query",
+		},
+	)
 	if err != nil {
 		snapshot.UnavailableReason = "The queue query could not be encoded."
 		return snapshot
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		endpoint.String(),
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		snapshot.UnavailableReason = "The queue query could not be constructed."
 		return snapshot
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+string(token))
-	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-		return errors.New("queue queries do not follow redirects")
-	}}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("queue queries do not follow redirects")
+		},
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		snapshot.UnavailableReason = "The queue query failed."

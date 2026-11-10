@@ -18,7 +18,9 @@ func removeChunkID(pending []string, id string) []string {
 		if item == id {
 			continue
 		}
+
 		remaining = append(remaining, item)
 	}
+
 	return remaining
 }

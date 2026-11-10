@@ -66,7 +66,12 @@ const (
 // Collector gathers pull request diff input for one review pass, scoped to the
 // range since a previously reviewed commit when one is given.
 type Collector interface {
-	CollectRange(context.Context, domain.PullRequestRef, githubapp.PullRequest, domain.HeadSHA) (diff.ReviewInput, error)
+	CollectRange(
+		context.Context,
+		domain.PullRequestRef,
+		githubapp.PullRequest,
+		domain.HeadSHA,
+	) (diff.ReviewInput, error)
 }
 
 // Reconciler silently resolves earlier bot findings on the current head.
@@ -124,21 +129,26 @@ func NewService(
 	if logger == nil {
 		logger = slog.Default()
 	}
+
 	if now == nil {
 		now = time.Now
 	}
+
 	// A non-positive budget refuses every real delta while admitting an empty
 	// one, which is the opposite of what a budget is for. Treat it the same way
 	// the configuration loader treats an unset variable.
 	if reviewMaxFiles <= 0 {
 		reviewMaxFiles = config.DefaultReviewMaxFiles
 	}
+
 	if reviewMaxChunks <= 0 {
 		reviewMaxChunks = config.DefaultReviewMaxChunks
 	}
+
 	if chunkTimeout <= 0 {
 		chunkTimeout = config.DefaultReviewChunkTimeout
 	}
+
 	return &Service{
 		approveEachCommit:      false,
 		failureVerdicts:        config.DismissLatestFailureVerdict,
@@ -219,6 +229,7 @@ func (service *Service) run(parent context.Context, job domain.ReviewJob) error 
 		// idempotent, which has already happened by the time a run starts.
 		ExternalID: "",
 	}
+
 	return service.runLocked(ctx, job, checkRun, settings)
 }
 
@@ -232,7 +243,10 @@ func (service *Service) Admit(
 	parent context.Context,
 	job domain.ReviewJob,
 ) (domain.ReviewJob, bool, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), service.checkCompletionTimeout)
+	ctx, cancel := context.WithTimeout(
+		context.WithoutCancel(parent),
+		service.checkCompletionTimeout,
+	)
 	defer cancel()
 	logger := service.logger.With(
 		slog.String("delivery_id", job.DeliveryID),
@@ -246,9 +260,11 @@ func (service *Service) Admit(
 	if err != nil {
 		return job, false, err
 	}
+
 	if !admitted {
 		return job, false, nil
 	}
+
 	job.CheckRunID = checkRun.ID
 	job.CheckRunStatus = checkRun.Status
 	job.CheckRunConclusion = checkRun.Conclusion
@@ -259,6 +275,7 @@ func (service *Service) Admit(
 		slog.String("status", checkRun.Status),
 		slog.String("conclusion", checkRun.Conclusion),
 	)
+
 	return job, true, nil
 }
 
@@ -269,9 +286,11 @@ func (service *Service) Reject(parent context.Context, job domain.ReviewJob, cau
 	if job.CheckRunID == 0 || job.CheckRunStatus == "completed" {
 		return nil
 	}
+
 	now := service.now()
 	progress := service.newProgress(job, service.settingsFor(job), now).summary(now)
 	progress.Usage = UsageFromContext(parent)
+
 	return service.reportFailedCheck(
 		parent,
 		job,
@@ -301,6 +320,7 @@ func (service *Service) runLocked(
 		if recovered == nil {
 			return
 		}
+
 		panicErr := fmt.Errorf("review panic: %v", recovered)
 		logger.ErrorContext(
 			ctx,
@@ -309,13 +329,27 @@ func (service *Service) runLocked(
 			slog.String("stack", string(debug.Stack())),
 			slog.String("err", panicErr.Error()),
 		)
-		runErr = service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePanic, panicErr)
+		runErr = service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailurePanic,
+			panicErr,
+		)
 	}()
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
 	ctx, closeSnapshot, err := withRepositorySnapshot(ctx, service.github, job.PullRequestRef)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureDiff, err)
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureDiff,
+			err,
+		)
 	}
 	defer closeSnapshot()
 
@@ -327,6 +361,7 @@ func (service *Service) runLocked(
 		// A prior successful check does not override a refreshed withheld verdict.
 		return service.refreshReviewedCheck(ctx, job, nil, settings)
 	}
+
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
 		job.InstallationID,
@@ -334,33 +369,80 @@ func (service *Service) runLocked(
 		job.Number,
 	)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailurePullRequest, err)
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailurePullRequest,
+			err,
+		)
 	}
+
 	if pullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+
 	if job.AutomaticReassessment && (!pullRequest.EligibilityKnown || !pullRequest.MetadataKnown) {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, errors.New("current pull request response is incomplete"))
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureRefresh,
+			errors.New("current pull request response is incomplete"),
+		)
 	}
-	if job.AutomaticReassessment && (pullRequest.State != "open" || pullRequest.Merged || pullRequest.Draft) {
+
+	if job.AutomaticReassessment &&
+		(pullRequest.State != "open" || pullRequest.Merged || pullRequest.Draft) {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+
 	progress.reached("the pull request")
 
 	if job.MetadataOnly {
-		return service.reviewMetadataEdit(ctx, job, checkRun, pullRequest, startedAt, progress, settings)
+		return service.reviewMetadataEdit(
+			ctx,
+			job,
+			checkRun,
+			pullRequest,
+			startedAt,
+			progress,
+			settings,
+		)
 	}
+
 	if job.AutomaticReassessment && job.RefreshVerdict {
 		return service.refreshReviewedCheck(ctx, job, nil, settings)
 	}
+
 	reviews, reviewed, err := service.loadReviewHistory(ctx, job, head, progress)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureReviews, err)
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureReviews,
+			err,
+		)
 	}
+
 	if reviewed {
 		return service.refreshReviewedCheck(ctx, job, reviews, settings)
 	}
-	return service.reviewOwedWork(ctx, job, checkRun, pullRequest, reviews, startedAt, progress, settings)
+
+	return service.reviewOwedWork(
+		ctx,
+		job,
+		checkRun,
+		pullRequest,
+		reviews,
+		startedAt,
+		progress,
+		settings,
+	)
 }
 
 // reviewOwedWork reviews the current pull request as GitHub presents it now,
@@ -382,8 +464,16 @@ func (service *Service) reviewOwedWork(
 	head := job.Head
 	state, hasState, err := service.loadDurableState(ctx, job)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureSummary,
+			err,
+		)
 	}
+
 	previousPolicy := state.PolicyRevision
 	state = bindCheckpointPolicy(state, pullRequest, service.reviewPolicy, settings)
 	policyChanged := previousPolicy != state.PolicyRevision
@@ -421,6 +511,7 @@ func (service *Service) reviewOwedWork(
 		state.Pending = nil
 		state.Completed = nil
 	}
+
 	// Nothing is owed when the checkpoint already names this head with no chunk
 	// pending. Deciding that here, rather than letting the collector compare a
 	// commit against itself, spends no API call proving what the state already
@@ -433,7 +524,13 @@ func (service *Service) reviewOwedWork(
 	// and resolves threads, so running it first would spend both on the exact
 	// delta admission exists to refuse.
 	work, stop, err := service.collectAndAdmit(
-		ctx, job, pullRequest, checkRun, "", progress, settings,
+		ctx,
+		job,
+		pullRequest,
+		checkRun,
+		"",
+		progress,
+		settings,
 	)
 	if stop {
 		return err
@@ -447,11 +544,25 @@ func (service *Service) reviewOwedWork(
 	var metadataRecord metadataReviewRecord
 	var fallbackRecord fallbackReviewRecord
 	if hasState {
-		metadataRecord, fallbackRecord, state.Completed, err = service.restoreFindingCheckpoints(ctx, job, pullRequest, work.Chunks, state.Completed)
+		metadataRecord, fallbackRecord, state.Completed, err = service.restoreFindingCheckpoints(
+			ctx,
+			job,
+			pullRequest,
+			work.Chunks,
+			state.Completed,
+		)
 		if err != nil {
-			return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err)
+			return service.failCheck(
+				ctx,
+				job,
+				checkRun.ID,
+				progress.summary(service.now()),
+				checkFailureSummary,
+				err,
+			)
 		}
 	}
+
 	progress.restoreFindings(metadataRecord, fallbackRecord)
 	progress.fileAssessments = work.FileAssessments
 	progress.models = work.AssessmentModels
@@ -472,20 +583,53 @@ func (service *Service) reviewOwedWork(
 	disputes := collectDisputes(threads, service.botLogin, head)
 	disputePrompt, err := disputes.promptSection(service.reviewPolicy)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureAnalysis,
+			err,
+		)
 	}
+
 	pass := newChunkPass(work, settings, &selection, disputes, disputePrompt, startedAt)
 	pass.seedFileAssessments(service.reviewPolicy)
-	pass.restoreFindings(metadataRecord, fallbackRecord, fromScratch || policyChanged, state.Completed)
+	pass.restoreFindings(
+		metadataRecord,
+		fallbackRecord,
+		fromScratch || policyChanged,
+		state.Completed,
+	)
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
 	if err != nil {
 		if errors.Is(err, errHeadMoved) {
 			return service.cancelCheck(ctx, job, checkRun.ID)
 		}
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureAnalysis,
+			err,
+		)
 	}
-	return service.publish(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress, settings)
+
+	return service.publish(
+		ctx,
+		job,
+		head,
+		checkRun,
+		reviews,
+		pass,
+		state,
+		startedAt,
+		progress,
+		settings,
+	)
 }
 
 // applyPass records what the chunk loop learned on the progress the failure and
@@ -514,6 +658,7 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	if err := logAnalysis(ctx, analysis); err != nil {
 		logger.ErrorContext(ctx, "trace review analysis", slog.String("err", err.Error()))
 	}
+
 	progress.reached("model analysis")
 }
 
@@ -539,7 +684,9 @@ func stateClearedByThisDelivery(state marker.State, hasState bool, job domain.Re
 
 // publicationContext gives publication its own budget, freed from whatever the
 // caller's context carries but still bound to the service lifetime.
-func (service *Service) publicationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+func (service *Service) publicationContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
 	return detachFromReviewDeadline(ctx, service.publicationTimeout)
 }
 
@@ -560,6 +707,7 @@ func detachFromReviewDeadline(
 	if shutdown == nil {
 		return detached, cancel
 	}
+
 	// A service already stopping never starts. Checking here rather than only in
 	// the watch below removes the race where the first GitHub call would get
 	// away before the watch observed the shutdown.
@@ -586,6 +734,7 @@ func detachFromReviewDeadline(
 		case <-stopWatch:
 		}
 	}()
+
 	return detached, func() {
 		close(stopWatch)
 		cancel()
@@ -607,6 +756,7 @@ func shutdownFrom(ctx context.Context) context.Context {
 	if !ok {
 		return nil
 	}
+
 	return shutdown
 }
 
@@ -624,19 +774,18 @@ func (service *Service) loadReviewHistory(
 		logger.ErrorContext(ctx, "list reviews", slog.String("err", err.Error()))
 		return nil, false, fmt.Errorf("list reviews: %w", err)
 	}
+
 	progress.priorReviews = traceReviews(reviews, service.botLogin)
 	progress.reached("the review history")
-	logger.InfoContext(
-		ctx,
-		"review history loaded",
-		slog.Any("bot_reviews", progress.priorReviews),
-	)
+	logger.InfoContext(ctx, "review history loaded", slog.Any("bot_reviews", progress.priorReviews))
 	// A forced run reviews this head again on purpose, so the marker an earlier
 	// run left is exactly what it is asked to look past.
-	if !job.Forced && !job.AutomaticReassessment && hasBotReviewMarker(reviews, service.botLogin, head) {
+	if !job.Forced && !job.AutomaticReassessment &&
+		hasBotReviewMarker(reviews, service.botLogin, head) {
 		logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "review_marker"))
 		return reviews, true, nil
 	}
+
 	return reviews, false, nil
 }
 
@@ -652,11 +801,20 @@ func (service *Service) reconcileThreads(
 	logger := gklog.L(ctx)
 	threads, err := service.reconciler.Reconcile(ctx, job)
 	if err != nil {
-		return nil, service.failCheck(ctx, job, checkRunID, progress.summary(service.now()), checkFailureReconcile, err)
+		return nil, service.failCheck(
+			ctx,
+			job,
+			checkRunID,
+			progress.summary(service.now()),
+			checkFailureReconcile,
+			err,
+		)
 	}
+
 	progress.threads = traceThreads(threads, service.botLogin)
 	progress.reached("thread reconciliation")
 	logger.InfoContext(ctx, "review threads reconciled", slog.Any("bot_threads", progress.threads))
+
 	return threads, nil
 }
 
@@ -665,15 +823,25 @@ func (service *Service) newProgress(
 	settings reviewSettings,
 	startedAt time.Time,
 ) *reviewProgress {
-	progress := newReviewProgress(job.Head, startedAt, settings.minimumImportance, job.Forced, service.reviewPolicy.MetadataFindingsDisplay())
+	progress := newReviewProgress(
+		job.Head,
+		startedAt,
+		settings.minimumImportance,
+		job.Forced,
+		service.reviewPolicy.MetadataFindingsDisplay(),
+	)
 	progress.fileAssessmentsDisplay = service.reviewPolicy.FileAssessmentsDisplay()
 	progress.fileAssessmentMaximumBytes = service.reviewPolicy.FileAssessmentMaximumBytes()
+
 	return progress
 }
 
 // checkAlreadySucceeded reports whether this head already carries a completed
 // successful check, which means the review ran and needs no repeat.
-func (service *Service) checkAlreadySucceeded(ctx context.Context, checkRun githubapp.CheckRun) bool {
+func (service *Service) checkAlreadySucceeded(
+	ctx context.Context,
+	checkRun githubapp.CheckRun,
+) bool {
 	logger := gklog.L(ctx)
 	logger.InfoContext(
 		ctx,
@@ -685,7 +853,9 @@ func (service *Service) checkAlreadySucceeded(ctx context.Context, checkRun gith
 	if checkRun.Status != checkRunCompleted || checkRun.Conclusion != checkConclusionSuccess {
 		return false
 	}
+
 	logger.InfoContext(ctx, "review job suppressed", slog.String("reason", "completed_check"))
+
 	return true
 }
 
@@ -696,11 +866,13 @@ func logAnalysis(ctx context.Context, analysis Analysis) error {
 		logger.ErrorContext(ctx, "trace observed findings", slog.String("err", err.Error()))
 		return fmt.Errorf("trace observed findings: %w", err)
 	}
+
 	eligibleTrace, err := traceFindings(ctx, analysis.Anchored)
 	if err != nil {
 		logger.ErrorContext(ctx, "trace eligible findings", slog.String("err", err.Error()))
 		return fmt.Errorf("trace eligible findings: %w", err)
 	}
+
 	logger.InfoContext(
 		ctx,
 		"review analysis classified",
@@ -709,6 +881,7 @@ func logAnalysis(ctx context.Context, analysis Analysis) error {
 		slog.Any("observed_findings", observedTrace),
 		slog.Any("eligible_findings", eligibleTrace),
 	)
+
 	return nil
 }
 
@@ -726,30 +899,77 @@ func (service *Service) publish(
 	settings reviewSettings,
 ) error {
 	if len(state.Pending) == 0 && len(state.Unread) == 0 {
-		retained, assessmentErr := service.reassessMetadataFindings(ctx, job, pass.retainedMetadata, pass.work.Metadata, pass.work.PullRequest, settings)
+		retained, assessmentErr := service.reassessMetadataFindings(
+			ctx,
+			job,
+			pass.retainedMetadata,
+			pass.work.Metadata,
+			pass.work.PullRequest,
+			settings,
+		)
 		if assessmentErr != nil {
-			return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, assessmentErr)
+			return service.failCheck(
+				ctx,
+				job,
+				checkRun.ID,
+				progress.summary(service.now()),
+				checkFailureAnalysis,
+				assessmentErr,
+			)
 		}
+
 		pass.retainedMetadata = retained
 	}
-	return service.publishReassessed(ctx, job, head, checkRun, reviews, pass, state, startedAt, progress, settings)
+
+	return service.publishReassessed(
+		ctx,
+		job,
+		head,
+		checkRun,
+		reviews,
+		pass,
+		state,
+		startedAt,
+		progress,
+		settings,
+	)
 }
 
 func (service *Service) publishReassessed(
-	ctx context.Context, job domain.ReviewJob, head domain.HeadSHA,
-	checkRun githubapp.CheckRun, reviews []githubapp.Review, pass *chunkPass,
-	state marker.State, startedAt time.Time, progress *reviewProgress, settings reviewSettings,
+	ctx context.Context,
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	checkRun githubapp.CheckRun,
+	reviews []githubapp.Review,
+	pass *chunkPass,
+	state marker.State,
+	startedAt time.Time,
+	progress *reviewProgress,
+	settings reviewSettings,
 ) error {
 	// Reading a commit proves it was reviewed, not that it is still the head. A
 	// verdict submitted here would judge a commit this run never read, so a
 	// moved head ends the run and leaves the work to the push that moved it.
-	currentPullRequest, err := service.publicationPullRequest(ctx, job, diff.PullRequestRevision(pass.work.PullRequest))
+	currentPullRequest, err := service.publicationPullRequest(
+		ctx,
+		job,
+		diff.PullRequestRevision(pass.work.PullRequest),
+	)
 	if errors.Is(err, errHeadMoved) {
 		return service.cancelCheck(ctx, job, checkRun.ID)
 	}
+
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, err)
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureRefresh,
+			err,
+		)
 	}
+
 	progress.reached("the head refresh")
 
 	// Findings either reached the diff or were retained for the summary, so the
@@ -764,7 +984,14 @@ func (service *Service) publishReassessed(
 
 	threads, err := service.openThreads(ctx, job, progress)
 	if err != nil {
-		return service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureThreads, err)
+		return service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureThreads,
+			err,
+		)
 	}
 
 	shortfall := pass.structuralShortfall()
@@ -775,42 +1002,46 @@ func (service *Service) publishReassessed(
 	// refused or a finding could not reach the diff.
 	headFullyReviewed := len(state.Pending) == 0 && len(state.Unread) == 0 &&
 		(analysis.CoverageComplete || omissionsDecided) && failed == len(fallback)
-	approvalAllowed := headFullyReviewed && (!omissionsDecided || omissionsAccepted) && len(fallback) == 0
+	approvalAllowed := headFullyReviewed && (!omissionsDecided || omissionsAccepted) &&
+		len(fallback) == 0
 	decision := reviewerDecision(threads, service.botLogin, approvalAllowed)
 	if len(metadata) > 0 {
 		decision = domain.ReviewDecisionRequestChanges
 	}
+
 	blocking := blockingReasons(threads, service.botLogin, job.PullRequestRef)
 	summary := Summary{
-		FileAssessmentNote: "", Head: head,
-		Decision:         decision,
-		DecisionReason:   pass.decisionReason(),
-		ApprovalWithheld: !approvalAllowed,
+		FileAssessmentNote: "",
+		Head:               head,
+		Decision:           decision,
+		DecisionReason:     pass.decisionReason(),
+		ApprovalWithheld:   !approvalAllowed,
 		Report: Report{
 			Summary:     "",
 			Walkthrough: nil,
 		},
-		Blocking:                blocking,
-		Models:                  analysis.Models,
-		Usage:                   UsageFromContext(ctx),
-		Duration:                service.now().Sub(startedAt),
-		FilesReviewed:           analysis.FilesReviewed,
-		Chunks:                  analysis.Chunks,
-		CoverageComplete:        analysis.CoverageComplete,
-		MinimumImportance:       settings.minimumImportance,
-		Observed:                analysis.Observed,
-		Eligible:                analysis.Anchored,
-		Published:               published,
-		Fallback:                fallback,
-		Metadata:                metadata,
-		metadataCheckpoint:      metadataCheckpoint,
-		fallbackCheckpoint:      fallbackCheckpoint,
-		MetadataRevision:        diff.PullRequestRevision(pass.work.PullRequest),
-		MetadataFindingsDisplay: service.reviewPolicy.MetadataFindingsDisplay(),
-		PriorReviews:            traceReviews(reviews, service.botLogin),
-		Threads:                 traceThreads(threads, service.botLogin),
-		Reached:                 "",
-		Failed:                  false, InProgress: false,
+		Blocking:                   blocking,
+		Models:                     analysis.Models,
+		Usage:                      UsageFromContext(ctx),
+		Duration:                   service.now().Sub(startedAt),
+		FilesReviewed:              analysis.FilesReviewed,
+		Chunks:                     analysis.Chunks,
+		CoverageComplete:           analysis.CoverageComplete,
+		MinimumImportance:          settings.minimumImportance,
+		Observed:                   analysis.Observed,
+		Eligible:                   analysis.Anchored,
+		Published:                  published,
+		Fallback:                   fallback,
+		Metadata:                   metadata,
+		metadataCheckpoint:         metadataCheckpoint,
+		fallbackCheckpoint:         fallbackCheckpoint,
+		MetadataRevision:           diff.PullRequestRevision(pass.work.PullRequest),
+		MetadataFindingsDisplay:    service.reviewPolicy.MetadataFindingsDisplay(),
+		PriorReviews:               traceReviews(reviews, service.botLogin),
+		Threads:                    traceThreads(threads, service.botLogin),
+		Reached:                    "",
+		Failed:                     false,
+		InProgress:                 false,
 		Forced:                     job.Forced,
 		Omissions:                  nil,
 		OmissionsAccepted:          omissionsAccepted,
@@ -821,23 +1052,49 @@ func (service *Service) publishReassessed(
 	if omissionsDecided {
 		summary.Omissions = shortfall.Hunks
 	}
+
 	// A head holding something no run can read is settled first. Its shortfall
 	// outlives every later push, so the pending path's promise that the next
 	// push covers it would be false even when chunks are pending too.
 	if shortfall.present() && !omissionsDecided || len(state.Pending) > 0 {
 		if shortfall.present() && !omissionsDecided {
 			return service.concludeStructurallyIncomplete(
-				ctx, job, checkRun, currentPullRequest, state, shortfall, summary, progress, pass,
+				ctx,
+				job,
+				checkRun,
+				currentPullRequest,
+				state,
+				shortfall,
+				summary,
+				progress,
+				pass,
 			)
 		}
+
 		publicationCtx, cancelPublication := service.publicationContext(ctx)
 		defer cancelPublication()
+
 		return service.concludeIncomplete(
-			publicationCtx, job, checkRun, state, pass, summary, progress,
+			publicationCtx,
+			job,
+			checkRun,
+			state,
+			pass,
+			summary,
+			progress,
 		)
 	}
+
 	return service.publishCompletedReview(
-		ctx, job, checkRun, currentPullRequest, head, summary, state, progress, pass,
+		ctx,
+		job,
+		checkRun,
+		currentPullRequest,
+		head,
+		summary,
+		state,
+		progress,
+		pass,
 	)
 }
 
@@ -853,14 +1110,26 @@ func (service *Service) openThreads(
 	progress *reviewProgress,
 ) ([]githubapp.ReviewThread, error) {
 	logger := gklog.L(ctx)
-	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
+	threads, err := service.github.ListReviewThreads(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
-		logger.ErrorContext(ctx, "list review threads for the verdict", slog.String("err", err.Error()))
+		logger.ErrorContext(
+			ctx,
+			"list review threads for the verdict",
+			slog.String("err", err.Error()),
+		)
+
 		return nil, fmt.Errorf("list review threads: %w", err)
 	}
+
 	progress.threads = traceThreads(threads, service.botLogin)
 	progress.reached("the thread refresh")
 	logger.InfoContext(ctx, "verdict threads loaded", slog.Any("bot_threads", progress.threads))
+
 	return threads, nil
 }
 
@@ -884,18 +1153,27 @@ func (service *Service) publishVerdict(
 		if err != nil {
 			return err
 		}
+
 		summary.FileAssessmentNote = note
 	}
-	if err := service.checkpointCompletedPublication(ctx, job, checkRun.ID, summary, state); err != nil {
+
+	if err := service.checkpointCompletedPublication(
+		ctx,
+		job,
+		checkRun.ID,
+		summary,
+		state,
+	); err != nil {
 		return err
 	}
+
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.ErrorContext(ctx, "refresh reviews for the verdict", slog.String("err", err.Error()))
-		return service.failCheck(
-			ctx, job, checkRun.ID, summary, checkFailureReviews, err,
-		)
+
+		return service.failCheck(ctx, job, checkRun.ID, summary, checkFailureReviews, err)
 	}
+
 	standing := service.standingVerdict(job, reviews, summary)
 	withdrawnByHuman := false
 	if summary.Decision == domain.ReviewDecisionRequestChanges {
@@ -904,6 +1182,7 @@ func (service *Service) publishVerdict(
 			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
 		}
 	}
+
 	decisionState := reviewStateFor(summary.Decision)
 	unchanged := standing.found && !standing.withdrawn &&
 		standing.review.State == decisionState &&
@@ -917,10 +1196,9 @@ func (service *Service) publishVerdict(
 		logger.InfoContext(ctx, "review verdict withheld", "reason", "block_withdrawn_by_hand")
 	case unchanged:
 		if err := service.updateStandingVerdict(ctx, job, standing.review, summary); err != nil {
-			return service.failCheck(
-				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
-			)
+			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
 		}
+
 		logger.InfoContext(
 			ctx,
 			"review verdict unchanged",
@@ -930,10 +1208,9 @@ func (service *Service) publishVerdict(
 	default:
 		publishedReview, err := service.submitInlineBackedVerdict(ctx, job, summary)
 		if err != nil {
-			return service.failCheck(
-				ctx, job, checkRun.ID, summary, checkFailurePublish, err,
-			)
+			return service.failCheck(ctx, job, checkRun.ID, summary, checkFailurePublish, err)
 		}
+
 		logger.InfoContext(
 			ctx,
 			"review published",
@@ -947,22 +1224,44 @@ func (service *Service) publishVerdict(
 	// The one top level comment carries the same body plus the durable state
 	// the chunk loop advanced, so a later invocation resumes from a checkpoint
 	// this run actually reached rather than one it asserted.
-	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderBody(summary),
-		State: state,
-	}); err != nil {
+	if err := service.upsertSummaryComment(
+		ctx,
+		job,
+		summaryCommentContent{
+			Prose: RenderBody(summary),
+			State: state,
+		},
+	); err != nil {
 		return service.failCheck(ctx, job, checkRun.ID, summary, checkFailureSummary, err)
 	}
 
 	if summary.Decision == domain.ReviewDecisionComment {
 		recordAssessment(ctx, domain.AssessmentDeclined, &summary, nil, 0)
-		return service.completeCheckRun(ctx, job.InstallationID, job.Repository, checkRun.ID, checkConclusionDeclined, summary.Title(), RenderDetails(summary))
+
+		return service.completeCheckRun(
+			ctx,
+			job.InstallationID,
+			job.Repository,
+			checkRun.ID,
+			checkConclusionDeclined,
+			summary.Title(),
+			RenderDetails(summary),
+		)
 	}
+
 	recordAssessment(ctx, domain.AssessmentCompleted, &summary, nil, 0)
-	if err := service.succeed(ctx, job, checkRun.ID, summary.Title(), RenderDetails(summary)); err != nil {
+	if err := service.succeed(
+		ctx,
+		job,
+		checkRun.ID,
+		summary.Title(),
+		RenderDetails(summary),
+	); err != nil {
 		return err
 	}
+
 	logger.InfoContext(ctx, "review job completed", slog.Int64("check_run_id", checkRun.ID))
+
 	return nil
 }
 
@@ -983,16 +1282,20 @@ func hasBotReviewMarker(
 		if item.Author != botLogin {
 			continue
 		}
+
 		if item.CommitID != head {
 			continue
 		}
+
 		markerHead, ok := marker.FindReview(item.Body)
 		if !ok {
 			continue
 		}
+
 		if markerHead == head {
 			return true
 		}
 	}
+
 	return false
 }

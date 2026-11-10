@@ -33,47 +33,71 @@ func loadReassessment(lookup LookupEnv) (Reassessment, error) {
 	if !found {
 		return settings, nil
 	}
+
 	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
 		return settings, errors.New("REASSESSMENT must be an object")
 	}
+
 	if !settings.Enabled {
 		return settings, nil
 	}
+
 	if settings.MetadataSettleInterval != "" {
 		interval, err := time.ParseDuration(settings.MetadataSettleInterval)
 		if err != nil || interval < 0 {
-			return settings, errors.New("REASSESSMENT.metadata_settle_interval must be a nonnegative duration")
+			return settings, errors.New(
+				"REASSESSMENT.metadata_settle_interval must be a nonnegative duration",
+			)
 		}
+
 		settings.MetadataSettleDelay = interval
 	}
+
 	if _, err := parseRequiredHTTPSURL("REASSESSMENT.queue_url", settings.QueueURL); err != nil {
 		return settings, err
 	}
+
 	initial, err := time.ParseDuration(settings.InitialDelay)
 	if err != nil || initial <= 0 {
 		return settings, errors.New("REASSESSMENT.initial_delay must be positive")
 	}
+
 	maximum, err := time.ParseDuration(settings.MaximumDelay)
 	if err != nil || maximum < initial {
 		return settings, errors.New("REASSESSMENT.maximum_delay must be at least initial_delay")
 	}
-	for name, value := range map[string]string{"ttl": settings.TTL, "terminal_retention": settings.TerminalRetention} {
+
+	for name, value := range map[string]string{
+		"ttl":                settings.TTL,
+		"terminal_retention": settings.TerminalRetention,
+	} {
 		duration, parseErr := time.ParseDuration(value)
 		if parseErr != nil || duration < 0 {
 			return settings, fmt.Errorf("REASSESSMENT.%s must be a nonnegative duration", name)
 		}
 	}
+
 	if settings.MaximumAttempts < 0 {
 		return settings, errors.New("REASSESSMENT.maximum_attempts must be nonnegative")
 	}
-	for name, value := range map[string]string{"reconcile_interval": settings.ReconcileInterval, "confirmation_interval": settings.ConfirmationInterval} {
+
+	for name, value := range map[string]string{
+		"reconcile_interval":    settings.ReconcileInterval,
+		"confirmation_interval": settings.ConfirmationInterval,
+	} {
 		duration, parseErr := time.ParseDuration(value)
 		if parseErr != nil || duration <= 0 {
 			return settings, fmt.Errorf("REASSESSMENT.%s must be positive", name)
 		}
 	}
-	if settings.PageSize < 1 || settings.PageSize > 100 || settings.BatchSize < 1 || settings.StateConfirmations < 1 || settings.ReadBudget < 1 {
-		return settings, errors.New("REASSESSMENT requires page_size from 1 through 100 and positive batch_size and state_confirmations")
+
+	if settings.PageSize < 1 || settings.PageSize > 100 || settings.BatchSize < 1 ||
+		settings.StateConfirmations < 1 ||
+		settings.ReadBudget < 1 {
+		return settings, errors.New(
+			"REASSESSMENT requires page_size from 1 through 100 and positive batch_size and state_confirmations",
+		)
 	}
+
 	return settings, nil
 }

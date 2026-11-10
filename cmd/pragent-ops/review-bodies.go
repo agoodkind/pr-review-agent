@@ -130,7 +130,12 @@ func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return err
 	}
-	client := githubapp.NewClient(cfg, &http.Client{Timeout: reviewBodyRequestTimeout}, time.Now, slog.Default())
+	client := githubapp.NewClient(
+		cfg,
+		&http.Client{Timeout: reviewBodyRequestTimeout},
+		time.Now,
+		slog.Default(),
+	)
 	snapshot, err := captureReviewBodies(ctx, client, opts.installationID, repo, opts.pullRequest)
 	if err != nil {
 		return err
@@ -144,7 +149,10 @@ func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return err
 	}
 	if opts.linkSummary {
-		selected = slices.DeleteFunc(selected, func(item githubapp.Review) bool { return item.State == "APPROVED" })
+		selected = slices.DeleteFunc(
+			selected,
+			func(item githubapp.Review) bool { return item.State == "APPROVED" },
+		)
 		for _, item := range snapshot.Reviews {
 			if item.Author != cfg.GitHubBotLogin || item.State == "APPROVED" {
 				continue
@@ -194,7 +202,10 @@ func reviewBodies(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	return printReviewBodyPlan(stdout, selected, clear, true, opts.linkSummary)
 }
 
-func reviewBodySummaryPrefix(opts reviewBodyOptions, snapshot reviewBodySnapshot, bot string) (string, error) {
+func reviewBodySummaryPrefix(opts reviewBodyOptions, snapshot reviewBodySnapshot, bot string) (
+	string,
+	error,
+) {
 	if !opts.linkSummary {
 		return "", nil
 	}
@@ -207,9 +218,14 @@ func reviewBodySummaryPrefix(opts reviewBodyOptions, snapshot reviewBodySnapshot
 		return "", err
 	}
 	if runtime.RulesFile == "" || runtime.PromptsFile == "" {
-		return "", errors.New("runtime configuration requires review rule and prompt files for summary links")
+		return "", errors.New(
+			"runtime configuration requires review rule and prompt files for summary links",
+		)
 	}
-	policy, err := reviewrules.LoadPolicy(filepath.Join(filepath.Dir(opts.runtime), runtime.RulesFile), filepath.Join(filepath.Dir(opts.runtime), runtime.PromptsFile))
+	policy, err := reviewrules.LoadPolicy(
+		filepath.Join(filepath.Dir(opts.runtime), runtime.RulesFile),
+		filepath.Join(filepath.Dir(opts.runtime), runtime.PromptsFile),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -219,24 +235,74 @@ func reviewBodySummaryPrefix(opts reviewBodyOptions, snapshot reviewBodySnapshot
 			summaryID = comment.ID
 		}
 	}
-	return review.NativeReviewSummaryLink(policy, snapshot.Repository, snapshot.Number, summaryID, "")
+	return review.NativeReviewSummaryLink(
+		policy,
+		snapshot.Repository,
+		snapshot.Number,
+		summaryID,
+		"",
+	)
 }
 
 func reviewBodyFlags(args []string, output io.Writer) (reviewBodyOptions, error) {
 	var opts reviewBodyOptions
 	set := flag.NewFlagSet("review-bodies", flag.ContinueOnError)
 	set.SetOutput(output)
-	set.Var(&opts.reviewIDs, "review-id", "Select an exact review ID. Repeat the flag to select additional IDs.")
-	set.StringVar(&opts.runtime, "runtime", "runtime.json", "Read the GitHub app ID and bot login from this public runtime file.")
+	set.Var(
+		&opts.reviewIDs,
+		"review-id",
+		"Select an exact review ID. Repeat the flag to select additional IDs.",
+	)
+	set.StringVar(
+		&opts.runtime,
+		"runtime",
+		"runtime.json",
+		"Read the GitHub app ID and bot login from this public runtime file.",
+	)
 	set.StringVar(&opts.appID, "app-id", "", "Use this GitHub app ID instead of the runtime value.")
-	set.StringVar(&opts.botLogin, "bot-login", "", "Use this exact bot login instead of the runtime value.")
-	set.StringVar(&opts.privateKeyFile, "app-private-key-file", "", "Read the GitHub app RSA private key from this file.")
-	set.StringVar(&opts.repository, "repository", "", "Select the target repository using OWNER/REPO.")
+	set.StringVar(
+		&opts.botLogin,
+		"bot-login",
+		"",
+		"Use this exact bot login instead of the runtime value.",
+	)
+	set.StringVar(
+		&opts.privateKeyFile,
+		"app-private-key-file",
+		"",
+		"Read the GitHub app RSA private key from this file.",
+	)
+	set.StringVar(
+		&opts.repository,
+		"repository",
+		"",
+		"Select the target repository using OWNER/REPO.",
+	)
 	set.IntVar(&opts.pullRequest, "pull-request", 0, "Select this pull request number.")
-	set.Int64Var(&opts.installationID, "installation-id", 0, "Authenticate with this GitHub app installation ID.")
-	set.StringVar(&opts.backupFile, "backup-file", "", "Create this private backup file before applying cleanup.")
-	set.BoolVar(&opts.apply, "apply", false, "Apply selected body repairs after backing up and verifying the target.")
-	set.BoolVar(&opts.linkSummary, "link-summary", false, "Add the configured summary permalink to hidden review bodies without changing their decisions or checkpoint data.")
+	set.Int64Var(
+		&opts.installationID,
+		"installation-id",
+		0,
+		"Authenticate with this GitHub app installation ID.",
+	)
+	set.StringVar(
+		&opts.backupFile,
+		"backup-file",
+		"",
+		"Create this private backup file before applying cleanup.",
+	)
+	set.BoolVar(
+		&opts.apply,
+		"apply",
+		false,
+		"Apply selected body repairs after backing up and verifying the target.",
+	)
+	set.BoolVar(
+		&opts.linkSummary,
+		"link-summary",
+		false,
+		"Add the configured summary permalink to hidden review bodies without changing their decisions or checkpoint data.",
+	)
 	if err := set.Parse(args); err != nil {
 		return opts, err
 	}
@@ -244,7 +310,9 @@ func reviewBodyFlags(args []string, output io.Writer) (reviewBodyOptions, error)
 		return opts, errors.New("review-bodies does not accept positional arguments")
 	}
 	if opts.repository == "" || opts.pullRequest <= 0 || opts.installationID <= 0 || opts.privateKeyFile == "" {
-		return opts, errors.New("review-bodies requires repository, pull-request, installation-id, and app-private-key-file")
+		return opts, errors.New(
+			"review-bodies requires repository, pull-request, installation-id, and app-private-key-file",
+		)
 	}
 	if opts.apply && opts.backupFile == "" {
 		return opts, errors.New("review-bodies --apply requires a new backup-file")
@@ -255,8 +323,12 @@ func reviewBodyFlags(args []string, output io.Writer) (reviewBodyOptions, error)
 func reviewBodyRepository(value string) (domain.Repository, error) {
 	var repo domain.Repository
 	parts := strings.Split(value, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || strings.ContainsAny(value, "?#\\ \t\r\n") {
-		return repo, errors.New("repository must use OWNER/REPO without whitespace or URL parameters")
+	if len(
+		parts,
+	) != 2 || parts[0] == "" || parts[1] == "" || strings.ContainsAny(value, "?#\\ \t\r\n") {
+		return repo, errors.New(
+			"repository must use OWNER/REPO without whitespace or URL parameters",
+		)
 	}
 	repo.Owner, repo.Name = parts[0], parts[1]
 	return repo, nil
@@ -291,7 +363,13 @@ func reviewBodyIdentity(opts reviewBodyOptions) (config.Config, error) {
 	return config.LoadGitHubIdentity(appID, opts.botLogin, key)
 }
 
-func captureReviewBodies(ctx context.Context, client *githubapp.Client, installationID int64, repo domain.Repository, number int) (reviewBodySnapshot, error) {
+func captureReviewBodies(
+	ctx context.Context,
+	client *githubapp.Client,
+	installationID int64,
+	repo domain.Repository,
+	number int,
+) (reviewBodySnapshot, error) {
 	var snapshot reviewBodySnapshot
 	snapshot.Repository, snapshot.Number, snapshot.InstallationID = repo, number, installationID
 	snapshot.CapturedAt = time.Now().UTC()
@@ -323,7 +401,9 @@ func validateReviewBodySummary(snapshot reviewBodySnapshot, botLogin string) err
 		}
 		count++
 		state, valid := marker.DecodeState(comment.Body)
-		if !valid || state.Status != marker.StateDone || state.LastReviewed != snapshot.PullRequest.Head || len(state.Pending) != 0 || len(state.Unread) != 0 {
+		if !valid || state.Status != marker.StateDone || state.LastReviewed != snapshot.PullRequest.Head || len(
+			state.Pending,
+		) != 0 || len(state.Unread) != 0 {
 			return errors.New("the bot summary must record a completed review of the current head")
 		}
 	}
@@ -333,7 +413,10 @@ func validateReviewBodySummary(snapshot reviewBodySnapshot, botLogin string) err
 	return nil
 }
 
-func selectReviewBodies(reviews []githubapp.Review, botLogin string) ([]githubapp.Review, []githubapp.Review) {
+func selectReviewBodies(reviews []githubapp.Review, botLogin string) (
+	[]githubapp.Review,
+	[]githubapp.Review,
+) {
 	var selected []githubapp.Review
 	var clear []githubapp.Review
 	for _, item := range reviews {
@@ -370,7 +453,11 @@ func reviewBodyHidden(body string) bool {
 	return true
 }
 
-func restrictReviewBodies(selected, clear []githubapp.Review, ids reviewBodyIDs) ([]githubapp.Review, []githubapp.Review, error) {
+func restrictReviewBodies(selected, clear []githubapp.Review, ids reviewBodyIDs) (
+	[]githubapp.Review,
+	[]githubapp.Review,
+	error,
+) {
 	if len(ids) == 0 {
 		return selected, clear, nil
 	}
@@ -389,7 +476,10 @@ func restrictReviewBodies(selected, clear []githubapp.Review, ids reviewBodyIDs)
 	clear = slices.DeleteFunc(clear, exclude)
 	for _, id := range ids {
 		if !found[id] {
-			return nil, nil, fmt.Errorf("review %d is not an eligible bot review with a hidden or empty body", id)
+			return nil, nil, fmt.Errorf(
+				"review %d is not an eligible bot review with a hidden or empty body",
+				id,
+			)
 		}
 	}
 	return selected, clear, nil
@@ -423,22 +513,41 @@ func writeReviewBodyBackup(path string, snapshot reviewBodySnapshot) (returnErr 
 	return nil
 }
 
-func applyReviewBodies(ctx context.Context, client *githubapp.Client, snapshot reviewBodySnapshot, selected, replacements []githubapp.Review) (returnErr error) {
+func applyReviewBodies(
+	ctx context.Context,
+	client *githubapp.Client,
+	snapshot reviewBodySnapshot,
+	selected []githubapp.Review,
+	replacements []githubapp.Review,
+) (returnErr error) {
 	attempted := make([]githubapp.Review, 0, len(selected))
 	defer func() {
 		if returnErr == nil || len(attempted) == 0 {
 			return
 		}
-		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), reviewBodyRollbackTimeout)
+		rollbackCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			reviewBodyRollbackTimeout,
+		)
 		defer cancel()
-		returnErr = errors.Join(returnErr, rollbackReviewBodies(rollbackCtx, client, snapshot, attempted, replacements))
+		returnErr = errors.Join(
+			returnErr,
+			rollbackReviewBodies(rollbackCtx, client, snapshot, attempted, replacements),
+		)
 	}()
 	for index, original := range selected {
-		current, err := client.GetReview(ctx, snapshot.InstallationID, snapshot.Repository, snapshot.Number, original.ID)
+		current, err := client.GetReview(
+			ctx,
+			snapshot.InstallationID,
+			snapshot.Repository,
+			snapshot.Number,
+			original.ID,
+		)
 		if err != nil {
 			return &reviewBodyOperationError{
-				operation: "read_review", reviewID: original.ID,
-				cause: fmt.Errorf("read review: %w", err),
+				operation: "read_review",
+				reviewID:  original.ID,
+				cause:     fmt.Errorf("read review: %w", err),
 			}
 		}
 		if current != original {
@@ -446,17 +555,28 @@ func applyReviewBodies(ctx context.Context, client *githubapp.Client, snapshot r
 		}
 		// A failed response may follow a successful remote write.
 		attempted = append(attempted, original)
-		updated, err := client.UpdateReview(ctx, snapshot.InstallationID, snapshot.Repository, snapshot.Number, original.ID, replacements[index].Body)
+		updated, err := client.UpdateReview(
+			ctx,
+			snapshot.InstallationID,
+			snapshot.Repository,
+			snapshot.Number,
+			original.ID,
+			replacements[index].Body,
+		)
 		if err != nil {
 			return &reviewBodyOperationError{
-				operation: "clear_review_body", reviewID: original.ID,
-				cause: fmt.Errorf("clear review body: %w", err),
+				operation: "clear_review_body",
+				reviewID:  original.ID,
+				cause:     fmt.Errorf("clear review body: %w", err),
 			}
 		}
 		expected := original
 		expected.Body = replacements[index].Body
 		if updated != expected {
-			return fmt.Errorf("review %d did not retain its original decision after body cleanup", original.ID)
+			return fmt.Errorf(
+				"review %d did not retain its original decision after body cleanup",
+				original.ID,
+			)
 		}
 	}
 	return verifyReviewBodySnapshot(ctx, client, snapshot, replacements)
@@ -484,8 +604,12 @@ func reportReviewBodyError(backupPath string, failure error) error {
 	}
 	if err := writeReviewBodyDiagnostic(path, diagnostic); err != nil {
 		return &reviewBodyDiagnosticError{
-			message: fmt.Sprintf("%s Private diagnostics could not be saved at %s.", publicStatus, path),
-			cause:   errors.Join(failure, fmt.Errorf("write private review diagnostics: %w", err)),
+			message: fmt.Sprintf(
+				"%s Private diagnostics could not be saved at %s.",
+				publicStatus,
+				path,
+			),
+			cause: errors.Join(failure, fmt.Errorf("write private review diagnostics: %w", err)),
 		}
 	}
 	return &reviewBodyDiagnosticError{
@@ -511,36 +635,87 @@ func writeReviewBodyDiagnostic(path string, diagnostic reviewBodyDiagnostic) (re
 	return file.Sync()
 }
 
-func rollbackReviewBodies(ctx context.Context, client *githubapp.Client, snapshot reviewBodySnapshot, attempted, replacements []githubapp.Review) error {
+func rollbackReviewBodies(
+	ctx context.Context,
+	client *githubapp.Client,
+	snapshot reviewBodySnapshot,
+	attempted []githubapp.Review,
+	replacements []githubapp.Review,
+) error {
 	var failures []error
 	for _, original := range slices.Backward(attempted) {
-		current, err := client.GetReview(ctx, snapshot.InstallationID, snapshot.Repository, snapshot.Number, original.ID)
+		current, err := client.GetReview(
+			ctx,
+			snapshot.InstallationID,
+			snapshot.Repository,
+			snapshot.Number,
+			original.ID,
+		)
 		if err != nil || current.ID != original.ID || current.Author != original.Author {
-			failures = append(failures, fmt.Errorf("review %d could not be read for body restoration", original.ID))
+			failures = append(
+				failures,
+				fmt.Errorf("review %d could not be read for body restoration", original.ID),
+			)
 			continue
 		}
 		if current.Body == original.Body {
 			continue
 		}
-		index := slices.IndexFunc(replacements, func(item githubapp.Review) bool { return item.ID == original.ID })
+		index := slices.IndexFunc(
+			replacements,
+			func(item githubapp.Review) bool { return item.ID == original.ID },
+		)
 		if index < 0 || current.Body != replacements[index].Body {
-			failures = append(failures, fmt.Errorf("review %d contains a different body and was not overwritten during restoration", original.ID))
+			failures = append(
+				failures,
+				fmt.Errorf(
+					"review %d contains a different body and was not overwritten during restoration",
+					original.ID,
+				),
+			)
 			continue
 		}
-		restored, err := client.UpdateReview(ctx, snapshot.InstallationID, snapshot.Repository, snapshot.Number, original.ID, original.Body)
+		restored, err := client.UpdateReview(
+			ctx,
+			snapshot.InstallationID,
+			snapshot.Repository,
+			snapshot.Number,
+			original.ID,
+			original.Body,
+		)
 		if err != nil || restored.ID != original.ID || restored.Author != original.Author || restored.Body != original.Body || restored.State != current.State {
-			failures = append(failures, fmt.Errorf("review %d body could not be restored without changing its decision", original.ID))
+			failures = append(
+				failures,
+				fmt.Errorf(
+					"review %d body could not be restored without changing its decision",
+					original.ID,
+				),
+			)
 		}
 	}
-	rollbackErr := errors.Join(errors.Join(failures...), verifyReviewBodySnapshot(ctx, client, snapshot, nil))
+	rollbackErr := errors.Join(
+		errors.Join(failures...),
+		verifyReviewBodySnapshot(ctx, client, snapshot, nil),
+	)
 	if rollbackErr != nil {
 		slog.WarnContext(ctx, "Review body restoration failed", "review_count", len(attempted))
 	}
 	return rollbackErr
 }
 
-func verifyReviewBodySnapshot(ctx context.Context, client *githubapp.Client, original reviewBodySnapshot, cleared []githubapp.Review) error {
-	current, err := captureReviewBodies(ctx, client, original.InstallationID, original.Repository, original.Number)
+func verifyReviewBodySnapshot(
+	ctx context.Context,
+	client *githubapp.Client,
+	original reviewBodySnapshot,
+	cleared []githubapp.Review,
+) error {
+	current, err := captureReviewBodies(
+		ctx,
+		client,
+		original.InstallationID,
+		original.Repository,
+		original.Number,
+	)
 	if err != nil {
 		return err
 	}
@@ -552,7 +727,10 @@ func verifyReviewBodySnapshot(ctx context.Context, client *githubapp.Client, ori
 	}
 	for _, item := range original.Reviews {
 		expected := item
-		if index := slices.IndexFunc(cleared, func(review githubapp.Review) bool { return review.ID == item.ID }); index >= 0 {
+		if index := slices.IndexFunc(
+			cleared,
+			func(review githubapp.Review) bool { return review.ID == item.ID },
+		); index >= 0 {
 			expected.Body = cleared[index].Body
 		}
 		if !slices.Contains(current.Reviews, expected) {
@@ -571,36 +749,72 @@ func verifyReviewBodySnapshot(ctx context.Context, client *githubapp.Client, ori
 func printReviewBodyPlan(output io.Writer, selected, clear []githubapp.Review, applied, linked bool) error {
 	for _, item := range selected {
 		if linked {
-			if _, err := fmt.Fprintf(output, "Review %d has state %s with a summary permalink; applied=%t.\n", item.ID, item.State, applied); err != nil {
+			if _, err := fmt.Fprintf(
+				output,
+				"Review %d has state %s with a summary permalink; applied=%t.\n",
+				item.ID,
+				item.State,
+				applied,
+			); err != nil {
 				return err
 			}
 			continue
 		}
 		if applied {
-			if _, err := fmt.Fprintf(output, "Review %d retains state %s after body cleanup.\n", item.ID, item.State); err != nil {
+			if _, err := fmt.Fprintf(
+				output,
+				"Review %d retains state %s after body cleanup.\n",
+				item.ID,
+				item.State,
+			); err != nil {
 				return err
 			}
 		} else {
-			if _, err := fmt.Fprintf(output, "Review %d has state %s and requires body cleanup.\n", item.ID, item.State); err != nil {
+			if _, err := fmt.Fprintf(
+				output,
+				"Review %d has state %s and requires body cleanup.\n",
+				item.ID,
+				item.State,
+			); err != nil {
 				return err
 			}
 		}
 	}
 	for _, item := range clear {
 		if linked && item.Body != "" {
-			if _, err := fmt.Fprintf(output, "Review %d already includes the summary permalink and has state %s.\n", item.ID, item.State); err != nil {
+			if _, err := fmt.Fprintf(
+				output,
+				"Review %d already includes the summary permalink and has state %s.\n",
+				item.ID,
+				item.State,
+			); err != nil {
 				return err
 			}
 			continue
 		}
-		if _, err := fmt.Fprintf(output, "Review %d has state %s and an empty body.\n", item.ID, item.State); err != nil {
+		if _, err := fmt.Fprintf(
+			output,
+			"Review %d has state %s and an empty body.\n",
+			item.ID,
+			item.State,
+		); err != nil {
 			return err
 		}
 	}
 	if linked {
-		_, err := fmt.Fprintf(output, "The selection includes %d bodies to link and %d reviews that do not require updates.\n", len(selected), len(clear))
+		_, err := fmt.Fprintf(
+			output,
+			"The selection includes %d bodies to link and %d reviews that do not require updates.\n",
+			len(selected),
+			len(clear),
+		)
 		return err
 	}
-	_, err := fmt.Fprintf(output, "The selection includes %d bodies for cleanup and %d empty bodies.\n", len(selected), len(clear))
+	_, err := fmt.Fprintf(
+		output,
+		"The selection includes %d bodies for cleanup and %d empty bodies.\n",
+		len(selected),
+		len(clear),
+	)
 	return err
 }

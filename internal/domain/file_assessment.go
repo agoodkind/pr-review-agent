@@ -59,37 +59,54 @@ func (assessment FileAssessment) Validate() error {
 	if strings.TrimSpace(assessment.Path) == "" {
 		return &FileAssessmentValidationError{Field: "path"}
 	}
+
 	if strings.TrimSpace(assessment.Identity) == "" {
 		return &FileAssessmentValidationError{Field: "identity"}
 	}
+
 	if strings.TrimSpace(assessment.Reason) == "" {
 		return &FileAssessmentValidationError{Field: "reason"}
 	}
+
 	switch assessment.ContentReviewRequirement {
 	case ContentReviewRequired, ContentReviewUnnecessary, ContentReviewUncertain:
 	default:
 		return &FileAssessmentValidationError{Field: "content_review_requirement"}
 	}
+
 	switch assessment.ContentKind {
-	case reviewrules.ContentSource, reviewrules.ContentGenerated, reviewrules.ContentEncrypted, reviewrules.ContentBinary, reviewrules.ContentDependency, reviewrules.ContentData, reviewrules.ContentExternal, reviewrules.ContentUnknown:
+	case reviewrules.ContentSource,
+		reviewrules.ContentGenerated,
+		reviewrules.ContentEncrypted,
+		reviewrules.ContentBinary,
+		reviewrules.ContentDependency,
+		reviewrules.ContentData,
+		reviewrules.ContentExternal,
+		reviewrules.ContentUnknown:
 	default:
 		return &FileAssessmentValidationError{Field: "content_kind"}
 	}
+
 	switch assessment.Action {
 	case FileActionReview, FileActionInspectRelated, FileActionExclude, FileActionGap:
 	default:
 		return &FileAssessmentValidationError{Field: "action"}
 	}
+
 	if len(assessment.Evidence) == 0 {
 		return &FileAssessmentValidationError{Field: "evidence"}
 	}
-	if assessment.ContentKind == reviewrules.ContentUnknown && assessment.Action == FileActionExclude {
+
+	if assessment.ContentKind == reviewrules.ContentUnknown &&
+		assessment.Action == FileActionExclude {
 		return &FileAssessmentValidationError{Field: "content_exclusion"}
 	}
+
 	return nil
 }
 
 // PermitsContentExclusion rejects saved assessments that do not include a review requirement.
 func (assessment FileAssessment) PermitsContentExclusion() bool {
-	return assessment.Action == FileActionExclude && assessment.ContentReviewRequirement == ContentReviewUnnecessary
+	return assessment.Action == FileActionExclude &&
+		assessment.ContentReviewRequirement == ContentReviewUnnecessary
 }

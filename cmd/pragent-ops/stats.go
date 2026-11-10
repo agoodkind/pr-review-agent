@@ -45,26 +45,85 @@ func statsFlags(args []string, stderr io.Writer) (statsOptions, error) {
 	var opts statsOptions
 	set := flag.NewFlagSet("stats", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	set.StringVar(&opts.telemetry.since, "since", "", "Duration before --end; live capture defaults to 24h.")
+	set.StringVar(
+		&opts.telemetry.since,
+		"since",
+		"",
+		"Duration before --end; live capture defaults to 24h.",
+	)
 	set.StringVar(&opts.telemetry.from, "from", "", "Start timestamp in RFC3339; excludes --since.")
-	set.StringVar(&opts.telemetry.end, "end", "", "End timestamp in RFC3339; cached input defaults to the manifest end.")
-	set.StringVar(&opts.telemetry.input, "input", "", "Cached events.ndjson; skips Cloudflare telemetry requests.")
-	set.StringVar(&opts.telemetry.manifest, "manifest", "", "Cached manifest path; defaults to manifest.json beside input.")
-	set.StringVar(&opts.telemetry.account, "account", "", "Cloudflare account ID; defaults to Wrangler account_id.")
+	set.StringVar(
+		&opts.telemetry.end,
+		"end",
+		"",
+		"End timestamp in RFC3339; cached input defaults to the manifest end.",
+	)
+	set.StringVar(
+		&opts.telemetry.input,
+		"input",
+		"",
+		"Cached events.ndjson; skips Cloudflare telemetry requests.",
+	)
+	set.StringVar(
+		&opts.telemetry.manifest,
+		"manifest",
+		"",
+		"Cached manifest path; defaults to manifest.json beside input.",
+	)
+	set.StringVar(
+		&opts.telemetry.account,
+		"account",
+		"",
+		"Cloudflare account ID; defaults to Wrangler account_id.",
+	)
 	set.StringVar(&opts.telemetry.script, "script", "", "Worker script; defaults to Wrangler name.")
-	set.StringVar(&opts.telemetry.wrangler, "wrangler", "deploy/cloudflare/wrangler.jsonc", "Public Wrangler configuration.")
-	set.StringVar(&opts.telemetry.tokenFile, "token-file", "", "Existing scoped Cloudflare observability token file.")
-	set.StringVar(&opts.telemetry.accountTokenFile, "account-token-file", "", "Account token file for a temporary observability credential.")
-	set.DurationVar(&opts.telemetry.ttl, "credential-ttl", 90*time.Minute, "Temporary credential expiration.")
+	set.StringVar(
+		&opts.telemetry.wrangler,
+		"wrangler",
+		"deploy/cloudflare/wrangler.jsonc",
+		"Public Wrangler configuration.",
+	)
+	set.StringVar(
+		&opts.telemetry.tokenFile,
+		"token-file",
+		"",
+		"Existing scoped Cloudflare observability token file.",
+	)
+	set.StringVar(
+		&opts.telemetry.accountTokenFile,
+		"account-token-file",
+		"",
+		"Account token file for a temporary observability credential.",
+	)
+	set.DurationVar(
+		&opts.telemetry.ttl,
+		"credential-ttl",
+		90*time.Minute,
+		"Temporary credential expiration.",
+	)
 	set.IntVar(&opts.telemetry.pageSize, "page-size", 2000, "Telemetry records per page.")
 	set.IntVar(&opts.telemetry.maxPages, "max-pages", 200, "Telemetry page safety cap.")
 	set.StringVar(&opts.telemetry.apiURL, "api-url", cloudflareops.APIURL, "Cloudflare API URL.")
 	set.StringVar(&opts.telemetry.output, "output-dir", "", "New private output directory.")
 	set.StringVar(&opts.owner, "owner", "", "GitHub owner; defaults to the authenticated gh user.")
-	set.StringVar(&opts.botLogin, "bot-login", "", "Review bot login; defaults to runtime GITHUB_BOT_LOGIN.")
+	set.StringVar(
+		&opts.botLogin,
+		"bot-login",
+		"",
+		"Review bot login; defaults to runtime GITHUB_BOT_LOGIN.",
+	)
 	set.StringVar(&opts.runtime, "runtime", "runtime.json", "Public runtime configuration.")
-	set.StringVar(&opts.operatorTokenFile, "operator-token-file", "", "Optional operator token file for current quota snapshots.")
-	set.Var(&opts.excluded, "exclude", "Exclude OWNER/REPOSITORY#NUMBER from metrics and blockers; repeatable.")
+	set.StringVar(
+		&opts.operatorTokenFile,
+		"operator-token-file",
+		"",
+		"Optional operator token file for current quota snapshots.",
+	)
+	set.Var(
+		&opts.excluded,
+		"exclude",
+		"Exclude OWNER/REPOSITORY#NUMBER from metrics and blockers; repeatable.",
+	)
 	if err := set.Parse(args); err != nil {
 		return opts, err
 	}
@@ -74,7 +133,12 @@ func statsFlags(args []string, stderr io.Writer) (statsOptions, error) {
 	return opts, nil
 }
 
-func statsEvidence(ctx context.Context, opts options) (cloudflareops.Metrics, []cloudflareops.Event, string, error) {
+func statsEvidence(ctx context.Context, opts options) (
+	cloudflareops.Metrics,
+	[]cloudflareops.Event,
+	string,
+	error,
+) {
 	var manifest cloudflareops.Manifest
 	var directory string
 	var err error
@@ -107,11 +171,15 @@ func statsEvidence(ctx context.Context, opts options) (cloudflareops.Metrics, []
 				return cloudflareops.Metrics{}, nil, "", rangeErr
 			}
 			if from.Before(manifest.From) || end.After(manifest.To) {
-				return cloudflareops.Metrics{}, nil, "", errors.New("stats range exceeds the cached capture range")
+				return cloudflareops.Metrics{}, nil, "", errors.New(
+					"stats range exceeds the cached capture range",
+				)
 			}
 			manifest.From, manifest.To = from, end
 		} else if opts.end != "" {
-			return cloudflareops.Metrics{}, nil, "", errors.New("stats --end requires --since or --from")
+			return cloudflareops.Metrics{}, nil, "", errors.New(
+				"stats --end requires --since or --from",
+			)
 		}
 		if opts.script != "" {
 			manifest.Script = opts.script
@@ -125,7 +193,9 @@ func statsEvidence(ctx context.Context, opts options) (cloudflareops.Metrics, []
 		}
 	}
 	if !manifest.Complete {
-		return cloudflareops.Metrics{}, nil, directory, errors.New("stats requires an exhausted available telemetry capture; the manifest is partial")
+		return cloudflareops.Metrics{}, nil, directory, errors.New(
+			"stats requires an exhausted available telemetry capture; the manifest is partial",
+		)
 	}
 	events, err := cloudflareops.ReadEvents(opts.input)
 	if err != nil {
@@ -148,11 +218,22 @@ func statsNumber(value json.RawMessage) int64 {
 	return number
 }
 
-func statsExcludedMetrics(metrics cloudflareops.Metrics, events []cloudflareops.Event, excluded []string, owner string) (cloudflareops.Metrics, error) {
+func statsExcludedMetrics(
+	metrics cloudflareops.Metrics,
+	events []cloudflareops.Event,
+	excluded []string,
+	owner string,
+) (cloudflareops.Metrics, error) {
 	excludedRuns := make(map[string]bool)
 	for _, run := range metrics.Runs {
 		target := opsstats.Target{Repository: run.Repository, Number: run.PullRequest}
-		if slices.Contains(excluded, target.String()) || (run.Repository != "" && run.Repository != "unidentified" && !strings.EqualFold(strings.Split(run.Repository, "/")[0], owner)) {
+		if slices.Contains(
+			excluded,
+			target.String(),
+		) || (run.Repository != "" && run.Repository != "unidentified" && !strings.EqualFold(
+			strings.Split(run.Repository, "/")[0],
+			owner,
+		)) {
 			excludedRuns[run.ID] = true
 		}
 	}
@@ -167,7 +248,10 @@ func statsExcludedMetrics(metrics cloudflareops.Metrics, events []cloudflareops.
 		if excludedRuns[delivery] || excludedRuns[runID] {
 			continue
 		}
-		if slices.Contains(excluded, (opsstats.Target{Repository: repository, Number: number}).String()) {
+		if slices.Contains(
+			excluded,
+			(opsstats.Target{Repository: repository, Number: number}).String(),
+		) {
 			continue
 		}
 		if repository != "" && !strings.EqualFold(strings.Split(repository, "/")[0], owner) {
@@ -223,21 +307,57 @@ func stats(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if err = cloudflareops.WriteJSON(filepath.Join(directory, "metrics.json"), metrics); err != nil {
+	if err = cloudflareops.WriteJSON(
+		filepath.Join(directory, "metrics.json"),
+		metrics,
+	); err != nil {
 		return err
 	}
-	if err = cloudflareops.WriteJSON(filepath.Join(directory, "manifest.json"), metrics.Manifest); err != nil {
+	if err = cloudflareops.WriteJSON(
+		filepath.Join(directory, "manifest.json"),
+		metrics.Manifest,
+	); err != nil {
 		return err
 	}
-	pullRequests, err := opsstats.CaptureGitHub(ctx, opts.owner, metrics.Manifest.From, metrics.Manifest.To, logTargets)
+	pullRequests, err := opsstats.CaptureGitHub(
+		ctx,
+		opts.owner,
+		metrics.Manifest.From,
+		metrics.Manifest.To,
+		logTargets,
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "Stats GitHub capture failed", "directory", directory)
-		return fmt.Errorf("stats GitHub capture failed; telemetry remains in %s: %w", directory, err)
+		return fmt.Errorf(
+			"stats GitHub capture failed; telemetry remains in %s: %w",
+			directory,
+			err,
+		)
 	}
-	report := opsstats.Build(metrics, pullRequests, opts.owner, opts.botLogin, opts.excluded, minimumImportance, clock.System().UTC())
+	report := opsstats.Build(
+		metrics,
+		pullRequests,
+		opts.owner,
+		opts.botLogin,
+		opts.excluded,
+		minimumImportance,
+		clock.System().UTC(),
+	)
 	if opts.operatorTokenFile != "" {
 		quotaDirectory := filepath.Join(directory, "quotas")
-		if err = counters(ctx, []string{"--runtime", opts.runtime, "--operator-token-file", opts.operatorTokenFile, "--output-dir", quotaDirectory}, io.Discard, stderr); err != nil {
+		if err = counters(
+			ctx,
+			[]string{
+				"--runtime",
+				opts.runtime,
+				"--operator-token-file",
+				opts.operatorTokenFile,
+				"--output-dir",
+				quotaDirectory,
+			},
+			io.Discard,
+			stderr,
+		); err != nil {
 			report.QuotaUnavailableReason = "Current quota snapshots could not be queried."
 		} else {
 			report.QuotaCapturePath = filepath.Join(quotaDirectory, "counters.json")

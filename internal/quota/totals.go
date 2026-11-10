@@ -42,41 +42,73 @@ type totalsPage struct {
 }
 
 // QueryTotals reads grouped pricing inputs without downloading native SDK envelopes.
-func (client *Client) QueryTotals(ctx context.Context, providerID, requestedModel string, bounds Bounds) (TotalsResponse, error) {
+func (client *Client) QueryTotals(
+	ctx context.Context,
+	providerID string,
+	requestedModel string,
+	bounds Bounds,
+) (TotalsResponse, error) {
 	request := totalsRequest{
-		Action: "query_usage_totals", ProviderID: providerID, Model: requestedModel,
-		StartMS: bounds.StartMS, EndMS: bounds.EndMS, IncludeStart: bounds.IncludeStart,
-		IncludeEnd: bounds.IncludeEnd, AfterGroup: 0, SnapshotSequence: 0, PageSize: maximumPageSize,
+		Action:              "query_usage_totals",
+		ProviderID:          providerID,
+		Model:               requestedModel,
+		StartMS:             bounds.StartMS,
+		EndMS:               bounds.EndMS,
+		IncludeStart:        bounds.IncludeStart,
+		IncludeEnd:          bounds.IncludeEnd,
+		AfterGroup:          0,
+		SnapshotSequence:    0,
+		PageSize:            maximumPageSize,
 		RetentionGeneration: nil,
 	}
 	var result TotalsResponse
 	first := true
+
 	for {
 		var page totalsPage
 		if err := post(ctx, client, request, &page); err != nil {
 			return TotalsResponse{}, err
 		}
+
 		if !validTotalsMetadata(page, maximumPageSize) {
-			return TotalsResponse{}, errors.New("accounting service returned invalid totals metadata")
+			return TotalsResponse{}, errors.New(
+				"accounting service returned invalid totals metadata",
+			)
 		}
+
 		if !first && !sameTotalsSnapshot(page, result) {
-			return TotalsResponse{}, errors.New("accounting service changed the usage totals snapshot")
+			return TotalsResponse{}, errors.New(
+				"accounting service changed the usage totals snapshot",
+			)
 		}
+
 		result.SnapshotSequence, result.HistoryStartMS = page.SnapshotSequence, page.HistoryStartMS
+
 		result.RetentionGeneration = *page.RetentionGeneration
 		for _, group := range page.Groups {
 			if !validTotalsGroup(group, page.SnapshotSequence, bounds) ||
-				(len(result.Groups) > 0 && !orderedTotalsGroups(result.Groups[len(result.Groups)-1], group)) {
-				return TotalsResponse{}, errors.New("accounting service returned invalid usage totals")
+				(len(
+					result.Groups,
+				) > 0 && !orderedTotalsGroups(result.Groups[len(result.Groups)-1], group)) {
+				return TotalsResponse{}, errors.New(
+					"accounting service returned invalid usage totals",
+				)
 			}
+
 			result.Groups = append(result.Groups, group)
 		}
+
 		if page.NextGroup == 0 {
 			return result, nil
 		}
-		if len(page.Groups) == 0 || page.NextGroup != request.AfterGroup+int64(len(page.Groups)) || page.NextGroup <= request.AfterGroup {
-			return TotalsResponse{}, errors.New("accounting service returned a nonadvancing totals cursor")
+
+		if len(page.Groups) == 0 || page.NextGroup != request.AfterGroup+int64(len(page.Groups)) ||
+			page.NextGroup <= request.AfterGroup {
+			return TotalsResponse{}, errors.New(
+				"accounting service returned a nonadvancing totals cursor",
+			)
 		}
+
 		request.AfterGroup, request.SnapshotSequence = page.NextGroup, page.SnapshotSequence
 		request.RetentionGeneration = &result.RetentionGeneration
 		first = false
@@ -84,7 +116,8 @@ func (client *Client) QueryTotals(ctx context.Context, providerID, requestedMode
 }
 
 func sameTotalsSnapshot(page totalsPage, result TotalsResponse) bool {
-	return page.SnapshotSequence == result.SnapshotSequence && page.HistoryStartMS == result.HistoryStartMS &&
+	return page.SnapshotSequence == result.SnapshotSequence &&
+		page.HistoryStartMS == result.HistoryStartMS &&
 		*page.RetentionGeneration == result.RetentionGeneration
 }
 
@@ -92,7 +125,9 @@ func validTotalsMetadata(page totalsPage, maximumGroups int) bool {
 	return page.SnapshotSequence >= 0 && page.SnapshotSequence <= MaximumInteger &&
 		page.RetentionGeneration != nil && *page.RetentionGeneration >= 0 && *page.RetentionGeneration <= MaximumInteger &&
 		page.NextGroup >= 0 && page.NextGroup <= page.SnapshotSequence &&
-		page.HistoryStartMS > 0 && page.HistoryStartMS <= MaximumInteger && len(page.Groups) <= maximumGroups
+		page.HistoryStartMS > 0 && page.HistoryStartMS <= MaximumInteger && len(
+		page.Groups,
+	) <= maximumGroups
 }
 
 func validTotalsGroup(group UsageTotalsGroup, snapshot int64, bounds Bounds) bool {
@@ -105,24 +140,32 @@ func orderedTotalsGroups(previous, current UsageTotalsGroup) bool {
 	if previous.ReportedModel != current.ReportedModel {
 		return previous.ReportedModel < current.ReportedModel
 	}
+
 	if previous.ServiceTier != current.ServiceTier {
 		return previous.ServiceTier < current.ServiceTier
 	}
+
 	if (previous.CachedInputTokens == nil) != (current.CachedInputTokens == nil) {
 		return previous.CachedInputTokens == nil
 	}
+
 	if (previous.CacheWriteTokens == nil) != (current.CacheWriteTokens == nil) {
 		return previous.CacheWriteTokens == nil
 	}
+
 	previousWrites := previous.CacheWriteTokens != nil && *previous.CacheWriteTokens > 0
 	currentWrites := current.CacheWriteTokens != nil && *current.CacheWriteTokens > 0
 	if previousWrites != currentWrites {
 		return !previousWrites
 	}
-	previousReady := previous.InputTokens == 0 || (previous.CachedInputTokens != nil && previous.CacheWriteTokens != nil)
-	currentReady := current.InputTokens == 0 || (current.CachedInputTokens != nil && current.CacheWriteTokens != nil)
+
+	previousReady := previous.InputTokens == 0 ||
+		(previous.CachedInputTokens != nil && previous.CacheWriteTokens != nil)
+	currentReady := current.InputTokens == 0 ||
+		(current.CachedInputTokens != nil && current.CacheWriteTokens != nil)
 	if previousReady != currentReady {
 		return !previousReady
 	}
+
 	return false
 }

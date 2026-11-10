@@ -79,20 +79,25 @@ type Consolidation struct {
 // string, so it does not know that number. Validate adds it.
 func (consolidation Consolidation) ValidateShape() error {
 	claimed := make(map[int]struct{})
+
 	for _, group := range consolidation.Groups {
 		if len(group.Candidates) == 0 {
 			return errors.New("consolidation group names no candidate")
 		}
+
 		for _, number := range group.Candidates {
 			if number < 1 {
 				return fmt.Errorf("consolidation names candidate %d, below the first", number)
 			}
+
 			if _, repeated := claimed[number]; repeated {
 				return fmt.Errorf("consolidation places candidate %d in two groups", number)
 			}
+
 			claimed[number] = struct{}{}
 		}
 	}
+
 	return nil
 }
 
@@ -112,6 +117,7 @@ func (consolidation Consolidation) Validate(candidateCount int) error {
 	if err := consolidation.ValidateShape(); err != nil {
 		return err
 	}
+
 	for _, group := range consolidation.Groups {
 		for _, number := range group.Candidates {
 			if number > candidateCount {
@@ -119,6 +125,7 @@ func (consolidation Consolidation) Validate(candidateCount int) error {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -141,6 +148,7 @@ func (service *Service) chunkPosts(
 ) []postCandidate {
 	candidates := pass.chunkCandidates(ctx, chunk, findings)
 	candidates = service.consolidateChunk(ctx, candidates, pass)
+
 	for {
 		pass.publicationMu.Lock()
 		selectedCount := len(pass.selection.findings)
@@ -148,20 +156,22 @@ func (service *Service) chunkPosts(
 		if selectedCount == 0 {
 			posts := service.renderChunkFindings(ctx, head, candidates, pass)
 			pass.publicationMu.Unlock()
+
 			return posts
 		}
+
 		pass.publicationMu.Unlock()
 
-		consolidated := service.consolidateAcrossChunks(
-			ctx, candidates, selected, pass, chunk.Text,
-		)
+		consolidated := service.consolidateAcrossChunks(ctx, candidates, selected, pass, chunk.Text)
 		pass.publicationMu.Lock()
 		if len(pass.selection.findings) != selectedCount {
 			pass.publicationMu.Unlock()
 			continue
 		}
+
 		posts := service.renderChunkFindings(ctx, head, consolidated, pass)
 		pass.publicationMu.Unlock()
+
 		return posts
 	}
 }
@@ -178,13 +188,28 @@ func (service *Service) consolidateAcrossChunks(
 	if len(candidates) == 0 || len(selected) == 0 {
 		return candidates
 	}
+
 	prompt, err := BuildConsolidationPrompt(
-		service.model, candidates, selected, formatAcrossChunkContext(pass.work, chunkText, pass.disputePrompt, selected), pass.settings.maximumPromptBytes, service.reviewPolicy,
+		service.model,
+		candidates,
+		selected,
+		formatAcrossChunkContext(pass.work, chunkText, pass.disputePrompt, selected),
+		pass.settings.maximumPromptBytes,
+		service.reviewPolicy,
 	)
 	if err != nil {
-		gklog.L(ctx).WarnContext(ctx, "Cross-chunk consolidation prompt preparation failed; preserving deterministic findings", "candidates", len(candidates), "err", err)
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"Cross-chunk consolidation prompt preparation failed; preserving deterministic findings",
+			"candidates",
+			len(candidates),
+			"err",
+			err,
+		)
+
 		return candidates
 	}
+
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	answer, err := service.model.Consolidate(callCtx, prompt)
 	cancel()
@@ -192,6 +217,7 @@ func (service *Service) consolidateAcrossChunks(
 	if err == nil {
 		err = answer.Validate(len(candidates))
 	}
+
 	if err != nil {
 		gklog.L(ctx).WarnContext(
 			ctx,
@@ -199,8 +225,10 @@ func (service *Service) consolidateAcrossChunks(
 			slog.Int("candidates", len(candidates)),
 			slog.String("err", err.Error()),
 		)
+
 		return candidates
 	}
+
 	return applyConsolidation(ctx, candidates, answer)
 }
 
@@ -217,8 +245,20 @@ func (pass *chunkPass) chunkCandidates(
 	defer pass.mu.Unlock()
 
 	pass.collector.collect(findings)
-	grounded := GroundedFindings(ctx, findings, pass.collector.fileIndex, BuildMetadataIndex(chunk.Metadata), chunk.Text)
-	eligible := EligibleFindings(grounded, pass.collector.fileIndex, pass.collector.metadataIndex, pass.collector.minimumImportance)
+	grounded := GroundedFindings(
+		ctx,
+		findings,
+		pass.collector.fileIndex,
+		BuildMetadataIndex(chunk.Metadata),
+		chunk.Text,
+	)
+	eligible := EligibleFindings(
+		grounded,
+		pass.collector.fileIndex,
+		pass.collector.metadataIndex,
+		pass.collector.minimumImportance,
+	)
+
 	return collapseChunkCandidates(ctx, unansweredCandidates(ctx, eligible, pass))
 }
 
@@ -245,9 +285,11 @@ func worthConsolidating(candidates []domain.Finding, disputes string) bool {
 	if len(candidates) == 0 {
 		return false
 	}
+
 	if len(candidates) >= minimumConsolidationCandidates {
 		return true
 	}
+
 	// The prompt section is the test rather than the thread count, because it is
 	// what the model will actually be shown. A thread the byte budget dropped is
 	// a thread the call could not weigh anything against.
@@ -277,21 +319,35 @@ func (service *Service) consolidateChunk(
 	// to the service would be timed by whatever the process booted with, which
 	// is the staleness the carrying exists to end.
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
-	prompt, err := BuildConsolidationPrompt(service.model, candidates, nil, pass.disputePrompt, pass.settings.maximumPromptBytes, service.reviewPolicy)
+	prompt, err := BuildConsolidationPrompt(
+		service.model,
+		candidates,
+		nil,
+		pass.disputePrompt,
+		pass.settings.maximumPromptBytes,
+		service.reviewPolicy,
+	)
 	if err != nil {
 		cancel()
-		gklog.L(ctx).WarnContext(ctx, "Consolidation prompt preparation failed; preserving deterministic findings", "candidates", len(candidates), "err", err)
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"Consolidation prompt preparation failed; preserving deterministic findings",
+			"candidates",
+			len(candidates),
+			"err",
+			err,
+		)
+
 		return candidates
 	}
-	answer, err := service.model.Consolidate(
-		callCtx,
-		prompt,
-	)
+
+	answer, err := service.model.Consolidate(callCtx, prompt)
 	cancel()
 	pass.recordConsolidationRequest()
 	if err == nil {
 		err = answer.Validate(len(candidates))
 	}
+
 	if err != nil {
 		gklog.L(ctx).WarnContext(
 			ctx,
@@ -299,8 +355,10 @@ func (service *Service) consolidateChunk(
 			slog.Int("candidates", len(candidates)),
 			slog.String("err", err.Error()),
 		)
+
 		return candidates
 	}
+
 	return applyConsolidation(ctx, candidates, answer)
 }
 
@@ -316,12 +374,14 @@ func applyConsolidation(
 	answer Consolidation,
 ) []domain.Finding {
 	dropped := make(map[int]duplicateMatch, len(candidates))
+
 	for _, group := range answer.Groups {
 		survivor := strongestCandidate(group.Candidates, candidates)
 		for _, number := range group.Candidates {
 			if number == survivor && !group.RestatesOpenThread {
 				continue
 			}
+
 			dropped[number] = consolidationMatch(group, candidates[survivor-1])
 		}
 	}
@@ -332,13 +392,16 @@ func applyConsolidation(
 			kept = append(kept, candidate)
 			continue
 		}
+
 		match, isDropped := dropped[index+1]
 		if !isDropped {
 			kept = append(kept, candidate)
 			continue
 		}
+
 		logSuppressed(ctx, layerConsolidation, candidate, match)
 	}
+
 	return kept
 }
 
@@ -348,6 +411,7 @@ func consolidationMatch(group ConsolidationGroup, survivor domain.Finding) dupli
 	if group.RestatesOpenThread {
 		matched = "an existing finding in the reviewer context"
 	}
+
 	return duplicateMatch{
 		Sense:   senseConsolidation,
 		Detail:  truncateReply(strings.TrimSpace(group.Reason), maximumConsolidationReasonBytes),
@@ -378,38 +442,61 @@ func strongestCandidate(numbers []int, candidates []domain.Finding) int {
 			strongest = number
 			continue
 		}
+
 		if importance == strongestImportance && number < strongest {
 			strongest = number
 		}
 	}
+
 	return strongest
 }
 
 // BuildConsolidationPrompt preserves complete findings while fitting optional context.
-func BuildConsolidationPrompt(model Model, candidates, carried []domain.Finding, context string, maximumBytes int, policy reviewrules.Policy) (string, error) {
+func BuildConsolidationPrompt(
+	model Model,
+	candidates []domain.Finding,
+	carried []domain.Finding,
+	context string,
+	maximumBytes int,
+	policy reviewrules.Policy,
+) (string, error) {
 	name := "consolidate.input"
 	findings := formatConsolidationCandidates(candidates)
 	if len(carried) > 0 {
 		name = "consolidate.across.input"
-		findings = "Findings already selected:\n" + formatConsolidationCandidates(carried) + "\n\nNew candidates:\n" + findings
+		findings = "Findings already selected:\n" + formatConsolidationCandidates(
+			carried,
+		) + "\n\nNew candidates:\n" + findings
 	}
+
 	required := policy.WrapUntrusted(policy.EscapeUntrusted(findings))
-	return boundStagePrompt(context, maximumBytes, func(optional string, omitted bool) (string, error) {
-		var data reviewrules.PromptData
-		data.Input = required
-		if optional != "" {
-			data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(optional)) + "\n\n" + data.Input
-		}
-		prompt, err := renderPrompt(policy, name, data)
-		if err != nil || !omitted {
-			return prompt, err
-		}
-		var noteData reviewrules.PromptData
-		note, err := renderPrompt(policy, "consolidate.context_omitted", noteData)
-		return prompt + "\n\n" + note, err
-	}, func(prompt string) (int, error) {
-		return consolidationPromptBytes(model, prompt)
-	})
+
+	return boundStagePrompt(
+		context,
+		maximumBytes,
+		func(optional string, omitted bool) (string, error) {
+			var data reviewrules.PromptData
+			data.Input = required
+			if optional != "" {
+				data.Input = policy.WrapUntrusted(
+					policy.EscapeUntrusted(optional),
+				) + "\n\n" + data.Input
+			}
+
+			prompt, err := renderPrompt(policy, name, data)
+			if err != nil || !omitted {
+				return prompt, err
+			}
+
+			var noteData reviewrules.PromptData
+			note, err := renderPrompt(policy, "consolidate.context_omitted", noteData)
+
+			return prompt + "\n\n" + note, err
+		},
+		func(prompt string) (int, error) {
+			return consolidationPromptBytes(model, prompt)
+		},
+	)
 }
 
 func formatAcrossChunkContext(
@@ -425,26 +512,33 @@ func formatAcrossChunkContext(
 		truncateUTF8(work.PullRequest.Title, maximumPullRequestDescriptionBytes),
 		truncateUTF8(work.PullRequest.Body, maximumPullRequestDescriptionBytes),
 	)
+
 	for _, file := range work.Files {
 		fmt.Fprintf(&builder, "\n- %s (%s)", file.Path, file.Status)
 	}
+
 	builder.WriteString("\n\nCurrent source context:\n")
 	builder.WriteString(chunkText)
+
 	paths := make(map[string]struct{}, len(carried))
 	for _, finding := range carried {
 		paths[finding.Path] = struct{}{}
 	}
+
 	for _, chunk := range work.Chunks {
 		if chunk.Text == chunkText || !chunkHasPath(chunk, paths) {
 			continue
 		}
+
 		builder.WriteString("\n\n")
 		builder.WriteString(chunk.Text)
 	}
+
 	if disputes != "" {
 		builder.WriteString("\n\nCurrent inline discussions:\n")
 		builder.WriteString(disputes)
 	}
+
 	return builder.String()
 }
 
@@ -454,6 +548,7 @@ func chunkHasPath(chunk diff.Chunk, paths map[string]struct{}) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -462,21 +557,25 @@ func chunkHasPath(chunk diff.Chunk, paths map[string]struct{}) bool {
 func formatConsolidationCandidates(candidates []domain.Finding) string {
 	sections := make([]string, 0, len(candidates))
 	for index, candidate := range candidates {
-		sections = append(sections, fmt.Sprintf(
-			"Finding %d\nRule ID: %s\nDeduplication: %s\nSurface: %s\nCommit SHA: %s\nPath: %s\nLines: %d-%d\nTitle: %s\nClaim: %s\nBody: %s\nEvidence: %s",
-			index+1,
-			candidate.RuleID,
-			candidate.Deduplication,
-			candidate.EffectiveSurface(),
-			candidate.CommitSHA,
-			candidate.Path,
-			candidate.StartLine,
-			candidate.EndLine,
-			candidate.Title,
-			candidate.Claim,
-			candidate.Body,
-			candidate.Evidence,
-		))
+		sections = append(
+			sections,
+			fmt.Sprintf(
+				"Finding %d\nRule ID: %s\nDeduplication: %s\nSurface: %s\nCommit SHA: %s\nPath: %s\nLines: %d-%d\nTitle: %s\nClaim: %s\nBody: %s\nEvidence: %s",
+				index+1,
+				candidate.RuleID,
+				candidate.Deduplication,
+				candidate.EffectiveSurface(),
+				candidate.CommitSHA,
+				candidate.Path,
+				candidate.StartLine,
+				candidate.EndLine,
+				candidate.Title,
+				candidate.Claim,
+				candidate.Body,
+				candidate.Evidence,
+			),
+		)
 	}
+
 	return strings.Join(sections, "\n\n")
 }

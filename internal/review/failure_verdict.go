@@ -30,15 +30,32 @@ type (
 
 const checkFailurePanic = "Review failed after an internal panic."
 
-func (service *Service) finalizeFailure(ctx context.Context, job domain.ReviewJob, checkRunID int64, progress *reviewProgress, runErr *error) {
+func (service *Service) finalizeFailure(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRunID int64,
+	progress *reviewProgress,
+	runErr *error,
+) {
 	var reported *reportedFailureError
 	if *runErr == nil || errors.As(*runErr, &reported) || failureInterrupted(ctx, *runErr) {
 		return
 	}
-	if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); ok && recorder.outcome.Disposition == domain.AssessmentInterrupted {
+
+	if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); ok &&
+		recorder.outcome.Disposition == domain.AssessmentInterrupted {
 		return
 	}
-	*runErr = service.reportFailedCheck(ctx, job, checkRunID, progress.summary(service.now()), checkFailurePublish, service.presentedConclusion(failureClassesOf(*runErr), "failure"), *runErr)
+
+	*runErr = service.reportFailedCheck(
+		ctx,
+		job,
+		checkRunID,
+		progress.summary(service.now()),
+		checkFailurePublish,
+		service.presentedConclusion(failureClassesOf(*runErr), "failure"),
+		*runErr,
+	)
 }
 
 // SetFailureVerdictPolicy treats an empty policy as dismiss_latest_block.
@@ -46,6 +63,7 @@ func (service *Service) SetFailureVerdictPolicy(policy config.FailureVerdictPoli
 	if policy == "" {
 		policy = config.DismissLatestFailureVerdict
 	}
+
 	service.failureVerdicts = policy
 }
 
@@ -55,43 +73,74 @@ func unexpectedFailure(cause error) bool {
 
 func unexpectedFailureClass(class config.FailureClass) bool {
 	switch class {
-	case config.FailureUnavailable, config.FailureDeadline, config.FailurePanic, config.FailureOther:
+	case config.FailureUnavailable,
+		config.FailureDeadline,
+		config.FailurePanic,
+		config.FailureOther:
 		return true
 	case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureRateLimited:
 		return false
 	}
+
 	return false
 }
 
-func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.ReviewJob, cause error) error {
-	if cause == nil || failureInterrupted(ctx, cause) || !unexpectedFailure(cause) || service.failureVerdicts == config.PreserveFailureVerdict {
+func (service *Service) dismissFailureVerdict(
+	ctx context.Context,
+	job domain.ReviewJob,
+	cause error,
+) error {
+	if cause == nil || failureInterrupted(ctx, cause) || !unexpectedFailure(cause) ||
+		service.failureVerdicts == config.PreserveFailureVerdict {
 		return nil
 	}
+
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
 	logger := gklog.L(ctx)
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		logger.WarnContext(ctx, "read standing verdict after failure", slog.String("err", err.Error()))
+		logger.WarnContext(
+			ctx,
+			"read standing verdict after failure",
+			slog.String("err", err.Error()),
+		)
+
 		return fmt.Errorf("read standing verdict after failure: %w", err)
 	}
+
 	latest := githubapp.LatestDecisionReview(reviews, service.botLogin)
 	if latest.State != reviewStateChangesRequested {
 		return nil
 	}
 
-	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
+	threads, err := service.github.ListReviewThreads(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
 		return fmt.Errorf("verify file findings before failure dismissal: %w", err)
 	}
 
 	if hasUnresolvedBotThread(threads, service.botLogin) {
-		logger.InfoContext(ctx, "preserve unresolved file rejection after failure", "review_id", latest.ID)
+		logger.InfoContext(
+			ctx,
+			"preserve unresolved file rejection after failure",
+			"review_id",
+			latest.ID,
+		)
 
 		return nil
 	}
 
-	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
+	comments, err := service.github.ListIssueComments(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
 		return fmt.Errorf("verify saved findings before failure dismissal: %w", err)
 	}
@@ -107,11 +156,19 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 		if verificationErr != nil {
 			return verificationErr
 		}
+
 		if blocked {
-			logger.InfoContext(ctx, "preserve unresolved metadata rejection after failure", "review_id", latest.ID)
+			logger.InfoContext(
+				ctx,
+				"preserve unresolved metadata rejection after failure",
+				"review_id",
+				latest.ID,
+			)
+
 			return nil
 		}
 	}
+
 	var data reviewrules.PromptData
 	data.Input = service.terminalFailureLead(ctx, cause)
 	if found && comment.ID > 0 {
@@ -119,24 +176,51 @@ func (service *Service) dismissFailureVerdict(ctx context.Context, job domain.Re
 	} else {
 		logger.WarnContext(ctx, "failure dismissal summary is unavailable")
 	}
+
 	message, err := service.reviewPolicy.Render("failure.dismiss", data)
 	if err != nil {
 		logger.WarnContext(ctx, "render failure dismissal", slog.String("err", err.Error()))
 		return fmt.Errorf("render failure dismissal: %w", err)
 	}
+
 	message += "\n\n" + marker.FailureDismissal(latest.ID)
 	dismissCtx, cancelDismiss := service.publicationContext(ctx)
 	defer cancelDismiss()
-	if _, err := service.github.DismissReview(dismissCtx, job.InstallationID, job.Repository, job.Number, latest.ID, message); err != nil {
-		logger.WarnContext(ctx, "dismiss standing rejection after failure", slog.Int64("review_id", latest.ID), slog.String("err", err.Error()))
+	if _, err := service.github.DismissReview(
+		dismissCtx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+		latest.ID,
+		message,
+	); err != nil {
+		logger.WarnContext(
+			ctx,
+			"dismiss standing rejection after failure",
+			slog.Int64("review_id", latest.ID),
+			slog.String("err", err.Error()),
+		)
+
 		return fmt.Errorf("dismiss standing rejection after failure: %w", err)
 	}
-	logger.InfoContext(ctx, "review failure verdict dismissed", slog.Int64("review_id", latest.ID), slog.String("failure_class", string(failureClassOf(cause))))
+
+	logger.InfoContext(
+		ctx,
+		"review failure verdict dismissed",
+		slog.Int64("review_id", latest.ID),
+		slog.String("failure_class", string(failureClassOf(cause))),
+	)
+
 	return nil
 }
 
-func automaticFailureDismissal(dismissal githubapp.ReviewDismissal, botLogin string, reviewID int64) bool {
-	return dismissal.ReviewID == reviewID && dismissal.Actor == botLogin && marker.HasFailureDismissal(dismissal.Message, reviewID)
+func automaticFailureDismissal(
+	dismissal githubapp.ReviewDismissal,
+	botLogin string,
+	reviewID int64,
+) bool {
+	return dismissal.ReviewID == reviewID && dismissal.Actor == botLogin &&
+		marker.HasFailureDismissal(dismissal.Message, reviewID)
 }
 
 func joinedChunkFailures(ctx context.Context, failures []chunkFailure) error {
@@ -146,11 +230,13 @@ func joinedChunkFailures(ctx context.Context, failures []chunkFailure) error {
 			causes = append(causes, failure.err)
 		}
 	}
+
 	cause := errors.Join(causes...)
 	if cause != nil {
 		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "review chunks failed", slog.String("err", cause.Error()))
 	}
+
 	return cause
 }
 
@@ -158,7 +244,9 @@ func failureInterrupted(ctx context.Context, cause error) bool {
 	if errors.Is(cause, errHeadMoved) {
 		return true
 	}
+
 	shutdown := shutdownFrom(ctx)
+
 	return shutdown != nil && shutdown.Err() != nil
 }
 
@@ -174,41 +262,59 @@ func collectTerminalProviderFailures(cause error, failures *[]terminalProviderFa
 		for _, child := range joined.Unwrap() {
 			collectTerminalProviderFailures(child, failures)
 		}
+
 		return
 	}
+
 	if reported, ok := cause.(providerFailureStatus); ok {
-		failure := terminalProviderFailure{status: reported.ProviderStatus(), class: failureClassOf(cause), httpStatus: 0, code: ""}
+		failure := terminalProviderFailure{
+			status:     reported.ProviderStatus(),
+			class:      failureClassOf(cause),
+			httpStatus: 0,
+			code:       "",
+		}
 		var details providerFailureDetails
 		if errors.As(cause, &details) {
 			failure.httpStatus, failure.code = details.ProviderFailureDetails()
 		}
+
 		*failures = append(*failures, failure)
+
 		return
 	}
+
 	if wrapped, ok := cause.(wrappedFailure); ok {
 		collectTerminalProviderFailures(wrapped.Unwrap(), failures)
 	}
 }
 
-func (service *Service) terminalFailureDetail(ctx context.Context, job domain.ReviewJob, cause error) string {
+func (service *Service) terminalFailureDetail(
+	ctx context.Context,
+	job domain.ReviewJob,
+	cause error,
+) string {
 	detail := publicFailureDetail(job)
 	if cause == nil || !unexpectedFailure(cause) {
 		return detail
 	}
+
 	var failures []terminalProviderFailure
 	collectTerminalProviderFailures(cause, &failures)
 	visible := service.terminalFailureLead(ctx, cause)
 	var rows strings.Builder
+
 	for _, failure := range failures {
 		row := service.terminalFailureData(failure)
 		row.FailureClass = service.failureClassLabel(ctx, row.FailureClass)
 		rows.WriteString(service.renderFailureTemplate(ctx, "failure.row", row))
 	}
+
 	if rows.Len() > 0 {
 		var data reviewrules.PromptData
 		data.Input = rows.String()
 		visible += "\n\n" + service.renderFailureTemplate(ctx, "failure.details", data)
 	}
+
 	return visible + "\n\n" + detail
 }
 
@@ -225,15 +331,19 @@ func terminalFailureCause(cause error) error {
 				}
 			}
 		}
+
 		if _, ok := current.(providerFailureStatus); ok {
 			return current
 		}
+
 		wrapped, ok := current.(wrappedFailure)
 		if !ok {
 			break
 		}
+
 		current = wrapped.Unwrap()
 	}
+
 	return cause
 }
 
@@ -248,12 +358,15 @@ func (service *Service) terminalFailureLead(ctx context.Context, cause error) st
 	if errors.As(terminal, &githubFailure) {
 		data.FailureStatus = fmt.Sprintf("HTTP %d", githubFailure.StatusCode)
 	}
+
 	template := "failure.service"
 	if len(failures) > 0 {
 		data = service.terminalFailureData(failures[len(failures)-1])
 		template = "failure.provider"
 	}
+
 	data.FailureClass = service.failureClassLabel(ctx, data.FailureClass)
+
 	return service.renderFailureTemplate(ctx, template, data)
 }
 
@@ -262,7 +375,9 @@ func (service *Service) failureClassLabel(ctx context.Context, class string) str
 	return service.renderFailureTemplate(ctx, "failure.class."+class, data)
 }
 
-func (service *Service) terminalFailureData(failure terminalProviderFailure) reviewrules.PromptData {
+func (service *Service) terminalFailureData(
+	failure terminalProviderFailure,
+) reviewrules.PromptData {
 	var data reviewrules.PromptData
 	data.Provider = usageModelCell(failure.status.ProviderID)
 	data.Model = usageModelCell(failure.status.Model)
@@ -271,17 +386,29 @@ func (service *Service) terminalFailureData(failure terminalProviderFailure) rev
 	if failure.httpStatus >= 100 && failure.httpStatus <= 599 {
 		data.FailureStatus = fmt.Sprintf("HTTP %d", failure.httpStatus)
 	}
+
 	data.FailureCode = "not reported"
 	if service.reviewPolicy.RecognizesFailureCode(failure.code) {
 		data.FailureCode = failure.code
 	}
+
 	return data
 }
 
-func (service *Service) renderFailureTemplate(ctx context.Context, name string, data reviewrules.PromptData) string {
+func (service *Service) renderFailureTemplate(
+	ctx context.Context,
+	name string,
+	data reviewrules.PromptData,
+) string {
 	text, err := service.reviewPolicy.Render(name, data)
 	if err != nil {
-		gklog.L(ctx).WarnContext(ctx, "render failure details", slog.String("template", name), slog.String("err", err.Error()))
+		gklog.L(ctx).WarnContext(
+			ctx,
+			"render failure details",
+			slog.String("template", name),
+			slog.String("err", err.Error()),
+		)
 	}
+
 	return text
 }

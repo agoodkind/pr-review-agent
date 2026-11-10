@@ -10,10 +10,12 @@ func TestAdmissionSkipsAnOverBudgetDelta(t *testing.T) {
 	if !over.Skip || !strings.Contains(over.Reason, "150") {
 		t.Fatalf("verdict = %+v, want skip naming the measured size", over)
 	}
+
 	tooManyChunks := admitDelta(10, 173, 100, 60)
 	if !tooManyChunks.Skip || !strings.Contains(tooManyChunks.Reason, "173") {
 		t.Fatalf("verdict = %+v, want skip naming the chunk count", tooManyChunks)
 	}
+
 	within := admitDelta(100, 60, 100, 60)
 	if within.Skip {
 		t.Fatalf("verdict = %+v, want admission at the boundary", within)
@@ -26,8 +28,12 @@ func TestAdmissionSkipsAnOverBudgetDelta(t *testing.T) {
 func TestAdmissionNeverTrustsMoreFilesThanOneCompareCanName(t *testing.T) {
 	overCap := admitDelta(compareFileCap+1, 1, 1000, 60)
 	if !overCap.Skip {
-		t.Fatalf("verdict = %+v, want a skip: a budget above the compare cap cannot be honoured", overCap)
+		t.Fatalf(
+			"verdict = %+v, want a skip: a budget above the compare cap cannot be honoured",
+			overCap,
+		)
 	}
+
 	atCap := admitDelta(compareFileCap, 1, 1000, 60)
 	if atCap.Skip {
 		t.Fatalf("verdict = %+v, want admission at exactly the cap", atCap)

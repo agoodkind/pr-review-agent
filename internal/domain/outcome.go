@@ -44,6 +44,7 @@ func EncodeAssessmentOutcome(outcome AssessmentOutcome) string {
 	if err != nil {
 		return ""
 	}
+
 	return assessmentOutcomePrefix + base64.RawURLEncoding.EncodeToString(encoded) + " -->"
 }
 
@@ -54,17 +55,21 @@ func DecodeAssessmentOutcome(body string) AssessmentOutcome {
 	if start < 0 {
 		return outcome
 	}
+
 	encoded, _, found := strings.Cut(body[start+len(assessmentOutcomePrefix):], " -->")
 	if !found {
 		return outcome
 	}
+
 	data, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return outcome
 	}
+
 	if json.Unmarshal(data, &outcome) != nil {
 		var empty AssessmentOutcome
 		return empty
 	}
+
 	return outcome
 }

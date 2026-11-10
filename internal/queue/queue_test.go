@@ -27,6 +27,7 @@ func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
 
 	var winners int32
 	var waitGroup sync.WaitGroup
+
 	for range 12 {
 		waitGroup.Add(1)
 		go func() {
@@ -36,6 +37,7 @@ func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
 			}
 		}()
 	}
+
 	waitGroup.Wait()
 	if winners != 0 {
 		t.Fatalf("extra claims = %d, want 0", winners)
@@ -44,10 +46,12 @@ func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
 	if !dispatcher.Enqueue(job) {
 		t.Fatal("enqueue: want true")
 	}
+
 	deadline := time.Now().Add(2 * time.Second)
 	for len(runner.snapshot()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
+
 	if got := runner.snapshot(); len(got) != 1 || got[0] != job.DeliveryID {
 		t.Fatalf("processed = %v, want one delivery-concurrent job", got)
 	}
@@ -61,6 +65,7 @@ func TestDeliveryCacheClaimsOnceUntilExpiry(t *testing.T) {
 	if !cache.Claim("delivery-1") {
 		t.Fatal("first claim: want true")
 	}
+
 	if cache.Claim("delivery-1") {
 		t.Fatal("second claim: want false")
 	}
@@ -79,18 +84,23 @@ func TestDeliveryCacheEvictsOldestAtCapacity(t *testing.T) {
 	if !cache.Claim("delivery-1") {
 		t.Fatal("claim delivery-1")
 	}
+
 	if !cache.Claim("delivery-2") {
 		t.Fatal("claim delivery-2")
 	}
+
 	if !cache.Claim("delivery-3") {
 		t.Fatal("claim delivery-3")
 	}
+
 	if cache.Claim("delivery-2") {
 		t.Fatal("delivery-2 should remain claimed")
 	}
+
 	if !cache.Claim("delivery-1") {
 		t.Fatal("delivery-1 should be reclaimable after eviction")
 	}
+
 	if !cache.Claim("delivery-2") {
 		t.Fatal("delivery-2 should be reclaimable after delivery-1 fills the cache again")
 	}
@@ -101,6 +111,7 @@ func TestDeliveryCacheConcurrentClaimHasOneWinner(t *testing.T) {
 	var winners int
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+
 	for range 20 {
 		wg.Add(1)
 		go func() {
@@ -112,6 +123,7 @@ func TestDeliveryCacheConcurrentClaimHasOneWinner(t *testing.T) {
 			}
 		}()
 	}
+
 	wg.Wait()
 	if winners != 1 {
 		t.Fatalf("winners = %d, want 1", winners)
@@ -149,6 +161,7 @@ func TestKeyedLockerSerializesSameKeyAndAllowsDifferentKeys(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("second same-key lock did not acquire after unlock")
 	}
+
 	close(secondDone)
 }
 
@@ -172,6 +185,7 @@ func (runner *blockingRunner) Run(_ context.Context, job domain.ReviewJob) error
 	case "other":
 		close(runner.secondStarted)
 	}
+
 	return nil
 }
 
@@ -179,6 +193,7 @@ func (runner *recordingRunner) Run(_ context.Context, job domain.ReviewJob) erro
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	runner.order = append(runner.order, job.DeliveryID)
+
 	return runner.err
 }
 
@@ -187,6 +202,7 @@ func (runner *recordingRunner) snapshot() []string {
 	defer runner.mu.Unlock()
 	copied := make([]string, len(runner.order))
 	copy(copied, runner.order)
+
 	return copied
 }
 
@@ -200,6 +216,7 @@ func TestDispatcherRejectsWhenFull(t *testing.T) {
 	if !dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-1"}) {
 		t.Fatal("first enqueue: want true")
 	}
+
 	if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-2"}) {
 		t.Fatal("second enqueue: want false")
 	}
@@ -237,7 +254,9 @@ func TestDispatcherRunsIndependentJobsConcurrently(t *testing.T) {
 	if !dispatcher.Enqueue(first) {
 		t.Fatal("enqueue same-1")
 	}
+
 	<-runner.firstStarted
+
 	for _, deliveryID := range []string{"same-2", "same-3"} {
 		job := samePullRequest
 		job.DeliveryID = deliveryID
@@ -245,6 +264,7 @@ func TestDispatcherRunsIndependentJobsConcurrently(t *testing.T) {
 			t.Fatalf("enqueue %s", deliveryID)
 		}
 	}
+
 	if !dispatcher.Enqueue(independentPullRequest) {
 		t.Fatal("enqueue other")
 	}
@@ -270,13 +290,16 @@ func TestDispatcherRunsJobsInOrder(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		if len(runner.snapshot()) == 3 {
 			break
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("order = %v, want 3 jobs", runner.snapshot())
 		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -296,6 +319,7 @@ func TestDispatcherShutdownDrainsAcceptedJobs(t *testing.T) {
 	if !dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-1"}) {
 		t.Fatal("enqueue delivery-1")
 	}
+
 	if !dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-2"}) {
 		t.Fatal("enqueue delivery-2")
 	}
@@ -305,6 +329,7 @@ func TestDispatcherShutdownDrainsAcceptedJobs(t *testing.T) {
 	if err := dispatcher.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
+
 	if got := runner.snapshot(); len(got) != 2 {
 		t.Fatalf("processed = %v, want 2 jobs", got)
 	}
@@ -318,6 +343,7 @@ func TestDispatcherShutdownRejectsConcurrentEnqueueAndDrainsAcceptedJobs(t *test
 
 		var accepted atomic.Int32
 		var waitGroup sync.WaitGroup
+
 		for range 16 {
 			waitGroup.Go(func() {
 				if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "concurrent"}) {
@@ -331,11 +357,13 @@ func TestDispatcherShutdownRejectsConcurrentEnqueueAndDrainsAcceptedJobs(t *test
 			cancel()
 			t.Fatalf("Shutdown: %v", err)
 		}
+
 		cancel()
 		waitGroup.Wait()
 		if got := len(runner.snapshot()); got != int(accepted.Load()) {
 			t.Fatalf("processed = %d, accepted = %d", got, accepted.Load())
 		}
+
 		if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "late"}) {
 			t.Fatal("enqueue accepted after shutdown")
 		}
@@ -347,6 +375,7 @@ func TestDispatcherKeepsClaimAfterRunnerFailure(t *testing.T) {
 	if !cache.Claim("delivery-1") {
 		t.Fatal("claim delivery-1")
 	}
+
 	runner := &recordingRunner{err: errors.New("boom")}
 	dispatcher := NewDispatcher(1, 1, runner, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -361,6 +390,7 @@ func TestDispatcherKeepsClaimAfterRunnerFailure(t *testing.T) {
 	for len(runner.snapshot()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
+
 	if cache.Claim("delivery-1") {
 		t.Fatal("claim should remain reserved after runner failure")
 	}
@@ -370,10 +400,12 @@ func equalStringSlices(left []string, right []string) bool {
 	if len(left) != len(right) {
 		return false
 	}
+
 	for index := range left {
 		if left[index] != right[index] {
 			return false
 		}
 	}
+
 	return true
 }

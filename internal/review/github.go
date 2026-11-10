@@ -19,30 +19,93 @@ type GitHub interface {
 }
 
 type repositorySnapshotGitHub interface {
-	OpenRepositorySnapshot(context.Context, int64, domain.Repository, domain.HeadSHA) (context.Context, func() error, error)
+	OpenRepositorySnapshot(
+		context.Context,
+		int64,
+		domain.Repository,
+		domain.HeadSHA,
+	) (context.Context, func() error, error)
 }
 
 // checkRunGitHub loads the pull request and runs the visible check lifecycle.
 type checkRunGitHub interface {
 	GetPullRequest(context.Context, int64, domain.Repository, int) (githubapp.PullRequest, error)
-	FindCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string) (githubapp.CheckRun, bool, error)
-	FindCheckRunByExternalID(
-		context.Context, int64, domain.Repository, domain.HeadSHA, string, string,
+	FindCheckRun(
+		context.Context,
+		int64,
+		domain.Repository,
+		domain.HeadSHA,
+		string,
 	) (githubapp.CheckRun, bool, error)
-	CreateCheckRun(context.Context, int64, domain.Repository, domain.HeadSHA, string, string) (githubapp.CheckRun, error)
+	FindCheckRunByExternalID(
+		context.Context,
+		int64,
+		domain.Repository,
+		domain.HeadSHA,
+		string,
+		string,
+	) (githubapp.CheckRun, bool, error)
+	CreateCheckRun(
+		context.Context,
+		int64,
+		domain.Repository,
+		domain.HeadSHA,
+		string,
+		string,
+	) (githubapp.CheckRun, error)
 	StartCheckRun(context.Context, int64, domain.Repository, int64, string) error
-	CompleteCheckRun(context.Context, int64, domain.Repository, int64, string, string, string, string) error
+	CompleteCheckRun(
+		context.Context,
+		int64,
+		domain.Repository,
+		int64,
+		string,
+		string,
+		string,
+		string,
+	) error
 }
 
 // publicationGitHub publishes the pull request review and its inline
 // findings, and reads back the threads those findings become.
 type publicationGitHub interface {
 	ListReviews(context.Context, int64, domain.Repository, int) ([]githubapp.Review, error)
-	ListReviewThreads(context.Context, int64, domain.Repository, int) ([]githubapp.ReviewThread, error)
-	SubmitReview(context.Context, int64, domain.Repository, int, githubapp.SubmitReviewRequest) (githubapp.Review, error)
-	UpdateReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
-	DismissReview(context.Context, int64, domain.Repository, int, int64, string) (githubapp.Review, error)
-	FindReviewDismissal(context.Context, int64, domain.Repository, int, int64) (githubapp.ReviewDismissal, bool, error)
+	ListReviewThreads(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+	) ([]githubapp.ReviewThread, error)
+	SubmitReview(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+		githubapp.SubmitReviewRequest,
+	) (githubapp.Review, error)
+	UpdateReview(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+		int64,
+		string,
+	) (githubapp.Review, error)
+	DismissReview(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+		int64,
+		string,
+	) (githubapp.Review, error)
+	FindReviewDismissal(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+		int64,
+	) (githubapp.ReviewDismissal, bool, error)
 	CreateReviewComment(
 		context.Context,
 		int64,
@@ -55,7 +118,24 @@ type publicationGitHub interface {
 
 // issueCommentGitHub keeps the service's one top level comment.
 type issueCommentGitHub interface {
-	ListIssueComments(context.Context, int64, domain.Repository, int) ([]githubapp.IssueComment, error)
-	CreateIssueComment(context.Context, int64, domain.Repository, int, string) (githubapp.IssueComment, error)
-	UpdateIssueComment(context.Context, int64, domain.Repository, int64, string) (githubapp.IssueComment, error)
+	ListIssueComments(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+	) ([]githubapp.IssueComment, error)
+	CreateIssueComment(
+		context.Context,
+		int64,
+		domain.Repository,
+		int,
+		string,
+	) (githubapp.IssueComment, error)
+	UpdateIssueComment(
+		context.Context,
+		int64,
+		domain.Repository,
+		int64,
+		string,
+	) (githubapp.IssueComment, error)
 }

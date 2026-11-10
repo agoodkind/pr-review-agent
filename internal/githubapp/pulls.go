@@ -46,25 +46,41 @@ func (client *Client) GetPullRequest(
 	if err != nil {
 		return PullRequest{}, err
 	}
+
 	var response pullRequestResponse
 	if err := json.Unmarshal(body, &response); err != nil {
 		client.logger.ErrorContext(ctx, "decode pull request", slog.String("err", err.Error()))
 		return PullRequest{}, errors.New("decode pull request")
 	}
+
 	head, err := parseHeadSHA(response.Head.SHA)
 	if err != nil {
 		return PullRequest{}, err
 	}
+
 	base, err := parseHeadSHA(response.Base.SHA)
 	if err != nil {
 		return PullRequest{}, err
 	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
-		client.logger.WarnContext(ctx, "read pull request field presence", slog.String("err", err.Error()))
+		client.logger.WarnContext(
+			ctx,
+			"read pull request field presence",
+			slog.String("err", err.Error()),
+		)
+
 		return PullRequest{}, fmt.Errorf("read pull request field presence: %w", err)
 	}
-	eligibilityKnown := response.Number == number && (response.State == "open" || response.State == "closed") && (response.State != "open" || !response.Merged) && len(fields["draft"]) > 0 && len(fields["merged"]) > 0 && !bytes.Equal(bytes.TrimSpace(fields["draft"]), []byte("null")) && !bytes.Equal(bytes.TrimSpace(fields["merged"]), []byte("null"))
+
+	eligibilityKnown := response.Number == number &&
+		(response.State == "open" || response.State == "closed") &&
+		(response.State != "open" || !response.Merged) &&
+		len(fields["draft"]) > 0 &&
+		len(fields["merged"]) > 0 &&
+		!bytes.Equal(bytes.TrimSpace(fields["draft"]), []byte("null")) &&
+		!bytes.Equal(bytes.TrimSpace(fields["merged"]), []byte("null"))
 	metadataKnown := strings.TrimSpace(response.Title) != "" && len(fields["body"]) > 0
 	pullRequest := PullRequest{
 		EligibilityKnown: eligibilityKnown,
@@ -102,29 +118,43 @@ func (client *Client) GetPullRequest(
 }
 
 // ListPullRequestCommits follows pagination without truncating commit messages.
-func (client *Client) ListPullRequestCommits(ctx context.Context, installationID int64, repo domain.Repository, number int) ([]PullRequestCommit, error) {
+func (client *Client) ListPullRequestCommits(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	number int,
+) ([]PullRequestCommit, error) {
 	var commits []PullRequestCommit
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/commits?per_page=100", number))
-	err := client.doRESTPaginated(ctx, installationID, path, func(body []byte) (int, error) {
-		var page []struct {
-			SHA    string `json:"sha"`
-			Commit struct {
-				Message string `json:"message"`
-			} `json:"commit"`
-		}
-		if err := json.Unmarshal(body, &page); err != nil {
-			client.logger.WarnContext(ctx, "Decode pull request commits failed", "err", err)
-			return 0, fmt.Errorf("decode pull request commits: %w", err)
-		}
-		for _, item := range page {
-			sha, err := parseHeadSHA(item.SHA)
-			if err != nil {
-				return 0, err
+	err := client.doRESTPaginated(
+		ctx,
+		installationID,
+		path,
+		func(body []byte) (int, error) {
+			var page []struct {
+				SHA    string `json:"sha"`
+				Commit struct {
+					Message string `json:"message"`
+				} `json:"commit"`
 			}
-			commits = append(commits, PullRequestCommit{SHA: sha, Message: item.Commit.Message})
-		}
-		return len(page), nil
-	})
+			if err := json.Unmarshal(body, &page); err != nil {
+				client.logger.WarnContext(ctx, "Decode pull request commits failed", "err", err)
+				return 0, fmt.Errorf("decode pull request commits: %w", err)
+			}
+
+			for _, item := range page {
+				sha, err := parseHeadSHA(item.SHA)
+				if err != nil {
+					return 0, err
+				}
+
+				commits = append(commits, PullRequestCommit{SHA: sha, Message: item.Commit.Message})
+			}
+
+			return len(page), nil
+		},
+	)
+
 	return commits, err
 }
 
@@ -198,9 +228,11 @@ func (client *Client) GetFile(
 	if err != nil {
 		return nil, err
 	}
+
 	if content.Metadata == "" {
 		return content.Data, nil
 	}
+
 	return append([]byte(content.Metadata+"\n"), content.Data...), nil
 }
 
@@ -223,6 +255,7 @@ func (client *Client) GetFileContent(
 	if pathError != nil {
 		return FileContent{}, pathError
 	}
+
 	scope, err := client.repositorySnapshotScope(ctx, installationID, repo)
 	if err != nil {
 		return FileContent{}, err
@@ -235,6 +268,7 @@ func (client *Client) GetFileContent(
 		if err != nil {
 			return FileContent{}, err
 		}
+
 		defer func() { _ = closeSnapshot() }()
 
 		scope, err = client.repositorySnapshotScope(ctx, installationID, repo)

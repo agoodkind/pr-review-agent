@@ -36,10 +36,12 @@ func (locker *KeyedLocker) Lock(key string) func() {
 		}
 		locker.locks[key] = entry
 	}
+
 	entry.refs++
 	locker.mu.Unlock()
 
 	entry.mu.Lock()
+
 	return func() {
 		entry.mu.Unlock()
 		entry.holder.release(entry)
@@ -54,5 +56,6 @@ func (locker *KeyedLocker) release(entry *refCountedMutex) {
 	if entry.refs > 0 {
 		return
 	}
+
 	delete(locker.locks, entry.key)
 }

@@ -15,6 +15,7 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 	if len(snapshot.gitlinks) == 0 {
 		return nil
 	}
+
 	data, err := snapshot.root.ReadFile(".gitmodules")
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -23,12 +24,15 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 	if err != nil {
 		return repositoryAccessError("read submodule metadata", err)
 	}
+
 	modules := gitconfig.New()
 	err = gitconfig.NewDecoder(bytes.NewReader(data)).Decode(modules)
 	if err != nil {
 		return repositoryAccessError("decode submodule metadata", err)
 	}
+
 	urls := make(map[string]string)
+
 	for _, module := range modules.Section("submodule").Subsections {
 		urls[module.Option("path")] = module.Option("url")
 	}
@@ -38,6 +42,7 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 		if !mapped {
 			continue
 		}
+
 		if strings.TrimSpace(address) == "" || strings.ContainsAny(address, "\r\n\x00") {
 			return errSubmoduleRepositoryMetadata
 		}
@@ -45,5 +50,6 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 		pointer.Metadata = "Submodule repository: " + address
 		snapshot.gitlinks[name] = pointer
 	}
+
 	return nil
 }

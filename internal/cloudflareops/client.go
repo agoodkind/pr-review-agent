@@ -45,29 +45,51 @@ type Client struct {
 // NewClient disables redirects because another host must not receive the bearer token.
 func NewClient(baseURL string, token string, httpClient *http.Client) (*Client, error) {
 	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" ||
+		parsed.Fragment != "" {
 		return nil, errors.New("cloudflare API URL is invalid")
 	}
-	loopback := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "::1"
+
+	loopback := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1" ||
+		parsed.Hostname() == "::1"
 	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !loopback) {
 		return nil, errors.New("cloudflare API URL must use HTTPS or a loopback test server")
 	}
+
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("cloudflare credential is empty")
 	}
+
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 45 * time.Second}
 	}
+
 	copyClient := *httpClient
 	copyClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), token: strings.TrimSpace(token), httpClient: &copyClient}, nil
+
+	return &Client{
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		token:      strings.TrimSpace(token),
+		httpClient: &copyClient,
+	}, nil
 }
 
-func (client *Client) request(ctx context.Context, method string, path string, payload []byte) (envelope, int, error) {
-	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+path, bytes.NewReader(payload))
+func (client *Client) request(
+	ctx context.Context,
+	method string,
+	path string,
+	payload []byte,
+) (envelope, int, error) {
+	request, err := http.NewRequestWithContext(
+		ctx,
+		method,
+		client.baseURL+path,
+		bytes.NewReader(payload),
+	)
 	if err != nil {
 		return envelope{}, 0, errors.New("cloudflare request could not be created")
 	}
+
 	request.Header.Set("Authorization", "Bearer "+client.token)
 	request.Header.Set("Content-Type", "application/json")
 	response, err := client.httpClient.Do(request)
@@ -75,27 +97,56 @@ func (client *Client) request(ctx context.Context, method string, path string, p
 		slog.WarnContext(ctx, "Cloudflare transport failed")
 		return envelope{}, 0, fmt.Errorf("cloudflare transport failed: %w", err)
 	}
+
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
 	if err != nil {
 		return envelope{}, response.StatusCode, errors.New("cloudflare response could not be read")
 	}
+
 	if len(body) > maximumResponseBytes {
-		return envelope{}, response.StatusCode, errors.New("cloudflare response exceeds the byte limit")
+		return envelope{}, response.StatusCode, errors.New(
+			"cloudflare response exceeds the byte limit",
+		)
 	}
+
 	var decoded envelope
 	if json.Unmarshal(body, &decoded) != nil || decoded.Success == nil {
-		slog.WarnContext(ctx, "Cloudflare response envelope failed validation", "status", response.StatusCode)
-		return envelope{}, response.StatusCode, fmt.Errorf("cloudflare returned an invalid response envelope with HTTP %d", response.StatusCode)
+		slog.WarnContext(
+			ctx,
+			"Cloudflare response envelope failed validation",
+			"status",
+			response.StatusCode,
+		)
+
+		return envelope{}, response.StatusCode, fmt.Errorf(
+			"cloudflare returned an invalid response envelope with HTTP %d",
+			response.StatusCode,
+		)
 	}
+
 	if response.StatusCode < 200 || response.StatusCode >= 300 || !*decoded.Success {
 		codes := make([]int, 0, len(decoded.Errors))
 		for _, item := range decoded.Errors {
 			codes = append(codes, item.Code)
 		}
-		slog.WarnContext(ctx, "Cloudflare rejected the request", "status", response.StatusCode, "codes", codes)
-		return decoded, response.StatusCode, fmt.Errorf("cloudflare rejected the request with HTTP %d and error codes %v", response.StatusCode, codes)
+
+		slog.WarnContext(
+			ctx,
+			"Cloudflare rejected the request",
+			"status",
+			response.StatusCode,
+			"codes",
+			codes,
+		)
+
+		return decoded, response.StatusCode, fmt.Errorf(
+			"cloudflare rejected the request with HTTP %d and error codes %v",
+			response.StatusCode,
+			codes,
+		)
 	}
+
 	return decoded, response.StatusCode, nil
 }
 
@@ -130,24 +181,38 @@ type QueryRequest struct {
 }
 
 // Query returns one native telemetry view without treating API errors as empty results.
-func (client *Client) Query(ctx context.Context, account string, query QueryRequest) (json.RawMessage, error) {
+func (client *Client) Query(
+	ctx context.Context,
+	account string,
+	query QueryRequest,
+) (json.RawMessage, error) {
 	if account == "" || strings.ContainsAny(account, "/?#") {
 		return nil, errors.New("cloudflare account ID is invalid")
 	}
+
 	if query.Timeframe.From >= query.Timeframe.To {
 		return nil, errors.New("telemetry query requires an increasing time range")
 	}
+
 	body, err := json.Marshal(query)
 	if err != nil {
 		return nil, errors.New("telemetry query could not be encoded")
 	}
-	response, _, err := client.request(ctx, http.MethodPost, "/accounts/"+account+"/workers/observability/telemetry/query", body)
+
+	response, _, err := client.request(
+		ctx,
+		http.MethodPost,
+		"/accounts/"+account+"/workers/observability/telemetry/query",
+		body,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	if len(response.Result) == 0 || bytes.Equal(response.Result, []byte("null")) {
 		return nil, errors.New("cloudflare query omitted its result")
 	}
+
 	return response.Result, nil
 }
 
@@ -195,52 +260,73 @@ func ReadCredential(path string) ([]byte, error) {
 		slog.Warn("Credential file could not be read", "path", path)
 		return nil, fmt.Errorf("read credential file: %w", err)
 	}
+
 	data = bytes.TrimSpace(data)
 	if len(data) == 0 {
 		return nil, errors.New("credential file is empty")
 	}
+
 	return data, nil
 }
 
 // AcquireCredentials revokes only tokens created by the command, including after canceled acquisitions.
-func AcquireCredentials(ctx context.Context, options CredentialOptions) (credentials *Credentials, returnErr error) {
-	slog.InfoContext(ctx, "Cloudflare credential acquisition started", "ephemeral", options.AccountTokenFile != "")
+func AcquireCredentials(
+	ctx context.Context,
+	options CredentialOptions,
+) (credentials *Credentials, returnErr error) {
+	slog.InfoContext(
+		ctx,
+		"Cloudflare credential acquisition started",
+		"ephemeral",
+		options.AccountTokenFile != "",
+	)
 	if (options.TokenFile == "") == (options.AccountTokenFile == "") {
 		return nil, errors.New("provide exactly one scoped token file or account token file")
 	}
+
 	if options.APIURL == "" {
 		options.APIURL = APIURL
 	}
+
 	path := options.TokenFile
 	if path == "" {
 		path = options.AccountTokenFile
 	}
+
 	token, err := ReadCredential(path)
 	if err != nil {
 		return nil, err
 	}
+
 	client, err := NewClient(options.APIURL, string(token), nil)
 	if err != nil {
 		return nil, err
 	}
+
 	var handle Credentials
 	credentials = &handle
 	credentials.Client = client
 	if options.TokenFile != "" {
 		return credentials, nil
 	}
+
 	if options.TTL <= 0 || options.TTL > 24*time.Hour {
-		return nil, errors.New("temporary credential TTL must be positive and no greater than 24 hours")
+		return nil, errors.New(
+			"temporary credential TTL must be positive and no greater than 24 hours",
+		)
 	}
+
 	if options.Account == "" || strings.ContainsAny(options.Account, "/?#") {
 		return nil, errors.New("cloudflare account ID is invalid")
 	}
+
 	credentials.accountClient = client
 	credentials.directory, err = os.MkdirTemp("", "pragent-ops-credentials.")
 	if err != nil {
 		slog.WarnContext(ctx, "Private credential directory creation failed")
 		return nil, fmt.Errorf("create private credential directory: %w", err)
 	}
+
 	acquired := credentials
 	defer func() {
 		if returnErr != nil {
@@ -251,35 +337,51 @@ func AcquireCredentials(ctx context.Context, options CredentialOptions) (credent
 	if err != nil {
 		return nil, err
 	}
+
 	created, err := client.createToken(ctx, body)
 	if err != nil {
 		return nil, err
 	}
+
 	var scoped tokenResult
 	if json.Unmarshal(created.Result, &scoped) != nil {
 		return nil, errors.New("cloudflare returned an invalid scoped credential")
 	}
+
 	credentials.id = scoped.ID
 	if scoped.ID == "" || scoped.Value == "" {
 		return nil, errors.New("cloudflare did not return a complete scoped credential")
 	}
+
 	credentials.Client, err = NewClient(options.APIURL, scoped.Value, nil)
 	if err != nil {
 		return nil, err
 	}
-	if err = os.WriteFile(filepath.Join(credentials.directory, "token"), []byte(scoped.Value), 0o600); err != nil {
+
+	if err = os.WriteFile(
+		filepath.Join(credentials.directory, "token"),
+		[]byte(scoped.Value),
+		0o600,
+	); err != nil {
 		slog.WarnContext(ctx, "Private temporary credential write failed")
 		return nil, fmt.Errorf("write private temporary credential: %w", err)
 	}
-	if err = os.WriteFile(filepath.Join(credentials.directory, "id"), []byte(scoped.ID), 0o600); err != nil {
+
+	if err = os.WriteFile(
+		filepath.Join(credentials.directory, "id"),
+		[]byte(scoped.ID),
+		0o600,
+	); err != nil {
 		slog.WarnContext(ctx, "Temporary credential identifier write failed")
 		return nil, fmt.Errorf("write temporary credential identifier: %w", err)
 	}
+
 	_, _, err = credentials.Client.request(ctx, http.MethodGet, "/user/tokens/verify", nil)
 	if err != nil {
 		slog.WarnContext(ctx, "Scoped credential verification failed")
 		return nil, fmt.Errorf("scoped credential verification failed: %w", err)
 	}
+
 	return credentials, nil
 }
 
@@ -288,24 +390,42 @@ func (client *Client) tokenBody(ctx context.Context, options CredentialOptions) 
 	if len(names) == 0 {
 		names = []string{""}
 	}
+
 	permissions := make([]permissionGroup, 0, len(names))
 	seen := make(map[string]bool)
+
 	for _, name := range names {
 		if seen[name] {
 			return nil, errors.New("temporary token permission names must be distinct")
 		}
+
 		seen[name] = true
 		permissionID, err := client.permissionID(ctx, name)
 		if err != nil {
 			return nil, err
 		}
+
 		permissions = append(permissions, permissionGroup{ID: permissionID})
 	}
-	body, err := json.Marshal(tokenRequest{Name: "pragent-ops-temporary", ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339), Policies: []tokenPolicy{{Effect: "allow", PermissionGroups: permissions, Resources: map[string]string{"com.cloudflare.api.account." + options.Account: "*"}}}})
+
+	body, err := json.Marshal(tokenRequest{
+		Name:      "pragent-ops-temporary",
+		ExpiresOn: clock.System().UTC().Add(options.TTL).Format(time.RFC3339),
+		Policies: []tokenPolicy{
+			{
+				Effect:           "allow",
+				PermissionGroups: permissions,
+				Resources: map[string]string{
+					"com.cloudflare.api.account." + options.Account: "*",
+				},
+			},
+		},
+	})
 	if err != nil {
 		slog.WarnContext(ctx, "Temporary token policy encoding failed")
 		return nil, fmt.Errorf("encode temporary token policy: %w", err)
 	}
+
 	return body, nil
 }
 
@@ -313,10 +433,12 @@ func (client *Client) permissionID(ctx context.Context, name string) (string, er
 	if name == "" {
 		return observabilityPermission, nil
 	}
+
 	response, _, err := client.request(ctx, http.MethodGet, "/user/tokens/permission_groups", nil)
 	if err != nil {
 		return "", err
 	}
+
 	var groups []struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
@@ -324,18 +446,23 @@ func (client *Client) permissionID(ctx context.Context, name string) (string, er
 	if err := json.Unmarshal(response.Result, &groups); err != nil {
 		return "", errors.New("cloudflare returned invalid permission groups")
 	}
+
 	var identifier string
+
 	for _, group := range groups {
 		if group.Name == name {
 			if identifier != "" || group.ID == "" {
 				return "", errors.New("cloudflare permission group is ambiguous")
 			}
+
 			identifier = group.ID
 		}
 	}
+
 	if identifier == "" {
 		return "", fmt.Errorf("cloudflare permission group %q is unavailable", name)
 	}
+
 	return identifier, nil
 }
 
@@ -344,10 +471,15 @@ func (client *Client) createToken(ctx context.Context, body []byte) (envelope, e
 		slog.WarnContext(ctx, "Credential acquisition canceled")
 		return envelope{}, fmt.Errorf("credential acquisition canceled: %w", err)
 	}
+
 	// Caller cancellation must not interrupt creation before the response provides the revocation ID.
-	creationContext, cancelCreation := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+	creationContext, cancelCreation := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		45*time.Second,
+	)
 	defer cancelCreation()
 	created, _, err := client.request(creationContext, http.MethodPost, "/user/tokens", body)
+
 	return created, err
 }
 
@@ -356,25 +488,58 @@ func (credentials *Credentials) Close(ctx context.Context) error {
 	if credentials == nil || credentials.directory == "" {
 		return nil
 	}
+
 	if credentials.id != "" && !credentials.Revoked {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 		defer cancel()
-		_, _, err := credentials.accountClient.request(ctx, http.MethodDelete, "/user/tokens/"+credentials.id, nil)
+		_, _, err := credentials.accountClient.request(
+			ctx,
+			http.MethodDelete,
+			"/user/tokens/"+credentials.id,
+			nil,
+		)
 		if err != nil {
 			slog.WarnContext(ctx, "Temporary credential revocation failed", "id", credentials.id)
-			return fmt.Errorf("credential %s revocation failed; credential directory %s requires recovery: %w", credentials.id, credentials.directory, err)
+
+			return fmt.Errorf(
+				"credential %s revocation failed; credential directory %s requires recovery: %w",
+				credentials.id,
+				credentials.directory,
+				err,
+			)
 		}
-		verified, status, verifyErr := credentials.Client.request(ctx, http.MethodGet, "/user/tokens/verify", nil)
-		if verifyErr == nil || verified.Success == nil || *verified.Success || status >= 500 || len(verified.Errors) == 0 {
-			return fmt.Errorf("credential %s revocation could not be verified; credential directory %s requires recovery", credentials.id, credentials.directory)
+
+		verified, status, verifyErr := credentials.Client.request(
+			ctx,
+			http.MethodGet,
+			"/user/tokens/verify",
+			nil,
+		)
+		if verifyErr == nil || verified.Success == nil || *verified.Success || status >= 500 ||
+			len(verified.Errors) == 0 {
+			return fmt.Errorf(
+				"credential %s revocation could not be verified; credential directory %s requires recovery",
+				credentials.id,
+				credentials.directory,
+			)
 		}
+
 		credentials.Revoked = true
 		slog.InfoContext(ctx, "Temporary credential revocation verified", "id", credentials.id)
 	}
+
 	if err := os.RemoveAll(credentials.directory); err != nil {
-		slog.WarnContext(ctx, "Temporary credential directory removal failed", "path", credentials.directory)
+		slog.WarnContext(
+			ctx,
+			"Temporary credential directory removal failed",
+			"path",
+			credentials.directory,
+		)
+
 		return fmt.Errorf("remove temporary credential directory: %w", err)
 	}
+
 	credentials.directory = ""
+
 	return nil
 }

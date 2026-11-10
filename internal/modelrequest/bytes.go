@@ -14,5 +14,6 @@ func MaximumBytes(ctx context.Context, configured int) int {
 	if maximum, present := ctx.Value(maximumBytesKey{}).(int); present {
 		return maximum
 	}
+
 	return configured
 }

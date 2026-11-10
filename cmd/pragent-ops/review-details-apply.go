@@ -39,11 +39,22 @@ func writeReviewDetailsBackup(path string, snapshot reviewDetailsSnapshot) (retu
 	return nil
 }
 
-func applyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot reviewDetailsSnapshot, botLogin string) error {
+func applyReviewDetails(
+	ctx context.Context,
+	client *githubapp.Client,
+	snapshot reviewDetailsSnapshot,
+	botLogin string,
+) error {
 	if err := verifyReviewDetails(ctx, client, snapshot, snapshot.Comment.Body); err != nil {
 		return err
 	}
-	updated, err := client.UpdateIssueComment(ctx, snapshot.Original.InstallationID, snapshot.Original.Repository, snapshot.Comment.ID, snapshot.Repaired)
+	updated, err := client.UpdateIssueComment(
+		ctx,
+		snapshot.Original.InstallationID,
+		snapshot.Original.Repository,
+		snapshot.Comment.ID,
+		snapshot.Repaired,
+	)
 	if err != nil {
 		return err
 	}
@@ -53,7 +64,12 @@ func applyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot 
 	if err := verifyReviewDetails(ctx, client, snapshot, snapshot.Repaired); err != nil {
 		return err
 	}
-	repeated, err := review.RestoreReviewDetails(snapshot.Repaired, snapshot.Source.Summary, snapshot.Original.Threads, botLogin)
+	repeated, err := review.RestoreReviewDetails(
+		snapshot.Repaired,
+		snapshot.Source.Summary,
+		snapshot.Original.Threads,
+		botLogin,
+	)
 	if err != nil {
 		return err
 	}
@@ -63,20 +79,41 @@ func applyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot 
 	return nil
 }
 
-func verifyReviewDetails(ctx context.Context, client *githubapp.Client, snapshot reviewDetailsSnapshot, expectedBody string) error {
+func verifyReviewDetails(
+	ctx context.Context,
+	client *githubapp.Client,
+	snapshot reviewDetailsSnapshot,
+	expectedBody string,
+) error {
 	original := snapshot.Original
-	current, err := captureReviewBodies(ctx, client, original.InstallationID, original.Repository, original.Number)
+	current, err := captureReviewBodies(
+		ctx,
+		client,
+		original.InstallationID,
+		original.Repository,
+		original.Number,
+	)
 	if err != nil {
 		return err
 	}
-	source, err := client.GetCheckRunDetails(ctx, original.InstallationID, original.Repository, snapshot.Source.Run.ID)
+	source, err := client.GetCheckRunDetails(
+		ctx,
+		original.InstallationID,
+		original.Repository,
+		snapshot.Source.Run.ID,
+	)
 	if err != nil {
 		return err
 	}
 	return compareReviewDetails(snapshot, expectedBody, current, source)
 }
 
-func compareReviewDetails(snapshot reviewDetailsSnapshot, expectedBody string, current reviewBodySnapshot, source githubapp.CheckRunDetails) error {
+func compareReviewDetails(
+	snapshot reviewDetailsSnapshot,
+	expectedBody string,
+	current reviewBodySnapshot,
+	source githubapp.CheckRunDetails,
+) error {
 	original := snapshot.Original
 	if current.PullRequest != original.PullRequest {
 		return errors.New("pull request metadata changed during review-details repair")

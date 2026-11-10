@@ -32,7 +32,10 @@ type IncrementalHistoryUnavailableError struct {
 //
 //	message := unavailable.Error()
 func (unavailable *IncrementalHistoryUnavailableError) Error() string {
-	return fmt.Sprintf("previous review revision %s is unavailable in current Git history", unavailable.Revision)
+	return fmt.Sprintf(
+		"previous review revision %s is unavailable in current Git history",
+		unavailable.Revision,
+	)
 }
 
 // CompareIncremental acquires the current pull request's legitimate history
@@ -56,7 +59,14 @@ func (client *Client) CompareIncremental(
 		return Comparison{}, scopeError
 	}
 
-	return client.compareRepositoryCommits(ctx, installationID, repo, current.Base, current.Head, previous)
+	return client.compareRepositoryCommits(
+		ctx,
+		installationID,
+		repo,
+		current.Base,
+		current.Head,
+		previous,
+	)
 }
 
 func (client *Client) incrementalRepositoryBase(
@@ -78,7 +88,12 @@ func (client *Client) incrementalRepositoryBase(
 
 	_, err = object.GetCommit(entry.repository, hash)
 	if errors.Is(err, plumbing.ErrObjectNotFound) {
-		client.logger.WarnContext(ctx, "Previous revision is absent from current Git history", "revision", previous)
+		client.logger.WarnContext(
+			ctx,
+			"Previous revision is absent from current Git history",
+			"revision",
+			previous,
+		)
 
 		return nil, &IncrementalHistoryUnavailableError{Revision: previous}
 	}

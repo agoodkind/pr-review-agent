@@ -12,20 +12,31 @@ import (
 )
 
 func TestAnIncompleteFileAssessmentWithoutFindingsDoesNotSubmitAVerdict(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         oversizedHunkCollector{},
-		minimumImportance: 9,
-		model: &sequenceModel{results: []domain.ReviewResult{{
-			OmissionsAcceptable: false,
-			DecisionReason:      "The unread change cannot be checked from the available context.",
-		}}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         oversizedHunkCollector{},
+			minimumImportance: 9,
+			model: &sequenceModel{
+				results: []domain.ReviewResult{
+					{
+						OmissionsAcceptable: false,
+						DecisionReason:      "The unread change cannot be checked from the available context.",
+					},
+				},
+			},
+		},
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("an incomplete assessment submitted a native verdict: %v", fixture.state.lastSubmitReview)
+		t.Fatalf(
+			"an incomplete assessment submitted a native verdict: %v",
+			fixture.state.lastSubmitReview,
+		)
 	}
 }
 
@@ -36,11 +47,20 @@ func TestAStaleOmissionDecisionDoesNotEraseNewInlineFindings(t *testing.T) {
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("a stale omission decision submitted a native verdict: %v", fixture.state.lastSubmitReview)
+		t.Fatalf(
+			"a stale omission decision submitted a native verdict: %v",
+			fixture.state.lastSubmitReview,
+		)
 	}
+
 	if len(fixture.state.streamedComments) != 1 || len(fixture.state.dismissals) != 0 {
-		t.Fatalf("the fresh actionable finding requires its standing block: comments=%v dismissals=%v", fixture.state.streamedComments, fixture.state.dismissals)
+		t.Fatalf(
+			"the fresh actionable finding requires its standing block: comments=%v dismissals=%v",
+			fixture.state.streamedComments,
+			fixture.state.dismissals,
+		)
 	}
 }
 
@@ -54,13 +74,25 @@ func TestARejectedOmissionRefreshPreservesABlockWithAnOpenInlineFinding(t *testi
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("submitted review = %v, want the standing block retained", fixture.state.lastSubmitReview)
+		t.Fatalf(
+			"submitted review = %v, want the standing block retained",
+			fixture.state.lastSubmitReview,
+		)
 	}
+
 	if len(fixture.state.dismissals) != 0 {
-		t.Fatalf("dismissals = %v, want the block on the open finding retained", fixture.state.dismissals)
+		t.Fatalf(
+			"dismissals = %v, want the block on the open finding retained",
+			fixture.state.dismissals,
+		)
 	}
-	if body := failureSummaryComment(t, fixture); !strings.Contains(body, "Resolve the open inline findings.") {
+
+	if body := failureSummaryComment(t, fixture); !strings.Contains(
+		body,
+		"Resolve the open inline findings.",
+	) {
 		t.Fatalf("summary = %q, want the retained requested-changes verdict", body)
 	}
 }
@@ -69,15 +101,25 @@ func rejectedOmissionFixture(t *testing.T) *serviceFixture {
 	t.Helper()
 	metadata := `[{"path":"huge.go","header":"@@ -1,1 +1,2101 @@","reason":"hunk exceeds one model request"}]`
 	body := marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges) +
-		"\n<!-- pr-review-agent:omissions:v1 " + base64.RawURLEncoding.EncodeToString([]byte(metadata)) + " -->" +
+		"\n<!-- pr-review-agent:omissions:v1 " + base64.RawURLEncoding.EncodeToString(
+		[]byte(metadata),
+	) + " -->" +
 		"\n<!-- pr-review-agent:omissions-acceptable:v1 false -->"
-	return newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: [][]map[string]any{{{
-			"id":        float64(4100),
-			"commit_id": testHeadSHA,
-			"state":     "CHANGES_REQUESTED",
-			"body":      body,
-			"user":      map[string]any{"login": testBotLogin},
-		}}},
-	})
+
+	return newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			reviewPages: [][]map[string]any{
+				{
+					{
+						"id":        float64(4100),
+						"commit_id": testHeadSHA,
+						"state":     "CHANGES_REQUESTED",
+						"body":      body,
+						"user":      map[string]any{"login": testBotLogin},
+					},
+				},
+			},
+		},
+	)
 }

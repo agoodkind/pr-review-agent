@@ -29,11 +29,16 @@ func Command(t *testing.T, directory string, arguments ...string) string {
 	command := exec.CommandContext(t.Context(), "git", arguments...)
 	command.Dir = directory
 
-	command.Env = append(os.Environ(),
-		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_AUTHOR_NAME=Fixture", "GIT_AUTHOR_EMAIL=fixture@example.test",
-		"GIT_COMMITTER_NAME=Fixture", "GIT_COMMITTER_EMAIL=fixture@example.test",
-		"GIT_AUTHOR_DATE=2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2026-01-01T00:00:00Z",
+	command.Env = append(
+		os.Environ(),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_AUTHOR_NAME=Fixture",
+		"GIT_AUTHOR_EMAIL=fixture@example.test",
+		"GIT_COMMITTER_NAME=Fixture",
+		"GIT_COMMITTER_EMAIL=fixture@example.test",
+		"GIT_AUTHOR_DATE=2026-01-01T00:00:00Z",
+		"GIT_COMMITTER_DATE=2026-01-01T00:00:00Z",
 	)
 
 	output, err := command.CombinedOutput()
@@ -115,8 +120,9 @@ func Handler(t *testing.T, directory string) http.Handler {
 	}
 
 	backend := &cgi.Handler{
-		Path: gitBinary, Args: []string{"http-backend"},
-		Env: []string{"GIT_PROJECT_ROOT=" + filepath.Dir(directory), "GIT_HTTP_EXPORT_ALL=1"},
+		Path: gitBinary,
+		Args: []string{"http-backend"},
+		Env:  []string{"GIT_PROJECT_ROOT=" + filepath.Dir(directory), "GIT_HTTP_EXPORT_ALL=1"},
 	}
 
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -175,5 +181,7 @@ func Client(t *testing.T, server *httptest.Server) *http.Client {
 		t.Fatal(err)
 	}
 
-	return &http.Client{Transport: fixtureTransport{target: address, transport: server.Client().Transport}}
+	return &http.Client{
+		Transport: fixtureTransport{target: address, transport: server.Client().Transport},
+	}
 }

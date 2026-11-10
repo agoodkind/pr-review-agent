@@ -89,6 +89,7 @@ func inspectRepositoryDelta(
 	if err != nil {
 		return 0, repositoryAccessError("read bounded Git delta", err)
 	}
+
 	defer func() { _ = representation.Close() }()
 
 	reader := bufio.NewReader(io.TeeReader(representation, sink))

@@ -141,8 +141,11 @@ func run(ctx context.Context) (result error) {
 		return err
 	}
 	test := liveTest{
-		target: target, pr: pr, selected: selected, lastID: lastID,
-		marker: strconv.FormatInt(time.Now().UnixNano(), 36),
+		target:   target,
+		pr:       pr,
+		selected: selected,
+		lastID:   lastID,
+		marker:   strconv.FormatInt(time.Now().UnixNano(), 36),
 	}
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -182,8 +185,20 @@ func (test *liveTest) perform(ctx context.Context) error {
 }
 
 func (test *liveTest) testPlainComment(ctx context.Context) error {
-	issuePath := fmt.Sprintf("repos/%s/issues/%d/comments", test.target.Repository, test.target.PullRequest)
-	output, err := gh(ctx, "api", "-X", "POST", issuePath, "-f", "body=Live webhook test "+test.marker+" without a tag.")
+	issuePath := fmt.Sprintf(
+		"repos/%s/issues/%d/comments",
+		test.target.Repository,
+		test.target.PullRequest,
+	)
+	output, err := gh(
+		ctx,
+		"api",
+		"-X",
+		"POST",
+		issuePath,
+		"-f",
+		"body=Live webhook test "+test.marker+" without a tag.",
+	)
 	if err != nil {
 		return err
 	}
@@ -192,7 +207,13 @@ func (test *liveTest) testPlainComment(ctx context.Context) error {
 		return fmt.Errorf("decode untagged comment: %w", err)
 	}
 	test.plainCommentID = posted.ID
-	if err := assertNoNewCheck(ctx, test.target, test.pr.HeadRefOID, test.lastID, 30*time.Second); err != nil {
+	if err := assertNoNewCheck(
+		ctx,
+		test.target,
+		test.pr.HeadRefOID,
+		test.lastID,
+		30*time.Second,
+	); err != nil {
 		slog.Error("untagged comment started a review", "err", err)
 		return fmt.Errorf("untagged comment: %w", err)
 	}
@@ -201,8 +222,20 @@ func (test *liveTest) testPlainComment(ctx context.Context) error {
 }
 
 func (test *liveTest) testTaggedComment(ctx context.Context) error {
-	issuePath := fmt.Sprintf("repos/%s/issues/%d/comments", test.target.Repository, test.target.PullRequest)
-	output, err := gh(ctx, "api", "-X", "POST", issuePath, "-f", "body=Live webhook test "+test.marker+". @"+botLogin+" please review this pull request.")
+	issuePath := fmt.Sprintf(
+		"repos/%s/issues/%d/comments",
+		test.target.Repository,
+		test.target.PullRequest,
+	)
+	output, err := gh(
+		ctx,
+		"api",
+		"-X",
+		"POST",
+		issuePath,
+		"-f",
+		"body=Live webhook test "+test.marker+". @"+botLogin+" please review this pull request.",
+	)
 	if err != nil {
 		return err
 	}
@@ -216,7 +249,10 @@ func (test *liveTest) testTaggedComment(ctx context.Context) error {
 		slog.Error("tagged comment review failed", "err", err)
 		return fmt.Errorf("tagged comment: %w", err)
 	}
-	if !strings.Contains(check.Output.Summary, "| Forced run | yes |") || !strings.Contains(check.Output.Summary, "| Coverage complete | yes |") {
+	if !strings.Contains(
+		check.Output.Summary,
+		"| Forced run | yes |",
+	) || !strings.Contains(check.Output.Summary, "| Coverage complete | yes |") {
 		return fmt.Errorf("tagged comment check %d did not complete a full forced review", check.ID)
 	}
 	fmt.Printf("tagged comment: check %d passed\n", check.ID)
@@ -225,8 +261,21 @@ func (test *liveTest) testTaggedComment(ctx context.Context) error {
 }
 
 func (test *liveTest) testInlineReply(ctx context.Context) error {
-	replyPath := fmt.Sprintf("repos/%s/pulls/%d/comments/%d/replies", test.target.Repository, test.target.PullRequest, test.selected.Comments.Nodes[0].DatabaseID)
-	output, err := gh(ctx, "api", "-X", "POST", replyPath, "-f", "body=Live webhook test "+test.marker+": please reconsider this finding on the current head.")
+	replyPath := fmt.Sprintf(
+		"repos/%s/pulls/%d/comments/%d/replies",
+		test.target.Repository,
+		test.target.PullRequest,
+		test.selected.Comments.Nodes[0].DatabaseID,
+	)
+	output, err := gh(
+		ctx,
+		"api",
+		"-X",
+		"POST",
+		replyPath,
+		"-f",
+		"body=Live webhook test "+test.marker+": please reconsider this finding on the current head.",
+	)
 	if err != nil {
 		return err
 	}
@@ -292,7 +341,13 @@ func (test *liveTest) cleanup(ctx context.Context) error {
 	return result
 }
 
-func assertNoNewCheck(ctx context.Context, target config, head string, afterID int64, duration time.Duration) error {
+func assertNoNewCheck(
+	ctx context.Context,
+	target config,
+	head string,
+	afterID int64,
+	duration time.Duration,
+) error {
 	wait, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 	for wait.Err() == nil {
@@ -312,7 +367,16 @@ func assertNoNewCheck(ctx context.Context, target config, head string, afterID i
 }
 
 func getPullRequest(ctx context.Context, target config) (pullRequest, error) {
-	output, err := gh(ctx, "pr", "view", strconv.Itoa(target.PullRequest), "--repo", target.Repository, "--json", "state,isDraft,headRefOid,url")
+	output, err := gh(
+		ctx,
+		"pr",
+		"view",
+		strconv.Itoa(target.PullRequest),
+		"--repo",
+		target.Repository,
+		"--json",
+		"state,isDraft,headRefOid,url",
+	)
 	if err != nil {
 		return pullRequest{}, err
 	}
@@ -330,7 +394,10 @@ func selectThread(ctx context.Context, target config) (thread, error) {
 		if entry.IsResolved || len(entry.Comments.Nodes) == 0 {
 			continue
 		}
-		if strings.EqualFold(entry.Comments.Nodes[0].Author.Login, botLogin) && entry.Comments.Nodes[0].DatabaseID != 0 {
+		if strings.EqualFold(
+			entry.Comments.Nodes[0].Author.Login,
+			botLogin,
+		) && entry.Comments.Nodes[0].DatabaseID != 0 {
 			return entry, nil
 		}
 	}
@@ -342,7 +409,19 @@ func threads(ctx context.Context, target config) ([]thread, error) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, errors.New("repository must use owner/name format")
 	}
-	output, err := gh(ctx, "api", "graphql", "-f", "query="+threadQuery, "-f", "owner="+parts[0], "-f", "name="+parts[1], "-F", "number="+strconv.Itoa(target.PullRequest))
+	output, err := gh(
+		ctx,
+		"api",
+		"graphql",
+		"-f",
+		"query="+threadQuery,
+		"-f",
+		"owner="+parts[0],
+		"-f",
+		"name="+parts[1],
+		"-F",
+		"number="+strconv.Itoa(target.PullRequest),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -366,7 +445,12 @@ func expectThreadState(ctx context.Context, target config, id string, resolved b
 			if entry.IsResolved == resolved {
 				return nil
 			}
-			return fmt.Errorf("thread %s has resolved=%t, expected %t", id, entry.IsResolved, resolved)
+			return fmt.Errorf(
+				"thread %s has resolved=%t, expected %t",
+				id,
+				entry.IsResolved,
+				resolved,
+			)
 		}
 	}
 	return fmt.Errorf("thread %s disappeared", id)
@@ -396,7 +480,11 @@ func latestCheckID(ctx context.Context, target config, head string) (int64, erro
 }
 
 func checks(ctx context.Context, target config, head string) ([]checkRun, error) {
-	path := fmt.Sprintf("repos/%s/commits/%s/check-runs?filter=all&per_page=100", target.Repository, head)
+	path := fmt.Sprintf(
+		"repos/%s/commits/%s/check-runs?filter=all&per_page=100",
+		target.Repository,
+		head,
+	)
 	output, err := gh(ctx, "api", path)
 	if err != nil {
 		return nil, err
@@ -428,7 +516,11 @@ func awaitCheck(ctx context.Context, target config, head string, afterID int64) 
 			}
 			if check.Status == "completed" {
 				if check.Conclusion != "success" || check.ExternalID == "" {
-					return checkRun{}, fmt.Errorf("check %d ended with %q or lacks a delivery identifier", check.ID, check.Conclusion)
+					return checkRun{}, fmt.Errorf(
+						"check %d ended with %q or lacks a delivery identifier",
+						check.ID,
+						check.Conclusion,
+					)
 				}
 				return check, nil
 			}
@@ -441,7 +533,11 @@ func awaitCheck(ctx context.Context, target config, head string, afterID int64) 
 	if ctx.Err() != nil {
 		return checkRun{}, ctx.Err()
 	}
-	return checkRun{}, fmt.Errorf("review check after %d did not complete within %s", afterID, checkTimeout)
+	return checkRun{}, fmt.Errorf(
+		"review check after %d did not complete within %s",
+		afterID,
+		checkTimeout,
+	)
 }
 
 func gh(ctx context.Context, args ...string) ([]byte, error) {
@@ -449,7 +545,12 @@ func gh(ctx context.Context, args ...string) ([]byte, error) {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		slog.Error("GitHub command failed", "command", args[0], "err", err)
-		return nil, fmt.Errorf("gh %s failed: %w: %s", args[0], err, strings.TrimSpace(string(output)))
+		return nil, fmt.Errorf(
+			"gh %s failed: %w: %s",
+			args[0],
+			err,
+			strings.TrimSpace(string(output)),
+		)
 	}
 	return output, nil
 }

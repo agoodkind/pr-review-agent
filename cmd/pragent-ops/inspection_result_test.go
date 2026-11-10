@@ -29,13 +29,20 @@ func TestDiagnosticCommandsRejectReviewsWithPendingInspection(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(writePendingInspectionResponse))
 	defer server.Close()
 	certificatePath := filepath.Join(directory, "server.pem")
-	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	certificate := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: server.Certificate().Raw,
+	})
 	if err := os.WriteFile(certificatePath, certificate, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	runtimePath := diagnosticInspectionRuntime(t, root, directory, server.URL)
 	credentialPath := filepath.Join(directory, "synthetic-credential")
-	if err := os.WriteFile(credentialPath, []byte("local-inspection-test-credential"), 0o600); err != nil {
+	if err := os.WriteFile(
+		credentialPath,
+		[]byte("local-inspection-test-credential"),
+		0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	datasetPath := filepath.Join(directory, "dataset.json")
@@ -44,53 +51,86 @@ func TestDiagnosticCommandsRejectReviewsWithPendingInspection(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, commandName := range []string{"probe", "prose-eval"} {
-		t.Run(commandName, func(t *testing.T) {
-			outputDirectory := filepath.Join(directory, commandName)
-			arguments := []string{commandName, "--runtime", runtimePath, "--provider", "openai_goodkind_io", "--credential-file", credentialPath, "--output-dir", outputDirectory}
-			if commandName == "prose-eval" {
-				arguments = append(arguments, "--dataset", datasetPath)
-			}
-			command := exec.CommandContext(t.Context(), binary, arguments...)
-			command.Dir = root
-			command.Env = append(os.Environ(), "SSL_CERT_FILE="+certificatePath, "SSL_CERT_DIR=", "GODEBUG=x509sslcertoverrideplatform=1")
-			output, commandErr := command.CombinedOutput()
-			if commandErr == nil {
-				t.Fatalf("%s accepted a review that still requires inspection:\n%s", commandName, output)
-			}
-			content, readErr := os.ReadFile(filepath.Join(outputDirectory, "result.json"))
-			if readErr != nil {
-				t.Fatalf("%s did not save its diagnostic result: %v\n%s", commandName, readErr, output)
-			}
-			if commandName == "probe" {
+		t.Run(
+			commandName,
+			func(t *testing.T) {
+				outputDirectory := filepath.Join(directory, commandName)
+				arguments := []string{
+					commandName,
+					"--runtime",
+					runtimePath,
+					"--provider",
+					"openai_goodkind_io",
+					"--credential-file",
+					credentialPath,
+					"--output-dir",
+					outputDirectory,
+				}
+				if commandName == "prose-eval" {
+					arguments = append(arguments, "--dataset", datasetPath)
+				}
+				command := exec.CommandContext(t.Context(), binary, arguments...)
+				command.Dir = root
+				command.Env = append(
+					os.Environ(),
+					"SSL_CERT_FILE="+certificatePath,
+					"SSL_CERT_DIR=",
+					"GODEBUG=x509sslcertoverrideplatform=1",
+				)
+				output, commandErr := command.CombinedOutput()
+				if commandErr == nil {
+					t.Fatalf(
+						"%s accepted a review that still requires inspection:\n%s",
+						commandName,
+						output,
+					)
+				}
+				content, readErr := os.ReadFile(filepath.Join(outputDirectory, "result.json"))
+				if readErr != nil {
+					t.Fatalf(
+						"%s did not save its diagnostic result: %v\n%s",
+						commandName,
+						readErr,
+						output,
+					)
+				}
+				if commandName == "probe" {
+					var result struct {
+						Success    bool
+						Completion review.Completion
+						Usage      review.UsageSummary
+					}
+					if err := json.Unmarshal(content, &result); err != nil {
+						t.Fatal(err)
+					}
+					if result.Success || len(
+						result.Completion.InspectionRequests,
+					) != 1 || result.Completion.InspectionRequests[0].Target != "helper.go" {
+						t.Fatal(
+							"The probe lost the pending request or reported a completed review.",
+						)
+					}
+					assertDiagnosticInspectionUsage(t, result.Usage)
+					return
+				}
 				var result struct {
-					Success    bool
-					Completion review.Completion
-					Usage      review.UsageSummary
+					FailedCases int `json:"failed_cases"`
+					Cases       []struct {
+						Completed bool                `json:"completed"`
+						Usage     review.UsageSummary `json:"usage"`
+					} `json:"cases"`
 				}
 				if err := json.Unmarshal(content, &result); err != nil {
 					t.Fatal(err)
 				}
-				if result.Success || len(result.Completion.InspectionRequests) != 1 || result.Completion.InspectionRequests[0].Target != "helper.go" {
-					t.Fatal("The probe lost the pending request or reported a completed review.")
+				if result.FailedCases != 1 || len(result.Cases) != 1 || result.Cases[0].Completed {
+					t.Fatal(
+						"The evaluation reported completion while inspection remained necessary.",
+					)
 				}
-				assertDiagnosticInspectionUsage(t, result.Usage)
-				return
-			}
-			var result struct {
-				FailedCases int `json:"failed_cases"`
-				Cases       []struct {
-					Completed bool                `json:"completed"`
-					Usage     review.UsageSummary `json:"usage"`
-				} `json:"cases"`
-			}
-			if err := json.Unmarshal(content, &result); err != nil {
-				t.Fatal(err)
-			}
-			if result.FailedCases != 1 || len(result.Cases) != 1 || result.Cases[0].Completed {
-				t.Fatal("The evaluation reported completion while inspection remained necessary.")
-			}
-			assertDiagnosticInspectionUsage(t, result.Cases[0].Usage)
-		})
+				assertDiagnosticInspectionUsage(t, result.Cases[0].Usage)
+			},
+		)
 	}
 }
 
@@ -111,11 +151,22 @@ func diagnosticInspectionRuntime(t *testing.T, root, directory, endpoint string)
 	if err := json.Unmarshal(content, &runtime); err != nil {
 		t.Fatal(err)
 	}
-	runtime["PROVIDERS"], err = json.Marshal([]map[string]string{{"id": "openai_goodkind_io", "base_url": endpoint, "model": "inspection-command-model", "reasoning_effort": "low", "api_key_binding": "OPENAI_GOODKIND_IO_API_KEY"}})
+	runtime["PROVIDERS"], err = json.Marshal([]map[string]string{
+		{
+			"id":               "openai_goodkind_io",
+			"base_url":         endpoint,
+			"model":            "inspection-command-model",
+			"reasoning_effort": "low",
+			"api_key_binding":  "OPENAI_GOODKIND_IO_API_KEY",
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, path := range map[string]string{"REVIEW_RULES_FILE": "config/review-rules.json", "REVIEW_PROMPTS_FILE": "config/review-prompts.json"} {
+	for key, path := range map[string]string{
+		"REVIEW_RULES_FILE":   "config/review-rules.json",
+		"REVIEW_PROMPTS_FILE": "config/review-prompts.json",
+	} {
 		runtime[key], err = json.Marshal(filepath.Join(root, path))
 		if err != nil {
 			t.Fatal(err)
@@ -136,13 +187,49 @@ func writePendingInspectionResponse(writer http.ResponseWriter, _ *http.Request)
 	const result = `{"overview":"The changed source requires its existing helper implementation.","omissions_acceptable":true,"decision_reason":"","file_assessments":[],"findings":[],"inspection_requests":[{"operation":"read_file","target":"helper.go","query":"","start_line":0,"end_line":0,"reason":"Check the existing helper before completing the source review."}]}`
 	writer.Header().Set("Content-Type", "text/event-stream")
 	frames := []map[string]any{
-		{"type": "response.output_text.delta", "delta": result, "output_index": 0, "content_index": 0},
-		{"type": "response.completed", "response": map[string]any{"id": "inspection-command-response", "object": "response", "status": "completed", "model": "inspection-command-model", "output": []map[string]any{{"type": "message", "role": "assistant", "status": "completed", "content": []map[string]any{{"type": "output_text", "text": result, "annotations": []any{}}}}}, "usage": map[string]int{"input_tokens": 11, "output_tokens": 5, "total_tokens": 16}}},
+		{
+			"type":          "response.output_text.delta",
+			"delta":         result,
+			"output_index":  0,
+			"content_index": 0,
+		},
+		{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id":     "inspection-command-response",
+				"object": "response",
+				"status": "completed",
+				"model":  "inspection-command-model",
+				"output": []map[string]any{
+					{
+						"type":   "message",
+						"role":   "assistant",
+						"status": "completed",
+						"content": []map[string]any{
+							{
+								"type":        "output_text",
+								"text":        result,
+								"annotations": []any{},
+							},
+						},
+					},
+				},
+				"usage": map[string]int{
+					"input_tokens":  11,
+					"output_tokens": 5,
+					"total_tokens":  16,
+				},
+			},
+		},
 	}
 	for _, frame := range frames {
 		content, err := json.Marshal(frame)
 		if err != nil {
-			http.Error(writer, "The local response could not be encoded.", http.StatusInternalServerError)
+			http.Error(
+				writer,
+				"The local response could not be encoded.",
+				http.StatusInternalServerError,
+			)
 			return
 		}
 		if _, err := fmt.Fprintf(writer, "data: %s\n\n", content); err != nil {

@@ -1,14 +1,14 @@
-# deadcode: generated_at=2026-11-10T04:36:57Z
-internal/policytest/policy.go:15:6: unreachable func: Load	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/review/coverage.go:807:6: unreachable func: RenderUnreadableBody	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testarchive/archive.go:16:6: unreachable func: Write	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/changes.go:115:6: unreachable func: ContentAPIRequest	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/changes.go:21:6: unreachable func: PatchContents	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/changes.go:54:6: unreachable func: renderPatchLines	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/changes.go:78:6: unreachable func: CommitReview	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/git.go:108:6: unreachable func: Handler	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/git.go:143:35: unreachable func: fixtureTransport.RoundTrip	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/git.go:170:6: unreachable func: Client	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/git.go:25:6: unreachable func: Command	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/git.go:54:6: unreachable func: New	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
-internal/testgit/git.go:71:6: unreachable func: Commit	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:36:57Z
+# deadcode: generated_at=2026-11-10T04:50:06Z
+internal/policytest/policy.go:15:6: unreachable func: Load	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/review/coverage.go:1053:6: unreachable func: RenderUnreadableBody	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testarchive/archive.go:16:6: unreachable func: Write	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/changes.go:116:6: unreachable func: ContentAPIRequest	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/changes.go:21:6: unreachable func: PatchContents	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/changes.go:54:6: unreachable func: renderPatchLines	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/changes.go:79:6: unreachable func: CommitReview	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/git.go:113:6: unreachable func: Handler	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/git.go:149:35: unreachable func: fixtureTransport.RoundTrip	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/git.go:176:6: unreachable func: Client	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/git.go:25:6: unreachable func: Command	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/git.go:59:6: unreachable func: New	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z
+internal/testgit/git.go:76:6: unreachable func: Commit	# deadcode:first_added=2026-11-10T04:36:57Z last_seen=2026-11-10T04:50:06Z

@@ -22,11 +22,14 @@ func (policy ReportPolicy) Validate() error {
 	if policy.Attempts <= 0 {
 		return errors.New("report attempts must be positive")
 	}
+
 	if policy.AttemptTimeout <= 0 {
 		return errors.New("report attempt_timeout must be positive")
 	}
+
 	if policy.Timeout < policy.AttemptTimeout {
 		return errors.New("report timeout must be at least attempt_timeout")
 	}
+
 	return nil
 }

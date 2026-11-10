@@ -47,20 +47,28 @@ func TestGatewayHandoffReadinessRetriesNative(t *testing.T) {
 		t.Fatalf("unready handoff must wait until its deadline after HTTP 503: %v", err)
 	}
 	var readinessError *readinessHTTPError
-	if !errors.As(err, &readinessError) || readinessError.StatusCode != http.StatusServiceUnavailable {
+	if !errors.As(err, &readinessError) ||
+		readinessError.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("readiness timeout must preserve the actual HTTP status: %v", err)
 	}
 	assertNativeUnreadyHandoff(t, operation, ctx)
 	t.Log("Persistent readiness HTTP 503 preserved the running source until the deadline.")
 	if err := operation.waitHandoffControl(recoveryContext, "status", revision, true); err != nil {
-		t.Fatalf("the same waiter must recover after the actual candidate revision becomes available: %v", errors.Join(err, context.Cause(recoveryContext)))
+		t.Fatalf(
+			"the same waiter must recover after the actual candidate revision becomes available: %v",
+			errors.Join(err, context.Cause(recoveryContext)),
+		)
 	}
 	status, err := operation.gatewayHandoffControl(ctx, "status", revision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !*status.Complete || !*status.CandidateReady || *status.PreviousContainerRunning || status.CandidateRevision != revision {
-		t.Fatalf("recovered handoff must prove the exact candidate revision and stopped source: %+v", status)
+	if !*status.Complete || !*status.CandidateReady || *status.PreviousContainerRunning ||
+		status.CandidateRevision != revision {
+		t.Fatalf(
+			"recovered handoff must prove the exact candidate revision and stopped source: %+v",
+			status,
+		)
 	}
 	if _, err := operation.probe(ctx, operation.configuration.GatewayOrigin, revision); err != nil {
 		t.Fatalf("recovered gateway must serve the exact candidate revision: %v", err)
@@ -79,20 +87,29 @@ func TestCandidateDeploymentControlRetriesNative(t *testing.T) {
 	recoveryContext := nativeRecoveryContext(t, ctx)
 	_, err := operation.drainRequest(ctx, slot.Origin, "status")
 	if !errors.Is(err, errDeploymentControlUnavailable) {
-		t.Fatalf("the actual unavailable configuration dependency must produce control HTTP 503: %v", err)
+		t.Fatalf(
+			"the actual unavailable configuration dependency must produce control HTTP 503: %v",
+			err,
+		)
 	}
 	waitContext, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 	defer cancel()
 	_, err = operation.waitDrainControl(waitContext, slot.Origin, "status")
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("unavailable candidate control must wait until its deadline after HTTP 503: %v", err)
+		t.Fatalf(
+			"unavailable candidate control must wait until its deadline after HTTP 503: %v",
+			err,
+		)
 	}
 	if !errors.Is(err, errDeploymentControlUnavailable) {
 		t.Fatalf("candidate control timeout must preserve the actual HTTP status: %v", err)
 	}
 	t.Log("Persistent candidate control HTTP 503 continued until the deadline.")
 	if _, err := operation.waitDrainControl(recoveryContext, slot.Origin, "status"); err != nil {
-		t.Fatalf("the same candidate control waiter must recover after the actual configuration is restored: %v", errors.Join(err, context.Cause(recoveryContext)))
+		t.Fatalf(
+			"the same candidate control waiter must recover after the actual configuration is restored: %v",
+			errors.Join(err, context.Cause(recoveryContext)),
+		)
 	}
 	state, err := operation.drainRequest(ctx, slot.Origin, "status")
 	if err != nil {
@@ -101,15 +118,21 @@ func TestCandidateDeploymentControlRetriesNative(t *testing.T) {
 	if !state.containerRunning() || state.drained() {
 		t.Fatal("recovered candidate control must report its running container with open admission")
 	}
-	t.Log("The candidate control waiter recovered and read the running container state over HTTP 200.")
+	t.Log(
+		"The candidate control waiter recovered and read the running container state over HTTP 200.",
+	)
 }
 
 func TestCandidateBeginRetriesNative(t *testing.T) {
 	state := nativeDrainControlRecovery(t, "begin")
 	if !state.containerRunning() || !state.drained() {
-		t.Fatal("recovered begin must report a running container with closed admission and zero outstanding work")
+		t.Fatal(
+			"recovered begin must report a running container with closed admission and zero outstanding work",
+		)
 	}
-	t.Log("The begin waiter recovered and closed admission with zero outstanding work over HTTP 200.")
+	t.Log(
+		"The begin waiter recovered and closed admission with zero outstanding work over HTTP 200.",
+	)
 }
 
 func TestCandidateRestartRetriesNative(t *testing.T) {
@@ -128,7 +151,11 @@ func nativeDrainControlRecovery(t *testing.T, action string) drainState {
 	recoveryContext := nativeRecoveryContext(t, ctx)
 	_, err := operation.drainRequest(ctx, origin, action)
 	if !errors.Is(err, errDeploymentControlUnavailable) {
-		t.Fatalf("the actual unavailable configuration dependency must produce %s HTTP 503: %v", action, err)
+		t.Fatalf(
+			"the actual unavailable configuration dependency must produce %s HTTP 503: %v",
+			action,
+			err,
+		)
 	}
 	waitContext, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 	defer cancel()
@@ -142,7 +169,11 @@ func nativeDrainControlRecovery(t *testing.T, action string) drainState {
 	t.Logf("Persistent %s HTTP 503 continued until the deadline.", action)
 	state, err := operation.waitDrainControl(recoveryContext, origin, action)
 	if err != nil {
-		t.Fatalf("the same %s waiter must recover after the actual configuration is restored: %v", action, errors.Join(err, context.Cause(recoveryContext)))
+		t.Fatalf(
+			"the same %s waiter must recover after the actual configuration is restored: %v",
+			action,
+			errors.Join(err, context.Cause(recoveryContext)),
+		)
 	}
 	return state
 }
@@ -156,17 +187,23 @@ func nativeRecoveryContext(t *testing.T, ctx context.Context) context.Context {
 	recoveryContext, cancelRecovery := context.WithCancelCause(ctx)
 	t.Cleanup(func() { cancelRecovery(nil) })
 	var observed sync.Once
-	trace := &httptrace.ClientTrace{GotFirstResponseByte: func() {
-		observed.Do(func() {
-			if err := os.WriteFile(signalPath+".tmp", []byte("response_received\n"), 0o600); err != nil {
-				cancelRecovery(fmt.Errorf("write native handoff recovery receipt: %w", err))
-				return
-			}
-			if err := os.Rename(signalPath+".tmp", signalPath); err != nil {
-				cancelRecovery(fmt.Errorf("publish native handoff recovery receipt: %w", err))
-			}
-		})
-	}}
+	trace := &httptrace.ClientTrace{
+		GotFirstResponseByte: func() {
+			observed.Do(func() {
+				if err := os.WriteFile(
+					signalPath+".tmp",
+					[]byte("response_received\n"),
+					0o600,
+				); err != nil {
+					cancelRecovery(fmt.Errorf("write native handoff recovery receipt: %w", err))
+					return
+				}
+				if err := os.Rename(signalPath+".tmp", signalPath); err != nil {
+					cancelRecovery(fmt.Errorf("publish native handoff recovery receipt: %w", err))
+				}
+			})
+		},
+	}
 	return httptrace.WithClientTrace(recoveryContext, trace)
 }
 
@@ -191,8 +228,11 @@ func nativeHandoffDeployment(t *testing.T) (*deployment, string) {
 	operation := &deployment{
 		client: client,
 		configuration: DeploymentConfiguration{
-			GatewayOrigin: origin, CandidateTimeout: "2m", ProbeInterval: "100ms",
-			candidateTimeout: 2 * time.Minute, probeInterval: 100 * time.Millisecond,
+			GatewayOrigin:    origin,
+			CandidateTimeout: "2m",
+			ProbeInterval:    "100ms",
+			candidateTimeout: 2 * time.Minute,
+			probeInterval:    100 * time.Millisecond,
 		},
 		healthClient: &http.Client{Timeout: time.Second},
 		directory:    t.TempDir(),
@@ -206,10 +246,16 @@ func assertNativeUnreadyHandoff(t *testing.T, operation *deployment, ctx context
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !*status.Handoff || *status.Complete || *status.CandidateReady || !*status.PreviousContainerRunning {
+	if !*status.Handoff || *status.Complete || *status.CandidateReady ||
+		!*status.PreviousContainerRunning {
 		t.Fatalf("unready handoff must preserve the running source: %+v", status)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, operation.configuration.GatewayOrigin+"/", nil)
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		operation.configuration.GatewayOrigin+"/",
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +269,12 @@ func assertNativeUnreadyHandoff(t *testing.T, operation *deployment, ctx context
 	}
 }
 
-func assertNativeSourceRunning(t *testing.T, operation *deployment, ctx context.Context, revision string) {
+func assertNativeSourceRunning(
+	t *testing.T,
+	operation *deployment,
+	ctx context.Context,
+	revision string,
+) {
 	t.Helper()
 	status, err := operation.gatewayHandoffControl(ctx, "status", revision)
 	if err != nil {

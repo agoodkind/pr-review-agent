@@ -20,12 +20,21 @@ func TestStateMarkerRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("DecodeState: marker not found")
 	}
+
 	if decoded.LastReviewed != original.LastReviewed {
 		t.Fatalf("last reviewed = %q, want %q", decoded.LastReviewed, original.LastReviewed)
 	}
+
 	if decoded.RunID != original.RunID || decoded.Status != original.Status {
-		t.Fatalf("run/status = %q/%q, want %q/%q", decoded.RunID, decoded.Status, original.RunID, original.Status)
+		t.Fatalf(
+			"run/status = %q/%q, want %q/%q",
+			decoded.RunID,
+			decoded.Status,
+			original.RunID,
+			original.Status,
+		)
 	}
+
 	if len(decoded.Pending) != 2 || decoded.Pending[0] != "0011aabbccdd" {
 		t.Fatalf("pending = %v, want the two chunk ids", decoded.Pending)
 	}
@@ -42,6 +51,7 @@ func TestStateMarkerWithNoPendingDecodesEmpty(t *testing.T) {
 	if !ok || len(decoded.Pending) != 0 {
 		t.Fatalf("decoded = %+v ok=%v, want ok with empty pending", decoded, ok)
 	}
+
 	if !HasState(body) {
 		t.Fatal("HasState: want true")
 	}
@@ -65,18 +75,23 @@ func TestStateMarkerRoundTripPreservesRealisticChunkIDsInOrder(t *testing.T) {
 	if !ok {
 		t.Fatal("DecodeState: marker not found")
 	}
+
 	if decoded.LastReviewed != original.LastReviewed {
 		t.Fatalf("last reviewed = %q, want %q", decoded.LastReviewed, original.LastReviewed)
 	}
+
 	if decoded.RunID != original.RunID {
 		t.Fatalf("run id = %q, want %q", decoded.RunID, original.RunID)
 	}
+
 	if decoded.Status != original.Status {
 		t.Fatalf("status = %q, want %q", decoded.Status, original.Status)
 	}
+
 	if len(decoded.Pending) != len(original.Pending) {
 		t.Fatalf("pending = %v, want %v", decoded.Pending, original.Pending)
 	}
+
 	for index, chunkID := range original.Pending {
 		if decoded.Pending[index] != chunkID {
 			t.Fatalf("pending[%d] = %q, want %q", index, decoded.Pending[index], chunkID)
@@ -99,12 +114,15 @@ func TestStateMarkerRoundTripsWithNoReviewedCommit(t *testing.T) {
 	if !ok {
 		t.Fatalf("DecodeState(%q): want the marker decoded", body)
 	}
+
 	if decoded.LastReviewed != domain.HeadSHA("") {
 		t.Fatalf("last reviewed = %q, want empty", decoded.LastReviewed)
 	}
+
 	if decoded.Status != StateFailed {
 		t.Fatalf("status = %q, want %q", decoded.Status, StateFailed)
 	}
+
 	if len(decoded.Pending) != 1 || decoded.Pending[0] != "a1b2c3d4e5f6" {
 		t.Fatalf("pending = %v, want the one chunk id", decoded.Pending)
 	}
@@ -133,12 +151,15 @@ func TestStateMarkerRoundTripsTheCompletedChunkIDs(t *testing.T) {
 	if !ok {
 		t.Fatal("DecodeState: marker not found")
 	}
+
 	if len(decoded.Pending) != 1 || decoded.Pending[0] != "a1b2c3d4e5f6" {
 		t.Fatalf("pending = %v, want the one owed chunk", decoded.Pending)
 	}
+
 	if len(decoded.Completed) != 2 {
 		t.Fatalf("completed = %v, want both ids", decoded.Completed)
 	}
+
 	for index, id := range original.Completed {
 		if decoded.Completed[index] != id {
 			t.Fatalf("completed[%d] = %q, want %q", index, decoded.Completed[index], id)
@@ -157,9 +178,11 @@ func TestStateMarkerWithoutACompletedListStillDecodes(t *testing.T) {
 	if !ok {
 		t.Fatalf("DecodeState(%q): want the older marker decoded", body)
 	}
+
 	if len(decoded.Pending) != 1 || decoded.Pending[0] != "a1b2c3d4e5f6" {
 		t.Fatalf("pending = %v, want the id the older marker carried", decoded.Pending)
 	}
+
 	if len(decoded.Completed) != 0 {
 		t.Fatalf("completed = %v, want none: the older marker recorded none", decoded.Completed)
 	}
@@ -177,14 +200,20 @@ func TestStateMarkerWithoutAForcingDeliveryStillDecodes(t *testing.T) {
 	if !ok {
 		t.Fatalf("DecodeState(%q): want the older marker decoded", body)
 	}
+
 	if len(decoded.Pending) != 1 || decoded.Pending[0] != "a1b2c3d4e5f6" {
 		t.Fatalf("pending = %v, want the id the older marker carried", decoded.Pending)
 	}
+
 	if len(decoded.Completed) != 1 || decoded.Completed[0] != "0123456789ab" {
 		t.Fatalf("completed = %v, want the id the older marker carried", decoded.Completed)
 	}
+
 	if decoded.ForcedBy != "" {
-		t.Fatalf("forced by = %q, want empty: the older marker named no forcing delivery", decoded.ForcedBy)
+		t.Fatalf(
+			"forced by = %q, want empty: the older marker named no forcing delivery",
+			decoded.ForcedBy,
+		)
 	}
 }
 
@@ -205,13 +234,23 @@ func TestStateMarkerRoundTripsTheForcingDelivery(t *testing.T) {
 	if !ok {
 		t.Fatal("DecodeState: marker not found")
 	}
+
 	if decoded.ForcedBy != "delivery-forced" {
 		t.Fatalf("forced by = %q, want the delivery that cleared the state", decoded.ForcedBy)
 	}
+
 	if decoded.RunID != "delivery-later" {
-		t.Fatalf("run id = %q, want the run that wrote last, kept apart from the forcing one", decoded.RunID)
+		t.Fatalf(
+			"run id = %q, want the run that wrote last, kept apart from the forcing one",
+			decoded.RunID,
+		)
 	}
+
 	if len(decoded.Pending) != 1 || len(decoded.Completed) != 1 {
-		t.Fatalf("pending = %v completed = %v, want both lists intact", decoded.Pending, decoded.Completed)
+		t.Fatalf(
+			"pending = %v completed = %v, want both lists intact",
+			decoded.Pending,
+			decoded.Completed,
+		)
 	}
 }

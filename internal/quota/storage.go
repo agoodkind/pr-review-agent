@@ -36,5 +36,6 @@ type RetentionStats struct {
 func (client *Client) Storage(ctx context.Context) (StorageStats, error) {
 	var result StorageStats
 	err := post(ctx, client, storageRequest{Action: "storage_stats"}, &result)
+
 	return result, err
 }

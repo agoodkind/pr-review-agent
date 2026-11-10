@@ -17,11 +17,16 @@ func loadFailureVerdictPolicy(lookup LookupEnv) (FailureVerdictPolicy, error) {
 	if !found {
 		return DismissLatestFailureVerdict, nil
 	}
+
 	policy := FailureVerdictPolicy(raw)
 	switch policy {
 	case DismissLatestFailureVerdict, PreserveFailureVerdict:
 		return policy, nil
 	default:
-		return "", fmt.Errorf("SERVICE_FAILURE_VERDICT_POLICY must be %q or %q", DismissLatestFailureVerdict, PreserveFailureVerdict)
+		return "", fmt.Errorf(
+			"SERVICE_FAILURE_VERDICT_POLICY must be %q or %q",
+			DismissLatestFailureVerdict,
+			PreserveFailureVerdict,
+		)
 	}
 }

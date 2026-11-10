@@ -28,24 +28,27 @@ func TestGitCollectorSkipsOversizedBinaryChanges(t *testing.T) {
 			name = "deletion"
 		}
 
-		t.Run(name, func(t *testing.T) {
-			fixture := newGitFixture(t)
-			prepareOversizedBinaryChange(t, fixture, removed)
-			ctx, pullRequest, ref := openGitFixtureReview(t, fixture)
+		t.Run(
+			name,
+			func(t *testing.T) {
+				fixture := newGitFixture(t)
+				prepareOversizedBinaryChange(t, fixture, removed)
+				ctx, pullRequest, ref := openGitFixtureReview(t, fixture)
 
-			input, err := diff.NewCollector(fixture.client).Collect(ctx, ref, pullRequest)
-			if err != nil {
-				t.Fatal(err)
-			}
+				input, err := diff.NewCollector(fixture.client).Collect(ctx, ref, pullRequest)
+				if err != nil {
+					t.Fatal(err)
+				}
 
-			assertOversizedBinaryReview(t, input)
-			fixture.mutex.Lock()
-			defer fixture.mutex.Unlock()
+				assertOversizedBinaryReview(t, input)
+				fixture.mutex.Lock()
+				defer fixture.mutex.Unlock()
 
-			if fixture.contentRequests != 0 {
-				t.Fatalf("binary review content API requests=%d", fixture.contentRequests)
-			}
-		})
+				if fixture.contentRequests != 0 {
+					t.Fatalf("binary review content API requests=%d", fixture.contentRequests)
+				}
+			},
+		)
 	}
 }
 
@@ -84,7 +87,8 @@ func assertOversizedBinaryReview(t *testing.T, input diff.ReviewInput) {
 		case gitBinaryPath:
 			binaryFound = true
 
-			if file.Status != "binary" || file.Gap != diff.CoverageGapBinary || file.CurrentContent != "" {
+			if file.Status != "binary" || file.Gap != diff.CoverageGapBinary ||
+				file.CurrentContent != "" {
 				t.Fatalf("oversized binary context = %+v", file)
 			}
 		case gitFixtureSourcePath:

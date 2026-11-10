@@ -137,47 +137,70 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
+
 	if err := validateCatalog(rules); err != nil {
 		return Policy{}, err
 	}
+
 	prompts, err := decodeFile[promptsFile](promptsPath)
 	if err != nil {
 		return Policy{}, err
 	}
+
 	if err := validatePromptSettings(prompts); err != nil {
 		return Policy{}, err
 	}
+
 	headerPatterns, err := compileClassificationHeaders(prompts.FileClassification.HeaderPatterns)
 	if err != nil {
 		return Policy{}, err
 	}
+
 	compiled := make(map[string]*template.Template, len(prompts.Templates))
 	for name, body := range prompts.Templates {
 		if strings.TrimSpace(name) == "" || strings.TrimSpace(body) == "" {
 			return Policy{}, fmt.Errorf("prompt template requires a name and nonempty body")
 		}
+
 		parsed, err := compileTemplate(name, body)
 		if err != nil {
 			return Policy{}, err
 		}
+
 		compiled[name] = parsed
 	}
+
 	for _, entry := range rules.Rules {
 		name := "rule." + string(entry.ID)
 		parsed, err := compileTemplate(name, entry.Instructions)
 		if err != nil {
 			return Policy{}, err
 		}
+
 		compiled[name] = parsed
 	}
-	for _, name := range []string{"metadata.reassess.system", "metadata.reassess.input", "native.summary_link", "native.request_changes", "failure.saved", "schema.file_assessment.reason", "coverage.classification_incomplete", "classification.system", "classification.required", "classification.file_evidence"} {
+
+	for _, name := range []string{
+		"metadata.reassess.system",
+		"metadata.reassess.input",
+		"native.summary_link",
+		"native.request_changes",
+		"failure.saved",
+		"schema.file_assessment.reason",
+		"coverage.classification_incomplete",
+		"classification.system",
+		"classification.required",
+		"classification.file_evidence",
+	} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
 		}
 	}
+
 	if err := validateRelationshipTemplates(prompts.RelationshipReview, compiled); err != nil {
 		return Policy{}, err
 	}
+
 	if prompts.Limits.InspectionRequests > 0 {
 		for _, name := range []string{"inspection.instructions", "inspection.input"} {
 			if _, exists := compiled[name]; !exists {
@@ -185,19 +208,78 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 			}
 		}
 	}
-	for _, name := range []string{"report.context_omitted", "consolidate.context_omitted", "review.context_omitted", "review.path_instructions", "omissions.deferred", "coverage.requirement_conflict", "coverage.accepted", "coverage.pending", "coverage.check_title", "coverage.verdict_pending", "coverage.persistence_limit", "inline.footer", "failure.class.other", "failure.class.deadline", "failure.class.provider_unavailable", "failure.class.panic", "failure.class.daily_budget", "failure.class.usage_exceeded", "failure.class.rate_limited", "failure.dismiss", "failure.provider", "failure.service", "failure.details", "failure.row", "catalog.review", "catalog.output", "catalog.rule", "review.system", "review.input", "report.system", "report.input", "reconcile.system", "reconcile.input", "consolidate.system", "consolidate.input", "consolidate.across.input", "disputes.input", "omissions.none", "omissions.input", "omissions.decision", "pull_request.input", "structured.output", "untrusted.policy", "probe.user", "schema.finding.surface", "schema.finding.commit_sha", "schema.finding.correction_action", "schema.finding.path", "schema.finding.start_line", "schema.finding.end_line"} {
+
+	for _, name := range []string{
+		"report.context_omitted",
+		"consolidate.context_omitted",
+		"review.context_omitted",
+		"review.path_instructions",
+		"omissions.deferred",
+		"coverage.requirement_conflict",
+		"coverage.accepted",
+		"coverage.pending",
+		"coverage.check_title",
+		"coverage.verdict_pending",
+		"coverage.persistence_limit",
+		"inline.footer",
+		"failure.class.other",
+		"failure.class.deadline",
+		"failure.class.provider_unavailable",
+		"failure.class.panic",
+		"failure.class.daily_budget",
+		"failure.class.usage_exceeded",
+		"failure.class.rate_limited",
+		"failure.dismiss",
+		"failure.provider",
+		"failure.service",
+		"failure.details",
+		"failure.row",
+		"catalog.review",
+		"catalog.output",
+		"catalog.rule",
+		"review.system",
+		"review.input",
+		"report.system",
+		"report.input",
+		"reconcile.system",
+		"reconcile.input",
+		"consolidate.system",
+		"consolidate.input",
+		"consolidate.across.input",
+		"disputes.input",
+		"omissions.none",
+		"omissions.input",
+		"omissions.decision",
+		"pull_request.input",
+		"structured.output",
+		"untrusted.policy",
+		"probe.user",
+		"schema.finding.surface",
+		"schema.finding.commit_sha",
+		"schema.finding.correction_action",
+		"schema.finding.path",
+		"schema.finding.start_line",
+		"schema.finding.end_line",
+	} {
 		if _, exists := compiled[name]; !exists {
 			return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
 		}
 	}
-	encoded, err := json.Marshal(struct {
-		Rules   catalogFile `json:"rules"`
-		Prompts promptsFile `json:"prompts"`
-	}{Rules: rules, Prompts: prompts})
+
+	encoded, err := json.Marshal(
+		struct {
+			Rules   catalogFile `json:"rules"`
+			Prompts promptsFile `json:"prompts"`
+		}{
+			Rules:   rules,
+			Prompts: prompts,
+		},
+	)
 	if err != nil {
 		slog.Warn("Review policy identity encoding failed", "err", err)
 		return Policy{}, fmt.Errorf("encode review policy identity: %w", err)
 	}
+
 	return Policy{
 		fileClassificationHeaders: headerPatterns,
 		relationshipReview:        prompts.RelationshipReview,
@@ -205,10 +287,16 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		fileAssessmentsDisplay:    prompts.FileAssessmentsDisplay,
 		fileClassification:        prompts.FileClassification,
 		metadataFindingsDisplay:   prompts.MetadataFindingsDisplay,
-		catalog:                   Catalog{configuration: rules, templates: compiled, limits: prompts.Limits}, templates: compiled,
-		untrustedMarkers: prompts.UntrustedMarkers, limits: prompts.Limits,
-		providerDetails: prompts.ProviderDetails,
-		failureCodes:    prompts.FailureCodes,
+		catalog: Catalog{
+			configuration: rules,
+			templates:     compiled,
+			limits:        prompts.Limits,
+		},
+		templates:        compiled,
+		untrustedMarkers: prompts.UntrustedMarkers,
+		limits:           prompts.Limits,
+		providerDetails:  prompts.ProviderDetails,
+		failureCodes:     prompts.FailureCodes,
 	}, nil
 }
 
@@ -222,31 +310,46 @@ func validatePromptSettings(prompts promptsFile) error {
 	if err := validateFindingDisplay(prompts.MetadataFindingsDisplay); err != nil {
 		return err
 	}
-	if prompts.FileAssessmentsDisplay != FindingsExpanded && prompts.FileAssessmentsDisplay != FindingsCollapsed && prompts.FileAssessmentsDisplay != FindingsHidden {
+
+	if prompts.FileAssessmentsDisplay != FindingsExpanded &&
+		prompts.FileAssessmentsDisplay != FindingsCollapsed &&
+		prompts.FileAssessmentsDisplay != FindingsHidden {
 		return fmt.Errorf("file_assessments_display must be expanded, collapsed, or hidden")
 	}
+
 	if err := prompts.FileClassification.Validate(); err != nil {
 		return err
 	}
+
 	if err := prompts.RelationshipReview.Validate(); err != nil {
 		return err
 	}
-	if prompts.UntrustedMarkers.Begin == "" || prompts.UntrustedMarkers.End == "" || prompts.UntrustedMarkers.EscapedBegin == "" || prompts.UntrustedMarkers.EscapedEnd == "" {
+
+	if prompts.UntrustedMarkers.Begin == "" || prompts.UntrustedMarkers.End == "" ||
+		prompts.UntrustedMarkers.EscapedBegin == "" ||
+		prompts.UntrustedMarkers.EscapedEnd == "" {
 		return fmt.Errorf("prompt configuration requires all input markers")
 	}
+
 	if prompts.Limits.SummarySentences <= 0 || prompts.Limits.WalkthroughItems <= 0 {
 		return fmt.Errorf("prompt formatting limits must be positive")
 	}
+
 	if prompts.Limits.InspectionRequests < 0 || prompts.Limits.InspectionBytes < 0 ||
 		(prompts.Limits.InspectionRequests == 0) != (prompts.Limits.InspectionBytes == 0) {
-		return fmt.Errorf("inspection request and byte limits must both be positive or both be zero")
+		return fmt.Errorf(
+			"inspection request and byte limits must both be positive or both be zero",
+		)
 	}
+
 	if err := validateProviderColumns(prompts.ProviderDetails); err != nil {
 		return err
 	}
+
 	if len(prompts.Templates) == 0 {
 		return fmt.Errorf("prompt configuration requires templates")
 	}
+
 	return nil
 }
 
@@ -256,11 +359,13 @@ func compileTemplate(name, body string) (*template.Template, error) {
 		slog.Warn("Prompt template parsing failed", "template", name, "err", err)
 		return nil, fmt.Errorf("parse prompt template %q: %w", name, err)
 	}
+
 	var data PromptData
 	if err := parsed.Execute(io.Discard, data); err != nil {
 		slog.Warn("Prompt template field validation failed", "template", name, "err", err)
 		return nil, fmt.Errorf("validate prompt template %q: %w", name, err)
 	}
+
 	return parsed, nil
 }
 
@@ -271,44 +376,59 @@ func decodeFile[T catalogFile | promptsFile](path string) (T, error) {
 		slog.Warn("Policy configuration reading failed", "path", path, "err", err)
 		return target, fmt.Errorf("read policy configuration %q: %w", path, err)
 	}
+
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&target); err != nil {
 		slog.Warn("Policy configuration decoding failed", "path", path, "err", err)
 		return target, fmt.Errorf("decode policy configuration %q: %w", path, err)
 	}
+
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return target, fmt.Errorf("policy configuration %q must contain one JSON value", path)
 	}
+
 	return target, nil
 }
 
 func validateCatalog(catalog catalogFile) error {
-	if strings.TrimSpace(catalog.Preamble) == "" || strings.TrimSpace(catalog.OutputPreamble) == "" || len(catalog.Rules) == 0 || len(catalog.CategorySettings) == 0 {
+	if strings.TrimSpace(catalog.Preamble) == "" ||
+		strings.TrimSpace(catalog.OutputPreamble) == "" ||
+		len(catalog.Rules) == 0 ||
+		len(catalog.CategorySettings) == 0 {
 		return fmt.Errorf("rule catalog requires preambles, categories, and rules")
 	}
+
 	for category, settings := range catalog.CategorySettings {
-		if category == "" || settings.FixedImportance < 0 || settings.FixedImportance > MaximumImportance {
+		if category == "" || settings.FixedImportance < 0 ||
+			settings.FixedImportance > MaximumImportance {
 			return fmt.Errorf("rule category %q has invalid importance", category)
 		}
 	}
+
 	seen := make(map[ID]struct{}, len(catalog.Rules))
 	for _, entry := range catalog.Rules {
-		if entry.Deduplication != "" && entry.Deduplication != DeduplicateDefect && entry.Deduplication != DeduplicateLocation {
+		if entry.Deduplication != "" && entry.Deduplication != DeduplicateDefect &&
+			entry.Deduplication != DeduplicateLocation {
 			return fmt.Errorf("review rule %q deduplication must be defect or location", entry.ID)
 		}
+
 		if entry.ID == "" || entry.Title == "" || entry.Instructions == "" {
 			return fmt.Errorf("review rule requires an ID, title, and instructions")
 		}
+
 		if _, exists := catalog.CategorySettings[entry.Category]; !exists {
 			return fmt.Errorf("review rule %q has unknown category %q", entry.ID, entry.Category)
 		}
+
 		if _, duplicate := seen[entry.ID]; duplicate {
 			return fmt.Errorf("duplicate review rule ID %q", entry.ID)
 		}
+
 		seen[entry.ID] = struct{}{}
 	}
+
 	return nil
 }
 
@@ -320,18 +440,25 @@ func (policy Policy) Render(name string, data PromptData) (string, error) {
 	return render(policy.templates, name, data, policy.limits)
 }
 
-func render(templates map[string]*template.Template, name string, data PromptData, limits FormattingLimits) (string, error) {
+func render(
+	templates map[string]*template.Template,
+	name string,
+	data PromptData,
+	limits FormattingLimits,
+) (string, error) {
 	data.SummarySentences = limits.SummarySentences
 	data.WalkthroughItems = limits.WalkthroughItems
 	selected, exists := templates[name]
 	if !exists {
 		return "", fmt.Errorf("prompt template %q is not configured", name)
 	}
+
 	var output strings.Builder
 	if err := selected.Execute(&output, data); err != nil {
 		slog.Warn("Prompt template rendering failed", "template", name, "err", err)
 		return "", fmt.Errorf("render prompt template %q: %w", name, err)
 	}
+
 	return output.String(), nil
 }
 
@@ -355,8 +482,17 @@ func (policy Policy) WrapUntrusted(input string) string {
 
 // EscapeUntrusted prevents source text from closing a configured input boundary.
 func (policy Policy) EscapeUntrusted(input string) string {
-	input = strings.ReplaceAll(input, policy.untrustedMarkers.Begin, policy.untrustedMarkers.EscapedBegin)
-	return strings.ReplaceAll(input, policy.untrustedMarkers.End, policy.untrustedMarkers.EscapedEnd)
+	input = strings.ReplaceAll(
+		input,
+		policy.untrustedMarkers.Begin,
+		policy.untrustedMarkers.EscapedBegin,
+	)
+
+	return strings.ReplaceAll(
+		input,
+		policy.untrustedMarkers.End,
+		policy.untrustedMarkers.EscapedEnd,
+	)
 }
 
 // IDs returns a separate slice in configuration order for response schemas.
@@ -365,6 +501,7 @@ func (catalog Catalog) IDs() []ID {
 	for _, entry := range catalog.configuration.Rules {
 		ids = append(ids, entry.ID)
 	}
+
 	return ids
 }
 
@@ -374,21 +511,31 @@ func (catalog Catalog) ValidateImportance(overrides Importance) error {
 	for id := range overrides {
 		ids = append(ids, id)
 	}
+
 	slices.Sort(ids)
+
 	for _, id := range ids {
 		entry, err := catalog.findRule(id)
 		if err != nil {
 			return err
 		}
+
 		importance := overrides[id]
 		if importance < MinimumImportance || importance > MaximumImportance {
-			return fmt.Errorf("review rule %q importance must be between %d and %d", id, MinimumImportance, MaximumImportance)
+			return fmt.Errorf(
+				"review rule %q importance must be between %d and %d",
+				id,
+				MinimumImportance,
+				MaximumImportance,
+			)
 		}
+
 		fixed := catalog.configuration.CategorySettings[entry.Category].FixedImportance
 		if fixed != 0 && importance != fixed {
 			return fmt.Errorf("review rule %q category requires importance %d", id, fixed)
 		}
 	}
+
 	return nil
 }
 
@@ -398,15 +545,24 @@ func (catalog Catalog) FindingImportance(id ID, reported int, overrides Importan
 	if err != nil {
 		return 0, err
 	}
+
 	if fixed := catalog.configuration.CategorySettings[entry.Category].FixedImportance; fixed != 0 {
 		return fixed, nil
 	}
+
 	if fixed, configured := overrides[id]; configured {
 		return fixed, nil
 	}
+
 	if reported < MinimumImportance || reported > MaximumImportance {
-		return 0, fmt.Errorf("review rule %q reported importance must be between %d and %d", id, MinimumImportance, MaximumImportance)
+		return 0, fmt.Errorf(
+			"review rule %q reported importance must be between %d and %d",
+			id,
+			MinimumImportance,
+			MaximumImportance,
+		)
 	}
+
 	return reported, nil
 }
 
@@ -416,9 +572,11 @@ func (catalog Catalog) Prompt(overrides Importance) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	var data PromptData
 	data.Input = catalog.configuration.Preamble
 	data.Rules = rules
+
 	return render(catalog.templates, "catalog.review", data, catalog.limits)
 }
 
@@ -428,38 +586,51 @@ func (catalog Catalog) OutputPolicy() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	var data PromptData
 	data.Input = catalog.configuration.OutputPreamble
 	data.Rules = rules
+
 	return render(catalog.templates, "catalog.output", data, catalog.limits)
 }
 
 func (catalog Catalog) renderRules(overrides Importance, outputOnly bool) (string, error) {
 	var output strings.Builder
+
 	for _, entry := range catalog.configuration.Rules {
 		settings := catalog.configuration.CategorySettings[entry.Category]
 		if outputOnly && !settings.OutputPolicy {
 			continue
 		}
+
 		importance := settings.FixedImportance
 		if importance == 0 {
 			importance = overrides[entry.ID]
 		}
+
 		var data PromptData
 		data.MinimumImportance = importance
 		data.Rules = entry.Title
 		data.SchemaName = string(entry.ID)
-		instructions, err := render(catalog.templates, "rule."+string(entry.ID), data, catalog.limits)
+		instructions, err := render(
+			catalog.templates,
+			"rule."+string(entry.ID),
+			data,
+			catalog.limits,
+		)
 		if err != nil {
 			return "", err
 		}
+
 		data.Input = instructions
 		text, err := render(catalog.templates, "catalog.rule", data, catalog.limits)
 		if err != nil {
 			return "", err
 		}
+
 		output.WriteString(text)
 	}
+
 	return output.String(), nil
 }
 
@@ -469,5 +640,6 @@ func (catalog Catalog) findRule(id ID) (rule, error) {
 			return entry, nil
 		}
 	}
+
 	return rule{}, fmt.Errorf("unknown review rule ID %q", id)
 }

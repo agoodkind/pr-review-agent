@@ -36,9 +36,11 @@ func reviewerDecision(
 	if hasUnresolvedBotThread(threads, botLogin) {
 		return domain.ReviewDecisionRequestChanges
 	}
+
 	if !headFullyReviewed {
 		return domain.ReviewDecisionComment
 	}
+
 	return domain.ReviewDecisionApprove
 }
 
@@ -50,6 +52,7 @@ func hasUnresolvedBotThread(threads []githubapp.ReviewThread, botLogin string) b
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -58,13 +61,17 @@ func actionableBotThread(thread githubapp.ReviewThread, botLogin string) bool {
 	if thread.Resolved || comment.Author != botLogin || strings.TrimSpace(comment.Body) == "" {
 		return false
 	}
+
 	if comment.EndLine < 1 || comment.StartLine < 0 || comment.StartLine > comment.EndLine {
 		return false
 	}
+
 	if strings.TrimSpace(comment.Path) == "" {
 		return false
 	}
+
 	_, err := marker.NormalizePath(comment.Path)
+
 	return err == nil
 }
 
@@ -81,12 +88,15 @@ func blockingReasons(
 	ref domain.PullRequestRef,
 ) []string {
 	reasons := make([]string, 0)
+
 	for _, thread := range threads {
 		if !actionableBotThread(thread, botLogin) {
 			continue
 		}
+
 		reasons = append(reasons, describeOpenThread(thread, ref))
 	}
+
 	return reasons
 }
 
@@ -106,9 +116,11 @@ func describeOpenThread(thread githubapp.ReviewThread, ref domain.PullRequestRef
 	} else if thread.RootComment.EndLine > 0 {
 		label = fmt.Sprintf("%s:%d", label, thread.RootComment.EndLine)
 	}
+
 	if thread.RootComment.DatabaseID == 0 {
 		return label
 	}
+
 	return fmt.Sprintf("[%s](%s)", label, threadCommentURL(thread, ref))
 }
 
@@ -183,23 +195,29 @@ func latestBotVerdictAtHead(
 	head domain.HeadSHA,
 ) headVerdict {
 	latest := noHeadVerdict()
+
 	for _, item := range reviews {
 		if item.Author != botLogin || item.CommitID != head {
 			continue
 		}
+
 		if item.State == reviewStateDismissed {
 			latest = headVerdict{review: item, withdrawn: true, found: true}
 			continue
 		}
+
 		if item.State == "COMMENTED" && strings.Contains(item.Body, approvalWithheldMarker) {
 			latest = headVerdict{review: item, withdrawn: false, found: true}
 			continue
 		}
+
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
 			continue
 		}
+
 		latest = headVerdict{review: item, withdrawn: false, found: true}
 	}
+
 	return latest
 }
 
@@ -238,10 +256,12 @@ const legacyBlockingVerdictLead = "Changes requested."
 // the newer verdict standing over thread state that no longer supported it.
 func latestBotVerdictState(reviews []githubapp.Review, botLogin string) string {
 	state := ""
+
 	for _, item := range reviews {
 		if item.Author != botLogin {
 			continue
 		}
+
 		// A dismissal withdraws the verdict rather than restoring the one before
 		// it. Passing over it would leave the older state standing, and a refresh
 		// that then found that state equal to the decision it recomputed would
@@ -250,16 +270,20 @@ func latestBotVerdictState(reviews []githubapp.Review, botLogin string) string {
 			state = ""
 			continue
 		}
+
 		if item.State == "COMMENTED" && strings.Contains(item.Body, approvalWithheldMarker) &&
 			(state == "" || state == "COMMENTED") {
 			state = "COMMENTED"
 			continue
 		}
+
 		if item.State != reviewStateApproved && item.State != reviewStateChangesRequested {
 			continue
 		}
+
 		state = item.State
 	}
+
 	return state
 }
 
@@ -292,11 +316,13 @@ func logPublishedFindings(
 		logger.ErrorContext(ctx, "trace eligible findings", slog.String("err", err.Error()))
 		return
 	}
+
 	publishedTrace, err := traceFindings(ctx, published)
 	if err != nil {
 		logger.ErrorContext(ctx, "trace published findings", slog.String("err", err.Error()))
 		return
 	}
+
 	logger.InfoContext(
 		ctx,
 		"review findings published",
@@ -350,7 +376,13 @@ func keysFor(finding domain.Finding) findingKeys {
 	if findingID, err := marker.FindingID(finding); err == nil {
 		keys.id = findingID
 	}
-	keys.anchor, keys.anchorValid = findingAnchorKey(finding.Path, finding.StartLine, finding.EndLine)
+
+	keys.anchor, keys.anchorValid = findingAnchorKey(
+		finding.Path,
+		finding.StartLine,
+		finding.EndLine,
+	)
+
 	return keys
 }
 
@@ -361,8 +393,10 @@ func (state *publicationState) suppressed(keys findingKeys) (string, duplicateMa
 		if match, seen := state.carried.match(keys.duplicate); seen {
 			return layerAcrossChunks, match, true
 		}
+
 		return "", noMatch(), false
 	}
+
 	if keys.id != "" {
 		if _, seen := state.historyIDs[keys.id]; seen {
 			return layerPriorReviews, duplicateMatch{
@@ -372,6 +406,7 @@ func (state *publicationState) suppressed(keys findingKeys) (string, duplicateMa
 			}, true
 		}
 	}
+
 	if keys.anchorValid {
 		if _, seen := state.historyAnchors[keys.anchor]; seen {
 			return layerPriorReviews, duplicateMatch{
@@ -381,9 +416,11 @@ func (state *publicationState) suppressed(keys findingKeys) (string, duplicateMa
 			}, true
 		}
 	}
+
 	if match, seen := state.carried.match(keys.duplicate); seen {
 		return layerAcrossChunks, match, true
 	}
+
 	return "", noMatch(), false
 }
 
@@ -396,9 +433,11 @@ func (state *publicationState) remember(finding domain.Finding) {
 	if keys.id != "" {
 		state.historyIDs[keys.id] = struct{}{}
 	}
+
 	if keys.anchorValid {
 		state.historyAnchors[keys.anchor] = struct{}{}
 	}
+
 	state.carried.remember(keys.duplicate, finding.Title)
 	state.findings = append(state.findings, finding)
 }
@@ -412,23 +451,28 @@ func collectPublicationState(
 ) publicationState {
 	historyIDs := make(map[string]struct{})
 	historyAnchors := make(map[string]struct{})
+
 	for _, item := range reviews {
 		if item.Author != botLogin {
 			continue
 		}
+
 		findingMarker, ok := marker.FindFinding(item.Body)
 		if ok {
 			historyIDs[findingMarker.ID] = struct{}{}
 		}
 	}
+
 	for _, thread := range threads {
 		if thread.RootComment.Author != botLogin {
 			continue
 		}
+
 		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
 		if !ok {
 			continue
 		}
+
 		historyIDs[findingMarker.ID] = struct{}{}
 		if anchor, valid := findingAnchorKey(
 			thread.RootComment.Path,
@@ -438,6 +482,7 @@ func collectPublicationState(
 			historyAnchors[anchor] = struct{}{}
 		}
 	}
+
 	return publicationState{
 		historyIDs:     historyIDs,
 		historyAnchors: historyAnchors,
@@ -451,5 +496,6 @@ func findingAnchorKey(pathValue string, startLine int, endLine int) (string, boo
 	if err != nil || startLine < 1 || endLine < startLine {
 		return "", false
 	}
+
 	return fmt.Sprintf("%s:%d", normalizedPath, endLine), true
 }
