@@ -35,6 +35,8 @@ type RetentionStats struct {
 // Storage reads the existing authenticated provider-budget endpoint.
 func (client *Client) Storage(ctx context.Context) (StorageStats, error) {
 	var result StorageStats
+
 	err := post(ctx, client, storageRequest{Action: "storage_stats"}, &result)
+
 	return result, err
 }

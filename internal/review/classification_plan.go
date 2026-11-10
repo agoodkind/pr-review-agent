@@ -40,6 +40,7 @@ func normalizeFileAssessments(
 ) ([]domain.FileAssessment, error) {
 	decisions := slices.Clone(assessments)
 	files := BuildFileIndex(input.Files)
+
 	var shortfall structuralShortfall
 
 	for index := range decisions {
@@ -49,10 +50,12 @@ func normalizeFileAssessments(
 		}
 
 		assessment.Reviewed = false
+
 		file := files[assessment.Path]
 		if assessment.Action == domain.FileActionExclude &&
 			exclusionRequiresContentReview(*assessment, file, policy) {
 			var data reviewrules.PromptData
+
 			reason, err := renderPrompt(policy, "classification.required", data)
 			if err != nil {
 				return nil, err
@@ -65,6 +68,7 @@ func normalizeFileAssessments(
 
 		if assessment.Action == domain.FileActionExclude && !assessment.PermitsContentExclusion() {
 			var data reviewrules.PromptData
+
 			reason, err := renderPrompt(policy, "coverage.requirement_conflict", data)
 			if err != nil {
 				return nil, err

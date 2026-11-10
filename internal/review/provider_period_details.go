@@ -116,6 +116,7 @@ func writeProviderPeriodDetails(builder *strings.Builder, period ProviderPeriodU
 		periodTimestamp(period.Bounds.EndMS),
 		periodTimestamp(period.AsOfMS),
 	)
+
 	if !period.HistoryComplete {
 		label := "Partial history from"
 		if period.Window.Mode == "" {

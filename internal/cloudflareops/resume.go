@@ -56,6 +56,7 @@ func (operation *deployment) resumeTestHandoff(
 	}
 
 	receipt := readiness
+
 	receipt.Candidate, receipt.Revision, receipt.VersionBefore, receipt.Interrupted =
 		handoff.Service, handoff.Revision, before, true
 	if err := WriteJSON(
@@ -67,6 +68,7 @@ func (operation *deployment) resumeTestHandoff(
 
 	options.Directory += "-resumed"
 	options.Configuration = configurationPath
+
 	result, err = Deploy(ctx, options)
 	if err != nil {
 		return result, err

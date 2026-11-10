@@ -18,6 +18,7 @@ func (service *Service) reviewCurrentMetadata(
 	prior []domain.Finding,
 ) (metadataReviewRecord, error) {
 	var empty metadataReviewRecord
+
 	input, err := service.collector.CollectRange(ctx, job.PullRequestRef, pullRequest, "")
 	if err != nil {
 		logger := gklog.L(ctx)
@@ -36,6 +37,7 @@ func (service *Service) reviewCurrentMetadata(
 		Metadata:    input.Metadata,
 		MergeBase:   "",
 	}
+
 	support, err := BuildPullRequestContext(pullRequest, input.Files, service.reviewPolicy)
 	if err != nil {
 		gklog.L(ctx).WarnContext(ctx, "Build pull request prose context failed", "err", err)
@@ -103,6 +105,7 @@ func (service *Service) reviewCurrentMetadata(
 		}
 
 		seen[key] = struct{}{}
+
 		record.Findings = append(record.Findings, finding)
 	}
 

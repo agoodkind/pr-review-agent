@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -27,15 +28,21 @@ func (service *Service) reconcileReplyAndRefreshVerdict(
 	job domain.ReviewJob,
 	reviews []githubapp.Review,
 	settings reviewSettings,
-) (bool, error) {
+) (bool, Summary, error) {
+	var summary Summary
+
 	logger := gklog.L(ctx)
+
 	var threads []githubapp.ReviewThread
+
 	if job.ThreadRootCommentID != 0 {
 		var err error
+
 		threads, err = service.reconciler.Reconcile(ctx, job)
 		if err != nil {
 			logger.ErrorContext(ctx, "reconcile replied thread", slog.String("err", err.Error()))
-			return false, fmt.Errorf("reconcile replied thread: %w", err)
+
+			return false, summary, fmt.Errorf("reconcile replied thread: %w", err)
 		}
 	}
 
@@ -64,14 +71,14 @@ func (service *Service) refreshVerdictAtReviewedHead(
 	reviews []githubapp.Review,
 	threads []githubapp.ReviewThread,
 	settings reviewSettings,
-) (bool, error) {
-	ctx, cancel := service.publicationContext(ctx)
-	defer cancel()
+) (bool, Summary, error) {
+	var summary Summary
+
 	logger := gklog.L(ctx)
 
 	inputs, err := service.loadVerdictRefreshInputs(ctx, job, reviews, threads)
 	if err != nil || !inputs.found {
-		return false, err
+		return false, summary, err
 	}
 
 	state, hasState, err := service.readState(ctx, job)
@@ -82,7 +89,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 			slog.String("err", err.Error()),
 		)
 
-		return false, fmt.Errorf("read durable state before the verdict refresh: %w", err)
+		return false, summary, fmt.Errorf("read durable state before the verdict refresh: %w", err)
 	}
 
 	if hasState && state.Status == marker.StateReviewing {
@@ -92,7 +99,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 			slog.String("reason", "review_not_complete"),
 		)
 
-		return true, nil
+		return true, summary, nil
 	}
 
 	current, err := service.github.GetPullRequest(
@@ -102,11 +109,11 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		job.Number,
 	)
 	if err != nil {
-		return false, fmt.Errorf("read current pull request prose: %w", err)
+		return false, summary, fmt.Errorf("read current pull request prose: %w", err)
 	}
 
 	if current.Head != job.Head {
-		return true, nil
+		return true, summary, errHeadMoved
 	}
 
 	if hasState &&
@@ -117,7 +124,7 @@ func (service *Service) refreshVerdictAtReviewedHead(
 			settings,
 		).PolicyRevision != state.PolicyRevision) ||
 			(state.PolicyRevision == "" && len(inputs.assessment.omissions) > 0)) {
-		return false, errReviewContextChanged
+		return false, summary, errReviewContextChanged
 	}
 
 	metadata, metadataReassessed, err := service.refreshMetadataRecord(
@@ -128,8 +135,11 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		inputs.assessment,
 	)
 	if err != nil {
-		return false, err
+		return false, summary, err
 	}
+
+	ctx, cancel := service.publicationContext(ctx)
+	defer cancel()
 
 	refreshed, err := service.planRefreshedVerdict(
 		ctx,
@@ -140,12 +150,12 @@ func (service *Service) refreshVerdictAtReviewedHead(
 		settings,
 	)
 	if err != nil {
-		return false, err
+		return false, summary, err
 	}
 
-	err = service.applyRefreshedVerdict(ctx, job, refreshed)
+	summary, err = service.applyRefreshedVerdict(ctx, job, refreshed)
 
-	return refreshed.decision == domain.ReviewDecisionComment, err
+	return refreshed.decision == domain.ReviewDecisionComment, summary, err
 }
 
 func (service *Service) refreshReviewedCheck(
@@ -154,24 +164,53 @@ func (service *Service) refreshReviewedCheck(
 	reviews []githubapp.Review,
 	settings reviewSettings,
 ) error {
+	startedAt := service.now()
 	logger := gklog.L(ctx)
-	withheld, err := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
+	withheld, summary, err := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
+
+	usage := UsageFromContext(ctx)
 	if errors.Is(err, errReviewContextChanged) {
 		return service.reassessChangedContext(ctx, job, reviews, settings)
 	}
 
+	if errors.Is(err, errHeadMoved) && usage.Requests == 0 {
+		return service.cancelCheck(ctx, job, job.CheckRunID)
+	}
+
 	if err != nil {
+		now := service.now()
+		progress := service.newProgress(job, settings, startedAt).summary(now)
+
+		checkProgress := progress
+		if summary.Head != "" {
+			checkProgress = summary
+		}
+
+		checkProgress = service.measuredRefreshSummary(ctx, checkProgress, startedAt)
+
+		progress.Usage = checkProgress.Usage
+		if errors.Is(err, errHeadMoved) {
+			recordAssessment(ctx, domain.AssessmentInterrupted, &checkProgress, nil, 0)
+
+			return service.completeCheckRun(
+				ctx,
+				job.InstallationID,
+				job.Repository,
+				job.CheckRunID,
+				checkConclusionCancelled,
+				checkSummaryCancelled,
+				checkSummaryCancelled+"\n\n"+RenderDetails(checkProgress),
+			)
+		}
+
 		logger.ErrorContext(ctx, "refresh reviewed check", slog.String("err", err.Error()))
+
 		var statuses []ProviderStatus
 		collectProviderStatuses(err, &statuses)
-		now := service.now()
-		progress := service.newProgress(job, settings, now).summary(now)
-		progress.Usage = UsageFromContext(ctx)
-		service.enrichProviderPeriodUsage(ctx, &progress)
 		recordAssessment(
 			ctx,
 			domain.AssessmentFailed,
-			&progress,
+			&checkProgress,
 			failureNames(err),
 			quotaRecovery(statuses),
 		)
@@ -183,15 +222,24 @@ func (service *Service) refreshReviewedCheck(
 			job.CheckRunID,
 			"failure",
 			"Review refresh failed",
-			detail+"\n\n"+RenderDetails(progress),
+			detail+"\n\n"+RenderDetails(checkProgress),
 		)
 		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
+
 		dismissErr := service.dismissFailureVerdict(ctx, job, err)
 		if completionErr == nil {
 			return &reportedFailureError{cause: errors.Join(err, dismissErr)}
 		}
 
 		return errors.Join(err, completionErr, dismissErr)
+	}
+
+	details := ""
+
+	if usage.Requests > 0 {
+		summary = service.measuredRefreshSummary(ctx, summary, startedAt)
+
+		details = "\n\n" + RenderDetails(summary)
 	}
 
 	if withheld {
@@ -204,7 +252,17 @@ func (service *Service) refreshReviewedCheck(
 			job.CheckRunID,
 			checkConclusionDeclined,
 			"Review needs attention",
-			"Approval remains withheld. The review summary explains what needs attention.",
+			"Approval remains withheld. The review summary explains what needs attention."+details,
+		)
+	}
+
+	if usage.Requests > 0 {
+		return service.succeed(
+			ctx,
+			job,
+			job.CheckRunID,
+			"Review refreshed",
+			"This run reassessed the standing review."+details,
 		)
 	}
 
@@ -215,6 +273,27 @@ func (service *Service) refreshReviewedCheck(
 		checkTitleAlreadyReviewed,
 		"This head already has a PR-Agent review. No duplicate review was published.",
 	)
+}
+
+func (service *Service) measuredRefreshSummary(
+	ctx context.Context,
+	summary Summary,
+	startedAt time.Time,
+) Summary {
+	summary.Duration = service.now().Sub(startedAt)
+	summary.Usage = UsageFromContext(ctx)
+
+	var models modelSet
+
+	for _, model := range summary.Usage.Models {
+		models.add(model.RequestedModel)
+		models.add(model.Model)
+	}
+
+	summary.Models = models.names
+	service.enrichProviderPeriodUsage(ctx, &summary)
+
+	return summary
 }
 
 // headReadWhole reports whether any completed run read this whole head.
@@ -244,6 +323,7 @@ func (service *Service) headReadWhole(
 	legacyWholeHead bool,
 ) (bool, error) {
 	logger := gklog.L(ctx)
+
 	state, hasState, err := service.readState(ctx, job)
 	if err != nil {
 		logger.ErrorContext(
@@ -287,7 +367,9 @@ func (service *Service) loadVerdictRefreshInputs(
 	threads []githubapp.ReviewThread,
 ) (verdictRefreshInputs, error) {
 	logger := gklog.L(ctx)
+
 	var emptyAssessment assessmentSnapshot
+
 	missing := verdictRefreshInputs{
 		assessment:     emptyAssessment,
 		verdict:        emptyReview(),
@@ -297,6 +379,7 @@ func (service *Service) loadVerdictRefreshInputs(
 		found:          false,
 		blockWithdrawn: false,
 	}
+
 	if reviews == nil {
 		listed, err := service.github.ListReviews(
 			ctx,
@@ -318,6 +401,7 @@ func (service *Service) loadVerdictRefreshInputs(
 	}
 
 	verdict := latestBotVerdictAtHead(reviews, service.botLogin, job.Head)
+
 	blockWithdrawn, err := service.preserveDismissedRejection(ctx, job, reviews)
 	if err != nil {
 		return missing, err
@@ -460,7 +544,9 @@ func (service *Service) applyRefreshedVerdict(
 	ctx context.Context,
 	job domain.ReviewJob,
 	refreshed refreshedVerdict,
-) error {
+) (Summary, error) {
+	summary := service.refreshedSummary(ctx, job, refreshed)
+
 	logger := gklog.L(ctx)
 	// A verdict written at a moved head would judge a commit nobody is looking
 	// at any more, so the refresh checks the head one last time.
@@ -472,22 +558,21 @@ func (service *Service) applyRefreshedVerdict(
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "refresh verdict head check", slog.String("err", err.Error()))
-		return fmt.Errorf("refresh verdict head check: %w", err)
+		return summary, fmt.Errorf("refresh verdict head check: %w", err)
 	}
 
 	if currentPullRequest.Head != job.Head {
 		logger.InfoContext(ctx, "verdict refresh skipped", slog.String("reason", "head_moved"))
-		return nil
+		return summary, errHeadMoved
 	}
 
 	if diff.PullRequestRevision(currentPullRequest) != refreshed.metadataRevision {
-		return errMetadataChanged
+		return summary, errMetadataChanged
 	}
 
-	summary := service.refreshedSummary(ctx, job, refreshed)
 	if refreshed.metadataReassessed {
 		if err := service.checkpointRefreshedMetadata(ctx, job, summary); err != nil {
-			return err
+			return summary, err
 		}
 
 		if _, err := service.publicationPullRequest(
@@ -495,19 +580,19 @@ func (service *Service) applyRefreshedVerdict(
 			job,
 			refreshed.metadataRevision,
 		); err != nil {
-			return err
+			return summary, err
 		}
 	}
 
 	if !refreshed.mayPublish() && !refreshed.blockWithdrawn {
 		if err := service.refreshUnchangedVerdict(ctx, job, refreshed, summary); err != nil {
-			return err
+			return summary, err
 		}
 	}
 
 	if refreshed.mayPublish() {
 		if err := service.submitRefreshedVerdict(ctx, job, summary); err != nil {
-			return err
+			return summary, err
 		}
 	} else if refreshed.blockWithdrawn {
 		logger.InfoContext(
@@ -519,7 +604,7 @@ func (service *Service) applyRefreshedVerdict(
 	}
 
 	if err := service.saveRefreshedSummary(ctx, job, refreshed, summary); err != nil {
-		return err
+		return summary, err
 	}
 
 	disposition := domain.AssessmentCompleted
@@ -529,7 +614,7 @@ func (service *Service) applyRefreshedVerdict(
 
 	recordAssessment(ctx, disposition, &summary, nil, 0)
 
-	return nil
+	return summary, nil
 }
 
 func (service *Service) saveRefreshedSummary(
@@ -601,6 +686,7 @@ func (service *Service) submitRefreshedVerdict(
 	summary Summary,
 ) error {
 	logger := gklog.L(ctx)
+
 	submitted, err := service.submitInlineBackedVerdict(ctx, job, summary)
 	if err != nil {
 		logger.ErrorContext(ctx, "submit refreshed verdict", slog.String("err", err.Error()))

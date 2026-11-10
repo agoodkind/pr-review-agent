@@ -20,6 +20,7 @@ func TestEndToEndVersionRunsWithoutConfiguration(t *testing.T) {
 
 func TestVersionFlag(t *testing.T) {
 	command := exec.Command("go", "run", ".", "--version")
+
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go run . --version: %v\n%s", err, output)

@@ -26,6 +26,7 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 		},
 	)
 	job := fixture.forcedJob()
+
 	pr, err := fixture.github.GetPullRequest(
 		t.Context(),
 		job.InstallationID,
@@ -40,6 +41,7 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 	summary.MetadataRevision = diff.PullRequestRevision(pr)
 	summary.Fallback = []domain.Finding{severeFinding()}
 	original := review.RenderBody(summary)
+
 	fixture.state.issueComments = []map[string]any{
 		{
 			"id":   float64(2000),
@@ -73,6 +75,7 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 	fixture.reconciler.err = nil
 	model.err = &openai.TruncatedError{Model: testReviewModel}
 	job.DeliveryID = "reconciliation-recovered-truncated"
+
 	admitted, accepted, err := fixture.service.Admit(t.Context(), job)
 	if err != nil || !accepted {
 		t.Fatalf("The recovered reconciliation did not admit the reassessment: %v.", err)
@@ -116,6 +119,7 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 
 func TestPublicationFailurePreservesAnEarlierRefusedFinding(t *testing.T) {
 	finding := severeFinding()
+
 	fixture := newServiceFixture(
 		t,
 		serviceFixtureOptions{
@@ -148,8 +152,10 @@ func TestPublicationFailurePreservesAnEarlierRefusedFinding(t *testing.T) {
 	}
 
 	const prefix = "<!-- pr-review-agent:fallback-record:v1 "
+
 	_, remaining, _ := strings.Cut(body, prefix)
 	payload, _, _ := strings.Cut(remaining, " -->")
+
 	decoded, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
 		t.Fatal(err)
@@ -185,6 +191,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 			func(t *testing.T) {
 				firstLine := "First fragment " + strings.Repeat("a", 100000)
 				secondLine := "Second fragment " + strings.Repeat("b", 100000)
+
 				firstResult := domain.ReviewResult{}
 				if strings.Contains(scenario, "metadata finding") {
 					firstResult.Findings = []domain.Finding{
@@ -238,6 +245,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 
 				job := fixture.forcedJob()
 				job.Settings.ChunkConcurrency = 1
+
 				pr, err := fixture.github.GetPullRequest(
 					t.Context(),
 					job.InstallationID,
@@ -253,6 +261,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 				summary.Metadata[0].Surface = domain.FindingPullRequestDescription
 				summary.Metadata[0].RuleID = "complete_sentences"
 				summary.Metadata[0].Body = "The previous assessment reported a description defect that the current review must reassess."
+
 				priorBody := summary.Metadata[0].Body
 				if scenario == "legacy metadata finding" {
 					summary.Metadata = nil
@@ -335,6 +344,7 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 
 				job.Forced = false
 				job.DeliveryID = "resumed-metadata-assessment"
+
 				admitted, accepted, err := fixture.service.Admit(t.Context(), job)
 				if err != nil || !accepted {
 					t.Fatalf("The resumed review did not admit B: %v.", err)
@@ -379,10 +389,12 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 
 					job.Forced = true
 					job.DeliveryID = "fresh-fallback-reassessment"
+
 					model.results = append(
 						model.results,
 						make([]domain.ReviewResult, len(state.Completed)+len(state.Pending))...,
 					)
+
 					if err := fixture.run(t.Context(), job); err != nil {
 						t.Fatal(err)
 					}
@@ -421,6 +433,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 				model := &sequenceModel{err: &openai.TruncatedError{Model: testReviewModel}}
 				fixture, _ := newContentCollectionFixture(t, model)
 				job := fixture.forcedJob()
+
 				pr, err := fixture.github.GetPullRequest(
 					t.Context(),
 					job.InstallationID,
@@ -451,6 +464,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 					},
 				}
 				fallbackBody := summary.Fallback[0].Body
+
 				switch scenario {
 				case "stale head":
 					summary.Head = domain.HeadSHA(testStaleHeadSHA)
@@ -470,6 +484,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 					},
 				}
 				fixture.seedDismissedGitReview(job.Head)
+
 				admitted, accepted, err := fixture.service.Admit(t.Context(), job)
 				if err != nil || !accepted {
 					t.Fatalf("The forced review did not admit the current fixture: %v.", err)
@@ -486,6 +501,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 				}
 
 				body := failureSummaryComment(t, fixture)
+
 				state := decodedSummaryState(t, fixture)
 				if state.LastReviewed != "" || state.Status == marker.StateDone ||
 					len(state.Pending)+len(state.Unread) == 0 {
@@ -534,6 +550,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 					metadataDecision("1", domain.ResolutionResolved, pr.Title),
 				}
 				result := domain.ReviewResult{}
+
 				if scenario == "replace after reassessment" {
 					replacement := saved
 					replacement.Body = "The title does not identify summary link validation. State that behavior in the title."
@@ -543,6 +560,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 
 				model.results = []domain.ReviewResult{result}
 				job.DeliveryID = "forced-metadata-reassessment"
+
 				admitted, accepted, err = fixture.service.Admit(t.Context(), job)
 				if err != nil || !accepted {
 					t.Fatalf("The successful reassessment did not admit the fixture: %v.", err)
@@ -555,6 +573,7 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 				}
 
 				body = failureSummaryComment(t, fixture)
+
 				stored = retainedMetadataFindings(t, body)
 				if retainedMetadataCount(t, body, saved.Body) != 0 ||
 					strings.Contains(body, fallbackBody) ||
@@ -580,7 +599,9 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 
 func retainedMetadataFindings(t *testing.T, body string) []domain.Finding {
 	t.Helper()
+
 	const prefix = "<!-- pr-review-agent:metadata:v1 "
+
 	start := strings.LastIndex(body, prefix)
 	if start < 0 {
 		t.Fatal("The summary did not retain a metadata checkpoint.")
@@ -608,6 +629,7 @@ func retainedMetadataFindings(t *testing.T, body string) []domain.Finding {
 
 func retainedMetadataCount(t *testing.T, body, explanation string) int {
 	t.Helper()
+
 	count := 0
 
 	for _, finding := range retainedMetadataFindings(t, body) {
@@ -631,6 +653,7 @@ func TestUnreadableSummaryPreservesFindingCheckpointsWithoutCompletingTheReview(
 			Importance: 10,
 		},
 	}
+
 	body := review.RenderUnreadableBody(
 		summary,
 		"The model did not finish reviewing the current changes.",
@@ -645,6 +668,7 @@ func TestUnreadableSummaryPreservesFindingCheckpointsWithoutCompletingTheReview(
 	}
 
 	const prefix = "<!-- pr-review-agent:fallback-record:v1 "
+
 	_, checkpoint, found := strings.Cut(body, prefix)
 	if !found {
 		t.Fatal("The unreadable summary must persist its refused inline finding.")

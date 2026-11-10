@@ -31,6 +31,7 @@ func TestUnreadChangesRetainProviderDiagnosticsInsideDetails(t *testing.T) {
 		notice,
 		statuses...,
 	)
+
 	visible, details, found := strings.Cut(body, "<details>")
 	if !found {
 		t.Fatal("review diagnostics are not collapsed")

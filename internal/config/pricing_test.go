@@ -15,6 +15,7 @@ func TestTokenPricingSeparatesCacheReadsWritesAndOrdinaryInput(t *testing.T) {
 		CacheWritePerMillionTokens:  &writeRate,
 		OutputPerMillionTokens:      1.20,
 	}
+
 	cost, priced := pricing.Estimate(1_000_000, 400_000, 200_000, 100_000, "default")
 	if !priced || math.Abs(cost.TotalUSD()-0.258) > 1e-12 ||
 		math.Abs(cost.CacheWriteUSD-0.05) > 1e-12 {
@@ -27,6 +28,7 @@ func TestTokenPricingSeparatesCacheReadsWritesAndOrdinaryInput(t *testing.T) {
 	}
 
 	pricing.CacheWritePerMillionTokens = new(float64)
+
 	cost, priced = pricing.Estimate(1_000_000, 400_000, 200_000, 100_000, "default")
 	if !priced || math.Abs(cost.TotalUSD()-0.208) > 1e-12 {
 		t.Fatalf("an explicit zero write rate did not price the request: %+v", cost)

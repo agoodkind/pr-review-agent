@@ -319,6 +319,7 @@ func compileTemplate(name, body string) (*template.Template, error) {
 
 func decodeFile[T catalogFile | promptsFile](path string) (T, error) {
 	var target T
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		slog.Warn("Policy configuration reading failed", "path", path, "err", err)
@@ -327,6 +328,7 @@ func decodeFile[T catalogFile | promptsFile](path string) (T, error) {
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
+
 	if err := decoder.Decode(&target); err != nil {
 		slog.Warn("Policy configuration decoding failed", "path", path, "err", err)
 		return target, fmt.Errorf("decode policy configuration %q: %w", path, err)
@@ -408,6 +410,7 @@ func render(
 ) (string, error) {
 	data.SummarySentences = limits.SummarySentences
 	data.WalkthroughItems = limits.WalkthroughItems
+
 	selected, exists := templates[name]
 	if !exists {
 		return "", fmt.Errorf("prompt template %q is not configured", name)
@@ -593,6 +596,7 @@ func (catalog Catalog) Prompt(overrides Importance) (string, error) {
 	}
 
 	var data PromptData
+
 	data.Input = catalog.configuration.Preamble
 	data.Rules = rules
 
@@ -614,6 +618,7 @@ func (catalog Catalog) OutputPolicy() (string, error) {
 	}
 
 	var data PromptData
+
 	data.Input = catalog.configuration.OutputPreamble
 	data.Rules = rules
 
@@ -635,9 +640,11 @@ func (catalog Catalog) renderRules(overrides Importance, outputOnly bool) (strin
 		}
 
 		var data PromptData
+
 		data.MinimumImportance = importance
 		data.Rules = entry.Title
 		data.SchemaName = string(entry.ID)
+
 		instructions, err := render(
 			catalog.templates,
 			"rule."+string(entry.ID),
@@ -649,6 +656,7 @@ func (catalog Catalog) renderRules(overrides Importance, outputOnly bool) (strin
 		}
 
 		data.Input = instructions
+
 		text, err := render(catalog.templates, "catalog.rule", data, catalog.limits)
 		if err != nil {
 			return "", err

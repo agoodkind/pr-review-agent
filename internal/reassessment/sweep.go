@@ -67,6 +67,7 @@ type InventoryPage struct {
 // Inventory performs one bounded page read or target registration batch.
 func (coordinator *Coordinator) Inventory(ctx context.Context, cursor SweepCursor) InventoryPage {
 	now := coordinator.Clock()
+
 	if cursor.Stage == inventoryInitial {
 		version := cursor.Version
 		cursor = SweepCursor{
@@ -89,7 +90,9 @@ func (coordinator *Coordinator) Inventory(ctx context.Context, cursor SweepCurso
 	}
 
 	var result InventoryPage
+
 	result.Sweep = cursor
+
 	result.Sweep.NotBeforeMS = now.Add(time.Second).UnixMilli()
 	if !coordinator.Settings.Enabled {
 		result.Sweep.NotBeforeMS = coordinator.nextReconciliation(now).UnixMilli()
@@ -97,6 +100,7 @@ func (coordinator *Coordinator) Inventory(ctx context.Context, cursor SweepCurso
 	}
 
 	var err error
+
 	switch cursor.Stage {
 	case inventoryInitial:
 		err = errors.New("inventory initialization did not select its first page")
@@ -122,6 +126,7 @@ func (coordinator *Coordinator) Inventory(ctx context.Context, cursor SweepCurso
 			"reassessment inventory deferred",
 			slog.String("err", err.Error()),
 		)
+
 		result.Sweep = cursor
 		result.Sweep.NotBeforeMS = coordinator.delayed(now, 0).UnixMilli()
 		result.Targets = nil
@@ -139,6 +144,7 @@ func (coordinator *Coordinator) inventoryInstallations(
 	result *InventoryPage,
 ) error {
 	cursor := &result.Sweep
+
 	installations, next, err := coordinator.Discovery.ListInstallationsPage(
 		ctx,
 		cursor.InstallationPage,
@@ -161,6 +167,7 @@ func (coordinator *Coordinator) inventoryInstallations(
 	}
 
 	cursor.InstallationIndex = 0
+
 	cursor.InstallationsNext = next
 	if len(installations) == 0 {
 		if next {
@@ -206,6 +213,7 @@ func (coordinator *Coordinator) inventoryRepositories(
 
 	cursor.Repositories = repositories
 	cursor.RepositoryIndex = 0
+
 	cursor.RepositoriesNext = next
 	if len(repositories) == 0 {
 		if next {
@@ -237,6 +245,7 @@ func (coordinator *Coordinator) inventoryPullRequests(
 
 	installationID := cursor.InstallationIDs[cursor.InstallationIndex]
 	repository := cursor.Repositories[cursor.RepositoryIndex]
+
 	requests, next, err := coordinator.Discovery.ListOpenPullRequestsPage(
 		ctx,
 		installationID,
@@ -269,6 +278,7 @@ func (coordinator *Coordinator) inventoryPullRequests(
 	}
 
 	cursor.PullRequestIndex = 0
+
 	cursor.PullRequestsNext = next
 	if len(requests) == 0 {
 		if next {
@@ -292,6 +302,7 @@ func (coordinator *Coordinator) inventoryTargets(result *InventoryPage, now time
 	end := min(len(cursor.PullRequests), cursor.PullRequestIndex+coordinator.Settings.BatchSize)
 	for cursor.PullRequestIndex < end {
 		var job domain.ReviewJob
+
 		job.PullRequestRef = cursor.PullRequests[cursor.PullRequestIndex]
 		target := coordinator.NewTarget(job, now)
 		target.NotBeforeMS = now.UnixMilli()
@@ -312,6 +323,7 @@ func (coordinator *Coordinator) inventoryTargets(result *InventoryPage, now time
 
 func advanceRepository(cursor *SweepCursor) {
 	cursor.RepositoryIndex++
+
 	cursor.PullRequestPage = 1
 	if cursor.RepositoryIndex < len(cursor.Repositories) {
 		cursor.Stage = inventoryPullRequests
@@ -330,6 +342,7 @@ func advanceRepository(cursor *SweepCursor) {
 
 func advanceInstallation(cursor *SweepCursor) {
 	cursor.InstallationIndex++
+
 	cursor.RepositoryPage = 1
 	if cursor.InstallationIndex < len(cursor.InstallationIDs) {
 		cursor.Stage = inventoryRepositories

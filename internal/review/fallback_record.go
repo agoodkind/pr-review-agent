@@ -40,6 +40,7 @@ func (pass *chunkPass) fallbackSnapshotLocked() ([]domain.Finding, *findingCheck
 		}
 
 		seen[id] = true
+
 		checkpoint.Prior = append(checkpoint.Prior, len(findings))
 		findings = append(findings, finding)
 	}
@@ -56,6 +57,7 @@ func (pass *chunkPass) fileSourceReassessed(path string) bool {
 		}
 
 		found = true
+
 		if !chunk.CoverageComplete || !pass.reassessedChunks[chunkID(chunk)] {
 			return false
 		}
@@ -112,6 +114,7 @@ func encodeFallbackRecord(summary Summary) string {
 
 func readFallbackRecord(body string, head domain.HeadSHA) (fallbackReviewRecord, bool) {
 	var record fallbackReviewRecord
+
 	start := strings.LastIndex(body, fallbackRecordPrefix)
 	if start < 0 {
 		return record, false
@@ -147,6 +150,7 @@ func readFallbackRecord(body string, head domain.HeadSHA) (fallbackReviewRecord,
 		}
 
 		record.Findings[index].Deduplication = mode
+
 		if finding.EffectiveSurface() != domain.FindingFile || finding.Validate() != nil {
 			slog.Warn("Fallback review state contains an invalid finding")
 			return record, false

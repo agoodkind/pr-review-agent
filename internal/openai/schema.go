@@ -105,6 +105,7 @@ func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, er
 	properties["inspection_requests"] = json.RawMessage(
 		fmt.Sprintf(inspectionRequestSchemaTemplate, 0),
 	)
+
 	properties["findings"], err = json.Marshal(findings)
 	if err != nil {
 		return nil, requestEncodingError(err)
@@ -122,7 +123,9 @@ func MarshalClassificationSchema(policy reviewrules.Policy) (json.RawMessage, er
 
 func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, error) {
 	var data reviewrules.PromptData
+
 	data.Total = policy.FileAssessmentMaximumReasonBytes()
+
 	description, err := policy.Render("schema.file_assessment.reason", data)
 	if err != nil {
 		slog.Warn("File assessment reason constraint rendering failed", "err", err)
@@ -138,6 +141,7 @@ func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, 
 		Pattern:     fmt.Sprintf(`^[\s\S]{1,%d}$`, data.Total),
 		Description: description,
 	}
+
 	encoded, err := json.Marshal(constraint)
 	if err != nil {
 		slog.Warn("File assessment reason constraint encoding failed", "err", err)
@@ -149,6 +153,7 @@ func marshalAssessmentReasonSchema(policy reviewrules.Policy) (json.RawMessage, 
 
 func marshalFindingDescriptions(policy reviewrules.Policy) (map[string]json.RawMessage, error) {
 	descriptions := make(map[string]json.RawMessage)
+
 	var data reviewrules.PromptData
 
 	for _, field := range []string{

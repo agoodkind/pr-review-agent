@@ -42,14 +42,18 @@ func BuildFileAssessmentPrompt(
 	shortfall := structuralShortfall{
 		Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}},
 	}
+
 	var data reviewrules.PromptData
+
 	data.Path = path
+
 	instruction, err := renderPrompt(policy, "omissions.decision", data)
 	if err != nil {
 		return "", err
 	}
 
 	instruction += "\n" + policy.FileClassificationPathInstructions(path) + "\n"
+
 	omissions, err := omissionPrompt(shortfall, files, maximumBytes, policy, assessments...)
 	if err != nil {
 		return "", err
@@ -84,6 +88,7 @@ func AssessFileContent(
 	assessments ...[]domain.FileAssessment,
 ) (Completion, error) {
 	var empty Completion
+
 	prompt, err := BuildFileAssessmentPrompt(
 		model,
 		pullRequest,
@@ -140,6 +145,7 @@ func AssessFileContent(
 	}
 
 	input := diff.ReviewInput{PullRequest: pullRequest, Files: files, Metadata: nil, MergeBase: ""}
+
 	_, decisions, err := PlanFileContentReview(input, completion.Result.FileAssessments, policy)
 	if err != nil {
 		return completion, err
@@ -150,6 +156,7 @@ func AssessFileContent(
 	shortfall := structuralShortfall{
 		Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}},
 	}
+
 	validated, accepted, err := validateFileAssessmentsDetailed(
 		completion.Result,
 		shortfall,

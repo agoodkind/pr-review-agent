@@ -42,6 +42,7 @@ func (client *Client) GetPullRequest(
 	number int,
 ) (PullRequest, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d", number))
+
 	body, err := client.doREST(ctx, installationID, "GET", path, nil)
 	if err != nil {
 		return PullRequest{}, err
@@ -70,6 +71,7 @@ func (client *Client) GetPullRequest(
 			"read pull request field presence",
 			slog.String("err", err.Error()),
 		)
+
 		return PullRequest{}, fmt.Errorf("read pull request field presence: %w", err)
 	}
 
@@ -124,6 +126,7 @@ func (client *Client) ListPullRequestCommits(
 	number int,
 ) ([]PullRequestCommit, error) {
 	var commits []PullRequestCommit
+
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/commits?per_page=100", number))
 	err := client.doRESTPaginated(
 		ctx,

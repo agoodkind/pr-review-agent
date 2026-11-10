@@ -34,6 +34,7 @@ type testHandoffResumeReceipt struct {
 
 func (receipt testHandoffResumeReceipt) MarshalJSON() ([]byte, error) {
 	type wireReceipt testHandoffResumeReceipt
+
 	data, err := json.Marshal(wireReceipt(receipt))
 	if err != nil {
 		return nil, fmt.Errorf("encode handoff resume receipt: %w", err)
@@ -62,27 +63,37 @@ func (operation *deployment) deployWithInterruptedHandoff(
 	}
 
 	candidate := inactiveSlot(operation.configuration, selection)
+
 	interrupted, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	observations := make(chan testHandoffObservation, 1)
+
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err := errors.New("persisted handoff observer panicked")
 				slog.ErrorContext(interrupted, "Persisted handoff observer panicked", "err", err)
+
 				observations <- testHandoffObservation{
 					handoff: deploymentHandoff{Enabled: false, Revision: "", Service: ""},
 					err:     err,
 				}
+
 				cancel()
 			}
 		}()
+
 		handoff, err := operation.observePersistedTestHandoff(interrupted)
 		observations <- testHandoffObservation{handoff: handoff, err: err}
+
 		cancel()
 	}()
+
 	result, deploymentErr := Deploy(interrupted, options)
+
 	cancel()
+
 	observation := <-observations
 	if observation.err != nil {
 		return result, errors.Join(deploymentErr, observation.err)
@@ -109,6 +120,7 @@ func prepareUnavailableTestResumeOrigin(
 	revision string,
 ) (string, testHandoffResumeReceipt, error) {
 	var readiness testHandoffResumeReceipt
+
 	gateway, err := url.Parse(operation.configuration.GatewayOrigin)
 	if err != nil {
 		slog.WarnContext(ctx, "Isolated gateway origin parsing failed")
@@ -118,6 +130,7 @@ func prepareUnavailableTestResumeOrigin(
 	domain := strings.TrimPrefix(gateway.Hostname(), operation.name+".")
 	readiness.UnavailableWorker = strings.TrimSuffix(operation.name, "-gateway") + "-unavailable"
 	readiness.ConfiguredUnavailableOrigin = "https://" + readiness.UnavailableWorker + "." + domain
+
 	_, exists, err := operation.client.workerSettings(
 		ctx,
 		operation.account,
@@ -149,7 +162,9 @@ func prepareUnavailableTestResumeOrigin(
 	}
 
 	_, err = operation.probe(ctx, readiness.ConfiguredUnavailableOrigin, "")
+
 	var readinessError *readinessHTTPError
+
 	if err == nil {
 		return "", readiness, errors.New(
 			"unavailable test origin returned HTTP 200 instead of HTTP 404",

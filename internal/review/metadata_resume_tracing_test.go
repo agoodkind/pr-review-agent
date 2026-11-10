@@ -47,7 +47,9 @@ func TestResumedReviewTracesMetadataAfterACosmeticDescriptionEdit(t *testing.T) 
 						onlyMetadata: true,
 					},
 				)
+
 				var logs bytes.Buffer
+
 				logger := slog.New(slog.NewJSONHandler(&logs, nil))
 				fixture.service = review.NewService(
 					fixture.github,
@@ -68,6 +70,7 @@ func TestResumedReviewTracesMetadataAfterACosmeticDescriptionEdit(t *testing.T) 
 					policytest.Load(t),
 				)
 				seedMetadataReassessment(t, fixture, []domain.Finding{prior}, false)
+
 				priorSummary := findingDetailsSummary()
 				priorSummary.Head = domain.HeadSHA(testStaleHeadSHA)
 				priorSummary.Metadata = []domain.Finding{prior}
@@ -83,6 +86,7 @@ func TestResumedReviewTracesMetadataAfterACosmeticDescriptionEdit(t *testing.T) 
 					},
 				}
 				job := fixture.job()
+
 				job.MetadataOnly = metadataOnly
 				if err := fixture.run(t.Context(), job); err != nil {
 					t.Fatalf(

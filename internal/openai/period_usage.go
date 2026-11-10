@@ -29,8 +29,11 @@ func (client *Client) LoadProviderPeriodUsage(
 		}
 	}
 
-	var results []review.ProviderPeriodUsage
-	var failures []error
+	var (
+		results  []review.ProviderPeriodUsage
+		failures []error
+	)
+
 	seen := make(map[review.ProviderModelKey]bool)
 
 	for _, key := range keys {
@@ -39,7 +42,9 @@ func (client *Client) LoadProviderPeriodUsage(
 		}
 
 		seen[key] = true
+
 		var target provider
+
 		index := slices.IndexFunc(
 			client.providers,
 			func(target provider) bool { return target.id == key.ProviderID },
@@ -51,15 +56,19 @@ func (client *Client) LoadProviderPeriodUsage(
 		windows := providerUsageWindows(target)
 		if len(windows) == 0 {
 			var emptyWindow quota.Window
+
 			windows = append(windows, emptyWindow)
 		}
 
 		for _, window := range windows {
 			var result review.ProviderPeriodUsage
+
 			result.ProviderID, result.RequestedModel, result.AsOfMS = key.ProviderID, key.RequestedModel, at.UnixMilli()
 			result.Window = window
+
 			if client.budgetURL != "" && len(client.budgetSigningKey) > 0 {
 				var err error
+
 				result, err = client.readProviderPeriod(ctx, target, result)
 				if err != nil {
 					failures = append(
@@ -93,10 +102,13 @@ func (client *Client) readProviderPeriod(
 ) (review.ProviderPeriodUsage, error) {
 	ctx, cancel := context.WithTimeout(ctx, client.usageQueryTimeout)
 	defer cancel()
+
 	logger := gklog.L(ctx)
+
 	bounds := quota.Bounds{StartMS: 0, EndMS: result.AsOfMS, IncludeStart: true, IncludeEnd: true}
 	if result.Window.Mode != "" {
 		var err error
+
 		bounds, err = result.Window.Bounds(time.UnixMilli(result.AsOfMS))
 		if err != nil {
 			logger.WarnContext(
@@ -115,6 +127,7 @@ func (client *Client) readProviderPeriod(
 	}
 
 	storage := quota.NewClient(client.budgetURL, client.budgetSigningKey, client.httpClient)
+
 	history, err := storage.QueryTotals(ctx, result.ProviderID, result.RequestedModel, bounds)
 	if err != nil {
 		logger.WarnContext(
@@ -127,6 +140,7 @@ func (client *Client) readProviderPeriod(
 	}
 
 	result.HistoryStartMS = history.HistoryStartMS
+
 	result.HistoryComplete = result.Bounds.StartMS >= history.HistoryStartMS
 	if result.Window.Mode == "" {
 		result.Bounds.StartMS = min(history.HistoryStartMS, result.AsOfMS)
@@ -143,6 +157,7 @@ func (client *Client) readProviderPeriod(
 
 		result.TotalTokens += group.TotalTokens
 		result.ReportedRequests += int(group.Requests)
+
 		cost, priced := periodGroupCost(target, group.ReportedModel, group.Usage)
 		if priced {
 			result.PricedRequests += int(group.Requests)

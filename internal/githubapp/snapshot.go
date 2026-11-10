@@ -130,11 +130,13 @@ func (scope *repositorySnapshotScope) unlock() { scope.gate <- struct{}{} }
 func (scope *repositorySnapshotScope) close() error {
 	<-scope.gate
 	defer scope.unlock()
+
 	if scope.closed {
 		return nil
 	}
 
 	scope.closed = true
+
 	var failures []error
 
 	for _, revision := range scope.revisions {
@@ -222,6 +224,7 @@ func (scope *repositorySnapshotScope) read(
 	}
 
 	defer scope.unlock()
+
 	snapshot, err := scope.load(ctx, ref)
 	if err != nil {
 		return FileContent{}, err
@@ -265,12 +268,14 @@ func (scope *repositorySnapshotScope) search(ctx context.Context, query string) 
 	}
 
 	defer scope.unlock()
+
 	snapshot, err := scope.load(ctx, scope.head)
 	if err != nil {
 		return nil, err
 	}
 
 	var matches []string
+
 	needle := []byte(query)
 	buffer := make([]byte, max(32*1024, len(needle)*2))
 
@@ -307,6 +312,7 @@ func (snapshot *repositorySnapshot) contains(
 	buffer []byte,
 ) (bool, error) {
 	logger := gklog.L(ctx)
+
 	file, err := snapshot.root.Open(filePath)
 	if err != nil {
 		logger.WarnContext(ctx, "Open repository snapshot search source", "err", err)
@@ -314,6 +320,7 @@ func (snapshot *repositorySnapshot) contains(
 	}
 
 	defer func() { _ = file.Close() }()
+
 	retained := 0
 
 	for {
@@ -323,6 +330,7 @@ func (snapshot *repositorySnapshot) contains(
 		}
 
 		count, readErr := file.Read(buffer[retained:])
+
 		available := retained + count
 		if bytes.Contains(buffer[:available], query) {
 			return true, nil

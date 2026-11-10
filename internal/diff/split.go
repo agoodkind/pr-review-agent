@@ -14,12 +14,14 @@ type patchRow struct {
 // splitHunk preserves coordinates and keeps newline markers with their source row.
 func splitHunk(hunk parsedHunk) (parsedHunk, parsedHunk, bool) {
 	var empty parsedHunk
+
 	rows, ok := completeHunkRows(hunk)
 	if !ok || len(rows) < 2 {
 		return empty, empty, false
 	}
 
 	middle := balancedRowBoundary(rows)
+
 	oldLine := hunk.coordinates.oldStart
 	if hunk.coordinates.oldCount == 0 {
 		oldLine++
@@ -51,6 +53,7 @@ func completeHunkRows(hunk parsedHunk) ([]patchRow, bool) {
 			}
 
 			rows[len(rows)-1].text += "\n" + line
+
 			continue
 		}
 
@@ -132,6 +135,7 @@ func hunkFromRows(rows []patchRow, oldLine, newLine int) parsedHunk {
 
 func fileHunkPieces(file *FileContext, hunk parsedHunk, maximumBytes int) []Piece {
 	text := formatFileHunkChunk(file, hunk, maximumBytes)
+
 	contentMatches := file.CurrentContent == "" ||
 		ValidatePatchContent(hunk.text, file.CurrentContent) == nil
 	if len(text) > maximumBytes && contentMatches {
@@ -185,6 +189,7 @@ func splitFilePiece(piece Piece) (Piece, Piece, bool) {
 func pieceFromHunk(original Piece, hunk parsedHunk) Piece {
 	piece := original
 	piece.Patch = hunk.text
+
 	piece.Header = hunkCoordinates(hunk.header)
 	if original.fileContext != nil {
 		piece.Text = formatFileHunkChunk(original.fileContext, hunk, len(original.Text)/2)

@@ -30,6 +30,7 @@ func (service *Service) resolveRemoved(
 			Resolution:   domain.ResolutionResolved,
 			Reason:       "finding anchor no longer exists",
 		}
+
 		progress.resolutions = append(progress.resolutions, resolution)
 		if err := service.resolveAtHead(
 			ctx,

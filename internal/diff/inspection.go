@@ -24,15 +24,19 @@ func (collector *Collector) CollectInspectionFile(
 	filePath string,
 ) (FileContext, error) {
 	logger := gklog.L(ctx)
+
 	var file FileContext
+
 	if _, err := domain.ParseHeadSHA(string(ref.Head)); err != nil {
 		logger.WarnContext(ctx, "Inspection head validation failed", "err", err)
 		return file, fmt.Errorf("inspection requires an immutable head: %w", err)
 	}
 
 	var pullRequest githubapp.PullRequest
+
 	pullRequest.Head = ref.Head
 	recovery := newPatchRecovery(collector.source, ref, pullRequest, "")
+
 	content, err := recovery.readFile(ctx, filePath, ref.Head)
 	if err != nil {
 		logger.WarnContext(
@@ -52,8 +56,11 @@ func (collector *Collector) CollectInspectionFile(
 	file.CurrentContent = string(content.Data)
 	file.sourceMetadata = content.Metadata
 	file.CoverageComplete = true
+
 	var changed githubapp.ChangedFile
+
 	changed.Path = filePath
+
 	file.Attributes, err = newRepositoryAttributes(collector.source, ref).forChange(
 		ctx,
 		changed,

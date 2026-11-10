@@ -29,9 +29,12 @@ func (service *Service) prepareOwedPass(
 	preparation owedPreparation,
 ) (*chunkPass, error) {
 	head := job.Head
-	var err error
-	var metadataRecord metadataReviewRecord
-	var fallbackRecord fallbackReviewRecord
+
+	var (
+		err            error
+		metadataRecord metadataReviewRecord
+		fallbackRecord fallbackReviewRecord
+	)
 	if preparation.hasState {
 		metadataRecord, fallbackRecord, preparation.state.Completed, err = service.restoreFindingCheckpoints(
 			ctx,
@@ -70,6 +73,7 @@ func (service *Service) prepareOwedPass(
 	// call.
 	selection := collectPublicationState(reviews, threads, service.botLogin)
 	disputes := collectDisputes(threads, service.botLogin, head)
+
 	disputePrompt, err := disputes.promptSection(service.reviewPolicy)
 	if err != nil {
 		return nil, service.failCheck(

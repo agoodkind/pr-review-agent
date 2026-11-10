@@ -152,6 +152,7 @@ func (client *Client) CheckDaily(
 	limit int64,
 ) (DailySnapshot, error) {
 	var result DailySnapshot
+
 	err := post(
 		ctx,
 		client,
@@ -181,7 +182,9 @@ func (client *Client) Query(
 		AfterSequence:    0,
 		SnapshotSequence: 0,
 	}
+
 	var result QueryResponse
+
 	first := true
 
 	for {
@@ -234,6 +237,7 @@ func (client *Client) Query(
 func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 	ctx, cancelReport := context.WithTimeout(ctx, client.reportPolicy.Timeout)
 	defer cancelReport()
+
 	request.Action = "report_usage"
 	if request.ReportID == "" {
 		request.ReportID = rand.Text()
@@ -246,9 +250,12 @@ func (client *Client) Report(ctx context.Context, request ReportRequest) error {
 
 	for attempt := range client.reportPolicy.Attempts {
 		var response reportResponse
+
 		attemptContext, cancel := context.WithTimeout(ctx, client.reportPolicy.AttemptTimeout)
 		err := post(attemptContext, client, request, &response)
+
 		cancel()
+
 		if err == nil {
 			if !response.Reported {
 				return errors.New("accounting service did not acknowledge usage")
@@ -323,6 +330,7 @@ func post[
 	result *Response,
 ) error {
 	logger := gklog.L(ctx)
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		logger.WarnContext(
@@ -351,6 +359,7 @@ func post[
 	}
 
 	request.Header.Set("Content-Type", "application/json")
+
 	if client.operatorToken != "" {
 		request.Header.Set("Authorization", "Bearer "+client.operatorToken)
 	} else {
@@ -364,11 +373,13 @@ func post[
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	if response.StatusCode != http.StatusOK {
 		return &storageStatusError{status: response.StatusCode}
 	}
 
 	limited := io.LimitReader(response.Body, maximumResponseBytes+1)
+
 	data, err := io.ReadAll(limited)
 	if err != nil {
 		logger.WarnContext(

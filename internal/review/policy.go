@@ -33,6 +33,7 @@ func PolicyHeader(
 	}
 
 	var data reviewrules.PromptData
+
 	untrusted, err := renderPrompt(policy, "untrusted.policy", data)
 	if err != nil {
 		return "", err
@@ -41,6 +42,7 @@ func PolicyHeader(
 	data.MinimumImportance = minimumImportance
 	data.Rules = rules
 	data.UntrustedPolicy = untrusted
+
 	header, err := renderPrompt(policy, "review.system", data)
 	if err != nil {
 		return "", err
@@ -50,6 +52,7 @@ func PolicyHeader(
 	if policy.Limits().InspectionRequests > 0 {
 		data.Total = policy.Limits().InspectionRequests
 		data.ContentBytes = policy.Limits().InspectionBytes
+
 		inspection, err := renderPrompt(policy, "inspection.instructions", data)
 		if err != nil {
 			return "", err
@@ -108,6 +111,7 @@ func outputPolicyWithInput(policy reviewrules.Policy, name, input string) (strin
 	}
 
 	var data reviewrules.PromptData
+
 	untrusted, err := renderPrompt(policy, "untrusted.policy", data)
 	if err != nil {
 		return "", err
@@ -393,12 +397,14 @@ func SanitizeReport(report Report, limits reviewrules.FormattingLimits) Report {
 
 	for _, item := range report.Walkthrough {
 		item = sanitizeReportProse(item)
+
 		key := strings.ToLower(item)
 		if item == "" || seen[key] || strings.Contains(strings.ToLower(report.Summary), key) {
 			continue
 		}
 
 		seen[key] = true
+
 		walkthrough = append(walkthrough, item)
 		if len(walkthrough) == limits.WalkthroughItems {
 			break
@@ -546,6 +552,7 @@ func normalizedFindingKey(finding domain.Finding) string {
 
 func sanitizeFinding(finding domain.Finding) domain.Finding {
 	finding.Title = sanitizeProse(strings.TrimSpace(finding.Title))
+
 	finding.Body = sanitizeProse(strings.TrimSpace(finding.Body))
 	if finding.EffectiveSurface() == domain.FindingFile {
 		finding.Suggestion = strings.TrimRight(finding.Suggestion, "\r\n")

@@ -97,6 +97,7 @@ func keysFrom(
 		endLine:      0,
 		rangeValid:   false,
 	}
+
 	normalizedPath, err := marker.NormalizePath(pathValue)
 	if err != nil {
 		return keys
@@ -348,10 +349,12 @@ func collapseChunkCandidates(ctx context.Context, candidates []domain.Finding) [
 	survivorKeys := make([]duplicateKeys, 0, len(candidates))
 	for _, candidate := range candidates {
 		keys := candidateKeys(candidate)
+
 		slot, _, same := firstMatch(survivorKeys, keys)
 		if !same {
 			survivors = append(survivors, candidate)
 			survivorKeys = append(survivorKeys, keys)
+
 			continue
 		}
 
@@ -364,6 +367,7 @@ func collapseChunkCandidates(ctx context.Context, candidates []domain.Finding) [
 			logSuppressed(ctx, layerWithinChunk, survivors[slot], replaced)
 			survivors[slot] = candidate
 			survivorKeys[slot] = keys
+
 			continue
 		}
 

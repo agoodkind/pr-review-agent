@@ -39,6 +39,7 @@ func (service *Service) savedMetadataStillBlocks(
 	}
 
 	state, valid := marker.DecodeState(comment.Body)
+
 	head, completed := marker.FindReview(comment.Body)
 	if !valid || !completed || head != job.Head || !completedHeadState(state, job.Head) ||
 		(state.Status != marker.StateDone && state.Status != marker.StateFailed) {

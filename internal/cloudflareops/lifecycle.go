@@ -141,6 +141,7 @@ func updateLifecycle(run *Run, event Event) {
 	}
 	lifecycle.ReviewID, _ = number(event.Source, "review_id")
 	lifecycle.CheckRunID, _ = number(event.Source, "check_run_id")
+
 	lifecycle.CommentID, _ = number(event.Source, "comment_id")
 	if pending, ok := number(event.Source, "pending"); ok {
 		lifecycle.Pending = &pending
@@ -185,8 +186,10 @@ func returnedDecisionIDs(fields map[string]json.RawMessage) []string {
 		ThreadNodeID string            `json:"thread_node_id"`
 		Resolution   domain.Resolution `json:"resolution"`
 	}
+
 	identifiers := []string{}
 	raw := fields["resolutions"]
+
 	encoded := text(fields, "resolutions")
 	if json.Unmarshal(raw, &decisions) == nil ||
 		json.Unmarshal([]byte(encoded), &decisions) == nil {
@@ -211,8 +214,10 @@ func resolvedThreadIDs(fields map[string]json.RawMessage) []string {
 	var threads []struct {
 		NodeID string `json:"node_id"`
 	}
+
 	identifiers := []string{}
 	raw := fields["resolved_threads"]
+
 	encoded := text(fields, "resolved_threads")
 	if json.Unmarshal(raw, &threads) == nil || json.Unmarshal([]byte(encoded), &threads) == nil {
 		for _, thread := range threads {

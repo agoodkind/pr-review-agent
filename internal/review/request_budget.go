@@ -47,6 +47,7 @@ func boundReviewPrompt(
 	for lower <= upper {
 		middle := lower + (upper-lower)/2
 		candidate := required + truncateUTF8(optional, middle)
+
 		size, err := measure(candidate)
 		if err != nil {
 			return "", err
@@ -97,9 +98,13 @@ func BoundModelReviewChunksWithContext(
 	maximumBytes int,
 ) ([]diff.Chunk, error) {
 	notice := ""
+
 	if optional != "" {
-		var err error
-		var data reviewrules.PromptData
+		var (
+			err  error
+			data reviewrules.PromptData
+		)
+
 		notice, err = renderPrompt(policy, "review.context_omitted", data)
 		if err != nil {
 			return nil, err
@@ -153,6 +158,7 @@ func BuildModelReviewPrompt(
 	}
 
 	var data reviewrules.PromptData
+
 	notice, err := renderPrompt(policy, "review.context_omitted", data)
 	if err != nil {
 		return "", err
@@ -181,6 +187,7 @@ func BuildModelReviewPrompt(
 	for lower <= upper {
 		middle := lower + (upper-lower)/2
 		excerpt := policy.WrapUntrusted(policy.EscapeUntrusted(truncateUTF8(optional, middle)))
+
 		candidate, err := renderChunkPrompt(
 			chunk,
 			minimumImportance,

@@ -26,21 +26,26 @@ func Write(writer io.Writer, root string, contents map[string]string) (writeErr 
 			writeErr = fmt.Errorf("write repository fixture archive: %w", writeErr)
 		}
 	}()
+
 	compressed := gzip.NewWriter(writer)
 	defer func() {
 		if err := compressed.Close(); err != nil {
 			writeErr = errors.Join(writeErr, fmt.Errorf("close fixture compression: %w", err))
 		}
 	}()
+
 	archive := tar.NewWriter(compressed)
 	defer func() {
 		if err := archive.Close(); err != nil {
 			writeErr = errors.Join(writeErr, fmt.Errorf("close fixture tar archive: %w", err))
 		}
 	}()
+
 	var rootHeader tar.Header
+
 	rootHeader.Name = root
 	rootHeader.Mode = 0o755
+
 	rootHeader.Typeflag = tar.TypeDir
 	if err := archive.WriteHeader(&rootHeader); err != nil {
 		return fmt.Errorf("write fixture archive root: %w", err)
@@ -55,10 +60,13 @@ func Write(writer io.Writer, root string, contents map[string]string) (writeErr 
 
 	for _, name := range names {
 		content := contents[name]
+
 		var header tar.Header
+
 		header.Name = root + name
 		header.Mode = 0o644
 		header.Size = int64(len(content))
+
 		header.Typeflag = tar.TypeReg
 		if strings.HasSuffix(name, "/") {
 			header.Mode = 0o755

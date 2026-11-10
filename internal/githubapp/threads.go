@@ -189,6 +189,7 @@ func (client *Client) ListReviewThreads(
 			Number: number,
 			Cursor: nil,
 		}
+
 		if cursor != "" {
 			cursorCopy := cursor
 			variables.Cursor = &cursorCopy
@@ -270,6 +271,7 @@ func (client *Client) listRemainingThreadComments(
 
 	for cursor != "" {
 		cursorCopy := cursor
+
 		encoded, err := json.Marshal(threadCommentsVariables{
 			ThreadID: threadNodeID,
 			Cursor:   &cursorCopy,
@@ -328,6 +330,7 @@ func (client *Client) ResolveReviewThread(
 	variables := resolveReviewThreadVariables{
 		ThreadID: threadNodeID,
 	}
+
 	encoded, err := json.Marshal(variables)
 	if err != nil {
 		client.logger.ErrorContext(

@@ -90,6 +90,7 @@ func TestParsePullRequestAcceptsFourSupportedActions(t *testing.T) {
 				},
 			},
 		}
+
 		body, err := json.Marshal(payload)
 		if err != nil {
 			t.Fatalf("Marshal: %v", err)
@@ -119,6 +120,7 @@ func TestParsePullRequestIgnoresDraftAndUnsupportedEvents(t *testing.T) {
 		"pull_request":{"number":1,"draft":true,"head":{"sha":"a3c4f1cac7f595bc824704b9d2a1f1191630dc32"}}
 	}`,
 	)
+
 	_, supported, err := ParsePullRequest("pull_request", "delivery-1", draftPayload)
 	if err != nil {
 		t.Fatalf("draft opened: %v", err)
@@ -145,6 +147,7 @@ func TestParsePullRequestIgnoresDraftAndUnsupportedEvents(t *testing.T) {
 		"pull_request":{"number":1,"draft":true,"head":{"sha":"a3c4f1cac7f595bc824704b9d2a1f1191630dc32"}}
 	}`,
 	)
+
 	_, supported, err = ParsePullRequest("pull_request", "delivery-3", readyPayload)
 	if err != nil {
 		t.Fatalf("ready_for_review draft: %v", err)
@@ -157,6 +160,7 @@ func TestParsePullRequestIgnoresDraftAndUnsupportedEvents(t *testing.T) {
 
 func TestParsePullRequestRejectsMissingRequiredFields(t *testing.T) {
 	body := []byte(`{"action":"opened"}`)
+
 	_, _, err := ParsePullRequest("pull_request", "delivery-1", body)
 	if err == nil {
 		t.Fatal("missing fields: want error")
@@ -183,6 +187,7 @@ func reviewThreadPayloadBody(action string, draft bool) []byte {
 			},
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -214,6 +219,7 @@ func reviewCommentPayloadBody(action string, inReplyToID int64) []byte {
 			"in_reply_to_id": float64(inReplyToID),
 		},
 	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		panic(err)
@@ -310,6 +316,7 @@ func TestParseEventIgnoresUnsupportedThreadActionsAndDrafts(t *testing.T) {
 
 func TestParseReviewThreadRejectsMissingRequiredFields(t *testing.T) {
 	body := []byte(`{"action":"resolved"}`)
+
 	_, _, err := ParseReviewThread("pull_request_review_thread", "delivery-1", body)
 	if err == nil {
 		t.Fatal("missing fields: want error")
@@ -326,6 +333,7 @@ func TestMentionedPullRequestCommentRequestsFullReview(t *testing.T) {
 		"comment":{"body":"@review-agent please review this change","user":{"login":"author"}}
 	}`,
 	)
+
 	event, supported, err := ParseMentionedIssueComment(
 		"delivery-mention",
 		body,
@@ -376,6 +384,7 @@ func TestMentionedIssueCommentIgnoresOtherTextAndIssues(t *testing.T) {
 						"user": map[string]any{"login": testCase.author},
 					},
 				}
+
 				body, err := json.Marshal(payload)
 				if err != nil {
 					t.Fatalf("Marshal: %v", err)

@@ -88,6 +88,7 @@ func (service *Service) Reconcile(
 		slog.Int("pull_request", job.Number),
 	)
 	ctx = gklog.WithLogger(ctx, logger)
+
 	pullRequest, err := service.github.GetPullRequest(
 		ctx,
 		job.InstallationID,
@@ -131,6 +132,7 @@ func (service *Service) Reconcile(
 		"review reconciliation selected",
 		slog.Any("thread_node_ids", ownedThreadIDs(owned)),
 	)
+
 	if len(owned) == 0 {
 		return threads, nil
 	}
@@ -197,6 +199,7 @@ func (service *Service) reconcilePrepared(
 	logger *slog.Logger,
 ) ([]githubapp.ReviewThread, error) {
 	currentHead := pullRequest.Head
+
 	progress := resolutionProgress{
 		errors:          nil,
 		resolutions:     make([]domain.ThreadResolution, 0),
@@ -213,6 +216,7 @@ func (service *Service) reconcilePrepared(
 				progress.errors,
 				fmt.Errorf("reconcile batch %d/%d: %w", batchIndex+1, len(batches), err),
 			)
+
 			continue
 		}
 
@@ -371,6 +375,7 @@ func traceBotThreads(threads []githubapp.ReviewThread, botLogin string) []botThr
 			FindingHead: "",
 			Importance:  0,
 		}
+
 		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
 		if ok {
 			trace.FindingID = findingMarker.ID
@@ -525,6 +530,7 @@ func (service *Service) loadThreadContext(
 
 		currentDiff = formatCurrentDiff(file)
 		hasCurrentPatch = file.PatchPresent && strings.TrimSpace(file.Patch) != ""
+
 		break
 	}
 
@@ -540,6 +546,7 @@ func (service *Service) loadThreadContext(
 	}
 
 	originalAnchor := strings.TrimSpace(thread.Finding.Evidence)
+
 	originalAnchorKnown := originalAnchor != ""
 	if !originalAnchorKnown {
 		originalContent, originalErr := service.github.GetFile(
@@ -568,6 +575,7 @@ func (service *Service) loadThreadContext(
 
 	originalAnchorPresent := originalAnchorKnown &&
 		strings.Contains(string(fileBytes), originalAnchor)
+
 	currentContent := boundedCurrentFileContext(fileBytes, maximumBytes/2)
 	if hasCurrentPatch {
 		currentContent = extractAnchorWindow(
@@ -664,6 +672,7 @@ func formatThreadSection(
 	builder.WriteString(thread.Finding.Body)
 	builder.WriteString("\nImportance: ")
 	fmt.Fprintf(&builder, "%d", thread.Finding.Importance)
+
 	mode := thread.Finding.Deduplication
 	if mode == "" {
 		mode = reviewrules.DeduplicateDefect
@@ -671,11 +680,13 @@ func formatThreadSection(
 
 	builder.WriteString("\nDeduplication mode: ")
 	builder.WriteString(string(mode))
+
 	if contextText.originalAnchorKnown {
 		builder.WriteString(
 			"\n\nOriginal finding source at the earlier commit (historical evidence):\n",
 		)
 		builder.WriteString(contextText.originalAnchor)
+
 		if mode != reviewrules.DeduplicateLocation {
 			fmt.Fprintf(
 				&builder,
@@ -693,9 +704,11 @@ func formatThreadSection(
 		// response would let a passer by, or this service quoting itself, stand as
 		// the answer that resolves a finding.
 		lines, omitted := review.FormatReplies(thread.Replies, botLogin, review.MaximumReplyBytes)
+
 		builder.WriteString(
 			"\n\nReplies on this thread, oldest first. The name before each one is who wrote it",
 		)
+
 		if omitted > 0 {
 			fmt.Fprintf(&builder, ", and %d older replies are not shown", omitted)
 		}
@@ -748,6 +761,7 @@ func batchPreparedThreads(threads []preparedThread, maxSize int) [][]preparedThr
 
 		if len(current) > 0 && currentSize+separator+len(thread.text) > maxSize {
 			flush()
+
 			separator = 0
 		}
 
@@ -788,9 +802,11 @@ func buildBatchPrompt(
 	}
 
 	var data reviewrules.PromptData
+
 	data.Input = policy.WrapUntrusted(body.String())
 	data.Index = index
 	data.Total = total
+
 	prompt, err := policy.Render("reconcile.input", data)
 	if err != nil {
 		slog.Warn("Reconciliation prompt rendering failed", "err", err)

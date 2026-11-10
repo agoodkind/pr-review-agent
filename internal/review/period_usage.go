@@ -49,6 +49,7 @@ func (service *Service) enrichProviderPeriodUsage(ctx context.Context, summary *
 
 	queryCtx, cancel := service.publicationContext(ctx)
 	defer cancel()
+
 	periods, err := loader.LoadProviderPeriodUsage(queryCtx, keys, service.now())
 	if err != nil {
 		gklog.L(ctx).WarnContext(ctx, "Read provider period usage failed", "err", err)

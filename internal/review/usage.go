@@ -125,6 +125,7 @@ func RecordProviderAttempt(
 
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	recorder.totals.ProviderColumns = append([]reviewrules.ProviderDetailColumn(nil), columns...)
 	recorder.sequence++
 
@@ -167,6 +168,7 @@ type UsageRecorder struct {
 // WithUsageRecorder attaches a new usage recorder to a context.
 func WithUsageRecorder(ctx context.Context) (context.Context, *UsageRecorder) {
 	var totals UsageSummary
+
 	recorder := &UsageRecorder{
 		mu:       sync.Mutex{},
 		totals:   totals,
@@ -216,6 +218,7 @@ func (recorder *UsageRecorder) record(usage ModelUsage) {
 		priced:         usage.Priced,
 		serviceTier:    usage.ServiceTier,
 	}
+
 	model, found := recorder.models[key]
 	if !found {
 		model.ProviderID = usage.ProviderID
@@ -223,6 +226,7 @@ func (recorder *UsageRecorder) record(usage ModelUsage) {
 		model.Model = usage.Model
 		model.Priced = usage.Priced
 		model.ServiceTier = usage.ServiceTier
+
 		recorder.ordered = append(recorder.ordered, key)
 	}
 
@@ -265,6 +269,7 @@ func addModelUsage(summary *UsageSummary, usage ModelUsage) {
 	summary.ReportedRequests += usage.ReportedRequests
 	summary.InputTokens += usage.InputTokens
 	summary.CachedInputTokens += usage.CachedInputTokens
+
 	summary.CacheWriteTokens += usage.CacheWriteTokens
 	if usage.ServiceTier != "" && !slices.Contains(summary.ServiceTiers, usage.ServiceTier) {
 		summary.ServiceTiers = append(summary.ServiceTiers, usage.ServiceTier)

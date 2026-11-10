@@ -21,6 +21,7 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 			return strings.Compare(left.Path, right.Path)
 		},
 	)
+
 	var builder strings.Builder
 	builder.WriteString(
 		"#### File assessments\n\n" +
@@ -28,7 +29,9 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 			"| File | Content | Assessment | Content review requirement | Reason | Evidence |\n" +
 			"| --- | --- | --- | --- | --- | --- |\n",
 	)
+
 	listed := 0
+
 	const noticeAllowance = 256
 
 	for _, assessment := range ordered[:min(len(ordered), maximumListedUnreadHunks)] {
@@ -46,6 +49,7 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 		}
 
 		builder.WriteString(row)
+
 		listed++
 	}
 
@@ -59,6 +63,7 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 	}
 
 	builder.WriteString("\n")
+
 	if builder.Len() > maximumBytes {
 		return ""
 	}

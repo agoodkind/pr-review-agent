@@ -99,6 +99,7 @@ func (pass *chunkPass) recordOmissionDecision(
 	assessments, accepted := validateFileAssessments(result, shortfall, pass.work.Files, policy)
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	pass.votes++
 	if !accepted {
 		pass.omissionsOK = false
@@ -116,6 +117,7 @@ func (pass *chunkPass) recordOmissionDecision(
 	sameDecision := candidate.acceptable == pass.decision.acceptable
 	preferReason := sameDecision && pass.decision.reason == "" && candidate.reason != ""
 	sameReasonState := (candidate.reason == "") == (pass.decision.reason == "")
+
 	preferEarlier := sameDecision && sameReasonState &&
 		chunk < pass.decision.chunk
 	if !pass.decision.recorded || preferRejected || preferReason || preferEarlier {
@@ -138,6 +140,7 @@ func (pass *chunkPass) replaceOmissionDecision(
 	assessments, accepted := validateFileAssessments(result, shortfall, pass.work.Files, policy)
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	pass.votes = 1
 	pass.omissionsOK = accepted
 	pass.decision = omissionDecision{
@@ -313,17 +316,21 @@ func omissionPrompt(
 	}
 
 	data.Input = policy.WrapUntrusted("")
+
 	prefix, err := renderPrompt(policy, "omissions.input", data)
 	if err != nil {
 		return "", err
 	}
 
 	const omittedFormat = "Unread changes not listed: %d (the request size limit prevented listing their details).\n\n"
+
 	settings := policy.FileClassification()
 	metadataBudget := min(maximumBytes/4, settings.MaximumEvidenceBytes) - len(prefix) - 1
 	hunks := sortedUnreadHunks(shortfall.Hunks)
 	omittedNoticeBudget := len(fmt.Sprintf(omittedFormat, len(hunks)))
+
 	var metadata strings.Builder
+
 	listed := 0
 
 	for _, hunk := range hunks {
@@ -347,6 +354,7 @@ func omissionPrompt(
 		}
 
 		metadata.WriteString(row)
+
 		listed++
 	}
 
@@ -417,6 +425,7 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 	}
 
 	var fileDecisions []domain.FileAssessment
+
 	files := BuildFileIndex(pass.work.Files)
 
 	for _, path := range assessmentPaths(shortfall) {
@@ -440,10 +449,13 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 			pass.settings.maximumPromptBytes,
 			pass.work.FileAssessments,
 		)
+
 		cancel()
+
 		models := modelSet{names: nil, seen: nil}
 		models.add(completion.Model)
 		pass.recordCall(models, 1)
+
 		if err != nil {
 			return err
 		}
@@ -464,6 +476,7 @@ func (service *Service) decideUnreadableHunks(ctx context.Context, pass *chunkPa
 
 	if !metadata {
 		reason := assessmentDecisionReason(fileDecisions)
+
 		limitReason, err := assessmentPersistenceReason(fileDecisions, service.reviewPolicy)
 		if err != nil {
 			return err
@@ -497,6 +510,7 @@ func (service *Service) decideUnreadableMetadata(
 	fileDecisions []domain.FileAssessment,
 ) error {
 	logger := gklog.L(ctx)
+
 	var reviewed strings.Builder
 
 	for _, overview := range pass.overviews() {
@@ -507,6 +521,7 @@ func (service *Service) decideUnreadableMetadata(
 	}
 
 	var data reviewrules.PromptData
+
 	instruction, err := renderPrompt(service.reviewPolicy, "omissions.decision", data)
 	if err != nil {
 		logger.ErrorContext(ctx, "Unread content policy rendering failed", "err", err)
@@ -539,6 +554,7 @@ func (service *Service) decideUnreadableMetadata(
 	contextText +=
 		pass.disputePrompt + "The readable parts were summarized as follows:\n" +
 			service.reviewPolicy.WrapUntrusted(reviewed.String())
+
 	prompt, err := BoundReviewPrompt(
 		service.model,
 		required,
@@ -551,13 +567,16 @@ func (service *Service) decideUnreadableMetadata(
 
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	defer cancel()
+
 	completion, err := service.model.Review(callCtx, prompt)
+
 	models := modelSet{names: nil, seen: nil}
 	if completion.Model != "" {
 		models.add(completion.Model)
 	}
 
 	pass.recordCall(models, 1)
+
 	if err != nil {
 		logger.ErrorContext(ctx, "decide unread changes", slog.String("err", err.Error()))
 		return fmt.Errorf("decide unread changes: %w", err)
@@ -624,7 +643,9 @@ func BuildPullRequestContext(
 	}
 
 	contextText.WriteString("\nEvidence ID: changed_files\n")
+
 	var data reviewrules.PromptData
+
 	data.Input = policy.WrapUntrusted(contextText.String())
 
 	return renderPrompt(policy, "pull_request.input", data)
@@ -824,6 +845,7 @@ func (service *Service) concludeStructurallyIncomplete(
 	failures := pass.unreadChunks()
 	failureState := pass.scopeFailures(ctx)
 	statuses := failureState.statuses
+
 	disposition := domain.AssessmentDeclined
 	if failureState.cause != nil {
 		disposition = domain.AssessmentIncomplete
@@ -831,7 +853,9 @@ func (service *Service) concludeStructurallyIncomplete(
 
 	recordAssessment(ctx, disposition, &summary, failureState.classNames(), quotaRecovery(statuses))
 	cause := failureState.cause
+
 	addAttemptedModels(&summary, statuses)
+
 	conclusion := checkConclusionDeclined
 	if !pass.decidedOmissions() || pass.acceptsOmissions() {
 		conclusion = service.presentedConclusion(failureState.classes, conclusion)
@@ -861,6 +885,7 @@ func (service *Service) concludeStructurallyIncomplete(
 	}
 
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
+
 	notice, title, err := service.pendingScopeNotice(ctx, job, state, shortfall, failures, cause)
 	if err != nil {
 		return err
@@ -894,6 +919,7 @@ func renderPendingScopeBody(
 	statuses ...ProviderStatus,
 ) (string, error) {
 	var data reviewrules.PromptData
+
 	verdict, err := renderPrompt(policy, "coverage.verdict_pending", data)
 	if err != nil {
 		return "", err
@@ -917,6 +943,7 @@ const maximumUnreadHunkLabelBytes = 220
 // renderUnreadHunks lists each unread hunk as inert code text.
 func renderUnreadHunks(hunks []unreadHunk) string {
 	listed := hunks
+
 	omitted := 0
 	if len(listed) > maximumListedUnreadHunks {
 		omitted = len(listed) - maximumListedUnreadHunks

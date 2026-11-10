@@ -112,6 +112,7 @@ func DecodeState(body string) (State, bool) {
 	}
 
 	head := domain.HeadSHA("")
+
 	if matches[1] != "" {
 		parsed, err := domain.ParseHeadSHA(matches[1])
 		if err != nil {

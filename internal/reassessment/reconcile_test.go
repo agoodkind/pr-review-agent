@@ -41,10 +41,13 @@ func livePending() reassessment.LiveSnapshot {
 func TestTrackingRepairRequiresConfirmedLiveStateAndPreservesFailedReads(t *testing.T) {
 	now := time.Now()
 	coordinator := planner()
+
 	var target reassessment.Target
+
 	target.Key = "tracked"
 	target.Version = 1
 	snapshot := livePending()
+
 	first := coordinator.Repair(target, nil, snapshot, now)
 	if first.Record != nil || first.RepairKind != "confirming" {
 		t.Fatalf("a single observation guessed a missing assessment: %+v", first)
@@ -56,6 +59,7 @@ func TestTrackingRepairRequiresConfirmedLiveStateAndPreservesFailedReads(t *test
 	}
 
 	snapshot.FailureStage = "check"
+
 	failed := coordinator.Repair(second.Target, second.Record, snapshot, now.Add(2*time.Minute))
 	if failed.Record != nil || failed.RepairKind != "deferred" ||
 		failed.Target.Confirmations != 0 ||
@@ -65,6 +69,7 @@ func TestTrackingRepairRequiresConfirmedLiveStateAndPreservesFailedReads(t *test
 
 	snapshot.FailureStage = ""
 	snapshot.PullRequest.EligibilityKnown = false
+
 	partial := coordinator.Repair(second.Target, second.Record, snapshot, now.Add(3*time.Minute))
 	if partial.Record != nil || partial.RepairKind != "deferred" {
 		t.Fatalf("partial eligibility invented a terminal state: %+v", partial)
@@ -75,10 +80,13 @@ func TestConfirmedClosureAndReopeningRepairUseDifferentGenerations(t *testing.T)
 	now := time.Now()
 	coordinator := planner()
 	record := queued(now)
+
 	var target reassessment.Target
+
 	target.Key = record.Key
 	snapshot := livePending()
 	snapshot.PullRequest.State = "closed"
+
 	first := coordinator.Repair(target, &record, snapshot, now)
 	if first.Record != nil {
 		t.Fatal("one closure observation terminated the queue")
@@ -90,6 +98,7 @@ func TestConfirmedClosureAndReopeningRepairUseDifferentGenerations(t *testing.T)
 	}
 
 	snapshot = livePending()
+
 	opened := coordinator.Repair(closed.Target, closed.Record, snapshot, now.Add(2*time.Minute))
 	if opened.Record != nil {
 		t.Fatal("one reopened observation guessed the new lifecycle")
@@ -105,7 +114,9 @@ func TestConfirmedClosureAndReopeningRepairUseDifferentGenerations(t *testing.T)
 func TestLostPrivateCompletionRebuildsAssessmentAndRequiresNewReceipt(t *testing.T) {
 	now := time.Now()
 	coordinator := planner()
+
 	var target reassessment.Target
+
 	target.Key = "tracked"
 	snapshot := livePending()
 	snapshot.Summary.Status = marker.StateDone
@@ -115,6 +126,7 @@ func TestLostPrivateCompletionRebuildsAssessmentAndRequiresNewReceipt(t *testing
 	snapshot.Check.Outcome.MetadataRevision = diff.PullRequestRevision(snapshot.PullRequest)
 	first := coordinator.Repair(target, nil, snapshot, now)
 	second := coordinator.Repair(first.Target, nil, snapshot, now.Add(time.Minute))
+
 	rebuild := coordinator.Repair(second.Target, nil, snapshot, now.Add(2*time.Minute))
 	if rebuild.Record == nil || rebuild.RepairKind != "evidence_rebuild" ||
 		!rebuild.Record.RebuildEvidence ||
@@ -134,6 +146,7 @@ func TestLostPrivateCompletionRebuildsAssessmentAndRequiresNewReceipt(t *testing
 	}
 
 	validated := reassessment.Snapshot{PullRequest: snapshot.PullRequest}
+
 	dispatched := coordinator.Decide(*rebuild.Record, validated, now.Add(3*time.Minute))
 	if !dispatched.Dispatch || dispatched.Job.Forced || !dispatched.Job.AutomaticReassessment {
 		t.Fatalf("rebuild did not resume existing checkpoints: %+v", dispatched)
@@ -153,12 +166,14 @@ func TestLostPrivateCompletionRebuildsAssessmentAndRequiresNewReceipt(t *testing
 	rebuiltTarget.PrivateOutcome = receipt
 	rebuiltTarget.PrivateNonce = receipt.Nonce
 	observed := coordinator.Repair(rebuiltTarget, &dispatched, snapshot, now.Add(4*time.Minute))
+
 	complete := coordinator.Repair(observed.Target, &dispatched, snapshot, now.Add(5*time.Minute))
 	if complete.Record == nil || complete.Record.Reason != "completed" {
 		t.Fatalf("matching new private/live receipt did not complete reassessment: %+v", complete)
 	}
 
 	snapshot.Check.Outcome.Nonce = "different-receipt"
+
 	disagreed := coordinator.Repair(rebuiltTarget, &dispatched, snapshot, now.Add(6*time.Minute))
 	if disagreed.Record != nil && disagreed.Record.Reason == "completed" {
 		t.Fatal("contradictory live receipt fabricated completion")
@@ -169,6 +184,7 @@ func TestLostPrivateCompletionRebuildsAssessmentAndRequiresNewReceipt(t *testing
 	stopped.Reason = "draft"
 	ready := livePending()
 	firstReady := coordinator.Repair(rebuild.Target, &stopped, ready, now.Add(7*time.Minute))
+
 	secondReady := coordinator.Repair(firstReady.Target, &stopped, ready, now.Add(8*time.Minute))
 	if secondReady.Record == nil || secondReady.RepairKind != "reactivated" ||
 		secondReady.Record.Generation == stopped.Generation {

@@ -38,6 +38,7 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 		nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
@@ -66,6 +67,7 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 		request.Header.Set("X-Github-Event", "pull_request")
 		request.Header.Set("X-Github-Delivery", deliveryID)
 		request.Header.Set("X-Hub-Signature-256", signTestBody(body))
+
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			t.Fatalf("POST webhook: %v", err)
@@ -87,6 +89,7 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 	}
 
 	_ = third.Body.Close()
+
 	repeated := post("delivery-blocked-3")
 	if repeated.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("repeated status = %d, want 503 while the queue remains full", repeated.StatusCode)
@@ -101,6 +104,7 @@ func TestFullQueueReturns503AndReleasesClaim(t *testing.T) {
 		retry := post("delivery-blocked-3")
 		status := retry.StatusCode
 		_ = retry.Body.Close()
+
 		if status == http.StatusAccepted {
 			break
 		}

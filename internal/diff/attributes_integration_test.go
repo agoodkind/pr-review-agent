@@ -24,8 +24,11 @@ func TestCollectorCollectsEffectiveGitAttributesAtPinnedRevisions(t *testing.T) 
 				source := newAttributesRepository(t)
 				pullRequest := recoveryPullRequest(source)
 				collector := diff.NewCollector(source)
-				var input diff.ReviewInput
-				var err error
+
+				var (
+					input diff.ReviewInput
+					err   error
+				)
 				if incremental {
 					input, err = collector.CollectRange(
 						t.Context(),
@@ -219,6 +222,7 @@ func TestCollectorRejectsUnreadableRepositoryAttributes(t *testing.T) {
 			func(t *testing.T) {
 				directory := t.TempDir()
 				largeGitCommand(t, directory, "init", "--quiet")
+
 				attributes := "*.txt linguist-generated\n"
 				if failure == "invalid_attribute" {
 					attributes = "*.txt invalid@attribute\n"
@@ -234,6 +238,7 @@ func TestCollectorRejectsUnreadableRepositoryAttributes(t *testing.T) {
 				writeAttributesFile(t, directory, "changed.txt", "after\n")
 				largeGitCommand(t, directory, "add", "--all")
 				largeGitCommit(t, directory, "Change source")
+
 				head := domain.HeadSHA(
 					strings.TrimSpace(largeGitCommand(t, directory, "rev-parse", "HEAD")),
 				)
@@ -241,6 +246,7 @@ func TestCollectorRejectsUnreadableRepositoryAttributes(t *testing.T) {
 					objectID := strings.TrimSpace(
 						largeGitCommand(t, directory, "rev-parse", string(head)+":.gitattributes"),
 					)
+
 					objectPath := filepath.Join(
 						directory,
 						".git",
@@ -259,6 +265,7 @@ func TestCollectorRejectsUnreadableRepositoryAttributes(t *testing.T) {
 					head:      head,
 					patchMode: "complete",
 				}
+
 				input, err := diff.NewCollector(source).Collect(
 					t.Context(),
 					recoveryRef(head),
@@ -279,6 +286,7 @@ func TestCollectorRejectsUnreadableRepositoryAttributes(t *testing.T) {
 
 func writeAttributesFile(t *testing.T, directory, path, content string) {
 	t.Helper()
+
 	if err := os.MkdirAll(filepath.Dir(filepath.Join(directory, path)), 0o700); err != nil {
 		t.Fatal(err)
 	}

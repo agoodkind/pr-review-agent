@@ -33,15 +33,18 @@ const (
 
 func TestAppJWTContainsExpectedClaimsAndValidSignature(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
 	var capturedJWT string
+
 	server.Config.Handler = http.HandlerFunc(
 		func(writer http.ResponseWriter, request *http.Request) {
 			if request.Method == http.MethodPost &&
 				strings.HasSuffix(request.URL.Path, "/access_tokens") {
 				capturedJWT = strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+
 				writeJSON(
 					writer,
 					http.StatusCreated,
@@ -124,6 +127,7 @@ func threadCommentNode(databaseID int, body string, author string) map[string]an
 // partial context. Every page has to be followed.
 func TestListReviewThreadsFollowsEveryPageOfAThreadsComments(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -162,6 +166,7 @@ func TestListReviewThreadsFollowsEveryPageOfAThreadsComments(t *testing.T) {
 			// the pull request's threads.
 			if strings.Contains(payload.Query, "PullRequestReviewThread") {
 				commentPageRequests++
+
 				writeJSON(
 					writer,
 					http.StatusOK,
@@ -272,6 +277,7 @@ func TestListReviewThreadsFollowsEveryPageOfAThreadsComments(t *testing.T) {
 func TestInstallationTokenIsCachedAndRefreshedBeforeExpiry(t *testing.T) {
 	privateKey := testPrivateKey(t)
 	now := time.Unix(1_700_000_000, 0)
+
 	client, server, state := newStatefulTestClient(t, privateKey, now)
 	defer server.Close()
 
@@ -294,6 +300,7 @@ func TestInstallationTokenIsCachedAndRefreshedBeforeExpiry(t *testing.T) {
 
 	now = now.Add(56 * time.Minute)
 	state.nowValue = now
+
 	_, err = client.GetPullRequest(context.Background(), 99, testRepo(), 1)
 	if err != nil {
 		t.Fatalf("third GetPullRequest: %v", err)
@@ -309,6 +316,7 @@ func TestInstallationTokenIsCachedAndRefreshedBeforeExpiry(t *testing.T) {
 
 func TestClientErrorsExposeStatusWithoutCredentials(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -418,10 +426,12 @@ func TestATransportFailureKeepsItsCause(t *testing.T) {
 // deadline.
 func TestARequestDeadlineIsStillADeadlineAfterTheClientWrapsIt(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
 	var blocking atomic.Bool
+
 	server.Config.Handler = http.HandlerFunc(
 		func(writer http.ResponseWriter, request *http.Request) {
 			if request.Method == http.MethodPost &&
@@ -483,6 +493,7 @@ func TestARequestDeadlineIsStillADeadlineAfterTheClientWrapsIt(t *testing.T) {
 
 func TestRESTPaginationLoadsEveryPage(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -540,6 +551,7 @@ func TestGetFileReadsPinnedGitContent(t *testing.T) {
 
 func TestSubmitReviewSendsOneCompletePayload(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -556,6 +568,7 @@ func TestSubmitReviewSendsOneCompletePayload(t *testing.T) {
 			},
 		},
 	}
+
 	_, err := client.SubmitReview(context.Background(), 99, testRepo(), 4, request)
 	if err != nil {
 		t.Fatalf("SubmitReview: %v", err)
@@ -581,6 +594,7 @@ func TestSubmitReviewSendsOneCompletePayload(t *testing.T) {
 
 func TestSubmitReviewRejectsUnknownEvent(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -606,6 +620,7 @@ func TestSubmitReviewRejectsUnknownEvent(t *testing.T) {
 
 func TestListReviewsPreservesAuthorForMarkerOwnership(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -637,6 +652,7 @@ func TestListReviewsPreservesAuthorForMarkerOwnership(t *testing.T) {
 
 func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -738,6 +754,7 @@ func TestCompleteCheckRunTruncatesAnOversizeLog(t *testing.T) {
 
 func TestEndToEndMoreThanOneHundredReviewThreads(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -755,10 +772,12 @@ func TestEndToEndMoreThanOneHundredReviewThreads(t *testing.T) {
 
 func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
 	state.submitReviewStatus = http.StatusInternalServerError
+
 	_, err := client.SubmitReview(
 		context.Background(),
 		99,
@@ -777,6 +796,7 @@ func TestEndToEndGitHubFailureSetsFailedLifecycle(t *testing.T) {
 
 func TestListReviewThreadsPaginatesBeyondOneHundred(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -798,6 +818,7 @@ func TestListReviewThreadsPaginatesBeyondOneHundred(t *testing.T) {
 
 func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -815,6 +836,7 @@ func TestListReviewThreadsNormalizesGraphQLBotLogin(t *testing.T) {
 
 func TestListReviewThreadsDecodesRepliesAfterTheRootComment(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -887,6 +909,7 @@ func TestListReviewThreadsDecodesRepliesAfterTheRootComment(t *testing.T) {
 
 func TestListReviewThreadsUsesOriginalLinesForOutdatedComments(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
@@ -945,10 +968,12 @@ func TestListReviewThreadsUsesOriginalLinesForOutdatedComments(t *testing.T) {
 
 func TestResolveReviewThreadVerifiesMutationResult(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
 	state.resolveThreadID = "thread-resolve"
+
 	if err := client.ResolveReviewThread(context.Background(), 99, "thread-resolve"); err != nil {
 		t.Fatalf("ResolveReviewThread: %v", err)
 	}
@@ -960,10 +985,12 @@ func TestResolveReviewThreadVerifiesMutationResult(t *testing.T) {
 
 func TestGraphQLErrorsRemainVisible(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server, state := newStatefulTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
 	state.graphQLError = "thread lookup failed"
+
 	_, err := client.ListReviewThreads(context.Background(), 99, testRepo(), 8)
 	if err == nil {
 		t.Fatal("ListReviewThreads: want error")
@@ -976,10 +1003,12 @@ func TestGraphQLErrorsRemainVisible(t *testing.T) {
 
 func TestCreateAndUpdateIssueComment(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 
 	var lastMethod, lastPath, lastBody string
+
 	server.Config.Handler = http.HandlerFunc(
 		func(writer http.ResponseWriter, request *http.Request) {
 			if request.Method == http.MethodPost &&
@@ -1003,6 +1032,7 @@ func TestCreateAndUpdateIssueComment(t *testing.T) {
 			}
 
 			lastMethod, lastPath, lastBody = request.Method, request.URL.Path, string(body)
+
 			writeJSON(
 				writer,
 				http.StatusOK,
@@ -1331,6 +1361,7 @@ func handleGraphQL(writer http.ResponseWriter, request *http.Request, state *tes
 
 	page := state.threadPages[state.threadPageIndex]
 	state.threadPageIndex++
+
 	writeJSON(writer, http.StatusOK, map[string]any{"data": page})
 }
 
@@ -1341,6 +1372,7 @@ func writeReviewPage(writer http.ResponseWriter, request *http.Request, state *t
 	}
 
 	page := state.reviewPages[state.reviewPageIndex]
+
 	state.reviewPageIndex++
 	if state.reviewPageIndex < len(state.reviewPages) {
 		next := fmt.Sprintf("http://%s%s", request.Host, request.URL.Path)
@@ -1368,6 +1400,7 @@ func writeChangedFilePage(
 
 	page := state.changedFilePages[state.changedFilePageIndex]
 	state.changedFilePageIndex++
+
 	writeJSON(writer, http.StatusOK, page)
 }
 
@@ -1407,6 +1440,7 @@ func buildThreadPages(total int) []map[string]any {
 		}
 
 		hasNext := end < total
+
 		endCursor := ""
 		if hasNext {
 			endCursor = fmt.Sprintf("cursor-%d", end)
@@ -1476,6 +1510,7 @@ func testRepo() domain.Repository {
 
 func testPrivateKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
+
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -1494,6 +1529,7 @@ func readJSONBody(request *http.Request) (map[string]any, error) {
 	defer func() {
 		_ = request.Body.Close()
 	}()
+
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, err
@@ -1562,6 +1598,7 @@ func base64RawURLDecode(value string) ([]byte, error) {
 // comment guarantee broken by pagination rather than by logic.
 func TestListIssueCommentsReadsEveryPage(t *testing.T) {
 	privateKey := testPrivateKey(t)
+
 	client, server := newTestClient(t, privateKey, time.Unix(1_700_000_000, 0))
 	defer server.Close()
 

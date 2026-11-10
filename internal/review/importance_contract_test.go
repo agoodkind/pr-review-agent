@@ -14,6 +14,7 @@ import (
 
 func TestClassificationPolicyDoesNotChangeWithPublicationMinimum(t *testing.T) {
 	policy := policytest.Load(t)
+
 	startup, err := review.PolicyHeader(policy, 6, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -77,13 +78,17 @@ func TestPublishedVerdictUsesTheFindingThreshold(t *testing.T) {
 			scenario.name,
 			func(t *testing.T) {
 				var finding domain.Finding
+
 				finding.RuleID, finding.Path, finding.StartLine, finding.EndLine = scenario.rule, "example.go", 1, 1
 				finding.Title, finding.Body = "Use a shared boundary", "The operations require one shared boundary."
 				finding.Evidence, finding.Claim, finding.Importance = "source", "The operations use separate boundaries.", scenario.reported
+
 				var result domain.ReviewResult
+
 				result.Overview, result.OmissionsAcceptable, result.Findings = "The change updates an operation.", true, []domain.Finding{
 					finding,
 				}
+
 				encoded, err := json.Marshal(result)
 				if err != nil {
 					t.Fatal(err)
@@ -104,7 +109,9 @@ func TestPublishedVerdictUsesTheFindingThreshold(t *testing.T) {
 				}
 
 				var summary review.Summary
+
 				summary.MinimumImportance = scenario.minimum
+
 				summary.Decision = review.DecisionFor(decoded.Findings, scenario.minimum)
 				if summary.Decision != scenario.decision {
 					t.Fatalf(

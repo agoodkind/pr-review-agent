@@ -102,6 +102,7 @@ func TestUsageDetailsDoNotPriceUnpricedCacheWritesAsZero(t *testing.T) {
 						TotalTokens:      scenario.unpricedWrites,
 					},
 				)
+
 				body := review.RenderDetails(review.Summary{Usage: recorder.Summary()})
 				if !strings.Contains(
 					body,

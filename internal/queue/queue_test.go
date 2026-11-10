@@ -16,8 +16,10 @@ func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
 	cache := NewDeliveryCache(100, time.Hour, time.Now)
 	runner := &recordingRunner{}
 	dispatcher := NewDispatcher(1, 1, runner, slog.Default())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dispatcher.Start(ctx)
 
 	job := domain.ReviewJob{DeliveryID: "delivery-concurrent"}
@@ -25,18 +27,24 @@ func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
 		t.Fatal("first claim: want true")
 	}
 
-	var winners int32
-	var waitGroup sync.WaitGroup
+	var (
+		winners   int32
+		waitGroup sync.WaitGroup
+	)
+
 	for range 12 {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
+
 			if cache.Claim(job.DeliveryID) {
 				atomic.AddInt32(&winners, 1)
 			}
 		}()
 	}
+
 	waitGroup.Wait()
+
 	if winners != 0 {
 		t.Fatalf("extra claims = %d, want 0", winners)
 	}
@@ -44,10 +52,12 @@ func TestEndToEndConcurrentDuplicateDeliveryOneReview(t *testing.T) {
 	if !dispatcher.Enqueue(job) {
 		t.Fatal("enqueue: want true")
 	}
+
 	deadline := time.Now().Add(2 * time.Second)
 	for len(runner.snapshot()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
+
 	if got := runner.snapshot(); len(got) != 1 || got[0] != job.DeliveryID {
 		t.Fatalf("processed = %v, want one delivery-concurrent job", got)
 	}
@@ -61,11 +71,13 @@ func TestDeliveryCacheClaimsOnceUntilExpiry(t *testing.T) {
 	if !cache.Claim("delivery-1") {
 		t.Fatal("first claim: want true")
 	}
+
 	if cache.Claim("delivery-1") {
 		t.Fatal("second claim: want false")
 	}
 
 	now = now.Add(2 * time.Minute)
+
 	if !cache.Claim("delivery-1") {
 		t.Fatal("claim after expiry: want true")
 	}
@@ -79,18 +91,23 @@ func TestDeliveryCacheEvictsOldestAtCapacity(t *testing.T) {
 	if !cache.Claim("delivery-1") {
 		t.Fatal("claim delivery-1")
 	}
+
 	if !cache.Claim("delivery-2") {
 		t.Fatal("claim delivery-2")
 	}
+
 	if !cache.Claim("delivery-3") {
 		t.Fatal("claim delivery-3")
 	}
+
 	if cache.Claim("delivery-2") {
 		t.Fatal("delivery-2 should remain claimed")
 	}
+
 	if !cache.Claim("delivery-1") {
 		t.Fatal("delivery-1 should be reclaimable after eviction")
 	}
+
 	if !cache.Claim("delivery-2") {
 		t.Fatal("delivery-2 should be reclaimable after delivery-1 fills the cache again")
 	}
@@ -98,13 +115,18 @@ func TestDeliveryCacheEvictsOldestAtCapacity(t *testing.T) {
 
 func TestDeliveryCacheConcurrentClaimHasOneWinner(t *testing.T) {
 	cache := NewDeliveryCache(100, time.Hour, time.Now)
-	var winners int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
+
+	var (
+		winners int
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+	)
+
 	for range 20 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+
 			if cache.Claim("delivery-1") {
 				mu.Lock()
 				winners++
@@ -112,7 +134,9 @@ func TestDeliveryCacheConcurrentClaimHasOneWinner(t *testing.T) {
 			}
 		}()
 	}
+
 	wg.Wait()
+
 	if winners != 1 {
 		t.Fatalf("winners = %d, want 1", winners)
 	}
@@ -127,11 +151,14 @@ func TestKeyedLockerSerializesSameKeyAndAllowsDifferentKeys(t *testing.T) {
 	unlockFirst := locker.Lock("repo#1")
 	go func() {
 		close(firstRunning)
+
 		unlockSecond := locker.Lock("repo#1")
+
 		close(secondStarted)
 		<-secondDone
 		unlockSecond()
 	}()
+
 	<-firstRunning
 
 	unlockOther := locker.Lock("repo#2")
@@ -144,11 +171,13 @@ func TestKeyedLockerSerializesSameKeyAndAllowsDifferentKeys(t *testing.T) {
 	}
 
 	unlockFirst()
+
 	select {
 	case <-secondStarted:
 	case <-time.After(time.Second):
 		t.Fatal("second same-key lock did not acquire after unlock")
 	}
+
 	close(secondDone)
 }
 
@@ -172,34 +201,42 @@ func (runner *blockingRunner) Run(_ context.Context, job domain.ReviewJob) error
 	case "other":
 		close(runner.secondStarted)
 	}
+
 	return nil
 }
 
 func (runner *recordingRunner) Run(_ context.Context, job domain.ReviewJob) error {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
+
 	runner.order = append(runner.order, job.DeliveryID)
+
 	return runner.err
 }
 
 func (runner *recordingRunner) snapshot() []string {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
+
 	copied := make([]string, len(runner.order))
 	copy(copied, runner.order)
+
 	return copied
 }
 
 func TestDispatcherRejectsWhenFull(t *testing.T) {
 	runner := &recordingRunner{}
 	dispatcher := NewDispatcher(1, 1, runner, slog.Default())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dispatcher.Start(ctx)
 
 	if !dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-1"}) {
 		t.Fatal("first enqueue: want true")
 	}
+
 	if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-2"}) {
 		t.Fatal("second enqueue: want false")
 	}
@@ -212,8 +249,10 @@ func TestDispatcherRunsIndependentJobsConcurrently(t *testing.T) {
 		releaseFirst:  make(chan struct{}),
 	}
 	dispatcher := NewDispatcher(4, 2, runner, slog.Default())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dispatcher.Start(ctx)
 	t.Cleanup(func() {
 		close(runner.releaseFirst)
@@ -233,18 +272,23 @@ func TestDispatcherRunsIndependentJobsConcurrently(t *testing.T) {
 		},
 	}
 	first := samePullRequest
+
 	first.DeliveryID = "same-1"
 	if !dispatcher.Enqueue(first) {
 		t.Fatal("enqueue same-1")
 	}
+
 	<-runner.firstStarted
+
 	for _, deliveryID := range []string{"same-2", "same-3"} {
 		job := samePullRequest
+
 		job.DeliveryID = deliveryID
 		if !dispatcher.Enqueue(job) {
 			t.Fatalf("enqueue %s", deliveryID)
 		}
 	}
+
 	if !dispatcher.Enqueue(independentPullRequest) {
 		t.Fatal("enqueue other")
 	}
@@ -259,8 +303,10 @@ func TestDispatcherRunsIndependentJobsConcurrently(t *testing.T) {
 func TestDispatcherRunsJobsInOrder(t *testing.T) {
 	runner := &recordingRunner{}
 	dispatcher := NewDispatcher(3, 1, runner, slog.Default())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dispatcher.Start(ctx)
 
 	for _, deliveryID := range []string{"delivery-1", "delivery-2", "delivery-3"} {
@@ -270,13 +316,16 @@ func TestDispatcherRunsJobsInOrder(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
+
 	for {
 		if len(runner.snapshot()) == 3 {
 			break
 		}
+
 		if time.Now().After(deadline) {
 			t.Fatalf("order = %v, want 3 jobs", runner.snapshot())
 		}
+
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -289,22 +338,27 @@ func TestDispatcherRunsJobsInOrder(t *testing.T) {
 func TestDispatcherShutdownDrainsAcceptedJobs(t *testing.T) {
 	runner := &recordingRunner{}
 	dispatcher := NewDispatcher(2, 1, runner, slog.Default())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dispatcher.Start(ctx)
 
 	if !dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-1"}) {
 		t.Fatal("enqueue delivery-1")
 	}
+
 	if !dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-2"}) {
 		t.Fatal("enqueue delivery-2")
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer shutdownCancel()
+
 	if err := dispatcher.Shutdown(shutdownCtx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
+
 	if got := runner.snapshot(); len(got) != 2 {
 		t.Fatalf("processed = %v, want 2 jobs", got)
 	}
@@ -316,8 +370,11 @@ func TestDispatcherShutdownRejectsConcurrentEnqueueAndDrainsAcceptedJobs(t *test
 		dispatcher := NewDispatcher(32, 1, runner, slog.Default())
 		dispatcher.Start(context.Background())
 
-		var accepted atomic.Int32
-		var waitGroup sync.WaitGroup
+		var (
+			accepted  atomic.Int32
+			waitGroup sync.WaitGroup
+		)
+
 		for range 16 {
 			waitGroup.Go(func() {
 				if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "concurrent"}) {
@@ -331,11 +388,14 @@ func TestDispatcherShutdownRejectsConcurrentEnqueueAndDrainsAcceptedJobs(t *test
 			cancel()
 			t.Fatalf("Shutdown: %v", err)
 		}
+
 		cancel()
 		waitGroup.Wait()
+
 		if got := len(runner.snapshot()); got != int(accepted.Load()) {
 			t.Fatalf("processed = %d, accepted = %d", got, accepted.Load())
 		}
+
 		if dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "late"}) {
 			t.Fatal("enqueue accepted after shutdown")
 		}
@@ -347,10 +407,13 @@ func TestDispatcherKeepsClaimAfterRunnerFailure(t *testing.T) {
 	if !cache.Claim("delivery-1") {
 		t.Fatal("claim delivery-1")
 	}
+
 	runner := &recordingRunner{err: errors.New("boom")}
 	dispatcher := NewDispatcher(1, 1, runner, slog.Default())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	dispatcher.Start(ctx)
 
 	if !dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "delivery-1"}) {
@@ -361,6 +424,7 @@ func TestDispatcherKeepsClaimAfterRunnerFailure(t *testing.T) {
 	for len(runner.snapshot()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
+
 	if cache.Claim("delivery-1") {
 		t.Fatal("claim should remain reserved after runner failure")
 	}
@@ -370,10 +434,12 @@ func equalStringSlices(left []string, right []string) bool {
 	if len(left) != len(right) {
 		return false
 	}
+
 	for index := range left {
 		if left[index] != right[index] {
 			return false
 		}
 	}
+
 	return true
 }

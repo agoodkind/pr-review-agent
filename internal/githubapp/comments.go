@@ -39,6 +39,7 @@ func (client *Client) ListIssueComments(
 ) ([]IssueComment, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/issues/%d/comments", number))
 	comments := make([]IssueComment, 0)
+
 	err := client.doRESTPaginated(
 		ctx,
 		installationID,

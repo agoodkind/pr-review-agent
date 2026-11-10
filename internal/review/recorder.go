@@ -22,5 +22,6 @@ func renderRunLog(ctx context.Context) string {
 	if !ok {
 		return ""
 	}
+
 	return recorder.Render()
 }

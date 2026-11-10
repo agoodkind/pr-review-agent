@@ -62,6 +62,7 @@ func (cache *tokenCache) get(installationID int64) (string, bool) {
 func (cache *tokenCache) set(installationID int64, value string, expiresAt time.Time) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+
 	cache.tokens[installationID] = installationToken{
 		value:     value,
 		expiresAt: expiresAt,
@@ -134,6 +135,7 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 	}
 
 	path := fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
+
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,

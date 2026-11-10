@@ -17,6 +17,7 @@ func (service *Service) reviewMetadataChunks(
 ) error {
 	for _, chunk := range chunks {
 		var models modelSet
+
 		requests := 0
 		callContext, cancel := detachFromReviewDeadline(ctx, settings.chunkTimeout)
 		analysis, reviewErr := reviewChunk(
@@ -32,7 +33,9 @@ func (service *Service) reviewMetadataChunks(
 			&requests,
 			service.now,
 		)
+
 		cancel()
+
 		if reviewErr != nil {
 			return reviewErr
 		}
@@ -68,6 +71,7 @@ func (service *Service) reviewMetadataChunks(
 				}
 
 				seen[key] = struct{}{}
+
 				record.Findings = append(record.Findings, finding)
 			}
 		}

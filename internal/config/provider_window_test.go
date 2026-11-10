@@ -31,6 +31,7 @@ func TestLoadedWindowAndTokenTypesDetermineAdmission(t *testing.T) {
 			Usage:        quota.Usage{InputTokens: 50, OutputTokens: 900, TotalTokens: 950},
 		},
 	}
+
 	snapshot, err := quota.Evaluate(
 		provider.TokenWindow,
 		now,

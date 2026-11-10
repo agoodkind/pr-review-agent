@@ -165,6 +165,7 @@ func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
 // FindFinding extracts a finding marker from a comment body.
 func FindFinding(body string) (FindingMarker, bool) {
 	var empty FindingMarker
+
 	matches := findingPattern.FindStringSubmatch(body)
 	if len(matches) != 9 {
 		return empty, false
@@ -314,6 +315,7 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 
 	title := strings.TrimSpace(finding.Title)
 	body := strings.TrimSpace(finding.Body)
+
 	parts := []string{
 		"### " + title,
 		body,
@@ -335,6 +337,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 
 	markerRange := findingPattern.FindStringIndex(comment.Body)
+
 	withoutMarker := strings.TrimSpace(comment.Body[:markerRange[0]])
 	if !strings.HasPrefix(withoutMarker, "### ") {
 		return "", domain.Finding{}, errors.New("finding title missing")
@@ -348,6 +351,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	title := strings.TrimSpace(withoutMarker[len("### "):titleEnd])
 	body := strings.TrimSpace(withoutMarker[titleEnd+2:])
 	suggestion := ""
+
 	suggestionSeparator := "\n\n" + suggestionPrefix
 	if suggestionStart := strings.LastIndex(body, suggestionSeparator); suggestionStart >= 0 {
 		if !strings.HasSuffix(body, suggestionSuffix) {
@@ -409,6 +413,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 // NormalizePath canonicalizes a repository-relative path for marker hashing.
 func NormalizePath(value string) (string, error) {
 	normalized := strings.ReplaceAll(value, "\\", "/")
+
 	normalized = path.Clean(normalized)
 	if normalized == "." || normalized == "" {
 		return "", errors.New("path is empty")
@@ -440,6 +445,7 @@ func FindingID(finding domain.Finding) (string, error) {
 	buffer.WriteString(normalizedPath)
 	writeLengthHex(&buffer, len(title))
 	buffer.WriteString(title)
+
 	if finding.Deduplication == reviewrules.DeduplicateLocation {
 		fmt.Fprintf(&buffer, ":%d:%d", finding.StartLine, finding.EndLine)
 	}

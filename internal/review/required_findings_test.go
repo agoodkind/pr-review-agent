@@ -51,6 +51,7 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 	model := &sequenceModel{
 		results: []domain.ReviewResult{{Findings: []domain.Finding{finding, titleFinding, inline}}},
 	}
+
 	fixture, _ := newContentCollectionFixture(
 		t,
 		model,
@@ -75,8 +76,12 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 	nativeID := fixture.state.submittedReviews[1]["id"]
 	threadID := fixture.state.threadNodes[0]["id"]
 	inlineBody := fmt.Sprint(fixture.state.streamedComments[0]["body"])
-	const reportStart = "<!-- pr-review-agent:report-section:start -->"
-	const reportEnd = "<!-- pr-review-agent:report-section:end -->"
+
+	const (
+		reportStart = "<!-- pr-review-agent:report-section:start -->"
+		reportEnd   = "<!-- pr-review-agent:report-section:end -->"
+	)
+
 	_, report, found := strings.Cut(failureSummaryComment(t, fixture), reportStart)
 	if !found {
 		t.Fatal("The summary must identify the start of its report.")
@@ -110,6 +115,7 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 					content,
 					body,
 				)
+
 				break
 			}
 
@@ -146,6 +152,7 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 		}
 
 		inlineReview := fixture.state.submittedReviews[0]
+
 		emptyBody, _ := inlineReview["body"].(string)
 		if inlineReview["id"] != inlineReviewID || inlineReview["state"] != "CHANGES_REQUESTED" ||
 			emptyBody != "" {
@@ -153,6 +160,7 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 		}
 
 		native := fixture.state.submittedReviews[1]
+
 		body, ok := native["body"].(string)
 		if !ok || native["state"] != "CHANGES_REQUESTED" {
 			t.Fatalf("The metadata finding must remain in a native rejection: %v.", native)
@@ -226,6 +234,7 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 					body = strings.ReplaceAll(body, reportEnd, "")
 					verdict := strings.Index(body, "<!-- pr-review-agent:verdict-section:start -->")
 					summary := strings.Index(body, "\n### Summary\n")
+
 					details := strings.Index(body, "<details>")
 					if verdict < 0 || summary < 0 || details < 0 {
 						t.Fatal(
@@ -254,12 +263,14 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 
 				fixture.state.issueComments[0]["body"] = body
 				job := fixture.job()
+
 				job.DeliveryID = scenario
 				if err := fixture.run(t.Context(), job); err != nil {
 					t.Fatal(err)
 				}
 
 				assertPublished(t)
+
 				if len(model.prompts) != 1 {
 					t.Fatal("The verdict refresh must reuse the completed metadata assessment.")
 				}
@@ -291,6 +302,7 @@ func TestServiceUsesMetadataDisplayAtTheNativeReview(t *testing.T) {
 				)
 				policy := loadFindingPolicy(t, display)
 				logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
 				fixture.service = review.NewService(
 					fixture.github,
 					diff.NewCollector(fixture.github),
@@ -320,6 +332,7 @@ func TestServiceUsesMetadataDisplayAtTheNativeReview(t *testing.T) {
 				}
 
 				summary := failureSummaryComment(t, fixture)
+
 				stored := retainedMetadataFindings(t, summary)
 				if len(stored) != 1 || stored[0].Body != finding.Body ||
 					stored[0].CorrectionAction != finding.CorrectionAction ||
@@ -339,6 +352,7 @@ func TestServiceUsesMetadataDisplayAtTheNativeReview(t *testing.T) {
 				}
 
 				native := fixture.state.submittedReviews[0]
+
 				body, ok := native["body"].(string)
 				if !ok || native["state"] != "CHANGES_REQUESTED" ||
 					!strings.Contains(
@@ -353,6 +367,7 @@ func TestServiceUsesMetadataDisplayAtTheNativeReview(t *testing.T) {
 
 				for _, content := range []string{finding.Title, finding.Body, finding.Suggestion} {
 					position := strings.Index(body, content)
+
 					switch display {
 					case reviewrules.FindingsExpanded:
 						if position < 0 || strings.Count(body, content) != 1 ||
@@ -390,6 +405,7 @@ func TestServicePublishesMetadataWithoutAnExactCorrection(t *testing.T) {
 	finding.CorrectionAction = domain.CorrectionNone
 	finding.Suggestion = ""
 	model := &sequenceModel{results: []domain.ReviewResult{{Findings: []domain.Finding{finding}}}}
+
 	fixture, _ := newContentCollectionFixture(
 		t,
 		model,
@@ -407,6 +423,7 @@ func TestServicePublishesMetadataWithoutAnExactCorrection(t *testing.T) {
 	}
 
 	native := fixture.state.submittedReviews[0]
+
 	body, ok := native["body"].(string)
 	if !ok || native["state"] != "CHANGES_REQUESTED" || strings.Count(body, finding.Title) != 1 ||
 		strings.Count(body, finding.Body) != 1 {
@@ -454,6 +471,7 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 				seedMetadataReassessment(t, fixture, []domain.Finding{prior}, true)
 				summaryID := fixture.state.issueComments[0]["id"]
 				job := fixture.job()
+
 				job.MetadataOnly = true
 				if operation != "submit" {
 					body := marker.Review(job.Head, domain.ReviewDecisionRequestChanges)
@@ -486,6 +504,7 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 				}
 
 				body := failureSummaryComment(t, fixture)
+
 				stored := retainedMetadataFindings(t, body)
 				if len(stored) != 1 || stored[0].Body != finding.Body ||
 					stored[0].Suggestion != finding.Suggestion ||
@@ -518,6 +537,7 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 
 				fixture.state.updateReviewStatus = http.StatusOK
 				fixture.state.submitReviewStatus = http.StatusOK
+
 				job.DeliveryID = "native-publication-recovered"
 				if err := fixture.run(t.Context(), job); err != nil {
 					t.Fatal(err)
@@ -542,6 +562,7 @@ func TestMetadataPublicationRetryReusesTheSavedAssessment(t *testing.T) {
 				}
 
 				metadataReviewCount := 0
+
 				var metadataReviewID int64
 
 				for _, native := range reviews {
@@ -627,6 +648,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 						currentDescription: func() string { return current },
 					},
 				)
+
 				job := fixture.job()
 				if err := fixture.run(t.Context(), job); err != nil {
 					t.Fatal(err)
@@ -641,6 +663,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 				summaryID := fixture.state.issueComments[0]["id"]
 				original := fixture.state.submittedReviews[0]
 				originalID := original["id"]
+
 				body, ok := original["body"].(string)
 				if !ok {
 					t.Fatal("The original metadata rejection must contain its full body.")
@@ -671,6 +694,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 					Metadata:         []domain.Finding{finding},
 					MetadataRevision: diff.PullRequestRevision(pullRequest),
 				}
+
 				if scenario == "legacy summary link" {
 					visible = fmt.Sprintf(
 						"[Review summary](https://github.com/owner/repo/pull/7#issuecomment-%.0f)\n\n",
@@ -681,6 +705,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 				originalBody := visible + review.RenderVerdictBody(oldSummary)
 				original["commit_id"] = testStaleHeadSHA
 				original["body"] = originalBody
+
 				if scenario == "changed" || scenario == "publication retry" {
 					current = "Changed summary fragment"
 					finding.Title = "Explain the changed review projection"
@@ -698,6 +723,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 
 				job.DeliveryID = "cross-head-projection"
 				job.MetadataOnly = true
+
 				if scenario == "publication retry" {
 					fixture.state.submitReviewStatus = http.StatusInternalServerError
 					if err := fixture.run(t.Context(), job); err == nil {
@@ -745,6 +771,7 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 
 				assertPublished := func(t *testing.T) {
 					t.Helper()
+
 					if original["id"] != originalID || original["commit_id"] != testStaleHeadSHA ||
 						original["body"] != originalBody {
 						t.Fatal(
@@ -766,7 +793,9 @@ func TestCrossHeadMetadataProjectionPreservesHistoricalReviews(t *testing.T) {
 					}
 				}
 				assertPublished(t)
+
 				freshCalls, reassessmentCalls := len(model.prompts), len(model.metadataPrompts)
+
 				var currentReviewID any
 				if scenario != "unchanged" {
 					currentReviewID = fixture.state.submittedReviews[1]["id"]

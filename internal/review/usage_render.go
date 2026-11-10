@@ -8,6 +8,7 @@ import (
 func renderUsageDetails(usage UsageSummary) string {
 	var builder strings.Builder
 	builder.WriteString("\n#### Model usage\n\n| | |\n| --- | --- |\n")
+
 	if usage.ReportedRequests == 0 {
 		fmt.Fprintf(
 			&builder,
@@ -56,6 +57,7 @@ func renderUsageDetails(usage UsageSummary) string {
 		usage.PricedRequests,
 		usage.ReportedRequests,
 	)
+
 	if usage.PricedRequests < usage.ReportedRequests {
 		builder.WriteString(
 			"\nSome reported token usage has no configured price. The estimate excludes its cost.\n",

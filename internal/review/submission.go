@@ -17,7 +17,9 @@ func (service *Service) publishStandingVerdict(
 	logger *slog.Logger,
 ) error {
 	var err error
+
 	standing := service.standingVerdict(job, reviews, summary)
+
 	withdrawnByHuman := false
 	if summary.Decision == domain.ReviewDecisionRequestChanges {
 		withdrawnByHuman, err = service.preserveDismissedRejection(ctx, job, reviews)
@@ -27,6 +29,7 @@ func (service *Service) publishStandingVerdict(
 	}
 
 	decisionState := reviewStateFor(summary.Decision)
+
 	unchanged := standing.found && !standing.withdrawn &&
 		standing.review.State == decisionState &&
 		latestBotVerdictState(reviews, service.botLogin) == decisionState

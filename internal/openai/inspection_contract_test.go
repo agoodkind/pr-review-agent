@@ -67,8 +67,10 @@ func TestNativeInspectionContractRequiresAnExplicitArrayWithoutTextFormat(t *tes
 							},
 						)
 					}
+
 					server := newProviderServer(state)
 					defer server.Close()
+
 					client := openai.NewClient(
 						config.Config{
 							ReviewPolicy:      policytest.Load(t),
@@ -87,6 +89,7 @@ func TestNativeInspectionContractRequiresAnExplicitArrayWithoutTextFormat(t *tes
 						server.Client(),
 					)
 					ctx, recorder := review.WithUsageRecorder(t.Context())
+
 					var completion review.Completion
 					if classification {
 						completion, err = client.ClassifyFileContent(

@@ -39,6 +39,7 @@ func updateExecution(trigger *Trigger, message string) {
 
 func triggerFromRun(run cloudflareops.Run, created time.Time, head string) (Trigger, bool) {
 	var trigger Trigger
+
 	trigger.RunID, trigger.FailureObserved = run.ID, run.FailureObserved
 	trigger.ExecutionStatus = "terminal_unknown"
 
@@ -52,6 +53,7 @@ func triggerFromRun(run cloudflareops.Run, created time.Time, head string) (Trig
 		}
 
 		updateExecution(&trigger, event.Message)
+
 		if event.Message != "webhook delivery accepted" {
 			continue
 		}
@@ -94,6 +96,7 @@ func triggersFor(runs []cloudflareops.Run, created time.Time, head string) []Tri
 
 func publicationBoundary(item *Revisit, runs []cloudflareops.Run) {
 	item.TriggerBoundary = item.CreatedAt.Add(time.Second)
+
 	item.TriggerBoundarySource = "github_timestamp_second_upper_bound"
 	if item.Kind != "review" {
 		return
@@ -314,11 +317,13 @@ func requiredThreadResolution(pr PullRequest, thread Thread) *bool {
 
 func newThreadRevisit(pr PullRequest, thread Thread, target Target, minimumImportance int) Revisit {
 	var item Revisit
+
 	root := thread.Comments.Nodes[0]
 	item.Target, item.Kind, item.ID = target, "thread", thread.ID
 	item.CreatedAt, item.PullRequestState = root.CreatedAt, pr.State
 	item.Draft, item.Resolved = pr.IsDraft, thread.IsResolved
 	item.BlocksThreadResolution = requiredThreadResolution(pr, thread)
+
 	finding, found := marker.FindFinding(root.Body)
 	if !found {
 		return item

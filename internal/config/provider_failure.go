@@ -27,6 +27,7 @@ func ResolveProviderFailurePolicy(policy ProviderFailurePolicy) ProviderFailureP
 // LoadProviderFailurePolicy rejects unknown policy values before provider requests.
 func LoadProviderFailurePolicy(lookup LookupEnv) (ProviderFailurePolicy, error) {
 	value, _ := lookup("PROVIDER_FAILURE_POLICY")
+
 	policy := ResolveProviderFailurePolicy(ProviderFailurePolicy(value))
 	switch policy {
 	case ProviderAnyFailure, ProviderRecoverableFailure:

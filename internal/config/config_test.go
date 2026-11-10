@@ -144,6 +144,7 @@ func TestLoadRejectsAPartialFallback(t *testing.T) {
 			present,
 			func(t *testing.T) {
 				only := map[string]string{present: completeFallback(map[string]string{})[present]}
+
 				_, err := loadWithOverrides(only)
 				if err == nil {
 					t.Fatalf("Load with only %s: want error", present)
@@ -237,6 +238,7 @@ func TestLoadAcceptsTheUsageExceededTrigger(t *testing.T) {
 
 func TestFallbackFailureNeverNamesASecretValue(t *testing.T) {
 	fallbackKey := "fixture-fallback-key-" + strings.Repeat("z", 12)
+
 	_, err := loadWithOverrides(map[string]string{"FALLBACK_API_KEY": fallbackKey})
 	if err == nil {
 		t.Fatal("Load with only FALLBACK_API_KEY: want error")
@@ -273,6 +275,7 @@ func TestLoadParsesPKCS1AndPKCS8RSAKeys(t *testing.T) {
 			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
 		}),
 	)
+
 	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
 		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
@@ -475,6 +478,7 @@ func TestLoadRejectsPlaintextClydeURL(t *testing.T) {
 
 func TestLoadErrorsDoNotContainSecretValues(t *testing.T) {
 	secret := "fixture-" + strings.Repeat("z", 12)
+
 	_, err := loadWithOverrides(map[string]string{
 		"GITHUB_WEBHOOK_SECRET": "",
 		"CLYDE_API_KEY":         secret,
@@ -561,6 +565,7 @@ func TestLoadRuntimeUsesFileSettingsAndEnvironmentSecrets(t *testing.T) {
 		}
 	}`,
 	)
+
 	cfg, err := LoadRuntime(data, lookup)
 	if err != nil {
 		t.Fatalf("LoadRuntime: %v", err)
@@ -708,6 +713,7 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 		}),
 	)
 	runtimePath := filepath.Join("..", "..", "runtime.json")
+
 	runtimeData, err := os.ReadFile(runtimePath)
 	if err != nil {
 		return nil, err

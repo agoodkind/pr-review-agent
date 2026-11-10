@@ -24,6 +24,7 @@ func (pass *chunkPass) recordOverview(chunk int, overview string) {
 
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	pass.overviewByChunk[chunk] = append(pass.overviewByChunk[chunk], overview)
 }
 
@@ -38,6 +39,7 @@ func (pass *chunkPass) overviews() []string {
 	}
 
 	sort.Ints(chunks)
+
 	ordered := make([]string, 0, len(pass.overviewByChunk))
 
 	for _, chunk := range chunks {
@@ -52,6 +54,7 @@ func (pass *chunkPass) overviews() []string {
 func (pass *chunkPass) recordReportModel(name string) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	pass.models.add(name)
 	pass.requests++
 }
@@ -70,6 +73,7 @@ func (service *Service) publishCompletedReview(
 	report, reportCalled := service.generateReport(ctx, pullRequest, pass)
 	summary.Report = report
 	summary.Models = pass.analysis().Models
+
 	summary.Usage = UsageFromContext(ctx)
 	if reportCalled {
 		current, err := service.github.GetPullRequest(
@@ -112,6 +116,7 @@ func (service *Service) updateVerdictBody(
 	}
 
 	logger := gklog.L(ctx)
+
 	_, err := service.github.UpdateReview(
 		ctx,
 		job.InstallationID,
@@ -134,6 +139,7 @@ func (service *Service) generateReport(
 	pass *chunkPass,
 ) (Report, bool) {
 	fallback := SanitizeReport(fallbackReport(pass.overviews()), service.reviewPolicy.Limits())
+
 	reporter, ok := service.model.(Reporter)
 	if !ok {
 		return fallback, false
@@ -141,6 +147,7 @@ func (service *Service) generateReport(
 
 	reportCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	defer cancel()
+
 	prompt, err := BuildReportPrompt(
 		service.model,
 		pullRequest,
@@ -160,6 +167,7 @@ func (service *Service) generateReport(
 	}
 
 	pass.recordReportModel(completion.Model)
+
 	report := SanitizeReport(completion.Report, service.reviewPolicy.Limits())
 	if err := report.Validate(); err != nil {
 		gklog.L(ctx).ErrorContext(
@@ -200,13 +208,16 @@ func BuildReportPrompt(
 		maximumBytes,
 		func(context string, omitted bool) (string, error) {
 			var data reviewrules.PromptData
+
 			data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(context))
+
 			prompt, err := renderPrompt(policy, "report.input", data)
 			if err != nil || !omitted {
 				return prompt, err
 			}
 
 			var noteData reviewrules.PromptData
+
 			note, err := renderPrompt(policy, "report.context_omitted", noteData)
 
 			return prompt + "\n\n" + note, err

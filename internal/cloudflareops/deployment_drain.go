@@ -72,6 +72,7 @@ func (operation *deployment) registerDeploymentToken(
 
 func (operation *deployment) writeDeploymentToken(ctx context.Context, script string) error {
 	digest := sha256.Sum256([]byte(operation.client.token))
+
 	body, err := json.Marshal(
 		struct {
 			Name string `json:"name"`
@@ -116,8 +117,10 @@ func (operation *deployment) waitDrainControl(
 	action string,
 ) (drainState, error) {
 	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
 	var lastError error
 
 	for {
@@ -148,6 +151,7 @@ func (operation *deployment) waitDrainControl(
 		}
 
 		lastError = err
+
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
@@ -175,6 +179,7 @@ func (operation *deployment) drainRequest(
 	action string,
 ) (drainState, error) {
 	var status drainStatusWire
+
 	body, err := json.Marshal(
 		struct {
 			Action string `json:"action"`
@@ -198,6 +203,7 @@ func (operation *deployment) drainRequest(
 
 	request.Header.Set("Authorization", "Bearer "+operation.client.token)
 	request.Header.Set("Content-Type", "application/json")
+
 	response, err := operation.healthClient.Do(request)
 	if err != nil {
 		slog.WarnContext(ctx, "Candidate drain transport failed")
@@ -205,6 +211,7 @@ func (operation *deployment) drainRequest(
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	if response.StatusCode == http.StatusUnauthorized {
 		return nil, errDeploymentCredentialInactive
 	}
@@ -270,8 +277,10 @@ func (operation *deployment) beginDrain(
 
 func (operation *deployment) waitDrained(ctx context.Context, slot DeploymentSlot) error {
 	timeout, interval := operation.configuration.candidateTimeout, operation.configuration.probeInterval
+
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+
 	status, err := operation.beginDrain(ctx, slot)
 	if err != nil {
 		return err

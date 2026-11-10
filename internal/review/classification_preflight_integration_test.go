@@ -25,6 +25,7 @@ func TestPreflightPreservesOneHundredCompletedAssessmentsWithinTheCommentLimit(t
 	files := classificationGitSources(t, 100, reviewrules.ContentSource)
 	input := diff.ReviewInput{Files: files}
 	policy := policytest.Load(t)
+
 	decisions, unresolved, err := review.PlanFileAssessments(input, policy)
 	if err != nil || len(unresolved) != 0 || len(decisions) != len(files) {
 		t.Fatalf("Every changed source file requires a durable assessment before review: %v", err)
@@ -36,7 +37,9 @@ func TestPreflightPreservesOneHundredCompletedAssessmentsWithinTheCommentLimit(t
 	}
 
 	const prefix = "<!-- pr-review-agent:file-assessments:v1 "
+
 	initialSize := len(prefix) + base64.RawURLEncoding.EncodedLen(len(uncompleted)) + len(" -->")
+
 	limited := assessmentPolicyStorageLimit(t, initialSize)
 	if _, _, err := review.PlanFileAssessments(input, limited); !errors.Is(
 		err,
@@ -58,6 +61,7 @@ func TestPreflightPreservesOneHundredCompletedAssessmentsWithinTheCommentLimit(t
 		CoverageComplete:           true,
 		Decision:                   domain.ReviewDecisionApprove,
 	}
+
 	body := review.RenderBody(summary)
 	if len(body) > 65536 {
 		t.Fatalf(
@@ -72,6 +76,7 @@ func TestPreflightPreservesOneHundredCompletedAssessmentsWithinTheCommentLimit(t
 	}
 
 	encoded, _, _ = strings.Cut(encoded, " -->")
+
 	data, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +111,7 @@ func classificationGitSources(
 		t.Helper()
 		process := exec.CommandContext(t.Context(), "git", arguments...)
 		process.Dir = directory
+
 		output, err := process.CombinedOutput()
 		if err != nil {
 			t.Fatalf("Git %s failed: %v\n%s", arguments[0], err, output)
@@ -114,7 +120,9 @@ func classificationGitSources(
 		return string(output)
 	}
 	command("init", "--quiet")
+
 	before, after, extension := "package sample\nconst Value = 1\n", "package sample\nconst Value = 2\n", "go"
+
 	switch kind {
 	case reviewrules.ContentSource:
 	case reviewrules.ContentGenerated:
@@ -147,6 +155,7 @@ func classificationGitSources(
 		"-m",
 		"Create classification source\n\nCo-authored-by: Codex <noreply@openai.com>",
 	)
+
 	var files []diff.FileContext
 
 	for index := range count {
@@ -156,6 +165,7 @@ func classificationGitSources(
 		}
 
 		patch := command("diff", "--unified=0", "--", name)
+
 		lines, hunks, err := diff.ChangedRightLines(patch)
 		if err != nil {
 			t.Fatal(err)
@@ -214,6 +224,7 @@ func TestPreflightExcludesArtifactsBeforeCreatingContentRequests(t *testing.T) {
 		Files: []diff.FileContext{lockfile, generated, manifest, vendor, compiled, binary},
 	}
 	policy := policytest.Load(t)
+
 	decisions, unresolved, err := review.PlanFileAssessments(input, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -237,10 +248,12 @@ func TestPreflightExcludesArtifactsBeforeCreatingContentRequests(t *testing.T) {
 	}
 
 	assertPlannedChangedRows(t, planned, manifest)
+
 	model := openai.NewClient(
 		config.Config{ReviewPolicy: policy, MinimumImportance: 7, ReviewModel: "configured-model"},
 		nil,
 	)
+
 	prompt, err := review.BuildFileAssessmentPrompt(
 		model,
 		githubapp.PullRequest{},
@@ -283,6 +296,7 @@ func TestPreflightReviewOverridesAndAttributesControlGeneratedExclusions(t *test
 	policy := policytest.Load(t)
 	file.Attributes = map[string]string{"linguist-generated": "true", "custom": "value"}
 	input := diff.ReviewInput{Files: []diff.FileContext{file}}
+
 	decisions, unresolved, err := review.PlanFileAssessments(input, policy)
 	if err != nil || len(unresolved) != 0 || len(decisions) != 1 ||
 		!decisions[0].PermitsContentExclusion() {
@@ -291,6 +305,7 @@ func TestPreflightReviewOverridesAndAttributesControlGeneratedExclusions(t *test
 
 	identity := decisions[0].Identity
 	file.Attributes = map[string]string{"custom": "value", "linguist-generated": "true"}
+
 	reordered, _, err := review.PlanFileAssessments(
 		diff.ReviewInput{Files: []diff.FileContext{file}},
 		policy,
@@ -301,6 +316,7 @@ func TestPreflightReviewOverridesAndAttributesControlGeneratedExclusions(t *test
 
 	file.Attributes["linguist-generated"] = "false"
 	input.Files[0] = file
+
 	decisions, unresolved, err = review.PlanFileAssessments(input, policy)
 	if err != nil || len(unresolved) != 0 || len(decisions) != 1 ||
 		decisions[0].Action != domain.FileActionReview ||
@@ -314,6 +330,7 @@ func TestPreflightReviewOverridesAndAttributesControlGeneratedExclusions(t *test
 	file.Attributes["linguist-generated"] = "true"
 	input.Files[0] = file
 	override := classificationReviewOverridePolicy(t, file.Path)
+
 	decisions, unresolved, err = review.PlanFileAssessments(input, override)
 	if err != nil || len(unresolved) != 0 || len(decisions) != 1 ||
 		decisions[0].ContentReviewRequirement != domain.ContentReviewRequired {
@@ -328,6 +345,7 @@ func TestPreflightReviewOverridesAndAttributesControlGeneratedExclusions(t *test
 		domain.FileActionExclude,
 		reviewrules.ContentGenerated,
 	)
+
 	planned, _, err := review.PlanFileContentReview(
 		input,
 		[]domain.FileAssessment{attemptedExclusion},
@@ -350,6 +368,7 @@ func TestPreflightRetainsOpaqueContentAndRetrievalFailuresForAssessment(t *testi
 	lockfile := classificationGitFile(t, "package-lock.json", "{}\n", "{\"version\":2}\n")
 	lockfile.Gap = diff.CoverageGapContentUnavailable
 	lockfile.CoverageComplete = false
+
 	decisions, unresolved, err := review.PlanFileAssessments(
 		diff.ReviewInput{Files: []diff.FileContext{vault, lockfile}},
 		policytest.Load(t),
@@ -364,9 +383,11 @@ func TestPreflightRetainsOpaqueContentAndRetrievalFailuresForAssessment(t *testi
 
 func TestRemovedUnknownContentRemainsAvailableForContextualAssessment(t *testing.T) {
 	const removedContent = "opaque payload requiring contextual assessment\n"
+
 	removed := classificationGitFile(t, "settings.unknown-extension", removedContent, "")
 	policy := policytest.Load(t)
 	input := diff.ReviewInput{Files: []diff.FileContext{removed}}
+
 	decisions, unresolved, err := review.PlanFileAssessments(input, policy)
 	if err != nil || len(decisions) != 0 || len(unresolved) != 1 {
 		t.Fatalf("An unknown removed file requires contextual assessment: %v", err)
@@ -376,6 +397,7 @@ func TestRemovedUnknownContentRemainsAvailableForContextualAssessment(t *testing
 		config.Config{ReviewPolicy: policy, MinimumImportance: 7, ReviewModel: "configured-model"},
 		nil,
 	)
+
 	prompt, err := review.BuildFileAssessmentPrompt(
 		model,
 		githubapp.PullRequest{},
@@ -411,6 +433,7 @@ func TestRemovedUnknownContentRemainsAvailableForContextualAssessment(t *testing
 		"earlier opaque payload\n",
 		"another opaque payload\n",
 	)
+
 	prompt, err = review.BuildFileAssessmentPrompt(
 		model,
 		githubapp.PullRequest{},
@@ -436,12 +459,14 @@ func TestRemovedUnknownContentRemainsAvailableForContextualAssessment(t *testing
 		domain.FileActionReview,
 		reviewrules.ContentSource,
 	)
+
 	_, reference, found := strings.Cut(prompt, "Related evidence ID: ")
 	if !found {
 		t.Fatal("The request must identify the supplied removed evidence.")
 	}
 
 	reference, _, _ = strings.Cut(reference, "\n")
+
 	assessment.Evidence = append(assessment.Evidence, reference)
 	if _, _, err := review.PlanFileContentReview(
 		diff.ReviewInput{Files: []diff.FileContext{other, removed}},
@@ -463,6 +488,7 @@ func TestPreflightPreservesOneHundredExcludedAssessmentsWithinTheCommentLimit(t 
 				files := classificationGitSources(t, 100, kind)
 				input := diff.ReviewInput{Files: files}
 				policy := policytest.Load(t)
+
 				decisions, unresolved, err := review.PlanFileAssessments(input, policy)
 				if err != nil || len(unresolved) != 0 || len(decisions) != len(files) {
 					t.Fatalf("Every excluded artifact requires a durable assessment: %v", err)
@@ -480,6 +506,7 @@ func TestPreflightPreservesOneHundredExcludedAssessmentsWithinTheCommentLimit(t 
 					OmissionsAccepted:          true,
 					Decision:                   domain.ReviewDecisionApprove,
 				}
+
 				body := review.RenderBody(summary)
 				if len(body) > 65536 {
 					t.Fatalf(
@@ -494,6 +521,7 @@ func TestPreflightPreservesOneHundredExcludedAssessmentsWithinTheCommentLimit(t 
 				}
 
 				encoded, _, _ = strings.Cut(encoded, " -->")
+
 				data, err := base64.RawURLEncoding.DecodeString(encoded)
 				if err != nil {
 					t.Fatal(err)
@@ -548,6 +576,7 @@ func TestPreflightRecognizesConfiguredGenerationHeadersInChangedAndRemovedFiles(
 					}
 
 					file := classificationGitFile(t, source.path, before, after)
+
 					decisions, unresolved, err := review.PlanFileAssessments(
 						diff.ReviewInput{Files: []diff.FileContext{file}},
 						policy,
@@ -570,6 +599,7 @@ func TestPreflightRecognizesConfiguredGenerationHeadersInChangedAndRemovedFiles(
 		"# Earlier guide\n",
 		"# Guide\n\nThis guide explains generated files.\n\n```sh\n# This file is generated. Do not edit.\n```\n",
 	)
+
 	decisions, unresolved, err := review.PlanFileAssessments(
 		diff.ReviewInput{Files: []diff.FileContext{guide}},
 		policy,
@@ -585,6 +615,7 @@ func TestPreflightRecognizesConfiguredGenerationHeadersInChangedAndRemovedFiles(
 
 func classificationReviewOverridePolicy(t *testing.T, pattern string) reviewrules.Policy {
 	t.Helper()
+
 	data, err := os.ReadFile(filepath.Join("..", "..", "config", "review-prompts.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -597,6 +628,7 @@ func classificationReviewOverridePolicy(t *testing.T, pattern string) reviewrule
 
 	settings := policytest.Load(t).FileClassification()
 	settings.ReviewOverrides = []string{pattern}
+
 	prompts["file_classification"], err = json.Marshal(settings)
 	if err != nil {
 		t.Fatal(err)

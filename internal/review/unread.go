@@ -41,6 +41,7 @@ func appendOmissionPreviews(
 			escapeOmissionPromptText(hunk.Path, policy),
 			len(content),
 		)
+
 		previewBudget := metadataBudget - metadata.Len() - len(header) - len("\n\n")
 		if previewBudget <= 0 {
 			break
@@ -51,6 +52,7 @@ func appendOmissionPreviews(
 			min(settings.MaximumPreviewBytes, previewBudget),
 			policy,
 		)
+
 		metadata.WriteString(header)
 		metadata.WriteString(preview)
 		metadata.WriteString("\n\n")
@@ -67,6 +69,7 @@ func appendOmissionPreviews(
 			assessmentIdentity(file, policy),
 			escapeOmissionPromptText(file.Path, policy),
 		)
+
 		remaining := metadataBudget - metadata.Len() - len(header) - len("\n\n")
 		if remaining <= 0 {
 			break
@@ -77,6 +80,7 @@ func appendOmissionPreviews(
 			min(settings.MaximumPreviewBytes, remaining),
 			policy,
 		)
+
 		metadata.WriteString(header)
 		metadata.WriteString(preview)
 		metadata.WriteString("\n\n")
@@ -92,9 +96,11 @@ func (service *Service) pendingScopeNotice(
 	cause error,
 ) (string, string, error) {
 	var scopeData reviewrules.PromptData
+
 	scopeData.Input = renderUnreadHunks(shortfall.Hunks)
 	scopeData.Index = len(shortfall.Hunks)
 	scopeData.Total = len(state.Pending)
+
 	notice, err := renderPrompt(service.reviewPolicy, "coverage.pending", scopeData)
 	if err != nil {
 		return "", "", err
@@ -136,6 +142,7 @@ func (service *Service) completeIncompletePublication(
 		slog.Int("pending", len(publication.state.Pending)),
 		slog.Int64("check_run_id", publication.checkRunID),
 	)
+
 	if dismissErr != nil {
 		logger.WarnContext(
 			ctx,

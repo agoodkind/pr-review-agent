@@ -51,6 +51,7 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 		policy            config.ProviderFailurePolicy
 		resolution        domain.Resolution
 		invalidSecondary  bool
+		emptyNativeBody   bool
 		expectFailure     bool
 		expectApproval    bool
 		expectSecondCalls int
@@ -73,6 +74,15 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 			policy:            config.ProviderAnyFailure,
 			resolution:        domain.ResolutionResolved,
 			invalidSecondary:  true,
+			expectFailure:     true,
+			expectSecondCalls: 1,
+		},
+		{
+			name:              "saved finding with empty native body",
+			policy:            config.ProviderAnyFailure,
+			resolution:        domain.ResolutionResolved,
+			invalidSecondary:  true,
+			emptyNativeBody:   true,
 			expectFailure:     true,
 			expectSecondCalls: 1,
 		},
@@ -299,7 +309,11 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 
 				assertMetadataRejectionStillStands(t, fixture)
 				initialSummaryID := fixture.state.issueComments[0]["id"]
+
 				originalRejection := fixture.state.submittedReviews[0]
+				if scenario.emptyNativeBody {
+					originalRejection["body"] = ""
+				}
 
 				capture.mu.Lock()
 				initialRequests := capture.requests

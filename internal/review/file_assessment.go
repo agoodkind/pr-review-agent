@@ -117,6 +117,7 @@ func validateFileAssessmentsDetailed(
 		seen[assessment.Path] = true
 		assessment.Reason = sanitizeDecisionReason(assessment.Reason)
 		reviewed := assessment.Action == domain.FileActionReview && assessment.Reviewed
+
 		excluded := !assessment.Reviewed && permittedContentExclusion(assessment, file, policy)
 		if !reviewed && !excluded {
 			accepted = false
@@ -222,6 +223,7 @@ func validateAssessmentFields(
 func (pass *chunkPass) fileWasReviewed(path string) bool {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	file, exists := BuildFileIndex(pass.work.Files)[path]
 	if !exists || !file.CoverageComplete {
 		return false
@@ -235,6 +237,7 @@ func (pass *chunkPass) fileWasReviewed(path string) bool {
 		}
 
 		found = true
+
 		if !chunk.CoverageComplete || !pass.reviewedChunks[chunkID(chunk)] {
 			return false
 		}
@@ -307,6 +310,7 @@ func (pass *chunkPass) seedFileAssessments(policy reviewrules.Policy) {
 
 	pass.requests += pass.work.AssessmentRequests
 	pass.mu.Unlock()
+
 	var excluded []domain.FileAssessment
 
 	files := BuildFileIndex(pass.work.Files)
@@ -397,6 +401,7 @@ func decodeFileAssessments(body string) []domain.FileAssessment {
 
 func assessmentPromptRow(file diff.FileContext, policy reviewrules.Policy) (string, error) {
 	var data reviewrules.PromptData
+
 	data.Identity = assessmentIdentity(file, policy)
 	data.EvidenceID = assessmentEvidenceID(file, policy)
 	data.Status = escapeOmissionPromptText(file.Status, policy)
@@ -419,6 +424,7 @@ func classificationAttributes(file diff.FileContext) string {
 	}
 
 	slices.Sort(keys)
+
 	var attributes strings.Builder
 
 	for _, key := range keys {

@@ -140,6 +140,7 @@ func (inspector *repositoryInspector) loadFile(
 	filePath string,
 ) (diff.FileContext, error) {
 	logger := gklog.L(ctx)
+
 	if err := inspectionPath(filePath, false); err != nil {
 		return diff.FileContext{}, err
 	}
@@ -238,6 +239,7 @@ func (inspector *repositoryInspector) readFile(
 	}
 
 	identity := "Repository file: " + file.Path + "\nHead: " + string(inspector.ref.Head)
+
 	start, end, err := inspectionQueryRange(file.CurrentContent, request)
 	if err != nil {
 		return "", err
@@ -258,6 +260,7 @@ func (inspector *repositoryInspector) search(
 	request InspectionRequest,
 ) (string, error) {
 	logger := gklog.L(ctx)
+
 	if err := inspectionPath(request.Target, true); err != nil {
 		return "", err
 	}
@@ -283,6 +286,7 @@ func (inspector *repositoryInspector) search(
 		request,
 		inspector.maximumResults,
 	)
+
 	var output strings.Builder
 	output.WriteString(
 		"Repository search checks the private snapshot at the reviewed head. " +
@@ -294,6 +298,7 @@ func (inspector *repositoryInspector) search(
 		request.Query,
 		inspector.ref.Head,
 	)
+
 	if output.Len() > inspector.maximumBytes {
 		return "", errors.New("inspection search metadata exceeds the configured byte limit")
 	}
@@ -320,6 +325,7 @@ func (inspector *repositoryInspector) search(
 		}
 
 		output.WriteString(excerpt + "\n")
+
 		matched++
 	}
 
@@ -377,6 +383,7 @@ func (inspector *repositoryInspector) searchMatch(
 	maximumBytes int,
 ) (string, error) {
 	logger := gklog.L(ctx)
+
 	file, err := inspector.loadFile(ctx, filePath)
 	if err != nil {
 		var apiError githubapp.APIError
@@ -439,11 +446,13 @@ func inspectionExcerpt(
 		sha256.Sum256([]byte(content)),
 		len(content),
 	)
+
 	var excerpt strings.Builder
 
 	returnedEnd := max(0, startLine-1)
 	for index := startLine; index > 0 && index <= endLine; index++ {
 		line := fmt.Sprintf("%d: %s\n", index, lines[index-1])
+
 		metadata := inspectionMetadata(
 			provenance,
 			startLine,
@@ -456,6 +465,7 @@ func inspectionExcerpt(
 		}
 
 		excerpt.WriteString(line)
+
 		returnedEnd = index
 	}
 

@@ -29,6 +29,7 @@ func TestSDKReviewRequestsUseConfiguredAssessmentBounds(t *testing.T) {
 			fmt.Sprintf("reason_%d_evidence_%d", limits.reasonBytes, limits.evidenceReferences),
 			func(t *testing.T) {
 				policy := assessmentBoundPolicy(t, limits.reasonBytes, limits.evidenceReferences)
+
 				var providers []config.ProviderConfig
 
 				for _, api := range []config.ProviderAPI{
@@ -51,6 +52,7 @@ func TestSDKReviewRequestsUseConfiguredAssessmentBounds(t *testing.T) {
 					config.Config{Providers: providers, MinimumImportance: 7, ReviewPolicy: policy},
 					nil,
 				)
+
 				payloads, err := client.ReviewRequestPayloads(
 					"Assess the supplied current file and its evidence references.",
 				)
@@ -63,7 +65,9 @@ func TestSDKReviewRequestsUseConfiguredAssessmentBounds(t *testing.T) {
 				}
 
 				var data reviewrules.PromptData
+
 				data.Total = limits.reasonBytes
+
 				description, err := policy.Render("schema.file_assessment.reason", data)
 				if err != nil {
 					t.Fatal(err)
@@ -71,12 +75,14 @@ func TestSDKReviewRequestsUseConfiguredAssessmentBounds(t *testing.T) {
 
 				for _, payload := range payloads {
 					node := assessmentRequestSchema(t, payload)
+
 					assessment := node.Properties["file_assessments"].Items
 					if assessment == nil {
 						t.Fatal("The actual provider request omitted the file assessment schema.")
 					}
 
 					reason := assessment.Properties["reason"]
+
 					pattern, err := regexp.Compile(reason.Pattern)
 					if err != nil || reason.Pattern == "" {
 						t.Fatalf("The reason constraint is not a usable pattern: %v", err)
@@ -122,6 +128,7 @@ func assessmentRequestSchema(
 	payload openai.ReviewRequestPayload,
 ) assessmentSchemaNode {
 	t.Helper()
+
 	var request struct {
 		Text struct {
 			Format struct {
@@ -156,7 +163,9 @@ func assessmentRequestSchema(
 
 func assessmentBoundPolicy(t *testing.T, reasonBytes, evidenceReferences int) reviewrules.Policy {
 	t.Helper()
+
 	configuration := filepath.Join("..", "..", "config")
+
 	contents, err := os.ReadFile(filepath.Join(configuration, "review-prompts.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +183,7 @@ func assessmentBoundPolicy(t *testing.T, reasonBytes, evidenceReferences int) re
 
 	classification.MaximumReasonBytes = reasonBytes
 	classification.MaximumEvidenceReferences = evidenceReferences
+
 	prompts["file_classification"], err = json.Marshal(classification)
 	if err != nil {
 		t.Fatal(err)

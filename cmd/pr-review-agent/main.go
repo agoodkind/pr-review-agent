@@ -42,6 +42,7 @@ func run(
 			_, _ = fmt.Fprintln(stdout, version.String())
 			return 0
 		}
+
 		return 2
 	}
 
@@ -49,6 +50,7 @@ func run(
 	if err != nil {
 		slog.Error("load config failed", slog.String("err", err.Error()))
 		_, _ = fmt.Fprintf(os.Stderr, "load config: %v\n", err)
+
 		return 1
 	}
 
@@ -65,6 +67,7 @@ func run(
 			correlation.HandlerOptions{},
 		),
 	}
+
 	var forwarder *telemetry.Forwarder
 	if cfg.LogForwardURL != nil {
 		forwarder = telemetry.NewForwarder(cfg.LogForwardURL.String(), cfg.GitHubWebhookSecret, nil)
@@ -84,11 +87,14 @@ func run(
 		if closeErr := closer.Close(); closeErr != nil {
 			logger.Error("close logger", slog.String("err", closeErr.Error()))
 		}
+
 		if closeErr := forwarder.Close(); closeErr != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "close log forwarder: %v\n", closeErr)
 		}
 	}()
+
 	slog.SetDefault(logger)
+
 	type providerSetting struct {
 		ID              string
 		Model           string
@@ -96,6 +102,7 @@ func run(
 		ReasoningEffort config.ReasoningEffort
 		Disabled        bool
 	}
+
 	providerSettings := make([]providerSetting, 0, len(cfg.Providers))
 	for _, provider := range cfg.Providers {
 		providerSettings = append(
@@ -109,6 +116,7 @@ func run(
 			},
 		)
 	}
+
 	logger.Info(
 		"pr-review-agent configured",
 		slog.String("version", version.String()),
@@ -123,6 +131,7 @@ func run(
 		slog.Int("review_max_chunks", cfg.ReviewMaxChunks),
 		slog.String("github_bot_login", cfg.GitHubBotLogin),
 	)
+
 	githubHTTP := &http.Client{Timeout: githubHTTPTimeout}
 	openaiHTTP := &http.Client{}
 	application := app.New(cfg, githubHTTP, openaiHTTP, logger)
@@ -141,5 +150,6 @@ func run(
 		logger.Error("shutdown failed", slog.String("err", err.Error()))
 		return 1
 	}
+
 	return 0
 }

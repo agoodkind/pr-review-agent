@@ -140,6 +140,7 @@ func (service *Service) priorDedicatedAdmission(
 	head domain.HeadSHA,
 ) (dedicatedAdmission, error) {
 	logger := gklog.L(ctx)
+
 	if !job.Forced && !job.RefreshVerdict && !job.AutomaticReassessment {
 		return emptyDedicatedAdmission(), nil
 	}
@@ -164,6 +165,7 @@ func (service *Service) priorDedicatedAdmission(
 	settled := checkRun.Status == checkRunCompleted &&
 		checkRun.Conclusion != checkConclusionCancelled
 	visible := false
+
 	if !settled {
 		latest, latestFound, findErr := service.github.FindCheckRun(
 			ctx,
@@ -225,6 +227,7 @@ func (service *Service) ensureCheckRun(
 	head domain.HeadSHA,
 ) (githubapp.CheckRun, bool, error) {
 	logger := gklog.L(ctx)
+
 	prior, err := service.priorDedicatedAdmission(ctx, job, head)
 	if err != nil {
 		return githubapp.CheckRun{}, false, err
@@ -284,6 +287,7 @@ func (service *Service) checkRunForHead(
 	head domain.HeadSHA,
 ) (githubapp.CheckRun, error) {
 	logger := gklog.L(ctx)
+
 	checkRun, found, err := service.github.FindCheckRun(
 		ctx,
 		job.InstallationID,
@@ -350,6 +354,7 @@ func (service *Service) cancelCheck(
 	checkRunID int64,
 ) error {
 	recordAssessment(ctx, domain.AssessmentInterrupted, nil, nil, 0)
+
 	logger := gklog.L(ctx)
 	if err := service.completeCheckRun(
 		ctx,
@@ -379,11 +384,13 @@ func (service *Service) completeCheckRun(
 	summary string,
 ) error {
 	logger := gklog.L(ctx)
+
 	completionCtx, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx),
 		service.checkCompletionTimeout,
 	)
 	defer cancel()
+
 	outcome, outcomeErr := persistAssessment(completionCtx, checkRunID)
 	if outcomeErr != nil {
 		return fmt.Errorf("persist assessment outcome: %w", outcomeErr)

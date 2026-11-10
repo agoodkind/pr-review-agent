@@ -59,6 +59,7 @@ func (collector *captureCollector) capture(
 		}
 
 		manifest.Pages = page
+
 		events, err := ReadQueryEvents(result)
 		if err != nil {
 			return err

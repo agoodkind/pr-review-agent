@@ -216,13 +216,16 @@ func (service *Service) run(parent context.Context, job domain.ReviewJob) error 
 		slog.Int("max_prompt_bytes", settings.maximumPromptBytes),
 		slog.Any("settings_carried", service.carriedSettingFields(job)),
 	)
+
 	if job.CheckRunID == 0 {
 		return errors.New("review check was not admitted")
 	}
 
 	unlock := service.locker.Lock(job.Key())
 	defer unlock()
+
 	var outcome domain.AssessmentOutcome
+
 	checkRun := githubapp.CheckRun{
 		Outcome:    outcome,
 		ID:         job.CheckRunID,
@@ -256,6 +259,7 @@ func (service *Service) Admit(
 		service.checkCompletionTimeout,
 	)
 	defer cancel()
+
 	logger := service.logger.With(
 		slog.String("delivery_id", job.DeliveryID),
 		slog.String("repository", job.Repository.Owner+"/"+job.Repository.Name),
@@ -326,6 +330,7 @@ func (service *Service) runLocked(
 	head := job.Head
 	startedAt := service.now()
 	progress := service.newProgress(job, settings, startedAt)
+
 	progress.usage = usage
 	defer service.finalizeFailure(ctx, job, checkRun.ID, progress, &runErr)
 	defer func() {
@@ -351,8 +356,10 @@ func (service *Service) runLocked(
 			panicErr,
 		)
 	}()
+
 	logger = logger.With(slog.String("head", string(head)))
 	ctx = gklog.WithLogger(ctx, logger)
+
 	ctx, closeSnapshot, err := withRepositorySnapshot(ctx, service.github, job.PullRequestRef)
 	if err != nil {
 		return service.failCheck(
@@ -386,6 +393,7 @@ func (service *Service) reviewOwedWork(
 	settings reviewSettings,
 ) error {
 	head := job.Head
+
 	state, hasState, err := service.loadDurableState(ctx, job)
 	if err != nil {
 		return service.failCheck(
@@ -488,6 +496,7 @@ func (service *Service) reviewOwedWork(
 
 	state, err = service.reviewDelta(ctx, job, head, state, pass)
 	service.applyPass(ctx, pass, progress)
+
 	if err != nil {
 		if errors.Is(err, errHeadMoved) {
 			return service.cancelCheck(ctx, job, checkRun.ID)
@@ -524,6 +533,7 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 	analysis := pass.analysis()
 	unread := pass.unreadChunks()
 	posted, failed, _ := pass.delivery()
+
 	progress.applyAnalysis(analysis)
 	progress.applyPublished(pass.publishedFindings())
 	progress.metadata, progress.metadataCheckpoint = pass.metadataSnapshot()
@@ -540,6 +550,7 @@ func (service *Service) applyPass(ctx context.Context, pass *chunkPass, progress
 		slog.Int("comments_undelivered", failed),
 		slog.Bool("coverage_complete", analysis.CoverageComplete),
 	)
+
 	if err := logAnalysis(ctx, analysis); err != nil {
 		logger.ErrorContext(ctx, "trace review analysis", slog.String("err", err.Error()))
 	}
@@ -588,6 +599,7 @@ func detachFromReviewDeadline(
 	budget time.Duration,
 ) (context.Context, context.CancelFunc) {
 	shutdown := shutdownFrom(ctx)
+
 	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 	if shutdown == nil {
 		return detached, cancel
@@ -602,6 +614,7 @@ func detachFromReviewDeadline(
 	}
 
 	stopWatch := make(chan struct{})
+
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -613,6 +626,7 @@ func detachFromReviewDeadline(
 				)
 			}
 		}()
+
 		select {
 		case <-shutdown.Done():
 			cancel()
@@ -654,6 +668,7 @@ func (service *Service) loadReviewHistory(
 	progress *reviewProgress,
 ) ([]githubapp.Review, bool, error) {
 	logger := gklog.L(ctx)
+
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
 		logger.ErrorContext(ctx, "list reviews", slog.String("err", err.Error()))
@@ -684,6 +699,7 @@ func (service *Service) reconcileThreads(
 	progress *reviewProgress,
 ) ([]githubapp.ReviewThread, error) {
 	logger := gklog.L(ctx)
+
 	threads, err := service.reconciler.Reconcile(ctx, job)
 	if err != nil {
 		return nil, service.failCheck(
@@ -735,6 +751,7 @@ func (service *Service) checkAlreadySucceeded(
 		slog.String("status", checkRun.Status),
 		slog.String("conclusion", checkRun.Conclusion),
 	)
+
 	if checkRun.Status != checkRunCompleted || checkRun.Conclusion != checkConclusionSuccess {
 		return false
 	}
@@ -746,6 +763,7 @@ func (service *Service) checkAlreadySucceeded(
 
 func logAnalysis(ctx context.Context, analysis Analysis) error {
 	logger := gklog.L(ctx)
+
 	observedTrace, err := traceFindings(ctx, analysis.Observed)
 	if err != nil {
 		logger.ErrorContext(ctx, "trace observed findings", slog.String("err", err.Error()))
@@ -931,6 +949,7 @@ func (service *Service) openThreads(
 	progress *reviewProgress,
 ) ([]githubapp.ReviewThread, error) {
 	logger := gklog.L(ctx)
+
 	threads, err := service.github.ListReviewThreads(
 		ctx,
 		job.InstallationID,
@@ -965,11 +984,15 @@ func (service *Service) publishVerdict(
 	state marker.State,
 ) error {
 	service.enrichProviderPeriodUsage(ctx, &summary)
+
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
+
 	logger := gklog.L(ctx)
+
 	if acceptedFileScope(summary) {
 		var data reviewrules.PromptData
+
 		note, err := renderPrompt(service.reviewPolicy, "coverage.accepted", data)
 		if err != nil {
 			return err
@@ -1035,6 +1058,7 @@ func (service *Service) publishVerdict(
 	}
 
 	recordAssessment(ctx, domain.AssessmentCompleted, &summary, nil, 0)
+
 	if err := service.succeed(
 		ctx,
 		job,

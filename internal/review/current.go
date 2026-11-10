@@ -16,8 +16,10 @@ func (service *Service) refreshMetadataRecord(
 	assessment assessmentSnapshot,
 ) (metadataReviewRecord, bool, error) {
 	var err error
+
 	metadata := assessment.metadata
 	metadataReassessed := false
+
 	recorded := assessment.metadataRecorded
 	if assessment.metadataError != nil {
 		return metadata, metadataReassessed, assessment.metadataError
@@ -78,6 +80,7 @@ func (service *Service) planRefreshedVerdict(
 	omissions := inputs.assessment.omissions
 	omissionsAccepted := inputs.assessment.omissionsAccepted
 	decisionReason := inputs.assessment.decisionReason
+
 	omissions, omissionsAccepted, decisionReason = updateMetadataOmissions(
 		omissions,
 		omissionsAccepted,
@@ -92,6 +95,7 @@ func (service *Service) planRefreshedVerdict(
 
 	approvalAllowed := headFullyReviewed && (len(omissions) == 0 || omissionsAccepted) &&
 		!inputs.assessment.approvalWithheld
+
 	decision := reviewerDecision(inputs.threads, service.botLogin, approvalAllowed)
 	if len(metadata.Findings) > 0 {
 		decision = domain.ReviewDecisionRequestChanges

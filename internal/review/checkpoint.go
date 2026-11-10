@@ -17,10 +17,12 @@ import (
 func (tracker *pendingTracker) completeUnreadChunks() {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
+
 	unread := make(map[string]struct{}, len(tracker.unread))
 	for _, id := range tracker.unread {
 		unread[id] = struct{}{}
 	}
+
 	unfinished := make(map[string]struct{}, len(tracker.unfinished))
 	for _, id := range tracker.unfinished {
 		unfinished[id] = struct{}{}
@@ -28,11 +30,13 @@ func (tracker *pendingTracker) completeUnreadChunks() {
 			return
 		}
 	}
+
 	for id := range unread {
 		if _, found := unfinished[id]; !found {
 			return
 		}
 	}
+
 	tracker.completed = append(tracker.completed, tracker.unfinished...)
 	tracker.unfinished = nil
 	tracker.unread = nil
@@ -62,15 +66,18 @@ func concludeState(
 	state.Completed = tracker.finished()
 	state.Unread = tracker.unreadable()
 	state.RunID = job.DeliveryID
+
 	state.Status = marker.StateReviewing
 	if unreadable {
 		return state
 	}
+
 	if len(unfinished) == 0 {
 		state.LastReviewed = head
 		state.Status = marker.StateDone
 		state.Completed = nil
 		state.Unread = nil
 	}
+
 	return state
 }

@@ -47,6 +47,7 @@ func TestLifecycleWebhookReactivatesCanceledPendingAssessment(t *testing.T) {
 						string(currentHead),
 					),
 				)
+
 				event, supported, err := webhook.ParseEvent(
 					"pull_request",
 					"delivery-reactivated",
@@ -63,6 +64,7 @@ func TestLifecycleWebhookReactivatesCanceledPendingAssessment(t *testing.T) {
 					Head:             currentHead,
 					Title:            "Resume the assessment",
 				}
+
 				if !event.RestartsQueue() {
 					t.Fatal("lifecycle webhook did not request queue evaluation")
 				}
@@ -91,6 +93,7 @@ func TestLifecycleWebhookReactivatesCanceledPendingAssessment(t *testing.T) {
 
 				staleJob := prior.Job
 				staleJob.AutomaticReassessment = true
+
 				staleJob.ReassessmentGeneration = prior.Generation
 				if restarted.AcceptsOutcome(staleJob) {
 					t.Fatal("an earlier lifecycle outcome can replace the reactivated assessment")
@@ -131,6 +134,7 @@ func TestReactivationRecoversExpiredTrackingAndReusesCurrentCompletion(t *testin
 			Head:           currentHead,
 		},
 	}
+
 	restarted, changed := coordinator.Reactivate(nil, job, fresh, now)
 	if !changed || restarted.Phase != "waiting" {
 		t.Fatalf("expired tracking did not restart evaluation: %+v", restarted)
@@ -144,6 +148,7 @@ func TestReactivationRecoversExpiredTrackingAndReusesCurrentCompletion(t *testin
 			MetadataRevision: diff.PullRequestRevision(fresh),
 		},
 	}
+
 	result := coordinator.Decide(
 		restarted,
 		reassessment.Snapshot{PullRequest: fresh, LatestCheck: check, LatestFound: true},

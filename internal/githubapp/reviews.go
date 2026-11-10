@@ -40,6 +40,7 @@ func (client *Client) ListReviews(
 ) ([]Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews", number))
 	reviews := make([]Review, 0)
+
 	err := client.doRESTPaginated(
 		ctx,
 		installationID,
@@ -98,6 +99,7 @@ func (client *Client) SubmitReview(
 	}
 
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews", number))
+
 	payload := submitReviewBody{
 		CommitID: string(request.CommitID),
 		Body:     request.Body,
@@ -137,6 +139,7 @@ func (client *Client) UpdateReview(
 	bodyText string,
 ) (Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews/%d", number, reviewID))
+
 	encoded, err := json.Marshal(updateReviewBody{Body: bodyText})
 	if err != nil {
 		client.logger.ErrorContext(
@@ -174,6 +177,7 @@ func (client *Client) CreateReviewComment(
 	comment InlineComment,
 ) error {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/comments", number))
+
 	encoded, err := json.Marshal(createReviewCommentBody{
 		InlineComment: comment,
 		CommitID:      string(head),

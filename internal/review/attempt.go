@@ -35,6 +35,7 @@ func (attempt *chunkReviewAttempt) complete(
 	logger *slog.Logger,
 ) (chunkAnalysis, error) {
 	nothing := chunkAnalysis{Results: nil, Unreadable: nil}
+
 	var err error
 
 	if validateErr := completion.Result.Validate(); validateErr != nil {
@@ -55,6 +56,7 @@ func (attempt *chunkReviewAttempt) complete(
 		slog.Int("paths", len(attempt.chunk.Paths)),
 		slog.Int("prompt_bytes", len(attempt.prompt)),
 	)
+
 	analysis := chunkAnalysis{
 		Results:    []domain.ReviewResult{completion.Result},
 		Unreadable: nil,
@@ -120,6 +122,7 @@ func (attempt *chunkReviewAttempt) retry(
 		slog.Int("prompt_bytes", len(attempt.prompt)),
 		slog.String("err", err.Error()),
 	)
+
 	var sizeFailure *diff.PromptSizeError
 	if !truncated(err) && !errors.As(err, &sizeFailure) {
 		return nothing, fmt.Errorf(

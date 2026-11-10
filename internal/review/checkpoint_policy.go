@@ -55,6 +55,7 @@ func (service *Service) reassessChangedContext(
 	}
 
 	var check githubapp.CheckRun
+
 	check.ID = job.CheckRunID
 	check.Head = job.Head
 	check.Name = service.checkName

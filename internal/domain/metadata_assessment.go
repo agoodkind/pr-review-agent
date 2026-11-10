@@ -22,16 +22,20 @@ func ValidateMetadataAssessments(assessments []MetadataFindingAssessment) error 
 		if strings.TrimSpace(assessment.FindingID) == "" || seen[assessment.FindingID] {
 			return errors.New("metadata assessment requires a unique finding_id")
 		}
+
 		seen[assessment.FindingID] = true
 		if _, err := ParseResolution(string(assessment.Resolution)); err != nil {
 			return errors.New("metadata assessment resolution is invalid")
 		}
+
 		if strings.TrimSpace(assessment.Reason) == "" {
 			return errors.New("metadata assessment reason is required")
 		}
+
 		if assessment.StartLine < 1 || assessment.EndLine < assessment.StartLine {
 			return errors.New("metadata assessment requires current field coordinates")
 		}
 	}
+
 	return nil
 }

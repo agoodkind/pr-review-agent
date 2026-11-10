@@ -27,6 +27,7 @@ func TestConfiguredLocationsRetainSeparateInlineIdentities(t *testing.T) {
 	}
 	second := first
 	second.StartLine, second.EndLine = 8, 8
+
 	encoded, err := json.Marshal(domain.ReviewResult{Findings: []domain.Finding{first, second}})
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +60,7 @@ func TestConfiguredLocationsRetainSeparateInlineIdentities(t *testing.T) {
 		}
 
 		identities[published.ID] = struct{}{}
+
 		_, restored, err := marker.DecodeFindingBody(domain.ReviewComment{
 			Body:      comments[index].Body,
 			Path:      finding.Path,
@@ -96,6 +98,7 @@ func TestConfiguredLocationsRetainSeparateInlineIdentities(t *testing.T) {
 
 func loadLocationPolicy(t *testing.T) (reviewrules.Policy, reviewrules.ID) {
 	t.Helper()
+
 	data, err := os.ReadFile(filepath.Join("..", "..", "config", "review-rules.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +116,7 @@ func loadLocationPolicy(t *testing.T) (reviewrules.Policy, reviewrules.ID) {
 
 	rules[0]["deduplication"] = json.RawMessage(`"location"`)
 	rules[0]["category"] = json.RawMessage(`"prose"`)
+
 	var ruleID reviewrules.ID
 	if err := json.Unmarshal(rules[0]["id"], &ruleID); err != nil {
 		t.Fatal(err)
@@ -154,6 +158,7 @@ func TestLocationMarkersRetainIdentityAfterGitHubRemapsTheSource(t *testing.T) {
 		Importance:    10,
 		Deduplication: reviewrules.DeduplicateLocation,
 	}
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testHeadSHA), finding)
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +185,7 @@ func TestLocationMarkersRetainIdentityAfterGitHubRemapsTheSource(t *testing.T) {
 	}
 
 	finding.Deduplication = ""
+
 	legacyBody, err := marker.EncodeFindingBody(domain.HeadSHA(testHeadSHA), finding)
 	if err != nil {
 		t.Fatal(err)

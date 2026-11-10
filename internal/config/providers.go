@@ -155,6 +155,7 @@ var (
 // LoadProviders requires normalized PROVIDER_<ID> credential variables.
 func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 	raw, _ := lookup("PROVIDERS")
+
 	definitions, err := unmarshalProviderDefinitions(raw)
 	if err != nil || len(definitions) == 0 {
 		return nil, errors.New("PROVIDERS must be a nonempty array of providers")
@@ -200,6 +201,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		}
 
 		prefix := "PROVIDER_" + strings.ToUpper(definition.ID)
+
 		apiKey, ok := loadRequiredText(lookup, prefix+"_API_KEY")
 		if !ok {
 			return nil, fmt.Errorf("%s_API_KEY is required", prefix)
@@ -208,6 +210,7 @@ func LoadProviders(lookup LookupEnv) ([]ProviderConfig, error) {
 		clientID, hasClientID := loadRequiredText(lookup, prefix+"_CF_ACCESS_CLIENT_ID")
 		clientSecret, hasClientSecret := loadRequiredText(lookup, prefix+"_CF_ACCESS_CLIENT_SECRET")
 		configuredID := definition.CFAccessClientIDBinding != ""
+
 		configuredSecret := definition.CFAccessClientSecretBinding != ""
 		if configuredID != configuredSecret || hasClientID != configuredID ||
 			hasClientSecret != configuredSecret {
@@ -426,6 +429,7 @@ func validateProviderLimits(definition providerDefinition) (time.Duration, error
 func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
+
 	var definitions []providerDefinition
 	if err := decoder.Decode(&definitions); err != nil {
 		return nil, errors.New("invalid provider definitions JSON")
@@ -447,6 +451,7 @@ func unmarshalProviderDefinitions(raw string) ([]providerDefinition, error) {
 
 func unmarshalProviderPriority(raw string) ([]string, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
+
 	var priority []string
 	if err := decoder.Decode(&priority); err != nil {
 		return nil, errors.New("invalid provider priority JSON")
@@ -483,6 +488,7 @@ func orderProviders(
 		}
 
 		seen[providerID] = true
+
 		if !provider.Disabled {
 			enabled++
 		}

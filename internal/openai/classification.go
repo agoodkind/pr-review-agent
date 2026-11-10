@@ -24,6 +24,7 @@ func (client *Client) ClassifyFileContent(
 	prompt string,
 ) (review.Completion, error) {
 	logger := gklog.L(ctx)
+
 	schema, err := MarshalClassificationSchema(client.reviewPolicy)
 	if err != nil {
 		return review.Completion{}, err
@@ -36,6 +37,7 @@ func (client *Client) ClassifyFileContent(
 	}
 
 	var result domain.ReviewResult
+
 	model, err := client.complete(
 		ctx,
 		prompt,

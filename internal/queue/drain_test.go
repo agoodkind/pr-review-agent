@@ -43,12 +43,16 @@ func TestStoppedAdmissionPreservesAcceptedQueueStatus(t *testing.T) {
 func TestIdleClosureRejectsConcurrentAdmission(t *testing.T) {
 	for range 100 {
 		dispatcher := queue.NewDispatcher(1, 1, nil, slog.Default())
+
 		accepted := make(chan bool, 1)
 		go func() {
 			accepted <- dispatcher.Enqueue(domain.ReviewJob{DeliveryID: "concurrent"})
 		}()
+
 		dispatcher.StopAdmissionIfIdle()
+
 		wasAccepted := <-accepted
+
 		status := dispatcher.Status()
 		if wasAccepted {
 			if status.AdmissionClosed || status.Outstanding != 1 {

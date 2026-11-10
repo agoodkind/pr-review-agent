@@ -48,10 +48,12 @@ func TestDrainClosesAdmissionThroughRunningApplication(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
+
 		if err := application.Shutdown(ctx); err != nil {
 			t.Error(err)
 		}
 	})
+
 	origin := fmt.Sprintf("http://127.0.0.1:%d", port)
 	deadline := time.Now().Add(5 * time.Second)
 
@@ -88,6 +90,7 @@ func TestDrainClosesAdmissionThroughRunningApplication(t *testing.T) {
 		{`{"action":"status"}`, true, http.StatusOK, true},
 	} {
 		body := []byte(operation.body)
+
 		request, err := http.NewRequestWithContext(
 			t.Context(),
 			http.MethodPost,

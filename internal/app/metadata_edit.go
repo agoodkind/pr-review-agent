@@ -20,6 +20,7 @@ func (handler *handler) scheduleMetadataEdit(
 	job *domain.ReviewJob,
 ) (bool, error) {
 	logger := gklog.L(ctx)
+
 	if handler.reassessment == nil {
 		return false, nil
 	}
@@ -47,6 +48,7 @@ func (handler *handler) scheduleMetadataEdit(
 
 func (handler *handler) supersedeMetadataEdit(ctx context.Context, job *domain.ReviewJob) error {
 	logger := gklog.L(ctx)
+
 	replacement, prior, err := handler.reassessment.SupersedeMetadataEdit(ctx, *job)
 	if err != nil {
 		logger.ErrorContext(ctx, "supersede metadata edit", "err", err)
@@ -104,6 +106,7 @@ func (handler *handler) completeMetadataChecks(
 		job.DeliveryID = deliveryID
 		job.CheckRunID = check.ID
 		job.CheckRunStatus = check.Status
+
 		job.CheckRunConclusion = check.Conclusion
 		if err := handler.completeMetadataCheck(ctx, job); err != nil {
 			return err
@@ -115,6 +118,7 @@ func (handler *handler) completeMetadataChecks(
 
 func (handler *handler) completeMetadataCheck(ctx context.Context, job domain.ReviewJob) error {
 	logger := gklog.L(ctx)
+
 	completer, available := handler.admitter.(metadataCheckCompleter)
 	if !available {
 		return errors.New("metadata check completion is unavailable")

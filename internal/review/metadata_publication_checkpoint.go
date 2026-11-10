@@ -15,6 +15,7 @@ func (service *Service) checkpointRefreshedMetadata(
 	summary Summary,
 ) error {
 	record := metadataRecordFromSummary(summary)
+
 	encoded := encodeMetadataRecord(record)
 	if encoded == "" {
 		return errors.New("cannot persist the current metadata assessment")
@@ -59,6 +60,7 @@ func (service *Service) checkpointCompletedPublication(
 	}
 
 	pendingPublication := state
+
 	pendingPublication.Status = marker.StateFailed
 	if err := service.upsertSummaryComment(
 		ctx,

@@ -50,11 +50,13 @@ const (
 // on its own.
 func testClock(step time.Duration) func() time.Time {
 	var mu sync.Mutex
+
 	current := time.Unix(1_700_000_000, 0).UTC()
 
 	return func() time.Time {
 		mu.Lock()
 		defer mu.Unlock()
+
 		now := current
 		current = current.Add(step)
 
@@ -99,6 +101,7 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 					Importance: 8,
 				},
 			}
+
 			decision := review.DecisionFor(findings, 9)
 			if decision != domain.ReviewDecisionApprove {
 				t.Fatalf("decision = %q, want APPROVE", decision)
@@ -119,6 +122,7 @@ func TestDecisionForOnlyBlocksConfiguredFindings(t *testing.T) {
 					Importance: 9,
 				},
 			}
+
 			decision := review.DecisionFor(findings, 9)
 			if decision != domain.ReviewDecisionRequestChanges {
 				t.Fatalf("decision = %q, want %q", decision, domain.ReviewDecisionRequestChanges)
@@ -237,6 +241,7 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 
 	// The premise: this run held the gate and published nothing inline.
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	if len(fixture.state.streamedComments) != 0 {
 		t.Fatalf("streamed comments = %d, want none", len(fixture.state.streamedComments))
 	}
@@ -349,6 +354,7 @@ func TestRenderFailureBodyStatesTheFailureAndOmitsTheReviewMarker(t *testing.T) 
 			detail := "The cause is recorded in this service's log."
 			body := review.RenderFailureBody(summary, "Review failed.", detail)
 			summary.Failed = true
+
 			want := "## Review\n\nReview failed.\n\n" + detail + "\n\n" +
 				review.RenderDetails(summary) + "\n\n" + marker.Summary()
 			if body != want {
@@ -363,6 +369,7 @@ func TestRenderFailureBodyStatesTheFailureAndOmitsTheReviewMarker(t *testing.T) 
 			summary := testSummary()
 			body := review.RenderFailureBody(summary, "Review failed.", "   ")
 			summary.Failed = true
+
 			want := "## Review\n\nReview failed.\n\n" + review.RenderDetails(
 				summary,
 			) + "\n\n" + marker.Summary()
@@ -552,6 +559,7 @@ type truncatedModel struct {
 
 func (model *truncatedModel) Review(ctx context.Context, prompt string) (review.Completion, error) {
 	model.calls++
+
 	model.prompts = append(model.prompts, prompt)
 	if model.blockAfter > 0 && model.calls > model.blockAfter {
 		close(model.blocked)
@@ -600,6 +608,7 @@ func TestASplitReviewPreservesEarlierFindingsWhenALaterFragmentFails(t *testing.
 					failAfter:     example.truncateCalls + 1,
 					findings:      []domain.Finding{finding},
 				}
+
 				fixture := newServiceFixture(
 					t,
 					serviceFixtureOptions{
@@ -638,6 +647,7 @@ func TestASplitReviewPreservesEarlierFindingsWhenALaterFragmentFails(t *testing.
 
 func assertRetainedFallback(t *testing.T, body string, finding domain.Finding) {
 	t.Helper()
+
 	if !strings.Contains(body, finding.Body) {
 		t.Fatal("The incomplete summary must display the refused finding.")
 	}
@@ -648,6 +658,7 @@ func assertRetainedFallback(t *testing.T, body string, finding domain.Finding) {
 	}
 
 	encoded, _, _ = strings.Cut(encoded, " -->")
+
 	payload, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		t.Fatal(err)
@@ -686,19 +697,24 @@ func TestASplitReviewPublishesBeforeTheNextFragmentFinishes(t *testing.T) {
 		},
 	)
 	ctx, cancel := context.WithCancel(t.Context())
+
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
+
 		_ = fixture.run(ctx, fixture.job())
 	}()
+
 	t.Cleanup(func() {
 		cancel()
+
 		select {
 		case <-finished:
 		case <-time.After(5 * time.Second):
 			t.Error("The canceled split review did not finish.")
 		}
 	})
+
 	select {
 	case <-model.blocked:
 	case <-finished:
@@ -709,6 +725,7 @@ func TestASplitReviewPublishesBeforeTheNextFragmentFinishes(t *testing.T) {
 
 	fixture.state.mu.Lock()
 	defer fixture.state.mu.Unlock()
+
 	if len(fixture.state.streamedComments) != 1 ||
 		fixture.state.streamedComments[0]["path"] != "main.go" ||
 		fixture.state.streamedComments[0]["line"] != float64(2) {
@@ -745,6 +762,7 @@ func (multiHunkCollector) CollectRange(
 		},
 		"\n",
 	)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
@@ -873,6 +891,7 @@ func TestAHunkThatCannotSplitLeavesTheHeadUnapproved(t *testing.T) {
 	}
 
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, "completion budget") {
 		t.Fatalf("summary comment does not name why the hunk went unread:\n%s", body)
@@ -934,8 +953,10 @@ func TestAModelRefusalIsNotRetriedAndLeavesItsChunkPending(t *testing.T) {
 // An incomplete review can request changes only with a published finding.
 func assertNoVerdictOverAnUnreadHead(t *testing.T, fixture *serviceFixture) {
 	t.Helper()
+
 	if submitted := fixture.state.lastSubmitReview; submitted != nil {
 		comments, _ := submitted["comments"].([]any)
+
 		body, _ := submitted["body"].(string)
 		if submitted["event"] != string(domain.ReviewDecisionRequestChanges) ||
 			len(comments) != 1 ||
@@ -992,6 +1013,7 @@ func (twoChunkSameFileCollector) CollectRange(
 		},
 		"\n",
 	)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
@@ -1196,6 +1218,7 @@ func (model *sequenceModel) Consolidate(
 ) (review.Consolidation, error) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	model.consolidatePrompts = append(model.consolidatePrompts, prompt)
 	if model.consolidateErr != nil {
 		return review.Consolidation{}, model.consolidateErr
@@ -1221,6 +1244,7 @@ func (model *sequenceModel) consolidationCalls() int {
 func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Completion, error) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	model.prompts = append(model.prompts, prompt)
 	if model.err != nil &&
 		(model.healthyPrompt == "" || !strings.Contains(prompt, model.healthyPrompt)) {
@@ -1232,6 +1256,7 @@ func (model *sequenceModel) Review(_ context.Context, prompt string) (review.Com
 	}
 
 	result := model.results[model.callCount]
+
 	name := testReviewModel
 	if model.callCount < len(model.models) {
 		name = model.models[model.callCount]
@@ -1259,6 +1284,7 @@ func (panicModel) Review(context.Context, string) (review.Completion, error) {
 // from one source, so the two can never report different numbers.
 func assertCheckAndCommentShareDetails(t *testing.T, fixture *serviceFixture, body string) {
 	t.Helper()
+
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("check output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
@@ -1521,6 +1547,7 @@ func TestSuccessfulReviewPublishesItsOwnLogInTheCheckRun(t *testing.T) {
 // comment, which is where a later invocation reads it from too.
 func decodedSummaryState(t *testing.T, fixture *serviceFixture) marker.State {
 	t.Helper()
+
 	state, ok := marker.DecodeState(failureSummaryComment(t, fixture))
 	if !ok {
 		t.Fatalf(
@@ -1551,6 +1578,7 @@ func (wideCollector) CollectRange(
 	}
 
 	patch := strings.Join(patchLines, "\n")
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
@@ -1792,6 +1820,7 @@ func newChunkScriptedModel(failPath string) *chunkScriptedModel {
 func (model *chunkScriptedModel) heal() {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	model.healthy = true
 }
 
@@ -1884,6 +1913,7 @@ func TestAFailedChunkStaysPendingAndTheNextRunFinishesIt(t *testing.T) {
 	// concluded neutral as satisfying the gate exactly as it counts one
 	// concluded skipped, so this asserts the class rather than one string.
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok || !strings.Contains(fmt.Sprint(output["title"]), "1 chunk could not be reviewed") {
 		t.Fatalf(
@@ -1893,6 +1923,7 @@ func TestAFailedChunkStaysPendingAndTheNextRunFinishesIt(t *testing.T) {
 	}
 
 	model.heal()
+
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -1947,6 +1978,7 @@ func (collector *growingCollector) CollectRange(
 ) (diff.ReviewInput, error) {
 	collector.mu.Lock()
 	collector.calls++
+
 	fileCount := 2
 	if collector.calls > 1 {
 		fileCount = 3
@@ -1972,6 +2004,7 @@ func paddedFiles(pullRequest githubapp.PullRequest, count int) (diff.ReviewInput
 	files := make([]diff.FileContext, 0, count)
 	for index := range count {
 		patch := fmt.Sprintf("@@ -1,1 +1,2 @@\n line%d\n+added%d\n", index, index)
+
 		changed, hunks, err := diff.ChangedRightLines(patch)
 		if err != nil {
 			return diff.ReviewInput{}, err
@@ -2019,6 +2052,7 @@ func TestTheNextRunReviewsNewChunksAndNotOnlyThePendingOnes(t *testing.T) {
 
 	// The second run's delta carries a third chunk the first run never saw.
 	model.heal()
+
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -2095,6 +2129,7 @@ func TestAnAlreadyReadChunkIsNotAnalyzedTwice(t *testing.T) {
 	}
 
 	model.heal()
+
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -2149,6 +2184,7 @@ func TestAForcedRunReadsEveryChunkAgainIncludingTheOnesAlreadyRead(t *testing.T)
 	}
 
 	model.heal()
+
 	if err := fixture.run(context.Background(), fixture.forcedJob()); err != nil {
 		t.Fatalf("forced Run: %v", err)
 	}
@@ -2407,6 +2443,7 @@ func TestAForcedDeliveryWhoseCheckNeverStartedIsResumed(t *testing.T) {
 
 	// GitHub recovers and the delivery arrives again.
 	fixture.state.startCheckRunStatus = 0
+
 	resumed, wasAdmitted, err := fixture.service.Admit(context.Background(), job)
 	if err != nil {
 		t.Fatalf("redelivered Admit: %v", err)
@@ -2572,8 +2609,24 @@ func TestReassessmentAfterPublicationFailureReusesCompletedChunks(t *testing.T) 
 		)
 	}
 
+	reviews, err := fixture.github.ListReviews(
+		t.Context(),
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalReview := githubapp.LatestDecisionReview(reviews, testBotLogin)
+	if originalReview.ID == 0 || originalReview.State != "CHANGES_REQUESTED" {
+		t.Fatalf("The first delivery did not persist its rejection: %+v.", originalReview)
+	}
+
 	job.DeliveryID = "reassessment-after-publication-failure"
 	job.AutomaticReassessment = true
+
 	job.Forced = false
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("redelivered Run: %v", err)
@@ -2596,11 +2649,19 @@ func TestReassessmentAfterPublicationFailureReusesCompletedChunks(t *testing.T) 
 		)
 	}
 
-	if len(fixture.state.submittedReviews) != 2 {
-		t.Fatalf(
-			"submitted reviews = %d, want the dismissed rejection replaced after reassessment",
-			len(fixture.state.submittedReviews),
-		)
+	reviews, err = fixture.github.ListReviews(
+		t.Context(),
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	standing := githubapp.LatestDecisionReview(reviews, testBotLogin)
+	if standing.ID != originalReview.ID || standing.State != "CHANGES_REQUESTED" {
+		t.Fatalf("The retry did not preserve the persisted rejection: %+v.", standing)
 	}
 
 	if len(fixture.state.checkRuns) != 2 {
@@ -2656,8 +2717,10 @@ func TestReassessmentAfterPartialFailureReviewsOnlyPendingChunks(t *testing.T) {
 	}
 
 	model.heal()
+
 	job.DeliveryID = "reassessment-after-partial-failure"
 	job.AutomaticReassessment = true
+
 	job.Forced = false
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("resumed Run: %v", err)
@@ -2795,10 +2858,12 @@ func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing
 	}
 
 	if len(fixture.state.submittedReviews) != 1 ||
-		fixture.state.submittedReviews[0]["state"] != "DISMISSED" {
+		fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
+		len(fixture.state.dismissals) != 0 {
 		t.Fatalf(
-			"submitted reviews = %d, want the early inline rejection dismissed after the failure",
-			len(fixture.state.submittedReviews),
+			"reviews = %v, dismissals = %v; expected one CHANGES_REQUESTED review without dismissals.",
+			fixture.state.submittedReviews,
+			fixture.state.dismissals,
 		)
 	}
 
@@ -2810,15 +2875,18 @@ func TestReassessmentAfterFinalPublicationFailurePublishesOwedVerdict(t *testing
 	fixture.state.listThreadsStatus = http.StatusOK
 	job.DeliveryID = "reassessment-after-final-publication-failure"
 	job.AutomaticReassessment = true
+
 	job.Forced = false
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("redelivered Run: %v", err)
 	}
 
-	if len(fixture.state.submittedReviews) != 2 {
+	if len(fixture.state.submittedReviews) != 1 ||
+		fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
+		len(fixture.state.dismissals) != 0 {
 		t.Fatalf(
-			"submitted reviews = %d, want the verdict the dead run owed",
-			len(fixture.state.submittedReviews),
+			"The retry changed the preserved inline rejection: %v.",
+			fixture.state.submittedReviews,
 		)
 	}
 
@@ -3067,6 +3135,7 @@ func TestAnotherDeliveryWritingTheMarkerDoesNotForgetTheForcedDelivery(t *testin
 func TestAForcedRedeliveryFindsItsCheckRunBehindNewerOnesAndPageBoundaries(t *testing.T) {
 	fixture := newServiceFixture(t, serviceFixtureOptions{})
 	job := fixture.forcedJob()
+
 	const soughtIndex = 2
 
 	for index := range 5 {
@@ -3131,6 +3200,7 @@ func TestASecondLabelEventIsANewForceRequest(t *testing.T) {
 	}
 
 	second := fixture.forcedJob()
+
 	second.DeliveryID = "delivery-forced-again"
 	if err := fixture.run(context.Background(), second); err != nil {
 		t.Fatalf("second Run: %v", err)
@@ -3198,6 +3268,7 @@ func TestAnIncompleteForcedRunLeavesAResumableCheckpoint(t *testing.T) {
 	// The next ordinary run must be able to derive a range those ids appear in,
 	// read the chunk that was left, and only then call the head reviewed.
 	model.heal()
+
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
@@ -3303,6 +3374,7 @@ func TestAnIncompleteRunPublishesOnlyItsActualInlineFindings(t *testing.T) {
 	// The gate still holds and the reader still learns what happened: the one
 	// comment names the owed work, and the check does not pass.
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	comments := bodiesOf(fixture.state.issueComments)
 	if len(comments) != 1 || !strings.Contains(comments[0], "could not be reviewed") {
 		t.Fatalf("comments = %v, want exactly one naming the unread chunks", comments)
@@ -3376,6 +3448,7 @@ func (model *deadlineProbeModel) Review(ctx context.Context, _ string) (review.C
 func (model *deadlineProbeModel) shortestBudget() (time.Duration, int, int) {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	shortest := time.Duration(0)
 
 	for index, budget := range model.budgets {
@@ -3400,6 +3473,7 @@ func TestNoModelCallInheritsAnEarlierChunksClock(t *testing.T) {
 		firstWaveWork = 600 * time.Millisecond
 		chunkTimeout  = 5 * time.Second
 	)
+
 	model := newDeadlineProbeModel(firstWaveWork)
 	fixture := newServiceFixture(
 		t,
@@ -3411,6 +3485,7 @@ func TestNoModelCallInheritsAnEarlierChunksClock(t *testing.T) {
 	)
 
 	job := fixture.job()
+
 	job.Settings.MaxPromptBytes = testChunkPromptBytes
 	if err := fixture.run(t.Context(), job); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -3455,12 +3530,14 @@ func (model *concurrencyProbeModel) Review(
 	_ string,
 ) (review.Completion, error) {
 	model.mu.Lock()
+
 	model.inFlight++
 	if model.inFlight > model.highest {
 		model.highest = model.inFlight
 	}
 
 	reached := model.inFlight >= config.MaximumChunkConcurrency
+
 	model.mu.Unlock()
 	defer func() {
 		model.mu.Lock()
@@ -3489,6 +3566,7 @@ func (model *concurrencyProbeModel) Review(
 func (model *concurrencyProbeModel) releaseOnce() {
 	model.mu.Lock()
 	defer model.mu.Unlock()
+
 	select {
 	case <-model.release:
 	default:
@@ -3509,6 +3587,7 @@ func (model *concurrencyProbeModel) peak() int {
 func TestChunksAreReviewedConcurrentlyUnderABound(t *testing.T) {
 	model := newConcurrencyProbeModel()
 	defer model.releaseOnce()
+
 	fixture := newServiceFixture(
 		t,
 		serviceFixtureOptions{
@@ -3519,6 +3598,7 @@ func TestChunksAreReviewedConcurrentlyUnderABound(t *testing.T) {
 
 	job := fixture.job()
 	job.Settings.MaxPromptBytes = testChunkPromptBytes
+
 	job.Settings.ChunkTimeout = 2 * time.Second
 	if err := fixture.run(t.Context(), job); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -3579,6 +3659,7 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	}
 
 	assertCheckAndCommentShareDetails(t, fixture, commentBody)
+
 	comments, ok := fixture.state.lastSubmitReview["comments"].([]any)
 	if !ok || len(comments) != 0 {
 		t.Fatalf("comments = %v, want none", fixture.state.lastSubmitReview["comments"])
@@ -3799,6 +3880,7 @@ func TestServiceSkipsHeadWithExistingReviewMarker(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
+
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatal("SubmitReview was called for existing marker")
 	}
@@ -4029,6 +4111,7 @@ func (disputeCollector) CollectRange(
 		},
 		"\n",
 	)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
@@ -4127,6 +4210,7 @@ func threadCarrying(
 	reply string,
 ) githubapp.ReviewThread {
 	t.Helper()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testStaleHeadSHA), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -4365,6 +4449,7 @@ func TestASeparateDefectOnAnAnsweredFileStillPublishes(t *testing.T) {
 // threads and their replies go into the chunk prompt.
 func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
 	const replyText = "Declined: publish already logs and retries."
+
 	fixture := disputeFixture(t, answeredThread(t, false, replyText))
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
@@ -4395,6 +4480,7 @@ func TestTheChunkPromptCarriesOpenThreadsAndTheirReplies(t *testing.T) {
 
 func TestTheChunkPromptCarriesResolvedDiscussionsFromEarlierCommits(t *testing.T) {
 	const replyText = "The current module disables itself when the member list is empty."
+
 	fixture := disputeFixture(t, answeredThread(t, true, replyText))
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
@@ -4605,6 +4691,7 @@ func TestReplyReconcilesOpenThreadsAtAReviewedHead(t *testing.T) {
 	priorReviewCount := len(fixture.state.reviewPages[0]) + len(fixture.state.submittedReviews)
 
 	job := fixture.job()
+
 	job.ThreadRootCommentID = 700
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -4902,6 +4989,7 @@ func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testi
 		resolvedBotThread("thread-open"),
 	})
 	resolved := fixture.job()
+
 	resolved.DeliveryID = "delivery-resolved"
 	if err := fixture.run(context.Background(), resolved); err != nil {
 		t.Fatalf("Run with the thread resolved: %v", err)
@@ -5142,6 +5230,7 @@ func TestAVerdictNobodyDismissedRefreshesAsBefore(t *testing.T) {
 		resolvedBotThread("thread-open"),
 	})
 	resolved := fixture.job()
+
 	resolved.DeliveryID = "delivery-resolved"
 	if err := fixture.run(context.Background(), resolved); err != nil {
 		t.Fatalf("Run with the thread resolved: %v", err)
@@ -5484,6 +5573,7 @@ func TestServiceCancelsWhenHeadChangesBeforePublication(t *testing.T) {
 		"PATCH /repos/owner/repo/check-runs/77",
 	}
 	assertRequestOrder(t, fixture.state.requestOrder, wantOrder)
+
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatal("SubmitReview was called after stale head")
 	}
@@ -5539,6 +5629,7 @@ func TestServiceCompletesCheckAfterReviewContextExpires(t *testing.T) {
 			model: contextBlockingModel{},
 		},
 	)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 
@@ -5645,6 +5736,7 @@ var passingCheckConclusions = []string{"success", "skipped", "neutral"}
 // to another passing conclusion fails here too.
 func assertDeclinedCheckDoesNotPass(t *testing.T, fixture *serviceFixture) {
 	t.Helper()
+
 	conclusion, ok := fixture.state.lastUpdateCheckRun["conclusion"].(string)
 	if !ok {
 		t.Fatalf("conclusion = %v, want a string", fixture.state.lastUpdateCheckRun["conclusion"])
@@ -5778,6 +5870,7 @@ func TestADeclinedDeltaKeepsItsBaselineSoALaterPushCannotBypassTheBudget(t *test
 	}
 
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	declined := decodedSummaryState(t, fixture)
 	if declined.LastReviewed != "" {
 		t.Fatalf(
@@ -5797,6 +5890,7 @@ func TestADeclinedDeltaKeepsItsBaselineSoALaterPushCannotBypassTheBudget(t *test
 
 	pushed := fixture.job()
 	pushed.DeliveryID = "delivery-2"
+
 	pushed.Head = domain.HeadSHA(pushedHeadSHA)
 	if err := fixture.run(context.Background(), pushed); err != nil {
 		t.Fatalf("second Run: %v", err)
@@ -5816,6 +5910,7 @@ func TestADeclinedDeltaKeepsItsBaselineSoALaterPushCannotBypassTheBudget(t *test
 	}
 
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	if model.callCount != 0 {
 		t.Fatalf(
 			"model call count = %d, want 0: the oversized range is still over budget",
@@ -5864,6 +5959,7 @@ func TestARedeliveryOfADeclinedHeadIsDeclinedAgain(t *testing.T) {
 	}
 
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	if title := fmt.Sprint(
 		checkOutput(t, fixture)["title"],
 	); title == checkTitleAlreadyReviewedText {
@@ -5923,6 +6019,7 @@ func TestADeclinedDeltaKeepsTheWorkAnEarlierRunRecorded(t *testing.T) {
 	}
 
 	assertDeclinedCheckDoesNotPass(t, fixture)
+
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed != domain.HeadSHA(testStaleHeadSHA) {
 		t.Fatalf(
@@ -6074,6 +6171,7 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 // run leaves behind, which is where the failure is now reported.
 func failureSummaryComment(t *testing.T, fixture *serviceFixture) string {
 	t.Helper()
+
 	if len(fixture.state.issueComments) != 1 {
 		t.Fatalf(
 			"issue comments = %d, want the one summary comment",
@@ -6103,6 +6201,7 @@ func assertSanitizedFailureComment(
 	rawCause string,
 ) {
 	t.Helper()
+
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, statedFailure) {
 		t.Fatalf("summary comment = %q, want the stated failure %q", body, statedFailure)
@@ -6120,6 +6219,7 @@ func assertSanitizedFailureComment(
 // checkOutput returns the output object of the last check run update.
 func checkOutput(t *testing.T, fixture *serviceFixture) map[string]any {
 	t.Helper()
+
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("check output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
@@ -6185,6 +6285,7 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	}
 
 	wantReason := "Review stopped: the app's configured token limit was exhausted."
+
 	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
 	if !ok || !strings.Contains(checkSummary, wantReason) {
 		t.Fatalf(
@@ -6208,6 +6309,7 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	}
 
 	assertSanitizedFailureComment(t, fixture, wantReason, "usage credits are exhausted")
+
 	if strings.Contains(
 		failureSummaryComment(t, fixture),
 		"Apply the `test-review-agent-rerun` label",
@@ -6294,6 +6396,7 @@ func TestUsageExhaustionPassesWhenConfigured(t *testing.T) {
 		"Review stopped: the model provider reported no remaining usage.",
 		"The usage limit has been reached",
 	)
+
 	if len(fixture.state.submittedReviews) != 0 {
 		t.Fatalf("submitted reviews = %v, want none", fixture.state.submittedReviews)
 	}
@@ -6520,6 +6623,7 @@ func TestAGitHubTimeoutIsTitledADeadlineRatherThanTheStageItDiedIn(t *testing.T)
 	}
 
 	output := checkOutput(t, fixture)
+
 	title, ok := output["title"].(string)
 	if !ok {
 		t.Fatalf("title = %v, want a string title on the check run", output["title"])
@@ -6615,12 +6719,12 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 				if submitted := fixture.state.lastSubmitReview; submitted != nil {
 					comments, _ := submitted["comments"].([]any)
 					if submitted["event"] != string(domain.ReviewDecisionRequestChanges) ||
-						len(comments) != 1 ||
-						len(fixture.state.streamedComments) != 1 ||
+						len(comments) != 1 || len(fixture.state.streamedComments) != 1 ||
 						len(fixture.state.submittedReviews) != 1 ||
-						fixture.state.submittedReviews[0]["state"] != "DISMISSED" {
+						fixture.state.submittedReviews[0]["state"] != "CHANGES_REQUESTED" ||
+						len(fixture.state.dismissals) != 0 {
 						t.Fatalf(
-							"The failed run retained a verdict without a published inline finding: %v",
+							"The failed run changed its actionable inline rejection: %v.",
 							submitted,
 						)
 					}
@@ -6651,6 +6755,7 @@ func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 	}
 
 	assertSanitizedFailureComment(t, fixture, "Review failed.", "review queue is full")
+
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatalf("submitted review = %v, want none on a rejection", fixture.state.lastSubmitReview)
 	}
@@ -7036,6 +7141,7 @@ func TestServiceSuppressesAHistoricalFindingAndPublishesTheRest(t *testing.T) {
 		Body:       "Original wording.",
 		Importance: 9,
 	}
+
 	historicalBody, err := marker.EncodeFindingBody(domain.HeadSHA(testStaleHeadSHA), historical)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -7188,6 +7294,7 @@ func TestServiceApprovesWhenEveryFindingIsAlreadyResolved(t *testing.T) {
 	resolvedFinding := answeredThreadFinding()
 	restatement := rewordedRepeat()
 	restatement.Evidence = disputeOtherLine
+
 	findingBody, err := marker.EncodeFindingBody(domain.HeadSHA(testHeadSHA), resolvedFinding)
 	if err != nil {
 		t.Fatalf("Encode finding body: %v", err)
@@ -7362,6 +7469,7 @@ func TestServiceKeepsRequestingChangesWhileABotThreadStaysOpen(t *testing.T) {
 		Evidence:   "added",
 		Importance: 9,
 	}
+
 	findingMarker, err := marker.Finding(domain.HeadSHA(testHeadSHA), openFinding)
 	if err != nil {
 		t.Fatalf("Finding marker: %v", err)
@@ -7422,6 +7530,7 @@ func TestServiceStopsPublicationWhenTheServiceShutsDown(t *testing.T) {
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
+
 	admitted, _, err := fixture.service.Admit(ctx, fixture.job())
 	if err != nil {
 		t.Fatalf("Admit: %v", err)
@@ -7672,6 +7781,7 @@ func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissI
 		},
 	)
 	job := fixture.job()
+
 	before, err := fixture.github.ListReviews(
 		context.Background(),
 		job.InstallationID,
@@ -7737,6 +7847,7 @@ func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissI
 		"Review failed while reconciling existing findings.",
 		"reconcile exploded",
 	)
+
 	if state := decodedSummaryState(t, fixture); state.Status != marker.StateFailed {
 		t.Fatalf("state status = %q, want %q", state.Status, marker.StateFailed)
 	}
@@ -7881,23 +7992,27 @@ func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 	)
 
 	job := fixture.job()
+
 	var waitGroup sync.WaitGroup
 	waitGroup.Add(2)
 
 	go func() {
 		defer waitGroup.Done()
+
 		if err := fixture.run(context.Background(), job); err != nil {
 			t.Errorf("first Run: %v", err)
 		}
 	}()
 
 	gateModel.waitUntilCalls(1)
+
 	if gateModel.activeCount() != 1 {
 		t.Fatalf("active model calls = %d, want 1", gateModel.activeCount())
 	}
 
 	go func() {
 		defer waitGroup.Done()
+
 		secondJob := domain.ReviewJob{
 			DeliveryID: "delivery-2",
 			PullRequestRef: domain.PullRequestRef{
@@ -7913,6 +8028,7 @@ func TestServiceSerializesJobsForTheSamePullRequest(t *testing.T) {
 	}()
 
 	time.Sleep(50 * time.Millisecond)
+
 	if gateModel.callCount() != 1 {
 		t.Fatalf("model call count = %d, want 1 while first job holds lock", gateModel.callCount())
 	}
@@ -8021,6 +8137,7 @@ type serviceServerState struct {
 	createCommentStatus int
 	createCommentHangup bool
 	issueCommentStatus  int
+	issueUpdateStatuses []int
 	listThreadsStatus   int
 	streamedComments    []map[string]any
 	// threadNodes is the GraphQL view of the pull request's review threads. A
@@ -8075,6 +8192,7 @@ func (state *serviceServerState) postedThreads() []githubapp.ReviewThread {
 		body, _ := comment["body"].(string)
 		path, _ := comment["path"].(string)
 		line, _ := comment["line"].(float64)
+
 		startLine := line
 		if start, ok := comment["start_line"].(float64); ok {
 			startLine = start
@@ -8121,6 +8239,7 @@ func (stubCollector) CollectRange(
 		},
 		"\n",
 	)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
@@ -8161,6 +8280,7 @@ func (collector *recordingDeltaCollector) CollectRange(
 	collector.mu.Unlock()
 
 	patch := "@@ -1,1 +1,2 @@\n package main\n+added\n"
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
@@ -8205,6 +8325,7 @@ func (twoChunkCollector) CollectRange(
 
 	for index := range 2 {
 		patch := fmt.Sprintf("@@ -1,1 +1,2 @@\n line%d\n+added%d\n", index, index)
+
 		changed, hunks, err := diff.ChangedRightLines(patch)
 		if err != nil {
 			return diff.ReviewInput{}, err
@@ -8389,6 +8510,7 @@ func writeServiceCheckRunPage(
 	}
 
 	start := min((page-1)*serviceCheckRunPageSize, len(matches))
+
 	end := min(start+serviceCheckRunPageSize, len(matches))
 	if end < len(matches) {
 		nextURL := *request.URL
@@ -8447,6 +8569,7 @@ func newSerialGateModel() *serialGateModel {
 func (model *serialGateModel) Review(context.Context, string) (review.Completion, error) {
 	model.mu.Lock()
 	model.active++
+
 	model.calls++
 	if model.active > model.maxSeen {
 		model.maxSeen = model.active
@@ -8506,6 +8629,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 	t.Helper()
 
 	privateKey := serviceTestPrivateKey(t)
+
 	state := &serviceServerState{
 		reviewPages:                     [][]map[string]any{{}},
 		checkRuns:                       []map[string]any{},
@@ -8570,6 +8694,7 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 
 			state.mu.Lock()
 			defer state.mu.Unlock()
+
 			if strings.Contains(request.URL.Path, "/pulls/comments/") &&
 				strings.HasSuffix(request.URL.Path, "/replies") {
 				http.Error(writer, "replies forbidden", http.StatusForbidden)
@@ -8611,12 +8736,14 @@ func newServiceFixture(t *testing.T, options serviceFixtureOptions) *serviceFixt
 		err:     options.reconcileErr,
 		state:   state,
 	}
+
 	collector := options.collector
 	if collector == nil {
 		collector = stubCollector{}
 	}
 
 	model := options.model
+
 	minimumImportance := options.minimumImportance
 	if minimumImportance == 0 {
 		minimumImportance = testMinimumImportance
@@ -8814,6 +8941,7 @@ func handleServiceRequest(
 				state.issueCommentStatus,
 				map[string]any{"message": "list issue comments failed"},
 			)
+
 			return
 		}
 
@@ -8830,6 +8958,7 @@ func handleServiceRequest(
 				state.issueCommentStatus,
 				map[string]any{"message": "create issue comment failed"},
 			)
+
 			return
 		}
 
@@ -8853,12 +8982,28 @@ func handleServiceRequest(
 
 	if request.Method == http.MethodPatch &&
 		strings.Contains(request.URL.Path, "/issues/comments/") {
+		if len(state.issueUpdateStatuses) > 0 {
+			status := state.issueUpdateStatuses[0]
+			state.issueUpdateStatuses = state.issueUpdateStatuses[1:]
+
+			if status != http.StatusOK {
+				serviceWriteJSON(
+					writer,
+					status,
+					map[string]any{"message": "update issue comment failed"},
+				)
+
+				return
+			}
+		}
+
 		if state.issueCommentStatus != http.StatusOK {
 			serviceWriteJSON(
 				writer,
 				state.issueCommentStatus,
 				map[string]any{"message": "update issue comment failed"},
 			)
+
 			return
 		}
 
@@ -8869,6 +9014,7 @@ func handleServiceRequest(
 		}
 
 		idText := strings.TrimPrefix(request.URL.Path, "/repos/owner/repo/issues/comments/")
+
 		var updated map[string]any
 
 		for index, item := range state.issueComments {
@@ -8990,6 +9136,7 @@ func handleServiceRequest(
 					state.createCommentStatus,
 					map[string]any{"message": "create review comment failed"},
 				)
+
 				return
 			}
 
@@ -9202,6 +9349,7 @@ func handleServiceRequest(
 		if body["status"] == "completed" && state.firstCheckCompletionStatus != 0 {
 			status := state.firstCheckCompletionStatus
 			state.firstCheckCompletionStatus = 0
+
 			http.Error(writer, "complete check run failed", status)
 
 			return
@@ -9252,6 +9400,7 @@ func handleServiceRequest(
 				state.pullRequestStatus,
 				map[string]any{"message": "pull request load failed"},
 			)
+
 			return
 		}
 
@@ -9355,6 +9504,7 @@ func writeServiceThreadPage(writer http.ResponseWriter, state *serviceServerStat
 			state.listThreadsStatus,
 			map[string]any{"message": "list review threads failed"},
 		)
+
 		return
 	}
 
@@ -9387,6 +9537,7 @@ func writeServiceReviewPage(
 			state.reviewListStatus,
 			map[string]any{"message": "list reviews failed"},
 		)
+
 		return
 	}
 
@@ -9397,6 +9548,7 @@ func writeServiceReviewPage(
 	}
 
 	page := state.reviewPages[state.reviewPageIndex]
+
 	state.reviewPageIndex++
 	if state.reviewPageIndex == len(state.reviewPages) {
 		page = append(append([]map[string]any{}, page...), state.submittedReviews...)
@@ -9418,6 +9570,7 @@ func writeServiceReviewPage(
 
 func assertRequestOrder(t *testing.T, got []string, want []string) {
 	t.Helper()
+
 	if len(got) != len(want) {
 		t.Fatalf("request count = %d, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
 	}
@@ -9438,6 +9591,7 @@ func assertRequestOrder(t *testing.T, got []string, want []string) {
 
 func serviceTestPrivateKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
+
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
@@ -9461,6 +9615,7 @@ func serviceReadJSONBody(request *http.Request) (map[string]any, error) {
 	defer func() {
 		_ = request.Body.Close()
 	}()
+
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, err

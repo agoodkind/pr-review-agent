@@ -68,6 +68,7 @@ func encodeMetadataRecord(record metadataReviewRecord) string {
 
 func decodeMetadataRecord(body string) (metadataReviewRecord, bool, error) {
 	var record metadataReviewRecord
+
 	start := strings.LastIndex(body, metadataRecordPrefix)
 	if start < 0 {
 		return record, false, nil
@@ -118,6 +119,7 @@ func (service *Service) readMetadataRecord(
 	job domain.ReviewJob,
 ) (metadataReviewRecord, bool, error) {
 	var empty metadataReviewRecord
+
 	comments, err := service.github.ListIssueComments(
 		ctx,
 		job.InstallationID,
@@ -144,8 +146,11 @@ func (service *Service) restoreFindingCheckpoints(
 	chunks []diff.Chunk,
 	completed []string,
 ) (metadataReviewRecord, fallbackReviewRecord, []string, error) {
-	var record metadataReviewRecord
-	var fallback fallbackReviewRecord
+	var (
+		record   metadataReviewRecord
+		fallback fallbackReviewRecord
+	)
+
 	comments, err := service.github.ListIssueComments(
 		ctx,
 		job.InstallationID,
@@ -205,6 +210,7 @@ func renderMetadataFindings(findings []domain.Finding) string {
 			EndLine:   0,
 		}
 		label := source.Label()
+
 		parts := []string{
 			fmt.Sprintf(
 				"##### %s, lines %d-%d: %s",

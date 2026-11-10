@@ -26,6 +26,7 @@ func TestRelationshipReviewJoinsRealGitSourceWithSharedState(t *testing.T) {
 		nil,
 	)
 	maximumBytes := config.MaximumPromptBytes
+
 	combined, err := review.PrepareRelationshipChunks(
 		model,
 		chunks,
@@ -78,6 +79,7 @@ func TestRelationshipReviewJoinsRealGitSourceWithSharedState(t *testing.T) {
 		}
 
 		sharedStateReviewed = sharedStateReviewed || (writer && removal)
+
 		prompt, err := review.BuildPrompt(chunk, 7, "", policy, maximumBytes)
 		if err != nil {
 			t.Fatal(err)
@@ -133,6 +135,7 @@ func TestRelationshipReviewHonorsConfiguredWorkLimit(t *testing.T) {
 			},
 			nil,
 		)
+
 		combined, err := review.PrepareRelationshipChunks(
 			model,
 			chunks,
@@ -171,6 +174,7 @@ func TestRelationshipAdmissionReservesRequiredScopeInActualSDKRequests(t *testin
 		config.Config{ReviewPolicy: policy, MinimumImportance: 7, ReviewModel: "configured-model"},
 		nil,
 	)
+
 	provisional, err := review.PrepareRelationshipChunks(
 		model,
 		chunks,
@@ -218,6 +222,7 @@ func TestRelationshipAdmissionReservesRequiredScopeInActualSDKRequests(t *testin
 	}
 
 	var data reviewrules.PromptData
+
 	required, err := policy.Render("omissions.none", data)
 	if err != nil {
 		t.Fatal(err)
@@ -242,6 +247,7 @@ func TestRelationshipAdmissionReservesRequiredScopeInActualSDKRequests(t *testin
 		maximumBytes,
 		len(required),
 	)
+
 	joint := 0
 	ordinaryRows := make(map[int]bool)
 
@@ -280,6 +286,7 @@ func TestRelationshipAdmissionReservesRequiredScopeInActualSDKRequests(t *testin
 
 		if chunk.RelationshipReview {
 			joint++
+
 			if _, _, split := chunk.Split(); split {
 				t.Fatal("The size correction separated required joint source endpoints.")
 			}
@@ -338,6 +345,7 @@ func TestRelationshipReviewSubdividesLargeGitSourceForJointRequests(t *testing.T
 		nil,
 	)
 	maximumBytes := config.MaximumPromptBytes
+
 	chunks, err := diff.ChunkInput(diff.ReviewInput{Files: []diff.FileContext{file}}, maximumBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -370,6 +378,7 @@ func TestRelationshipReviewSubdividesLargeGitSourceForJointRequests(t *testing.T
 		baseline,
 		len(chunks),
 	)
+
 	combined, err := review.PrepareRelationshipChunks(
 		model,
 		chunks,
@@ -434,6 +443,7 @@ func TestRelationshipReviewSubdividesLargeGitSourceForJointRequests(t *testing.T
 	}
 
 	const restrictedBytes = 80000
+
 	restricted, err := diff.ChunkInput(
 		diff.ReviewInput{Files: []diff.FileContext{file}},
 		restrictedBytes,
@@ -493,7 +503,9 @@ func TestRelationshipReviewSubdividesLargeGitSourceForJointRequests(t *testing.T
 
 func relationshipPolicy(t *testing.T, enabled bool, maximumPairs int) reviewrules.Policy {
 	t.Helper()
+
 	configuration := filepath.Join("..", "..", "config")
+
 	data, err := os.ReadFile(filepath.Join(configuration, "review-prompts.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -532,11 +544,13 @@ func relationshipPolicy(t *testing.T, enabled bool, maximumPairs int) reviewrule
 
 func relationshipGitInput(t *testing.T) (diff.FileContext, []diff.Chunk) {
 	t.Helper()
+
 	before := "package sample\n\nvar store = map[string]int{}\n\nfunc write() {\n\tstore[\"x\"] = 1\n}\n\nfunc unrelated() int {\n\treturn 1\n}\n\nfunc remove() {\n\tdelete(store, \"x\")\n}\n"
 	after := strings.ReplaceAll(before, "= 1", "= 2")
 	after = strings.ReplaceAll(after, "return 1", "return 2")
 	after = strings.ReplaceAll(after, `delete(store, "x")`, `delete(store, "y")`)
 	file := relationshipGitChangedFile(t, before, after)
+
 	chunks, err := diff.ChunkInput(diff.ReviewInput{Files: []diff.FileContext{file}}, 240)
 	if err != nil {
 		t.Fatal(err)
@@ -553,6 +567,7 @@ func relationshipGitChangedFile(t *testing.T, before, after string) diff.FileCon
 	t.Helper()
 	directory := t.TempDir()
 	relationshipGitCommand(t, directory, "init", "--quiet")
+
 	path := filepath.Join(directory, "state.go")
 	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
 		t.Fatal(err)
@@ -575,11 +590,13 @@ func relationshipGitChangedFile(t *testing.T, before, after string) diff.FileCon
 		"-m",
 		"Create source state\n\nCo-authored-by: Codex <noreply@openai.com>",
 	)
+
 	if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	patch := relationshipGitCommand(t, directory, "diff", "--unified=0", "--", "state.go")
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatal(err)
@@ -600,6 +617,7 @@ func relationshipGitCommand(t *testing.T, directory string, arguments ...string)
 	t.Helper()
 	command := exec.CommandContext(t.Context(), "git", arguments...)
 	command.Dir = directory
+
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("Git %s failed: %v\n%s", arguments[0], err, output)

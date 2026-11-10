@@ -202,6 +202,7 @@ func (target Target) String() string {
 func ParseTarget(value string) (Target, error) {
 	repository, numberText, found := strings.Cut(value, "#")
 	parts := strings.Split(repository, "/")
+
 	number, err := strconv.ParseInt(numberText, 10, 64)
 	if !found || len(parts) != 2 || parts[0] == "" || parts[1] == "" || err != nil || number <= 0 {
 		return Target{}, errors.New("pull request identifier must use OWNER/REPOSITORY#NUMBER")
@@ -212,6 +213,7 @@ func ParseTarget(value string) (Target, error) {
 
 func gh(ctx context.Context, args ...string) ([]byte, error) {
 	slog.DebugContext(ctx, "GitHub evidence request started", "operation", args[0])
+
 	data, err := exec.CommandContext(ctx, "gh", args...).Output()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -289,13 +291,16 @@ func completeConnection[T connectionNode](
 		}
 
 		seen[cursor] = true
+
 		var values queryValues
+
 		selection, err := renderQuery(fields, values)
 		if err != nil {
 			return err
 		}
 
 		values.ID, values.Kind, values.Connection, values.Cursor, values.Selection = id, kind, name, cursor, selection
+
 		query, err := renderQuery("connection", values)
 		if err != nil {
 			return err
@@ -318,6 +323,7 @@ func completeConnection[T connectionNode](
 
 		connection.Nodes = append(connection.Nodes, next.Nodes...)
 		connection.PageInfo = next.PageInfo
+
 		connection.Pages++
 		if next.TotalCount != connection.TotalCount {
 			return errors.New("GitHub connection changed during pagination; retry the capture")
@@ -335,12 +341,16 @@ func discover(ctx context.Context, owner string, from, end time.Time) ([]Target,
 	search := "is:pr user:" + owner + " updated:" + from.Format(time.RFC3339) + ".." + end.Format(
 		time.RFC3339,
 	)
+
 	var targets []Target
+
 	cursor := ""
 
 	for {
 		var values queryValues
+
 		values.Search, values.Cursor = search, cursor
+
 		query, err := renderQuery("search", values)
 		if err != nil {
 			return nil, err
@@ -421,6 +431,7 @@ func CaptureGitHub(
 		}
 
 		key := target.Repository + "/" + pr.BaseRefName
+
 		rules, exists := rulesByBranch[key]
 		if !exists {
 			rules = readBranchRules(ctx, target.Repository, pr.BaseRefName)
@@ -458,8 +469,11 @@ func uniqueTargets(owner string, targets []Target) []Target {
 
 func capturePullRequest(ctx context.Context, target Target) (*PullRequest, error) {
 	parts := strings.SplitN(target.Repository, "/", 2)
+
 	var values queryValues
+
 	values.Owner, values.Repository, values.Number = parts[0], parts[1], target.Number
+
 	query, err := renderQuery("pullRequest", values)
 	if err != nil {
 		return nil, err
@@ -542,6 +556,7 @@ func completePullRequest(ctx context.Context, pr *PullRequest) error {
 
 func readBranchRules(ctx context.Context, repository, branch string) BranchRules {
 	var rules BranchRules
+
 	raw, err := gh(
 		ctx,
 		"api",

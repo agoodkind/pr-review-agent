@@ -18,6 +18,7 @@ import (
 
 func TestMetricsDistinguishRetriedExecutionsAndReconciliationOutcomes(t *testing.T) {
 	var logs bytes.Buffer
+
 	logger := slog.New(slog.NewJSONHandler(&logs, nil)).With(
 		"delivery_id",
 		"delivery",
@@ -84,7 +85,9 @@ func TestMetricsDistinguishRetriedExecutionsAndReconciliationOutcomes(t *testing
 	logger.Info("review verdict unchanged", "review_id", "81", "event", "REQUEST_CHANGES")
 	logger.Info("review job completed", "check_run_id", "91")
 	logger.Info("review job skip completed", "check_run_id", "92")
+
 	capturedAt := time.Now().UTC().Add(time.Minute)
+
 	metrics := summarizeLogs(t, logs.Bytes(), capturedAt, true)
 	if metrics.Total.StartedExecutions != 2 || metrics.Total.FailedExecutions != 1 ||
 		metrics.Total.Runs != 1 ||
@@ -116,9 +119,11 @@ func TestMetricsDistinguishRetriedExecutionsAndReconciliationOutcomes(t *testing
 		t.Fatalf("joined fatal error classes = %v", metrics.Total.FailureClasses)
 	}
 
-	var decisions []string
-	var resolved []string
-	var emptyCompletions int
+	var (
+		decisions        []string
+		resolved         []string
+		emptyCompletions int
+	)
 
 	for _, event := range metrics.Runs[0].Lifecycle {
 		if !event.Timestamp.Before(capturedAt) {
@@ -131,6 +136,7 @@ func TestMetricsDistinguishRetriedExecutionsAndReconciliationOutcomes(t *testing
 
 		if event.Message == "review reconciliation analysis completed" {
 			decisions = append(decisions, event.DecisionThreadIDs...)
+
 			resolved = append(resolved, event.ResolvedThreadIDs...)
 			if len(event.DecisionThreadIDs) == 0 {
 				emptyCompletions++
@@ -167,6 +173,7 @@ func TestMetricsDistinguishRetriedExecutionsAndReconciliationOutcomes(t *testing
 
 func TestMetricsReadLegacyResolvedThreadsAndInvalidLogTime(t *testing.T) {
 	var logs bytes.Buffer
+
 	logger := slog.New(slog.NewJSONHandler(&logs, nil)).With(
 		"delivery_id",
 		"delivery",
@@ -189,8 +196,10 @@ func TestMetricsReadLegacyResolvedThreadsAndInvalidLogTime(t *testing.T) {
 		"api_code",
 		"insufficient_quota",
 	)
+
 	capturedAt := time.Now().UTC()
 	metrics := summarizeLogs(t, logs.Bytes(), capturedAt, false)
+
 	completion := metrics.Runs[0].Lifecycle[0]
 	if !completion.Timestamp.Equal(time.UnixMilli(capturedAt.UnixMilli()).UTC()) ||
 		fmt.Sprint(completion.DecisionThreadIDs) != "[PRRT_fixed]" ||
@@ -206,6 +215,7 @@ func TestMetricsReadLegacyResolvedThreadsAndInvalidLogTime(t *testing.T) {
 
 func TestMetricsAssignExecutionCountsToSourceDay(t *testing.T) {
 	var logs bytes.Buffer
+
 	logger := slog.New(slog.NewJSONHandler(&logs, nil)).With(
 		"delivery_id",
 		"delivery",
@@ -218,6 +228,7 @@ func TestMetricsAssignExecutionCountsToSourceDay(t *testing.T) {
 	logger.Info("review job failed", "time", capturedAt.Format(time.RFC3339Nano))
 	metrics := summarizeLogs(t, logs.Bytes(), capturedAt, false)
 	startedDay := metrics.Days[startedAt.Format(time.DateOnly)]
+
 	failedDay := metrics.Days[capturedAt.Format(time.DateOnly)]
 	if startedDay.StartedExecutions != 1 || startedDay.FailedExecutions != 0 ||
 		failedDay.StartedExecutions != 0 ||
@@ -239,13 +250,17 @@ func summarizeLogs(
 	duplicate bool,
 ) cloudflareops.Metrics {
 	t.Helper()
+
 	var events bytes.Buffer
+
 	encoder := json.NewEncoder(&events)
 	scanner := bufio.NewScanner(bytes.NewReader(logs))
+
 	var index int
 
 	for scanner.Scan() {
 		index++
+
 		var source map[string]json.RawMessage
 		if err := json.Unmarshal(scanner.Bytes(), &source); err != nil {
 			t.Fatal(err)
@@ -253,6 +268,7 @@ func summarizeLogs(
 
 		source["message"] = source[slog.MessageKey]
 		delete(source, slog.MessageKey)
+
 		event := cloudflareops.Event{
 			Timestamp: capturedAt.UnixMilli(),
 			Source:    source,

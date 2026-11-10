@@ -109,8 +109,10 @@ func traceFindings(ctx context.Context, findings []domain.Finding) ([]findingTra
 
 	traces := make([]findingTrace, 0, len(findings))
 	for _, finding := range findings {
-		var findingID string
-		var err error
+		var (
+			findingID string
+			err       error
+		)
 		if finding.EffectiveSurface() == domain.FindingFile {
 			findingID, err = marker.FindingID(finding)
 		} else {
@@ -184,6 +186,7 @@ func traceThreads(threads []githubapp.ReviewThread, botLogin string) []threadTra
 			FindingHead: "",
 			Importance:  0,
 		}
+
 		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
 		if ok {
 			trace.FindingID = findingMarker.ID

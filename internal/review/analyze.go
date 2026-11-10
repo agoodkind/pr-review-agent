@@ -117,6 +117,7 @@ func (collector *findingCollector) collect(findings []domain.Finding) {
 // works with: sanitized text and a path that matches the diff.
 func normalizeFinding(finding domain.Finding) domain.Finding {
 	sanitized := sanitizeFinding(finding)
+
 	sanitized.Surface = finding.EffectiveSurface()
 	if sanitized.Surface == domain.FindingFile {
 		if normalizedPath, err := marker.NormalizePath(sanitized.Path); err == nil {
@@ -155,6 +156,7 @@ func GroundedFindings(
 				slog.String("title", sanitized.Title),
 				slog.String("evidence", sanitized.Evidence),
 			)
+
 			continue
 		}
 
@@ -412,6 +414,7 @@ func reviewChunkObserved(
 	logger := gklog.L(ctx)
 	nothing := chunkAnalysis{Results: nil, Unreadable: nil}
 	required := strings.Join(requiredSupport, "")
+
 	bounded, err := BoundModelReviewChunksWithContext(
 		model,
 		[]diff.Chunk{chunk},
@@ -446,6 +449,7 @@ func reviewChunkObserved(
 	}
 
 	chunk = bounded[0]
+
 	prompt, err := BuildModelReviewPrompt(
 		model,
 		chunk,
@@ -464,6 +468,7 @@ func reviewChunkObserved(
 	startedAt := now()
 	completion, err := model.Review(ctx, prompt)
 	elapsed := now().Sub(startedAt)
+
 	attempt := chunkReviewAttempt{
 		model:             model,
 		chunk:             chunk,
@@ -521,6 +526,7 @@ func reviewChunkParts(
 			required,
 		)
 		combined.merge(part)
+
 		if err != nil {
 			return combined, err
 		}
@@ -651,6 +657,7 @@ func renderChunkPrompt(
 	}
 
 	var data reviewrules.PromptData
+
 	data.MinimumImportance = minimumImportance
 	data.Input = policy.WrapUntrusted(chunk.Text)
 	data.Anchors = policy.WrapUntrusted(string(anchors))
@@ -663,7 +670,9 @@ func renderChunkPrompt(
 		}
 
 		var pathData reviewrules.PromptData
+
 		pathData.Path, pathData.Input = policy.EscapeUntrusted(path), instruction
+
 		text, err := renderPrompt(policy, "review.path_instructions", pathData)
 		if err != nil {
 			return "", err
@@ -674,7 +683,9 @@ func renderChunkPrompt(
 
 	if chunk.RelationshipReview {
 		var relationshipData reviewrules.PromptData
+
 		relationshipData.Path = strings.Join(chunk.Paths, ", ")
+
 		instructions, err := renderPrompt(policy, "relationship.input", relationshipData)
 		if err != nil {
 			return "", err

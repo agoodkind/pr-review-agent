@@ -34,6 +34,7 @@ func (service *Service) collectAdmissionInput(
 	logger *slog.Logger,
 ) (admittedFiles, bool, error) {
 	var empty admittedFiles
+
 	input, err := service.collector.CollectRange(ctx, job.PullRequestRef, pullRequest, base)
 	if err != nil {
 		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
@@ -94,6 +95,7 @@ func (service *Service) prepareAdmissionPlan(
 	admitted admittedFiles,
 ) (admissionPlan, bool, error) {
 	var empty admissionPlan
+
 	contentInput, assessments, assessmentModels, assessmentRequests, err := service.classifyInput(
 		ctx,
 		admitted.input,
@@ -160,6 +162,7 @@ func (service *Service) prepareAdmissionPlan(
 
 func (service *Service) admissionContext(work deltaWork) (string, string, error) {
 	shortfall := classifyStructuralShortfall(work)
+
 	promptContext, err := BuildPullRequestContext(
 		work.PullRequest,
 		work.Files,
@@ -184,7 +187,9 @@ func (service *Service) boundAdmissionChunks(
 	work := plan.work
 	required := plan.required
 	promptContext := plan.promptContext
+
 	var err error
+
 	work.Chunks, err = BoundModelReviewChunksWithContext(
 		service.model,
 		work.Chunks,

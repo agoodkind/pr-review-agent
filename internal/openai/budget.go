@@ -72,8 +72,12 @@ func (budgetError *budgetAdmissionError) DailyBudgetExhausted() bool {
 
 func (client *Client) checkBudget(ctx context.Context, target provider) (budgetSnapshot, error) {
 	now := client.now()
-	var emptyWindow quota.Window
-	var emptyAccounting quota.Snapshot
+
+	var (
+		emptyWindow     quota.Window
+		emptyAccounting quota.Snapshot
+	)
+
 	snapshot := budgetSnapshot{
 		day:          "",
 		used:         0,
@@ -84,6 +88,7 @@ func (client *Client) checkBudget(ctx context.Context, target provider) (budgetS
 		window:       emptyWindow,
 		accounting:   emptyAccounting,
 	}
+
 	var err error
 	if target.tokenLimit > 0 {
 		snapshot, err = client.checkWindowBudget(
@@ -143,6 +148,7 @@ func (client *Client) checkDailyBudget(
 
 	requestContext, cancel := context.WithTimeout(ctx, budgetRequestTimeout)
 	defer cancel()
+
 	request, err := http.NewRequestWithContext(
 		requestContext,
 		http.MethodPost,
@@ -155,6 +161,7 @@ func (client *Client) checkDailyBudget(
 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("X-Pr-Agent-Budget-Signature", telemetry.Sign(client.budgetSigningKey, body))
+
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		return snapshot, budgetFailure(target, snapshot, err)
@@ -163,6 +170,7 @@ func (client *Client) checkDailyBudget(
 	defer func() {
 		_ = response.Body.Close()
 	}()
+
 	if response.StatusCode != http.StatusOK {
 		return snapshot, budgetFailure(
 			target,
@@ -226,7 +234,9 @@ func (client *Client) checkWindowBudget(
 ) (budgetSnapshot, error) {
 	snapshot.limit, snapshot.window = limit.Limit, limit.Window
 	snapshot.used, snapshot.remaining, snapshot.known = 0, 0, false
+
 	var emptyAccounting quota.Snapshot
+
 	snapshot.accounting = emptyAccounting
 	if client.budgetURL == "" || len(client.budgetSigningKey) == 0 {
 		return snapshot, budgetFailure(
@@ -243,7 +253,9 @@ func (client *Client) checkWindowBudget(
 
 	requestContext, cancel := context.WithTimeout(ctx, budgetRequestTimeout)
 	defer cancel()
+
 	storage := quota.NewClient(client.budgetURL, client.budgetSigningKey, client.httpClient)
+
 	usage, err := storage.Query(requestContext, target.id, target.model, bounds)
 	if err != nil {
 		return snapshot, budgetFailure(target, snapshot, err)
@@ -262,6 +274,7 @@ func (client *Client) checkWindowBudget(
 	}
 
 	snapshot.accounting = accounting
+
 	snapshot.used, snapshot.remaining, snapshot.known = accounting.Used, accounting.Remaining, true
 	if !accounting.Allowed {
 		return snapshot, budgetFailure(target, snapshot, errDailyTokenLimitExhausted)

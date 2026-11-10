@@ -16,8 +16,10 @@ func (catalog Catalog) FindingDeduplication(id ID) (Deduplication, error) {
 	if err != nil {
 		return "", err
 	}
+
 	if entry.Deduplication == "" {
 		return DeduplicateDefect, nil
 	}
+
 	return entry.Deduplication, nil
 }

@@ -92,6 +92,7 @@ func NewForwarder(endpoint string, signingKey []byte, httpClient *http.Client) *
 		closed:     &sync.Once{},
 		done:       make(chan struct{}),
 	}
+
 	go func() {
 		// A panic in the flush loop must not end the service. Log shipping is
 		// the least important thing this process does.
@@ -104,6 +105,7 @@ func NewForwarder(endpoint string, signingKey []byte, httpClient *http.Client) *
 				)
 			}
 		}()
+
 		forwarder.run()
 	}()
 
@@ -112,6 +114,7 @@ func NewForwarder(endpoint string, signingKey []byte, httpClient *http.Client) *
 
 func (forwarder *Forwarder) run() {
 	defer close(forwarder.done)
+
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
@@ -157,6 +160,7 @@ func (forwarder *Forwarder) Handle(_ context.Context, record slog.Record) error 
 
 	forwarder.mu.Lock()
 	defer forwarder.mu.Unlock()
+
 	buffered := *forwarder.pending
 	if len(buffered) >= bufferCapacity {
 		buffered = buffered[1:]
@@ -225,6 +229,7 @@ func (forwarder *Forwarder) flush() {
 func (forwarder *Forwarder) take() Batch {
 	forwarder.mu.Lock()
 	defer forwarder.mu.Unlock()
+
 	buffered := *forwarder.pending
 	if len(buffered) == 0 {
 		return Batch{Records: nil}
@@ -250,6 +255,7 @@ func (forwarder *Forwarder) send(batch Batch) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), shipTimeout)
 	defer cancel()
+
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,

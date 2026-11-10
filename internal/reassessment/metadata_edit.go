@@ -44,6 +44,7 @@ func (coordinator *Coordinator) ScheduleMetadataEdit(
 	}
 
 	key := coordinator.key(job)
+
 	response, err := coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "query", Key: key, ExpectedVersion: 0, Record: nil},
@@ -72,6 +73,7 @@ func (coordinator *Coordinator) ScheduleMetadataEdit(
 	record.Phase = "waiting"
 	record.Reason = "metadata_edit_settling"
 	record.NotBeforeMS = now.Add(coordinator.Settings.MetadataSettleDelay).UnixMilli()
+
 	version := int64(0)
 	if prior != nil {
 		version = prior.Version
@@ -86,6 +88,7 @@ func (coordinator *Coordinator) ScheduleMetadataEdit(
 	}
 
 	record.MetadataCheckHeads[job.DeliveryID] = job.Head
+
 	response, err = coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "transition", Key: key, ExpectedVersion: version, Record: &record},
@@ -113,6 +116,7 @@ func (coordinator *Coordinator) SupersedeMetadataEdit(
 	}
 
 	key := coordinator.key(job)
+
 	response, err := coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "query", Key: key, ExpectedVersion: 0, Record: nil},
@@ -159,6 +163,7 @@ func (coordinator *Coordinator) SupersedeMetadataEdit(
 	record.NotBeforeMS = now.UnixMilli()
 	retainMetadataChecks(&record, prior)
 	record.SourceDeliveries = append(record.SourceDeliveries, job.DeliveryID)
+
 	response, err = coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "transition", Key: key, ExpectedVersion: prior.Version, Record: &record},
@@ -186,6 +191,7 @@ func (coordinator *Coordinator) WakeUnqueuedReview(
 	}
 
 	key := coordinator.key(job)
+
 	response, err := coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "query", Key: key, ExpectedVersion: 0, Record: nil},
@@ -201,6 +207,7 @@ func (coordinator *Coordinator) WakeUnqueuedReview(
 
 	record.NotBeforeMS = coordinator.Clock().UnixMilli()
 	record.Dispatch = false
+
 	response, err = coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "transition", Key: key, ExpectedVersion: record.Version, Record: record},
@@ -244,6 +251,7 @@ func (coordinator *Coordinator) planMetadataEdit(
 	fingerprint := diff.MetadataRevision(diff.PullRequestMetadata(current, nil))
 	changed := record.MetadataFingerprint != "" && fingerprint != record.MetadataFingerprint
 	record.MetadataRevision = diff.PullRequestRevision(current)
+
 	record.MetadataFingerprint = fingerprint
 	if changed {
 		record.Generation = rand.Text()
@@ -260,9 +268,11 @@ func (coordinator *Coordinator) planMetadataEdit(
 	}
 
 	var snapshot Snapshot
+
 	snapshot.PullRequest = current
 	snapshot.LatestCheck = live.Check
 	snapshot.LatestFound = live.CheckFound
+
 	check, found, err := coordinator.GitHub.FindCheckRunByExternalID(
 		ctx,
 		record.Job.InstallationID,
@@ -283,6 +293,7 @@ func (coordinator *Coordinator) planMetadataEdit(
 
 func retainMetadataChecks(record *Record, prior *Record) {
 	record.SourceDeliveries = append([]string(nil), prior.SourceDeliveries...)
+
 	record.MetadataCheckHeads = maps.Clone(prior.MetadataCheckHeads)
 	if prior.Job.MetadataOnly {
 		if record.MetadataCheckHeads == nil {

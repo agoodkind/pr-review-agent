@@ -311,6 +311,7 @@ func logPublishedFindings(
 	failed int,
 ) {
 	logger := gklog.L(ctx)
+
 	eligibleTrace, err := traceFindings(ctx, eligible)
 	if err != nil {
 		logger.ErrorContext(ctx, "trace eligible findings", slog.String("err", err.Error()))
@@ -474,6 +475,7 @@ func collectPublicationState(
 		}
 
 		historyIDs[findingMarker.ID] = struct{}{}
+
 		if anchor, valid := findingAnchorKey(
 			thread.RootComment.Path,
 			thread.RootComment.StartLine,

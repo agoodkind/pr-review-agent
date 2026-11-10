@@ -152,6 +152,7 @@ func (service *Service) chunkPosts(
 	for {
 		pass.publicationMu.Lock()
 		selectedCount := len(pass.selection.findings)
+
 		selected := slices.Clone(pass.selection.findings)
 		if selectedCount == 0 {
 			posts := service.renderChunkFindings(ctx, head, candidates, pass)
@@ -212,8 +213,10 @@ func (service *Service) consolidateAcrossChunks(
 
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	answer, err := service.model.Consolidate(callCtx, prompt)
+
 	cancel()
 	pass.recordConsolidationRequest()
+
 	if err == nil {
 		err = answer.Validate(len(candidates))
 	}
@@ -319,6 +322,7 @@ func (service *Service) consolidateChunk(
 	// to the service would be timed by whatever the process booted with, which
 	// is the staleness the carrying exists to end.
 	callCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
+
 	prompt, err := BuildConsolidationPrompt(
 		service.model,
 		candidates,
@@ -342,8 +346,10 @@ func (service *Service) consolidateChunk(
 	}
 
 	answer, err := service.model.Consolidate(callCtx, prompt)
+
 	cancel()
 	pass.recordConsolidationRequest()
+
 	if err == nil {
 		err = answer.Validate(len(candidates))
 	}
@@ -437,6 +443,7 @@ func strongestCandidate(numbers []int, candidates []domain.Finding) int {
 	strongest := numbers[0]
 	for _, number := range numbers {
 		importance := candidates[number-1].Importance
+
 		strongestImportance := candidates[strongest-1].Importance
 		if importance > strongestImportance {
 			strongest = number
@@ -462,6 +469,7 @@ func BuildConsolidationPrompt(
 ) (string, error) {
 	name := "consolidate.input"
 	findings := formatConsolidationCandidates(candidates)
+
 	if len(carried) > 0 {
 		name = "consolidate.across.input"
 		findings = "Findings already selected:\n" + formatConsolidationCandidates(
@@ -476,6 +484,7 @@ func BuildConsolidationPrompt(
 		maximumBytes,
 		func(optional string, omitted bool) (string, error) {
 			var data reviewrules.PromptData
+
 			data.Input = required
 			if optional != "" {
 				data.Input = policy.WrapUntrusted(
@@ -489,6 +498,7 @@ func BuildConsolidationPrompt(
 			}
 
 			var noteData reviewrules.PromptData
+
 			note, err := renderPrompt(policy, "consolidate.context_omitted", noteData)
 
 			return prompt + "\n\n" + note, err

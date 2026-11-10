@@ -55,6 +55,7 @@ func TestReconciliationBatchesFitCompleteNativeProviderRequests(t *testing.T) {
 	}
 
 	maximum := single + 100
+
 	batches, err := reconcile.BuildReconciliationRequests(
 		threads,
 		pullRequest,
@@ -102,6 +103,7 @@ func TestReconciliationReportsAnIndivisibleThreadWithoutDroppingOtherBatches(t *
 		{ID: "oversized", Text: strings.Repeat("required anchor\n", 1000)},
 		{ID: "reviewable", Text: "required small anchor"},
 	}
+
 	initial, err := reconcile.BuildReconciliationRequests(
 		threads[1:],
 		pullRequest,
@@ -126,6 +128,7 @@ func TestReconciliationReportsAnIndivisibleThreadWithoutDroppingOtherBatches(t *
 		client,
 		maximum,
 	)
+
 	var refusal *diff.PromptSizeError
 	if !errors.As(err, &refusal) || refusal.Limit != maximum || refusal.Actual <= maximum ||
 		len(batches) != 1 ||
@@ -137,6 +140,7 @@ func TestReconciliationReportsAnIndivisibleThreadWithoutDroppingOtherBatches(t *
 	}
 
 	client = reconciliationBudgetClient(policy, refusal.Actual-1)
+
 	oversized, err := reconcile.BuildReconciliationRequests(
 		threads[:1],
 		pullRequest,

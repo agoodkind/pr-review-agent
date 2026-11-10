@@ -91,12 +91,14 @@ func (service *Service) decidePublication(
 	)
 	approvalAllowed := headFullyReviewed && (!omissionsDecided || omissionsAccepted) &&
 		len(inputs.fallback) == 0
+
 	decision := reviewerDecision(inputs.threads, service.botLogin, approvalAllowed)
 	if len(inputs.metadata) > 0 {
 		decision = domain.ReviewDecisionRequestChanges
 	}
 
 	blocking := blockingReasons(inputs.threads, service.botLogin, job.PullRequestRef)
+
 	summary := Summary{
 		FileAssessmentNote: "",
 		Head:               head,

@@ -49,8 +49,10 @@ func (settings workerSettings) handoff(
 	configuration DeploymentConfiguration,
 ) (deploymentHandoff, error) {
 	var handoff deploymentHandoff
+
 	flag, exists := settings.binding("REVIEW_HANDOFF")
 	candidate, candidateExists := settings.binding("CANDIDATE_REVIEW_SERVICE")
+
 	if exists && flag.Type != plainTextBindingType {
 		return handoff, errors.New("deployed REVIEW_HANDOFF must use plain text")
 	}

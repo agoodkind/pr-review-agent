@@ -91,6 +91,7 @@ func (client *Client) request(
 
 	request.Header.Set("Authorization", "Bearer "+client.token)
 	request.Header.Set("Content-Type", "application/json")
+
 	response, err := client.httpClient.Do(request)
 	if err != nil {
 		slog.WarnContext(ctx, "Cloudflare transport failed")
@@ -98,6 +99,7 @@ func (client *Client) request(
 	}
 
 	defer func() { _ = response.Body.Close() }()
+
 	body, err := io.ReadAll(io.LimitReader(response.Body, maximumResponseBytes+1))
 	if err != nil {
 		return envelope{}, response.StatusCode, errors.New("cloudflare response could not be read")
@@ -279,6 +281,7 @@ func AcquireCredentials(
 		"ephemeral",
 		options.AccountTokenFile != "",
 	)
+
 	if (options.TokenFile == "") == (options.AccountTokenFile == "") {
 		return nil, errors.New("provide exactly one scoped token file or account token file")
 	}
@@ -303,7 +306,9 @@ func AcquireCredentials(
 	}
 
 	var handle Credentials
+
 	credentials = &handle
+
 	credentials.Client = client
 	if options.TokenFile != "" {
 		return credentials, nil
@@ -320,6 +325,7 @@ func AcquireCredentials(
 	}
 
 	credentials.accountClient = client
+
 	credentials.directory, err = os.MkdirTemp("", "pragent-ops-credentials.")
 	if err != nil {
 		slog.WarnContext(ctx, "Private credential directory creation failed")
@@ -327,11 +333,13 @@ func AcquireCredentials(
 	}
 
 	acquired := credentials
+
 	defer func() {
 		if returnErr != nil {
 			returnErr = errors.Join(returnErr, acquired.Close(ctx))
 		}
 	}()
+
 	if err := credentials.acquireScoped(ctx, options); err != nil {
 		return nil, err
 	}
@@ -354,6 +362,7 @@ func (client *Client) tokenBody(ctx context.Context, options CredentialOptions) 
 		}
 
 		seen[name] = true
+
 		permissionID, err := client.permissionID(ctx, name)
 		if err != nil {
 			return nil, err
@@ -432,6 +441,7 @@ func (client *Client) createToken(ctx context.Context, body []byte) (envelope, e
 		45*time.Second,
 	)
 	defer cancelCreation()
+
 	created, _, err := client.request(creationContext, http.MethodPost, "/user/tokens", body)
 
 	return created, err
@@ -446,6 +456,7 @@ func (credentials *Credentials) Close(ctx context.Context) error {
 	if credentials.id != "" && !credentials.Revoked {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 90*time.Second)
 		defer cancel()
+
 		_, _, err := credentials.accountClient.request(
 			ctx,
 			http.MethodDelete,

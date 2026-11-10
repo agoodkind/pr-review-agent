@@ -98,6 +98,7 @@ func (coordinator *Coordinator) delayed(now time.Time, attempts int) time.Time {
 	}
 
 	var entropy [1]byte
+
 	_, _ = rand.Read(entropy[:])
 	delay += time.Duration(entropy[0]) * (delay / 10) / 255
 
@@ -144,6 +145,7 @@ func (coordinator *Coordinator) Observe(
 	}
 
 	key := coordinator.key(job)
+
 	response, err := coordinator.Store.Send(
 		ctx,
 		Mutation{Action: "query", Key: key, ExpectedVersion: 0, Record: nil},
@@ -154,6 +156,7 @@ func (coordinator *Coordinator) Observe(
 
 	prior := response.Record
 	now := coordinator.Clock()
+
 	retry := outcome.Disposition == domain.AssessmentFailed ||
 		outcome.Disposition == domain.AssessmentIncomplete ||
 		outcome.Disposition == domain.AssessmentDeclined && coordinator.Settings.RetryDeclined
@@ -170,7 +173,9 @@ func (coordinator *Coordinator) Observe(
 	}
 
 	var record Record
+
 	version := int64(0)
+
 	if prior != nil {
 		record = *prior
 		version = prior.Version
@@ -195,6 +200,7 @@ func (coordinator *Coordinator) Observe(
 	record.Phase = "waiting"
 	record.Reason = string(outcome.Disposition)
 	record.NotBeforeMS = coordinator.delayed(now, record.Attempts).UnixMilli()
+
 	record.NotBeforeMS = max(record.NotBeforeMS, outcome.AvailableAtMS)
 	if !retry {
 		record.Phase = "confirming"
@@ -215,6 +221,7 @@ func (coordinator *Coordinator) Observe(
 	if retry {
 		outcome.ReassessmentID = record.ID
 		outcome.RetryAtMS = record.NotBeforeMS
+
 		coordinator.log(ctx, "reassessment queued", *response.Record)
 	} else {
 		coordinator.log(ctx, "reassessment outcome recorded", *response.Record)
@@ -258,6 +265,7 @@ func (coordinator *Coordinator) DeliveryScheduled(
 // Plan defers uncertain eligibility without consuming another retry attempt.
 func (coordinator *Coordinator) Plan(ctx context.Context, record Record) Record {
 	record.Dispatch = false
+
 	now := coordinator.Clock()
 	if !coordinator.Settings.Enabled {
 		return coordinator.terminal(record, "disabled", now)
@@ -296,6 +304,7 @@ func (coordinator *Coordinator) Plan(ctx context.Context, record Record) Record 
 	}
 
 	repair := coordinator.Repair(*target, &record, live, now)
+
 	applied, err := coordinator.Store.WriteTarget(
 		ctx,
 		repair.Target,
@@ -378,6 +387,7 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 		record.Attempts = 0
 		record.CreatedAtMS = now.UnixMilli()
 		ttl, _ := time.ParseDuration(coordinator.Settings.TTL)
+
 		record.ExpiresAtMS = 0
 		if ttl > 0 {
 			record.ExpiresAtMS = now.Add(ttl).UnixMilli()
@@ -414,6 +424,7 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 
 	if snapshot.AvailableAt.After(now) {
 		record.NotBeforeMS = snapshot.AvailableAt.UnixMilli() + 1000
+
 		record.Reason = "quota_wait"
 		if record.Phase != "running" {
 			record.Phase = "waiting"
@@ -432,9 +443,12 @@ func (coordinator *Coordinator) planConsistent(
 	now time.Time,
 ) Record {
 	pr := live.PullRequest
+
 	var snapshot Snapshot
+
 	snapshot.PullRequest = pr
 	snapshot.LatestCheck = live.Check
+
 	snapshot.LatestFound = live.CheckFound
 	if record.RebuildEvidence {
 		snapshot.LatestFound = false
@@ -507,7 +521,9 @@ func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Rec
 	record.Job.CheckRunStatus = ""
 	record.Job.CheckRunConclusion = ""
 	record.Job.Forced = record.Phase == "running" && record.Job.Forced
+
 	var settings domain.ReviewSettings
+
 	record.Job.Settings = settings
 	record.Job.AutomaticReassessment = true
 	record.Job.ReassessmentID = record.ID
@@ -525,11 +541,13 @@ func (coordinator *Coordinator) newGeneration(
 	now time.Time,
 ) Record {
 	var record Record
+
 	record.ID = rand.Text()
 	record.Key = key
 	record.Generation = rand.Text()
 	record.OriginDeliveryID = job.DeliveryID
 	record.CreatedAtMS = now.UnixMilli()
+
 	ttl, _ := time.ParseDuration(coordinator.Settings.TTL)
 	if ttl > 0 {
 		record.ExpiresAtMS = now.Add(ttl).UnixMilli()
@@ -552,6 +570,7 @@ func (coordinator *Coordinator) deferAfterFailure(
 		slog.String("err", cause.Error()),
 	)
 	record.Reason = stage + "_unavailable"
+
 	retryAt := coordinator.delayed(now, record.Attempts).UnixMilli()
 	if record.Job.MetadataOnly {
 		record.NotBeforeMS = max(record.NotBeforeMS, retryAt)

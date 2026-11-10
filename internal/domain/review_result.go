@@ -63,6 +63,7 @@ func validateReviewResult(
 		}
 
 		result.Findings[index].Importance = score
+
 		deduplication, err := catalog.FindingDeduplication(finding.RuleID)
 		if err != nil {
 			return ReviewResult{}, fmt.Errorf("apply review rule deduplication: %w", err)

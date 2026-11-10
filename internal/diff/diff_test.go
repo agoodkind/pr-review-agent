@@ -113,6 +113,7 @@ func TestChangedRightLinesTruncatedHunk(t *testing.T) {
 			},
 		},
 	}
+
 	chunks, err := diff.ChunkInput(input, 10_000)
 	if err != nil {
 		t.Fatalf("ChunkInput: %v", err)
@@ -195,6 +196,7 @@ func TestCollectorModifiedFile(t *testing.T) {
 		},
 	}
 	collector := diff.NewCollector(source)
+
 	input, err := collector.Collect(context.Background(), testRef(), testPullRequest())
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -233,6 +235,7 @@ func TestCollectorRenamedFile(t *testing.T) {
 			"pkg/new.go": []byte("line\nadded\n"),
 		},
 	}
+
 	input, err := diff.NewCollector(source).Collect(
 		context.Background(),
 		testRef(),
@@ -264,6 +267,7 @@ func TestCollectorDeletedFileSkipsContent(t *testing.T) {
 	}
 	pullRequest := testPullRequest()
 	pullRequest.Base = domain.HeadSHA(testStaleHeadSHA)
+
 	input, err := diff.NewCollector(source).Collect(context.Background(), testRef(), pullRequest)
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -293,6 +297,7 @@ func TestCollectorBinaryFileIncomplete(t *testing.T) {
 			},
 		},
 	}
+
 	input, err := diff.NewCollector(source).Collect(
 		context.Background(),
 		testRef(),
@@ -317,6 +322,7 @@ func TestCollectorMissingPatchIncomplete(t *testing.T) {
 			},
 		},
 	}
+
 	input, err := diff.NewCollector(source).Collect(
 		context.Background(),
 		testRef(),
@@ -348,6 +354,7 @@ func TestCollectorFailedContentReadReturnsError(t *testing.T) {
 					},
 					getErr: cause,
 				}
+
 				input, err := diff.NewCollector(source).CollectRange(
 					context.Background(),
 					testRef(),
@@ -382,6 +389,7 @@ func TestCollectorDeterministicPathOrder(t *testing.T) {
 			"m.go": []byte("m\n"),
 		},
 	}
+
 	input, err := diff.NewCollector(source).Collect(
 		context.Background(),
 		testRef(),
@@ -577,6 +585,7 @@ func TestEndToEndMoreThanOneHundredChangedFiles(t *testing.T) {
 	}
 
 	source := &fakeSource{files: files, contents: contents}
+
 	input, err := diff.NewCollector(source).Collect(
 		context.Background(),
 		testRef(),
@@ -660,6 +669,7 @@ func TestChunkInputBoundsCurrentContentAroundEachHunk(t *testing.T) {
 // A hunk outside the current source is refused instead of reviewed without context.
 func TestChunkInputRefusesMismatchedHunkCoordinates(t *testing.T) {
 	const maximumBytes = 400
+
 	input := diff.ReviewInput{
 		PullRequest: githubapp.PullRequest{},
 		Files: []diff.FileContext{
@@ -734,6 +744,7 @@ func (source *fakeSource) Compare(
 ) (githubapp.Comparison, error) {
 	source.compareCalls++
 	source.lastCompareBase = base
+
 	source.lastCompareHead = head
 	if source.compareErr != nil {
 		return githubapp.Comparison{}, source.compareErr
@@ -803,6 +814,7 @@ func TestChunkSplitDividesHunksAndKeepsEveryLine(t *testing.T) {
 		},
 		"\n",
 	)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		t.Fatalf("ChangedRightLines: %v", err)
@@ -982,6 +994,7 @@ func TestCollectorRangeReviewsEverythingWhenTheBaseIsGone(t *testing.T) {
 // request, whose lines cannot accept review comments.
 func TestCollectRangeUsesThePullRequestWhenReviewHistoryDiverges(t *testing.T) {
 	const divergedMergeBase = "f8a9c5fdfaf828ef157a37e2f5d4f4424963af65"
+
 	source := &fakeSource{
 		files: []githubapp.ChangedFile{
 			{

@@ -21,6 +21,7 @@ func (service *Service) classifyInput(
 	settings reviewSettings,
 ) (diff.ReviewInput, []domain.FileAssessment, []string, int, error) {
 	logger := gklog.L(ctx)
+
 	if len(unresolvedFiles) == 0 {
 		return selectFileContentReview(
 			input,
@@ -30,6 +31,7 @@ func (service *Service) classifyInput(
 	}
 
 	var models []string
+
 	requests := 0
 
 	for _, file := range unresolvedFiles {
@@ -44,13 +46,16 @@ func (service *Service) classifyInput(
 			settings.maximumPromptBytes,
 			assessments,
 		)
+
 		cancel()
+
 		if completion.Model != "" {
 			requests++
 		}
 
 		if errors.Is(err, ErrAssessmentIncomplete) {
 			attributes := []slog.Attr{slog.String("path", file.Path), slog.Any("err", err)}
+
 			var rejection *AssessmentValidationError
 			if errors.As(err, &rejection) {
 				attributes = append(
@@ -68,6 +73,7 @@ func (service *Service) classifyInput(
 				"File classification remains unresolved; ordinary source review will continue",
 				attributes...,
 			)
+
 			unresolved, fallbackErr := UnresolvedFileAssessment(file, service.reviewPolicy)
 			if fallbackErr != nil {
 				return input, nil, nil, requests, fallbackErr
@@ -101,6 +107,7 @@ func UnresolvedFileAssessment(
 	policy reviewrules.Policy,
 ) (domain.FileAssessment, error) {
 	var data reviewrules.PromptData
+
 	reason, err := renderPrompt(policy, "coverage.classification_incomplete", data)
 	if err != nil {
 		return domain.FileAssessment{}, err

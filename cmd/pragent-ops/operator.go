@@ -14,8 +14,11 @@ import (
 func registerOperator(ctx context.Context, args []string, stdout, stderr io.Writer) (
 	returnErr error,
 ) {
-	var opts options
-	var operatorTokenFile string
+	var (
+		opts              options
+		operatorTokenFile string
+	)
+
 	set := flag.NewFlagSet("operator-token", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(
@@ -54,30 +57,37 @@ func registerOperator(ctx context.Context, args []string, stdout, stderr io.Writ
 		"",
 		"Worker script; defaults to the Wrangler configuration.",
 	)
+
 	if err := set.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
+
 		return err
 	}
+
 	if set.NArg() != 0 || (opts.tokenFile == "") == (opts.accountTokenFile == "") {
 		return errors.New(
 			"operator-token requires exactly one --token-file or --account-token-file",
 		)
 	}
+
 	if err := configuration(&opts); err != nil {
 		return err
 	}
+
 	if operatorTokenFile == "" {
 		operatorTokenFile = opts.tokenFile
 		if operatorTokenFile == "" {
 			operatorTokenFile = opts.accountTokenFile
 		}
 	}
+
 	token, err := cloudflareops.ReadCredential(operatorTokenFile)
 	if err != nil {
 		return err
 	}
+
 	credentials, err := cloudflareops.AcquireCredentials(
 		ctx,
 		cloudflareops.CredentialOptions{
@@ -91,7 +101,9 @@ func registerOperator(ctx context.Context, args []string, stdout, stderr io.Writ
 	if err != nil {
 		return err
 	}
+
 	defer func() { returnErr = errors.Join(returnErr, credentials.Close(ctx)) }()
+
 	if err := credentials.Client.RegisterOperatorToken(
 		ctx,
 		opts.account,
@@ -100,10 +112,12 @@ func registerOperator(ctx context.Context, args []string, stdout, stderr io.Writ
 	); err != nil {
 		return err
 	}
+
 	_, err = fmt.Fprintf(
 		stdout,
 		"Worker %s registered the operator token digest. The raw token was not uploaded.\n",
 		opts.script,
 	)
+
 	return err
 }

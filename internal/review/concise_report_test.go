@@ -47,6 +47,7 @@ func (model *conciseReportModel) Report(
 	prompt string,
 ) (review.ReportCompletion, error) {
 	model.prompt = prompt
+
 	review.RecordModelUsage(
 		ctx,
 		review.ModelUsage{
@@ -79,12 +80,14 @@ func (model *conciseReportModel) Report(
 
 func TestCompletedReviewKeepsProseConciseAndFoldsActualUsage(t *testing.T) {
 	model := &conciseReportModel{sequenceModel: &sequenceModel{results: []domain.ReviewResult{{}}}}
+
 	fixture := newServiceFixture(t, serviceFixtureOptions{model: model})
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
 	body := failureSummaryComment(t, fixture)
+
 	visible, details, found := strings.Cut(body, "<details>")
 	if !found {
 		t.Fatalf("review has no collapsed details: %s", body)
@@ -154,6 +157,7 @@ func TestCompletedReviewKeepsProseConciseAndFoldsActualUsage(t *testing.T) {
 
 func TestCompletedReviewRefreshUpdatesFoldedThreadsAndPreservesUsage(t *testing.T) {
 	model := &conciseReportModel{sequenceModel: &sequenceModel{results: []domain.ReviewResult{{}}}}
+
 	fixture := newServiceFixture(
 		t,
 		serviceFixtureOptions{
@@ -177,6 +181,7 @@ func TestCompletedReviewRefreshUpdatesFoldedThreadsAndPreservesUsage(t *testing.
 	}
 
 	body := failureSummaryComment(t, fixture)
+
 	visible, details, found := strings.Cut(body, "<details>")
 	if !found || !strings.Contains(visible, "Resolve the open inline findings.") {
 		t.Fatalf("refreshed summary omits the verdict or fold: %s", body)

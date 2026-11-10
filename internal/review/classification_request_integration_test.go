@@ -31,6 +31,7 @@ func TestClassificationRequestUsesDedicatedTaskAndExactNativeBudget(t *testing.T
 		config.Config{ReviewPolicy: policy, MinimumImportance: 7, Providers: providers},
 		nil,
 	)
+
 	overhead, err := client.ClassificationRequestBytes("")
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +48,7 @@ func TestClassificationRequestUsesDedicatedTaskAndExactNativeBudget(t *testing.T
 		Title: "Rotate a fixture token",
 		Body:  strings.Repeat("Optional parent context. ", limit),
 	}
+
 	prompt, err := review.BuildFileAssessmentPrompt(
 		client,
 		pr,
@@ -115,7 +117,9 @@ func TestClassificationRequestUsesDedicatedTaskAndExactNativeBudget(t *testing.T
 	)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
+
 	_, err = bounded.ClassifyFileContent(ctx, prompt)
+
 	var executionSize *diff.PromptSizeError
 	if !errors.As(err, &executionSize) || executionSize.Actual != measured ||
 		executionSize.Limit != measured-1 {
@@ -131,6 +135,7 @@ func TestClassificationRequestUsesDedicatedTaskAndExactNativeBudget(t *testing.T
 		ordinaryBytes,
 		limit,
 	)
+
 	_, err = review.BuildFileAssessmentPrompt(
 		client,
 		pr,
@@ -139,6 +144,7 @@ func TestClassificationRequestUsesDedicatedTaskAndExactNativeBudget(t *testing.T
 		policy,
 		overhead-1,
 	)
+
 	var oversized *diff.PromptSizeError
 	if !errors.As(err, &oversized) {
 		t.Fatal("Classification must reject a budget smaller than its required native request.")
@@ -152,6 +158,7 @@ func assertClassificationTask(
 ) {
 	t.Helper()
 	instructions, schema := classificationPayloadParts(t, payload)
+
 	header, err := review.ClassificationPolicy(policy)
 	if err != nil {
 		t.Fatal(err)
@@ -240,6 +247,7 @@ func assertClassificationTask(
 		},
 		nil,
 	)
+
 	ordinaryPayloads, err := ordinaryClient.ReviewRequestPayloads("Review supplied source.")
 	if err != nil {
 		t.Fatal(err)
@@ -253,6 +261,7 @@ func assertClassificationTask(
 
 func classificationCanonicalJSON(t *testing.T, source json.RawMessage) json.RawMessage {
 	t.Helper()
+
 	source = bytes.TrimSpace(source)
 	if len(source) > 0 && source[0] == '{' {
 		var fields map[string]json.RawMessage
@@ -298,6 +307,7 @@ func classificationPayloadParts(
 	payload openai.ReviewRequestPayload,
 ) (string, json.RawMessage) {
 	t.Helper()
+
 	var request struct {
 		Instructions string `json:"instructions"`
 		Messages     []struct {
@@ -366,6 +376,7 @@ func classificationJSONField(
 		}
 
 		var found bool
+
 		source, found = fields[name]
 		if !found {
 			t.Fatalf("The native request omitted %s.", name)
@@ -386,6 +397,7 @@ func TestClassificationDecoderRejectsFindingsBeforeRuleValidation(t *testing.T) 
 		`{"overview":"","omissions_acceptable":false,"decision_reason":"","file_assessments":[],"findings":[{"rule_id":"unknown-classification-rule"}]}`,
 	)
 	_, err := domain.UnmarshalClassificationResult(payload)
+
 	var contract *domain.FileAssessmentValidationError
 	if !errors.As(err, &contract) || contract.Field != "findings" {
 		t.Fatalf(
@@ -409,6 +421,7 @@ func TestClassificationDecoderRejectsFindingsBeforeRuleValidation(t *testing.T) 
 
 func TestClassificationTaskRequiresRuntimeConfiguration(t *testing.T) {
 	directory := filepath.Join("..", "..", "config")
+
 	data, err := os.ReadFile(filepath.Join(directory, "review-prompts.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -425,6 +438,7 @@ func TestClassificationTaskRequiresRuntimeConfiguration(t *testing.T) {
 	}
 
 	delete(templates, "classification.system")
+
 	configuration["templates"], err = json.Marshal(templates)
 	if err != nil {
 		t.Fatal(err)

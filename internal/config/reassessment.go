@@ -29,6 +29,7 @@ type Reassessment struct {
 
 func loadReassessment(lookup LookupEnv) (Reassessment, error) {
 	var settings Reassessment
+
 	raw, found := lookup("REASSESSMENT")
 	if !found {
 		return settings, nil

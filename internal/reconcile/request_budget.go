@@ -44,6 +44,7 @@ func BuildReconciliationRequests(
 		}
 
 		var owned domain.OwnedThread
+
 		owned.NodeID = thread.ID
 		prepared = append(prepared, preparedThread{thread: owned, text: thread.Text})
 	}
@@ -117,6 +118,7 @@ func boundThreadBatches(
 	}
 
 	batches := batchPreparedThreads(threads, maximumBytes)
+
 	var failures []error
 
 	for index := 0; index < len(batches); {

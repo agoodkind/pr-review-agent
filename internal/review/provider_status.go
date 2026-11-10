@@ -121,6 +121,7 @@ func renderProviderStatuses(statuses []ProviderStatus) string {
 
 	for _, status := range statuses {
 		quota := "No app limit"
+
 		switch {
 		case status.Limit == 0:
 		case status.QuotaKnown:
@@ -150,6 +151,7 @@ func renderProviderStatuses(statuses []ProviderStatus) string {
 		}
 
 		window := status.TokenWindow
+
 		label := string(window.Mode) + " " + window.Duration
 		if window.Mode == quota.Cron {
 			label = "cron " + window.Schedule + " (" + window.Timezone + ")"
@@ -161,6 +163,7 @@ func renderProviderStatuses(statuses []ProviderStatus) string {
 			usageModelCell(status.ProviderID),
 			usageModelCell(label),
 		)
+
 		accounting := status.QuotaSnapshot
 		if accounting.HistoryStartMS > 0 {
 			fmt.Fprintf(
@@ -168,6 +171,7 @@ func renderProviderStatuses(statuses []ProviderStatus) string {
 				"Measured usage starts at %s.\n",
 				time.UnixMilli(accounting.HistoryStartMS).UTC().Format(time.RFC3339),
 			)
+
 			if !accounting.HistoryComplete {
 				builder.WriteString("The requested window includes time before measured history.\n")
 			}

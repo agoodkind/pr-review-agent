@@ -13,13 +13,20 @@ import (
 // NextAvailable reads every app quota without sending a model request.
 func (client *Client) NextAvailable(ctx context.Context) (time.Time, error) {
 	now := client.now()
-	var earliest time.Time
-	var failures []error
+
+	var (
+		earliest time.Time
+		failures []error
+	)
 
 	for _, target := range client.providers {
 		providerFailed := false
-		var snapshot budgetSnapshot
-		var readyAt time.Time
+
+		var (
+			snapshot budgetSnapshot
+			readyAt  time.Time
+		)
+
 		check := func(checked budgetSnapshot, err error) {
 			if err == nil {
 				return

@@ -35,6 +35,7 @@ func compilePolicyTemplates(
 
 	for _, entry := range rules.Rules {
 		name := "rule." + string(entry.ID)
+
 		parsed, err := compileTemplate(name, entry.Instructions)
 		if err != nil {
 			return nil, err

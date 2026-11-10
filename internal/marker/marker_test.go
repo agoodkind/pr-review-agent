@@ -28,6 +28,7 @@ func TestEndToEndFreshAppInstanceMarkerDedup(t *testing.T) {
 func TestReviewMarkerRoundTrip(t *testing.T) {
 	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
 	body := "Summary text\n\n" + Review(head, domain.ReviewDecisionApprove)
+
 	parsed, ok := FindReview(body)
 	if !ok {
 		t.Fatal("FindReview: not found")
@@ -146,7 +147,9 @@ func TestFindingMarkerRejectsUnsafePaths(t *testing.T) {
 // service rather than for the reader.
 func TestFindingMarkerCarriesTheClaimTextHashAndNotTheSentence(t *testing.T) {
 	head := domain.HeadSHA("a3c4f1cac7f595bc824704b9d2a1f1191630dc32")
+
 	const claim = "the produce authorization check is skipped for cached tokens"
+
 	finding := domain.Finding{
 		Path:       "internal/app/handler.go",
 		StartLine:  10,
@@ -303,12 +306,14 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 		Suggestion: "if err := payload.Validate(); err != nil {\n\treturn err\n}",
 		Importance: 7,
 	}
+
 	encoded, err := EncodeFindingBody(head, finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	encoded += "\n\n<sub><i>Display footer.</i></sub>"
+
 	decodedHead, decodedFinding, err := DecodeFindingBody(domain.ReviewComment{
 		Path:      finding.Path,
 		StartLine: finding.StartLine,
@@ -336,6 +341,7 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 
 	historical := finding
 	historical.Suggestion = ""
+
 	historicalBody, err := EncodeFindingBody(head, historical)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody historical: %v", err)
@@ -370,6 +376,7 @@ func TestFindingBodyRoundTripAndStableIdentityVerification(t *testing.T) {
 	moved.EndLine = 31
 	moved.Body = "Updated wording after the code moved."
 	moved.Importance = 9
+
 	originalID, err := FindingID(finding)
 	if err != nil {
 		t.Fatalf("FindingID original: %v", err)

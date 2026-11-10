@@ -67,6 +67,7 @@ func TestAStaleOmissionDecisionDoesNotEraseNewInlineFindings(t *testing.T) {
 func TestARejectedOmissionRefreshPreservesABlockWithAnOpenInlineFinding(t *testing.T) {
 	fixture := rejectedOmissionFixture(t)
 	seedStateNaming(fixture, testHeadSHA)
+
 	openThread := resolvedBotThread("thread-open")
 	openThread.Resolved = false
 	fixture.state.threadNodes = threadNodesFor([]githubapp.ReviewThread{openThread})
@@ -99,6 +100,7 @@ func TestARejectedOmissionRefreshPreservesABlockWithAnOpenInlineFinding(t *testi
 
 func rejectedOmissionFixture(t *testing.T) *serviceFixture {
 	t.Helper()
+
 	metadata := `[{"path":"huge.go","header":"@@ -1,1 +1,2101 @@","reason":"hunk exceeds one model request"}]`
 	body := marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges) +
 		"\n<!-- pr-review-agent:omissions:v1 " + base64.RawURLEncoding.EncodeToString(

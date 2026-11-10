@@ -8,9 +8,12 @@ import (
 )
 
 func TestLatestDecisionReviewAtHeadPreservesNativeDecisionIdentity(t *testing.T) {
-	const author = "review-agent[bot]"
-	const firstHead = domain.HeadSHA("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	const secondHead = domain.HeadSHA("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	const (
+		author     = "review-agent[bot]"
+		firstHead  = domain.HeadSHA("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		secondHead = domain.HeadSHA("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	)
+
 	reviews := []githubapp.Review{
 		{ID: 1, Author: author, CommitID: firstHead, State: "CHANGES_REQUESTED"},
 		{ID: 2, Author: author, CommitID: secondHead, State: "CHANGES_REQUESTED"},

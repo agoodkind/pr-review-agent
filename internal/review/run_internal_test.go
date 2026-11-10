@@ -245,6 +245,7 @@ func (postPlanModel) Consolidate(context.Context, string) (Consolidation, error)
 
 func postFindingsWithPlan(t *testing.T, plan []error) error {
 	t.Helper()
+
 	postHead := domain.HeadSHA(internalTestHeadSHA)
 	work := deltaWork{
 		Files: []diff.FileContext{
@@ -432,8 +433,11 @@ func (model *deadlineRecordingModel) Consolidate(
 // value, which is the defect the carrying exists to end reappearing one function
 // away from where it was fixed.
 func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
-	const carried = 12 * time.Second
-	const booted = 30 * time.Minute
+	const (
+		carried = 12 * time.Second
+		booted  = 30 * time.Minute
+	)
+
 	model := &deadlineRecordingModel{consolidateDeadline: time.Time{}, sawConsolidate: false}
 	service := &Service{model: model, chunkTimeout: booted, reviewPolicy: policytest.Load(t)}
 	pass := newChunkPass(
@@ -472,6 +476,7 @@ func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
 	}
 
 	before := time.Now()
+
 	service.consolidateChunk(context.Background(), candidates, pass)
 
 	if !model.sawConsolidate {

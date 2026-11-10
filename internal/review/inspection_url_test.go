@@ -10,6 +10,7 @@ import (
 
 func TestPublicInspectionRejectsPrivateURLsAndDNSResults(t *testing.T) {
 	fixture := newInspectionGitFixture(t)
+
 	inspector, err := review.NewInspector(
 		fixture.source,
 		fixture.ref,

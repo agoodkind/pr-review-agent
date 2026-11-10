@@ -108,6 +108,7 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	}
 
 	configuredProviders, fallbackOnUsageExceeded := configuredModelProviders(cfg)
+
 	client := &Client{
 		providers:               make([]provider, 0, len(configuredProviders)),
 		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
@@ -177,6 +178,7 @@ func configuredModelProviders(cfg config.Config) ([]config.ProviderConfig, bool)
 	}
 
 	var emptyWindow quota.Window
+
 	providers := []config.ProviderConfig{
 		{
 			ID:                   "primary",
@@ -287,8 +289,11 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 		return review.Completion{}, fmt.Errorf("render review policy: %w", err)
 	}
 
-	var result domain.ReviewResult
-	var inspections []review.InspectionRequest
+	var (
+		result      domain.ReviewResult
+		inspections []review.InspectionRequest
+	)
+
 	model, err := client.complete(
 		ctx,
 		prompt,
@@ -307,6 +312,7 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 			}
 
 			result = candidate
+
 			inspections, decodeErr = inspectionRequests(ctx, []byte(content), reviewSchemaName)
 			if decodeErr != nil {
 				return decodeErr
@@ -328,6 +334,7 @@ func inspectionRequests(
 	schemaName string,
 ) ([]review.InspectionRequest, error) {
 	logger := gklog.L(ctx)
+
 	var envelope struct {
 		Requests json.RawMessage `json:"inspection_requests"`
 	}
@@ -338,6 +345,7 @@ func inspectionRequests(
 
 	present := len(envelope.Requests) > 0
 	null := bytes.Equal(bytes.TrimSpace(envelope.Requests), []byte("null"))
+
 	attributes := []slog.Attr{
 		slog.String("schema_name", schemaName),
 		slog.Bool("inspection_requests_present", present),
@@ -399,6 +407,7 @@ func (client *Client) Report(ctx context.Context, prompt string) (review.ReportC
 	}
 
 	var report review.Report
+
 	model, err := client.complete(
 		ctx,
 		prompt,
@@ -449,6 +458,7 @@ func (client *Client) Reconcile(
 	}
 
 	var resolutions []domain.ThreadResolution
+
 	_, err = client.complete(
 		ctx,
 		prompt,
@@ -494,6 +504,7 @@ func (client *Client) Consolidate(
 	prompt string,
 ) (review.Consolidation, error) {
 	logger := gklog.L(ctx)
+
 	policy, err := review.ConsolidationPolicy(client.reviewPolicy)
 	if err != nil {
 		logger.WarnContext(ctx, "Consolidation policy rendering failed")
@@ -501,6 +512,7 @@ func (client *Client) Consolidate(
 	}
 
 	var consolidation review.Consolidation
+
 	_, err = client.complete(
 		ctx,
 		prompt,
@@ -540,6 +552,7 @@ func (client *Client) complete(
 	accept func(string) error,
 ) (string, error) {
 	logger := gklog.L(ctx)
+
 	instructions, err := structuredOutputPrompt(
 		ctx,
 		client.reviewPolicy,
@@ -583,6 +596,7 @@ func (client *Client) complete(
 		client.recordProviderAttempt(ctx, target, budget, attemptErr, fallback)
 		logProviderAttempt(ctx, failure)
 		failures = append(failures, failure)
+
 		if !fallback {
 			if parentErr := ctx.Err(); parentErr != nil {
 				failures = append(failures, parentErr)
@@ -599,6 +613,7 @@ func (client *Client) complete(
 
 func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 	status := failure.ProviderStatus()
+
 	attributes := []slog.Attr{
 		slog.String("provider_id", status.ProviderID),
 		slog.String("configured_model", status.Model),
@@ -610,6 +625,7 @@ func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 	}
 	if status.QuotaKnown && status.QuotaSnapshot.Bounds.EndMS > 0 {
 		accounting := status.QuotaSnapshot
+
 		mode := status.TokenWindow.Mode
 		if mode == "" {
 			mode = quota.Fixed
@@ -687,22 +703,26 @@ func completeWith(
 		_ = stream.Close()
 	}()
 
-	var content strings.Builder
 	var (
+		content       strings.Builder
 		responseModel string
 		serviceTier   string
 		usage         responses.ResponseUsage
 		hasUsage      bool
 	)
+
 	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	completed := false
 	incompleteReason := ""
+
 	var streamFailure error
+
 	defer func() {
 		review.RecordModelUsage(
 			ctx,
 			modelUsage(responseModel, usage, hasUsage, target, serviceTier),
 		)
+
 		if hasUsage {
 			sdkUsage.Model = responseModel
 			report(usage, serviceTier, &sdkUsage)
@@ -711,6 +731,7 @@ func completeWith(
 
 	for stream.Next() {
 		event := stream.Current()
+
 		sdkUsage.ResponseID = cmp.Or(event.Response.ID, sdkUsage.ResponseID)
 		switch responseEventType(event.Type) {
 		case responseOutputTextDelta:
@@ -718,6 +739,7 @@ func completeWith(
 		case responseCompleted, responseIncomplete, responseFailed:
 			logResponseOutputShape(ctx, target.id, schemaName, event.Response)
 			serviceTier = string(event.Response.ServiceTier)
+
 			responseModel = cmp.Or(event.Response.Model, responseModel)
 			if event.Response.JSON.Usage.Valid() {
 				usage = event.Response.Usage
@@ -728,6 +750,7 @@ func completeWith(
 			switch responseTerminalEventType(event.Type) {
 			case terminalCompleted:
 				completed = true
+
 				if text := event.Response.OutputText(); text != "" {
 					content.Reset()
 					content.WriteString(text)
@@ -899,9 +922,11 @@ func modelUsage(
 		usage.OutputTokens,
 		serviceTier,
 	)
+
 	priced := usageReported && pricingFound && ratesKnown
 	if !priced {
 		var unknownCost config.TokenCost
+
 		cost = unknownCost
 	}
 
@@ -987,9 +1012,11 @@ func structuredOutputPrompt(
 	schema json.RawMessage,
 ) (string, error) {
 	var data reviewrules.PromptData
+
 	data.Input = policy
 	data.SchemaName = schemaName
 	data.Schema = string(schema)
+
 	output, err := configuration.Render("structured.output", data)
 	if err != nil {
 		logger := gklog.L(ctx)

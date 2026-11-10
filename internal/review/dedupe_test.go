@@ -59,6 +59,7 @@ func oneChunkFixture(t *testing.T, findings ...domain.Finding) *serviceFixture {
 // the pull request.
 func publishedBodies(t *testing.T, fixture *serviceFixture) []string {
 	t.Helper()
+
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -204,8 +205,10 @@ func TestTheSuppressionLogNamesTheWithheldFindingsRangeFirst(t *testing.T) {
 		t.Fatalf("published comments = %v, want one: the two ranges share line 3", bodies)
 	}
 
-	const withheldFirst = "main.go:2-3 over main.go:3-4"
-	const keptFirst = "main.go:3-4 over main.go:2-3"
+	const (
+		withheldFirst = "main.go:2-3 over main.go:3-4"
+		keptFirst     = "main.go:3-4 over main.go:2-3"
+	)
 	if strings.Contains(logs.String(), keptFirst) {
 		t.Fatalf(
 			"suppression detail read %q, want the withheld finding's range first, not the kept one's",
@@ -290,6 +293,7 @@ func (twoFileChunkCollector) CollectRange(
 			index,
 			index,
 		)
+
 		changed, hunks, err := diff.ChangedRightLines(patch)
 		if err != nil {
 			return diff.ReviewInput{}, err
@@ -726,6 +730,7 @@ func (fiveLineCollector) CollectRange(
 		},
 		"\n",
 	)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
@@ -795,6 +800,7 @@ func consolidationFixture(
 	callErr error,
 ) (*serviceFixture, *sequenceModel) {
 	t.Helper()
+
 	model := &sequenceModel{
 		results: []domain.ReviewResult{
 			{
@@ -1044,6 +1050,7 @@ func loneRestatementFixture(
 	grouping []review.Consolidation,
 ) (*serviceFixture, *sequenceModel) {
 	t.Helper()
+
 	standing := domain.Finding{
 		Path:       "main.go",
 		StartLine:  2,
@@ -1267,6 +1274,7 @@ func (model *barrierConsolidationModel) Consolidate(
 	model.arrived++
 	last := model.arrived == model.width
 	model.mu.Unlock()
+
 	if last {
 		close(model.release)
 	}
@@ -1301,6 +1309,7 @@ func sharedAndUniqueFindings(path string) []domain.Finding {
 	suffix := strings.TrimSuffix(strings.TrimPrefix(path, "file"), ".go")
 	sharedLine := 2
 	sharedEvidence := sharedClaimLine
+
 	if path != "file0.go" {
 		sharedLine = 3
 		sharedEvidence = "other0"

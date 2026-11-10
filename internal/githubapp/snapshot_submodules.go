@@ -26,6 +26,7 @@ func loadSnapshotGitlinks(snapshot *repositorySnapshot) error {
 	}
 
 	modules := gitconfig.New()
+
 	err = gitconfig.NewDecoder(bytes.NewReader(data)).Decode(modules)
 	if err != nil {
 		return repositoryAccessError("decode submodule metadata", err)

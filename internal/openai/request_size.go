@@ -227,8 +227,10 @@ func marshalProviderRequest(
 		return marshalGeminiRequest(target, prompt, instructions, schema)
 	}
 
-	var encoded []byte
-	var err error
+	var (
+		encoded []byte
+		err     error
+	)
 	if target.api == config.ChatCompletionsAPI {
 		encoded, err = json.Marshal(newChatParams(target, prompt, instructions, schemaName, schema))
 	} else {
@@ -250,6 +252,7 @@ func marshalProviderRequest(
 	}
 
 	payload["stream"] = json.RawMessage("true")
+
 	fields, enabled := providerRouting(target)
 	if enabled {
 		encoded, err := json.Marshal(fields)
@@ -286,6 +289,7 @@ type responseRoutingConfiguration struct {
 
 func providerRouting(target provider) (responseRoutingConfiguration, bool) {
 	router := target.model == config.AutoRouterModel || target.model == config.FreeRouterModel
+
 	openRouter := target.baseURL != nil &&
 		strings.EqualFold(target.baseURL.Hostname(), "openrouter.ai")
 	if !router && !openRouter {
@@ -330,6 +334,7 @@ func marshalGeminiRequest(
 	system := generation["systemInstruction"]
 	delete(generation, "systemInstruction")
 	delete(generation, "httpOptions")
+
 	configuration, err := json.Marshal(generation)
 	if err != nil {
 		return nil, requestEncodingError(err)
@@ -378,6 +383,7 @@ type requestSizeTransport struct {
 
 func requestBoundHTTPClient(client *http.Client, maximum int) *http.Client {
 	bounded := *client
+
 	transport := client.Transport
 	if transport == nil {
 		transport = http.DefaultTransport

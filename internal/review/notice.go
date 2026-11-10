@@ -59,6 +59,7 @@ func (service *Service) reportFailedCheck(
 	logger := gklog.L(ctx)
 	progress.Failed = true
 	service.enrichProviderPeriodUsage(ctx, &progress)
+
 	var statuses []ProviderStatus
 	collectProviderStatuses(cause, &statuses)
 	recordAssessment(
@@ -71,6 +72,7 @@ func (service *Service) reportFailedCheck(
 	title := failureTitle(stage, cause)
 	detail := service.terminalFailureDetail(ctx, job, cause)
 	checkSummary := detail + "\n\n" + RenderDetails(progress)
+
 	var completeErr error
 	if checkRunID != 0 {
 		completeErr = service.completeCheckRun(
@@ -92,6 +94,7 @@ func (service *Service) reportFailedCheck(
 	}
 
 	service.writeFailureSummary(ctx, job, progress, title, detail)
+
 	var dismissErr error
 	if conclusion != checkConclusionCancelled {
 		dismissErr = service.dismissFailureVerdict(ctx, job, cause)
@@ -356,6 +359,7 @@ func (service *Service) writeFailureSummary(
 	detail string,
 ) {
 	service.enrichProviderPeriodUsage(ctx, &progress)
+
 	ctx, cancel := detachFromReviewDeadline(ctx, service.checkCompletionTimeout)
 	defer cancel()
 
@@ -363,12 +367,14 @@ func (service *Service) writeFailureSummary(
 	progress.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
 	prose := RenderFailureBody(progress, title, detail)
 	prose += reassessmentNotice(ctx)
+
 	err := service.upsertSummaryCommentFrom(
 		ctx,
 		job,
 		func(existing marker.State, existingBody string) summaryCommentContent {
 			failureProse := prose
 			completedHead, markedComplete := marker.FindReview(existingBody)
+
 			completedPublication := completedHeadState(existing, job.Head) && markedComplete &&
 				completedHead == job.Head &&
 				MetadataMatches(existingBody, job.Head, progress.MetadataRevision)
@@ -381,8 +387,10 @@ func (service *Service) writeFailureSummary(
 					) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
 					len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0) {
 				currentDetail := detail
+
 				if strings.Contains(existingBody, reviewDetailsStart) {
 					var data reviewrules.PromptData
+
 					data.Identity = codeSpan(shortHead(progress.Head))
 					currentDetail = service.renderFailureTemplate(
 						ctx,

@@ -130,7 +130,9 @@ func (service *Service) collectAndAdmit(
 	settings reviewSettings,
 ) (deltaWork, bool, error) {
 	logger := gklog.L(ctx)
+
 	var empty deltaWork
+
 	admitted, stop, err := service.collectAdmissionInput(
 		ctx,
 		job,
@@ -171,6 +173,7 @@ func (service *Service) collectAndAdmit(
 	}
 
 	chunks := work.Chunks
+
 	verdict := CheckReviewBudget(
 		len(plan.contentInput.Files),
 		chunks,
@@ -189,6 +192,7 @@ func (service *Service) collectAndAdmit(
 		slog.Int("chunks", len(chunks)),
 		slog.Int("reviewable_chunks", verdict.ReviewableChunks),
 	)
+
 	if err := service.declineReview(ctx, job, checkRun.ID, verdict); err != nil {
 		// A skip that cannot be written is still a run that has to end. Without
 		// this the error travels back to the dispatcher, which only logs it, and
@@ -217,6 +221,7 @@ func (service *Service) admitFileInput(
 	}
 
 	var empty AdmissionVerdict
+
 	deterministic, unresolved, err := PlanFileAssessments(input, service.reviewPolicy)
 	if err != nil {
 		return empty, nil, nil, err

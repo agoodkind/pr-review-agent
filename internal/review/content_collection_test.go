@@ -92,7 +92,14 @@ func newContentCollectionFixture(
 
 				fixture.state.mu.Lock()
 				currentHead := fixture.state.headSHA
+				status := fixture.state.pullRequestStatus
 				fixture.state.mu.Unlock()
+				if status != http.StatusOK {
+					http.Error(writer, "Pull request unavailable", status)
+
+					return
+				}
+
 				serviceWriteJSON(
 					writer,
 					http.StatusOK,
@@ -143,10 +150,12 @@ func newContentCollectionFixture(
 
 			fixture.state.mu.Lock()
 			defer fixture.state.mu.Unlock()
+
 			handleServiceRequest(writer, request, fixture.state)
 		}),
 	)
 	t.Cleanup(server.Close)
+
 	apiURL, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +185,7 @@ func newContentCollectionFixture(
 		logger,
 	)
 	t.Cleanup(func() { _ = client.Close() })
+
 	fixture.github = client
 	fixture.service = review.NewService(
 		client,
@@ -203,11 +213,13 @@ func TestContentCollectionSubmoduleCleanRunApproves(t *testing.T) {
 	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture, _ := newContentCollectionFixture(t, model)
 	seedReviewedBaseline(fixture)
+
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
 	assertContentCollectionApproved(t, fixture)
+
 	if len(model.prompts) != 1 {
 		t.Fatalf("model prompts = %d, want one complete chunk", len(model.prompts))
 	}
@@ -258,7 +270,9 @@ func TestContentCollectionFailureDismissesRejectionAndRetryRecovers(t *testing.T
 			},
 		},
 	}
+
 	contentStatus.Store(http.StatusBadGateway)
+
 	if err := fixture.run(context.Background(), fixture.job()); err == nil {
 		t.Fatal("Run succeeded after GitHub content fetch returned 502")
 	}
@@ -295,7 +309,9 @@ func TestContentCollectionFailureDismissesRejectionAndRetryRecovers(t *testing.T
 	}
 
 	contentStatus.Store(http.StatusOK)
+
 	job := fixture.job()
+
 	job.DeliveryID = "delivery-content-recovered"
 	if err := fixture.run(context.Background(), job); err != nil {
 		t.Fatalf("recovered Run: %v", err)
@@ -338,6 +354,7 @@ func TestContentCollectionSubmoduleFindingRequestsChanges(t *testing.T) {
 			},
 		},
 	}
+
 	fixture, _ := newContentCollectionFixture(t, model)
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -364,6 +381,7 @@ func TestContentCollectionForcedRunRecoversIncorrectlyReviewedHead(t *testing.T)
 	model := &sequenceModel{results: []domain.ReviewResult{{}}}
 	fixture, _ := newContentCollectionFixture(t, model)
 	seedStateNaming(fixture, string(fixture.job().Head))
+
 	fixture.state.reviewPages = [][]map[string]any{
 		{
 			{
@@ -410,6 +428,7 @@ func TestContentCollectionForcedRunRecoversIncorrectlyReviewedHead(t *testing.T)
 
 func assertContentCollectionApproved(t *testing.T, fixture *serviceFixture) {
 	t.Helper()
+
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("review event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
 	}

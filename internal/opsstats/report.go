@@ -204,6 +204,7 @@ func Build(
 	capturedAt time.Time,
 ) Report {
 	var report Report
+
 	report.CapturedAt, report.Owner, report.BotLogin = capturedAt, owner, bot
 	report.Excluded, report.Metrics, report.GitHub = exclusions, metrics, prs
 	report.GitHubComplete = true
@@ -249,9 +250,11 @@ func (report *Report) recordLifecycleBounds() {
 
 func (report *Report) recordPullRequest(pr PullRequest, minimumImportance int) {
 	var summary PullRequestSummary
+
 	summary.Target = Target{Repository: pr.Repository.NameWithOwner, Number: pr.Number}
 	summary.State, summary.Draft = pr.State, pr.IsDraft
 	summary.Excluded = slices.Contains(report.Excluded, summary.Target.String())
+
 	summary.BotChecks = botChecks(pr, report.BotLogin)
 	if summary.Excluded {
 		report.Totals.ExcludedPullRequests++
@@ -304,6 +307,7 @@ func botChecks(pr PullRequest, bot string) []Check {
 
 func newReviewRevisit(pr PullRequest, review Review, target Target) Revisit {
 	var item Revisit
+
 	item.Target, item.Kind, item.ID = target, "review", review.ID
 	item.ReviewID, item.CreatedAt = review.DatabaseID, review.SubmittedAt
 	item.CurrentReviewState = review.State
@@ -326,6 +330,7 @@ func (report *Report) recordStandingReviews(
 		item := newReviewRevisit(pr, review, summary.Target)
 		item.StandingReview = true
 		correlate(&item, runs, pr.HeadRefOID, summary.BotChecks, report.Metrics.Manifest.To)
+
 		summary.StandingBotRejections++
 		if item.OldHead {
 			summary.OldHeadBotRejections++
@@ -357,6 +362,7 @@ func (report *Report) recordHistoricalReviews(
 		item := newReviewRevisit(pr, review, summary.Target)
 		item.PullRequestState, item.Draft = "OPEN", false
 		correlate(&item, runs, pr.HeadRefOID, summary.BotChecks, report.Metrics.Manifest.To)
+
 		if len(item.Triggers) == 0 {
 			continue
 		}
@@ -364,6 +370,7 @@ func (report *Report) recordHistoricalReviews(
 		item.WindowRevisitStatus = item.Status
 		item.PullRequestState, item.Draft = pr.State, pr.IsDraft
 		item.HistoricalStanding = "unknown_dismissal_timing"
+
 		item.Status = "historical_review_state_unknown"
 		if review.State == "CHANGES_REQUESTED" {
 			item.Status = "superseded_review"
@@ -434,6 +441,7 @@ func (report *Report) recordThreads(
 
 		item := newThreadRevisit(pr, thread, summary.Target, minimumImportance)
 		correlate(&item, runs, pr.HeadRefOID, summary.BotChecks, report.Metrics.Manifest.To)
+
 		if !thread.IsResolved {
 			summary.UnresolvedBotThreads++
 		}

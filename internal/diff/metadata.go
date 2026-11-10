@@ -47,6 +47,7 @@ func PullRequestMetadata(
 	commits []githubapp.PullRequestCommit,
 ) []MetadataSource {
 	var sources []MetadataSource
+
 	appendSource := func(surface domain.FindingSurface, commit domain.HeadSHA, text string) {
 		if strings.TrimSpace(text) == "" {
 			return
@@ -120,6 +121,7 @@ func PullRequestRevision(pullRequest githubapp.PullRequest) string {
 
 func metadataPieces(source MetadataSource, maximumBytes int) []Piece {
 	lines := strings.Split(source.Text, "\n")
+
 	var pieces []Piece
 
 	for start := 0; start < len(lines); {
@@ -136,6 +138,7 @@ func metadataPieces(source MetadataSource, maximumBytes int) []Piece {
 		fragment.StartLine, fragment.EndLine = start+1, end
 		fragment.Text = strings.Join(lines[start:end], "\n")
 		text := formatMetadataSource(fragment)
+
 		oversized := len(text) > maximumBytes
 		if oversized {
 			text = formatOversizedMetadataSource(fragment, maximumBytes)

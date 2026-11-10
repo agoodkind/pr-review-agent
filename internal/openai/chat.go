@@ -26,6 +26,7 @@ func completeChat(
 	report usageReporter,
 ) (string, string, error) {
 	params := newChatParams(target, prompt, policy, schemaName, schema)
+
 	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params, providerOptions(target)...)
 	defer func() { _ = stream.Close() }()
 
@@ -76,6 +77,7 @@ func readChatCompletion(
 	report usageReporter,
 ) (string, string, error) {
 	var content strings.Builder
+
 	model := ""
 	serviceTier := ""
 	usage := openaigo.CompletionUsage{}
@@ -83,6 +85,7 @@ func readChatCompletion(
 	hasUsage := false
 	finished := false
 	finishReason := ""
+
 	defer func() {
 		converted := responseUsageFromChat(usage)
 		result := modelUsage(model, converted, hasUsage, target, serviceTier)
@@ -91,6 +94,7 @@ func readChatCompletion(
 		result.AcceptedPredictionTokens = usage.CompletionTokensDetails.AcceptedPredictionTokens
 		result.RejectedPredictionTokens = usage.CompletionTokensDetails.RejectedPredictionTokens
 		review.RecordModelUsage(ctx, result)
+
 		if hasUsage {
 			sdkUsage.Model = model
 			report(converted, serviceTier, &sdkUsage)
@@ -99,6 +103,7 @@ func readChatCompletion(
 
 	for stream.Next() {
 		chunk := stream.Current()
+
 		sdkUsage.ResponseID = cmp.Or(chunk.ID, sdkUsage.ResponseID)
 		if chunk.ServiceTier != "" {
 			serviceTier = string(chunk.ServiceTier)
@@ -116,6 +121,7 @@ func readChatCompletion(
 
 		for _, choice := range chunk.Choices {
 			content.WriteString(choice.Delta.Content)
+
 			if choice.FinishReason != "" {
 				finished = true
 				finishReason = choice.FinishReason
