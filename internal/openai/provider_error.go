@@ -61,6 +61,7 @@ func (streamError *StreamError) Unwrap() error {
 	if streamError.Provider != nil {
 		return streamError.Provider
 	}
+
 	return streamError.Cause
 }
 
@@ -105,10 +106,14 @@ func (providerError *ProviderError) ProviderUnavailable() bool {
 	if responseErrorCode(providerError.Code) == responseServerError {
 		return true
 	}
-	if providerError.StatusCode >= http.StatusInternalServerError && providerError.StatusCode <= 599 {
+
+	if providerError.StatusCode >= http.StatusInternalServerError &&
+		providerError.StatusCode <= 599 {
 		return true
 	}
+
 	status, found := upstreamStatus(providerError)
+
 	return found && status >= http.StatusInternalServerError && status <= 599
 }
 
@@ -117,28 +122,36 @@ func upstreamStatus(providerError *ProviderError) (int, bool) {
 		!strings.EqualFold(providerError.Code, "upstream_failed") {
 		return 0, false
 	}
+
 	message := strings.ToLower(strings.TrimSpace(providerError.Message))
+
 	const prefix = "upstream call failed:"
 	if !strings.HasPrefix(message, prefix) {
 		return 0, false
 	}
+
 	metadata := strings.TrimSpace(strings.TrimPrefix(message, prefix))
+
 	for _, boundary := range []string{"upstream_message=", "upstream message "} {
 		if index := strings.Index(metadata, boundary); index >= 0 {
 			metadata = metadata[:index]
 		}
 	}
+
 	normalized := strings.NewReplacer("_", " ", "=", " ", ":", " ").Replace(metadata)
+
 	fields := strings.Fields(normalized)
 	for index := 0; index+2 < len(fields); index++ {
 		if fields[index] != "upstream" || fields[index+1] != "status" {
 			continue
 		}
+
 		status, err := strconv.Atoi(strings.Trim(fields[index+2], "(),.;"))
 		if err == nil {
 			return status, true
 		}
 	}
+
 	return 0, false
 }
 
@@ -172,10 +185,12 @@ func decodeStreamErrorFrame(encoded string) (providerErrorFields, bool) {
 	if err := json.Unmarshal([]byte(encoded), &wrapped); err == nil && wrapped.Error.stated() {
 		return wrapped.Error, true
 	}
+
 	var bare providerErrorFields
 	if err := json.Unmarshal([]byte(encoded), &bare); err == nil && bare.stated() {
 		return bare, true
 	}
+
 	return providerErrorFields{Message: "", Type: "", Code: "", Param: ""}, false
 }
 
@@ -189,10 +204,12 @@ func decodeStreamErrorFrame(encoded string) (providerErrorFields, bool) {
 // nil and the stream error reports the transport cause.
 func providerErrorFromStream(err error) *ProviderError {
 	text := err.Error()
+
 	start := strings.Index(text, "{")
 	if start < 0 {
 		return nil
 	}
+
 	end := strings.LastIndex(text, "}")
 	if end <= start {
 		return nil
@@ -202,6 +219,7 @@ func providerErrorFromStream(err error) *ProviderError {
 	if !ok {
 		return nil
 	}
+
 	return &ProviderError{
 		StatusCode: 0,
 		Type:       frame.Type,
@@ -215,9 +233,15 @@ func providerErrorFromStream(err error) *ProviderError {
 func (providerError *ProviderError) Error() string {
 	source := "model provider reported a stream error"
 	if providerError.StatusCode != 0 {
-		source = fmt.Sprintf("model provider returned HTTP %d %s", providerError.StatusCode, http.StatusText(providerError.StatusCode))
+		source = fmt.Sprintf(
+			"model provider returned HTTP %d %s",
+			providerError.StatusCode,
+			http.StatusText(providerError.StatusCode),
+		)
 	}
+
 	details := []string{source}
+
 	fields := []string{
 		providerError.Type,
 		providerError.Code,
@@ -230,6 +254,7 @@ func (providerError *ProviderError) Error() string {
 			details = append(details, collapsed)
 		}
 	}
+
 	return strings.Join(details, ": ")
 }
 
@@ -243,6 +268,7 @@ func (providerError *ProviderError) ProviderReason() string {
 			return collapsed
 		}
 	}
+
 	return ""
 }
 
@@ -252,6 +278,7 @@ func (streamError *StreamError) ProviderReason() string {
 	if streamError.Provider != nil {
 		return streamError.Provider.ProviderReason()
 	}
+
 	return "the connection carrying the answer closed early"
 }
 
@@ -267,18 +294,26 @@ func (providerError *ProviderError) UsageExceeded() bool {
 	if responseErrorCode(providerError.Code) == responseRateLimitExceeded {
 		return false
 	}
+
 	if providerError.StatusCode == http.StatusPaymentRequired {
 		return true
 	}
-	if strings.EqualFold(providerError.Code, "RESOURCE_EXHAUSTED") || strings.EqualFold(providerError.Type, "RESOURCE_EXHAUSTED") {
+
+	if strings.EqualFold(providerError.Code, "RESOURCE_EXHAUSTED") ||
+		strings.EqualFold(providerError.Type, "RESOURCE_EXHAUSTED") {
 		return true
 	}
-	lowered := strings.ToLower(providerError.Type + " " + providerError.Code + " " + providerError.Message)
+
+	lowered := strings.ToLower(
+		providerError.Type + " " + providerError.Code + " " + providerError.Message,
+	)
+
 	for _, phrase := range usageExceededPhrases {
 		if strings.Contains(lowered, phrase) {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -287,5 +322,7 @@ func (providerError *ProviderError) RateLimited() bool {
 	if providerError.UsageExceeded() {
 		return false
 	}
-	return providerError.StatusCode == http.StatusTooManyRequests || responseErrorCode(providerError.Code) == responseRateLimitExceeded
+
+	return providerError.StatusCode == http.StatusTooManyRequests ||
+		responseErrorCode(providerError.Code) == responseRateLimitExceeded
 }

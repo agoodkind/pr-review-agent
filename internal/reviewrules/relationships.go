@@ -16,6 +16,7 @@ func (policy RelationshipReviewPolicy) Validate() error {
 	if policy.MaximumPairs < 0 || (policy.Enabled && policy.MaximumPairs == 0) {
 		return fmt.Errorf("relationship_review.maximum_pairs must be positive when enabled")
 	}
+
 	return nil
 }
 
@@ -24,14 +25,19 @@ func (policy Policy) RelationshipReview() RelationshipReviewPolicy {
 	return policy.relationshipReview
 }
 
-func validateRelationshipTemplates(policy RelationshipReviewPolicy, templates map[string]*template.Template) error {
+func validateRelationshipTemplates(
+	policy RelationshipReviewPolicy,
+	templates map[string]*template.Template,
+) error {
 	if !policy.Enabled {
 		return nil
 	}
+
 	for _, name := range []string{"relationship.input", "relationship.fragment", "relationship.gap"} {
 		if _, exists := templates[name]; !exists {
 			return fmt.Errorf("required prompt template %q is missing", name)
 		}
 	}
+
 	return nil
 }

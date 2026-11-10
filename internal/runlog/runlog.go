@@ -42,6 +42,7 @@ type Recorder struct {
 // NewRecorder returns a recorder ready to wrap a logger for one run.
 func NewRecorder() *Recorder {
 	entries := make([]Entry, 0, MaximumRecords)
+
 	return &Recorder{
 		attributes: nil,
 		mu:         sync.Mutex{},
@@ -60,10 +61,12 @@ func (recorder *Recorder) Handle(_ context.Context, record slog.Record) error {
 	if recorder == nil {
 		return nil
 	}
+
 	fields := make(map[string]string, record.NumAttrs()+len(recorder.attributes))
 	for _, attribute := range recorder.attributes {
 		fields[attribute.Key] = attribute.Value.String()
 	}
+
 	record.Attrs(func(attribute slog.Attr) bool {
 		fields[attribute.Key] = attribute.Value.String()
 		return true
@@ -78,12 +81,15 @@ func (recorder *Recorder) Handle(_ context.Context, record slog.Record) error {
 
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	captured := *recorder.entries
 	if len(captured) >= MaximumRecords {
 		captured = captured[1:]
 	}
+
 	captured = append(captured, entry)
 	*recorder.entries = captured
+
 	return nil
 }
 
@@ -93,9 +99,11 @@ func (recorder *Recorder) WithAttrs(attrs []slog.Attr) slog.Handler {
 	if recorder == nil {
 		return nil
 	}
+
 	combined := make([]slog.Attr, 0, len(recorder.attributes)+len(attrs))
 	combined = append(combined, recorder.attributes...)
 	combined = append(combined, attrs...)
+
 	return &Recorder{
 		attributes: combined,
 		mu:         sync.Mutex{},
@@ -113,11 +121,14 @@ func (recorder *Recorder) Entries() []Entry {
 	if recorder == nil {
 		return nil
 	}
+
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	captured := *recorder.entries
 	copied := make([]Entry, len(captured))
 	copy(copied, captured)
+
 	return copied
 }
 
@@ -219,22 +230,28 @@ func (recorder *Recorder) Render() string {
 	if len(entries) == 0 {
 		return ""
 	}
+
 	var builder strings.Builder
 	builder.WriteString("## Run log\n\n```\n")
+
 	for _, entry := range entries {
 		builder.WriteString(formatEntry(entry))
 		builder.WriteString("\n")
 	}
+
 	builder.WriteString("```\n")
+
 	return builder.String()
 }
 
 func formatEntry(entry Entry) string {
 	stamp := entry.Time.UTC().Format("15:04:05.000")
+
 	line := fmt.Sprintf("%s %-5s %s", stamp, entry.Level.String(), entry.Message)
 	if len(entry.Fields) == 0 {
 		return line
 	}
+
 	return line + " " + formatFields(entry.Fields)
 }
 
@@ -243,12 +260,14 @@ func formatFields(fields map[string]string) string {
 	for key := range fields {
 		keys = append(keys, key)
 	}
+
 	sort.Strings(keys)
 
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, key+"="+publishedValue(key, fields[key]))
 	}
+
 	return strings.Join(parts, " ")
 }
 
@@ -277,6 +296,7 @@ func publishedValue(key string, value string) string {
 	if _, published := publishedFields[key]; published {
 		return EscapeLineBreaks(value)
 	}
+
 	return withheldValue
 }
 
@@ -289,6 +309,7 @@ func Tee(handlers ...slog.Handler) slog.Handler {
 			present = append(present, handler)
 		}
 	}
+
 	return &teeHandler{handlers: present}
 }
 
@@ -302,6 +323,7 @@ func (tee *teeHandler) Enabled(ctx context.Context, level slog.Level) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -313,8 +335,10 @@ func (tee *teeHandler) Handle(ctx context.Context, record slog.Record) error {
 		if !handler.Enabled(ctx, record.Level) {
 			continue
 		}
+
 		_ = handler.Handle(ctx, record.Clone())
 	}
+
 	return nil
 }
 
@@ -323,6 +347,7 @@ func (tee *teeHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	for _, handler := range tee.handlers {
 		next = append(next, handler.WithAttrs(attrs))
 	}
+
 	return &teeHandler{handlers: next}
 }
 
@@ -331,5 +356,6 @@ func (tee *teeHandler) WithGroup(name string) slog.Handler {
 	for _, handler := range tee.handlers {
 		next = append(next, handler.WithGroup(name))
 	}
+
 	return &teeHandler{handlers: next}
 }

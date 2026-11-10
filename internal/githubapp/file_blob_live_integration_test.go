@@ -36,7 +36,12 @@ func TestGetLargePinnedFileFromGitHub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := NewClient(config.Config{GitHubAPIBaseURL: baseURL}, &http.Client{Timeout: time.Minute}, time.Now, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	client := NewClient(
+		config.Config{GitHubAPIBaseURL: baseURL},
+		&http.Client{Timeout: time.Minute},
+		time.Now,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
 	const installationID = 1
 	client.tokens.set(installationID, strings.TrimSpace(string(token)), time.Now().Add(time.Hour))
 	repo := domain.Repository{Owner: "torvalds", Name: "linux"}

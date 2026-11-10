@@ -20,12 +20,13 @@ const metadataRecordPrefix = "<!-- pr-review-agent:metadata:v1 "
 var errMetadataChanged = errors.New("pull request prose requires a current review")
 
 type metadataReviewRecord struct {
-	Head              domain.HeadSHA   `json:"head"`
-	Revision          string           `json:"revision"`
-	Findings          []domain.Finding `json:"findings"`
-	Omissions         []unreadHunk     `json:"omissions,omitempty"`
-	OmissionsAccepted bool             `json:"omissions_accepted,omitempty"`
-	DecisionReason    string           `json:"decision_reason,omitempty"`
+	Head              domain.HeadSHA     `json:"head"`
+	Revision          string             `json:"revision"`
+	Findings          []domain.Finding   `json:"findings"`
+	Checkpoint        *findingCheckpoint `json:"checkpoint,omitempty"`
+	Omissions         []unreadHunk       `json:"omissions,omitempty"`
+	OmissionsAccepted bool               `json:"omissions_accepted,omitempty"`
+	DecisionReason    string             `json:"decision_reason,omitempty"`
 }
 
 type metadataReviewRecordJSON struct {
@@ -34,119 +35,217 @@ type metadataReviewRecordJSON struct {
 }
 
 func encodeMetadataRecord(record metadataReviewRecord) string {
+	if err := record.Checkpoint.validate(record.Findings); err != nil {
+		slog.Error("Metadata review provenance encoding failed", "err", err)
+		return ""
+	}
+
 	record.DecisionReason = scopeDecisionReason(record.DecisionReason, record.Omissions, nil)
 	modes := make(map[reviewrules.ID]reviewrules.Deduplication)
+
 	record.Findings = append([]domain.Finding(nil), record.Findings...)
 	for index := range record.Findings {
 		finding := record.Findings[index]
 		if finding.Deduplication == reviewrules.DeduplicateLocation {
 			modes[finding.RuleID] = finding.Deduplication
 		}
+
 		record.Findings[index].Evidence = ""
 		record.Findings[index].Claim = ""
 	}
-	encoded, err := json.Marshal(metadataReviewRecordJSON{metadataReviewRecord: record, Deduplication: modes})
+
+	encoded, err := json.Marshal(metadataReviewRecordJSON{
+		metadataReviewRecord: record,
+		Deduplication:        modes,
+	})
 	if err != nil {
 		slog.Error("Metadata review state encoding failed", "err", err)
 		return ""
 	}
+
 	return metadataRecordPrefix + base64.RawURLEncoding.EncodeToString(encoded) + " -->"
 }
 
 func decodeMetadataRecord(body string) (metadataReviewRecord, bool, error) {
 	var record metadataReviewRecord
+
 	start := strings.LastIndex(body, metadataRecordPrefix)
 	if start < 0 {
 		return record, false, nil
 	}
+
 	payload, _, found := strings.Cut(body[start+len(metadataRecordPrefix):], " -->")
 	if !found {
 		return record, false, errors.New("the metadata review state is incomplete")
 	}
+
 	decoded, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
 		return record, false, errors.New("the metadata review state cannot be decoded")
 	}
+
 	var stored metadataReviewRecordJSON
 	if err := json.Unmarshal(decoded, &stored); err != nil {
 		return record, false, errors.New("the metadata review state is invalid")
 	}
+
 	record = stored.metadataReviewRecord
 	if _, err := domain.ParseHeadSHA(string(record.Head)); err != nil || record.Revision == "" {
 		return record, false, errors.New("the metadata review revision is invalid")
 	}
+
 	for index, finding := range record.Findings {
 		mode := stored.Deduplication[finding.RuleID]
-		if mode != "" && mode != reviewrules.DeduplicateDefect && mode != reviewrules.DeduplicateLocation {
+		if mode != "" && mode != reviewrules.DeduplicateDefect &&
+			mode != reviewrules.DeduplicateLocation {
 			return record, false, errors.New("the stored metadata deduplication policy is invalid")
 		}
+
 		record.Findings[index].Deduplication = mode
 		if finding.EffectiveSurface() == domain.FindingFile || finding.Validate() != nil {
 			return record, false, errors.New("the stored metadata finding is invalid")
 		}
 	}
+
+	if err := record.Checkpoint.validate(record.Findings); err != nil {
+		return record, false, err
+	}
+
 	return record, true, nil
 }
 
-func (service *Service) readMetadataRecord(ctx context.Context, job domain.ReviewJob) (metadataReviewRecord, bool, error) {
+func (service *Service) readMetadataRecord(
+	ctx context.Context,
+	job domain.ReviewJob,
+) (metadataReviewRecord, bool, error) {
 	var empty metadataReviewRecord
-	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
+
+	comments, err := service.github.ListIssueComments(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
 		slog.WarnContext(ctx, "Read metadata review state failed", "err", err)
 		return empty, false, fmt.Errorf("read metadata review state: %w", err)
 	}
+
 	existing, found := findSummaryComment(comments, service.botLogin)
 	if !found {
 		return empty, false, nil
 	}
+
 	return decodeMetadataRecord(existing.Body)
 }
 
-func (service *Service) restoreCompletedMetadata(ctx context.Context, job domain.ReviewJob, pullRequest githubapp.PullRequest, chunks []diff.Chunk, completed []string) ([]domain.Finding, []string, error) {
-	record, found, err := service.readMetadataRecord(ctx, job)
+func (service *Service) restoreFindingCheckpoints(
+	ctx context.Context,
+	job domain.ReviewJob,
+	pullRequest githubapp.PullRequest,
+	chunks []diff.Chunk,
+	completed []string,
+) (metadataReviewRecord, fallbackReviewRecord, []string, error) {
+	var (
+		record   metadataReviewRecord
+		fallback fallbackReviewRecord
+	)
+
+	comments, err := service.github.ListIssueComments(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
-		return nil, completed, err
+		slog.WarnContext(ctx, "Read saved findings failed", slog.String("err", err.Error()))
+		return record, fallback, completed, fmt.Errorf("read saved findings: %w", err)
 	}
-	if found && record.Head == job.Head && record.Revision == diff.PullRequestRevision(pullRequest) {
-		return record.Findings, completed, nil
+
+	existing, found := findSummaryComment(comments, service.botLogin)
+	if !found {
+		return record, fallback, completed, nil
 	}
-	for _, chunk := range chunks {
-		if len(chunk.Metadata) > 0 {
-			completed = removeChunkID(completed, chunkID(chunk))
+
+	record, found, err = decodeMetadataRecord(existing.Body)
+	if err != nil {
+		return record, fallback, completed, err
+	}
+
+	revision := diff.PullRequestRevision(pullRequest)
+	if !found || record.Head != job.Head || record.Revision != revision {
+		// Retain historical findings until explicit current-source assessment.
+		record.Checkpoint = nil
+
+		for _, chunk := range chunks {
+			if len(chunk.Metadata) > 0 {
+				completed = removeChunkID(completed, chunkID(chunk))
+			}
 		}
 	}
-	return nil, completed, nil
+
+	if saved, valid := readFallbackRecord(existing.Body, job.Head); valid &&
+		(saved.Revision == "" || saved.Revision == revision) {
+		fallback = saved
+	}
+
+	return record, fallback, completed, nil
 }
 
 func renderMetadataFindings(findings []domain.Finding) string {
 	if len(findings) == 0 {
 		return ""
 	}
+
 	ordered := append([]domain.Finding(nil), findings...)
 	sortFindings(ordered)
+
 	sections := make([]string, 0, len(ordered))
 	for _, finding := range ordered {
-		source := diff.MetadataSource{Surface: finding.EffectiveSurface(), CommitSHA: finding.CommitSHA, Text: "", StartLine: 0, EndLine: 0}
+		source := diff.MetadataSource{
+			Surface:   finding.EffectiveSurface(),
+			CommitSHA: finding.CommitSHA,
+			Text:      "",
+			StartLine: 0,
+			EndLine:   0,
+		}
 		label := source.Label()
+
 		parts := []string{
-			fmt.Sprintf("##### %s, lines %d-%d: %s", label, finding.StartLine, finding.EndLine, sanitizeReportText(finding.Title)),
+			fmt.Sprintf(
+				"##### %s, lines %d-%d: %s",
+				label,
+				finding.StartLine,
+				finding.EndLine,
+				sanitizeReportText(finding.Title),
+			),
 			sanitizeReportText(finding.Body),
 		}
 		switch finding.CorrectionAction {
 		case "", domain.CorrectionNone:
 		case domain.CorrectionDelete:
-			parts = append(parts, fmt.Sprintf("Delete lines %d-%d.", finding.StartLine, finding.EndLine))
+			parts = append(
+				parts,
+				fmt.Sprintf("Delete lines %d-%d.", finding.StartLine, finding.EndLine),
+			)
 		case domain.CorrectionReplace:
 			fence := metadataReplacementFence(finding.Suggestion)
-			parts = append(parts, "Replace those lines with:", fence+"text\n"+finding.Suggestion+"\n"+fence)
+			parts = append(
+				parts,
+				"Replace those lines with:",
+				fence+"text\n"+finding.Suggestion+"\n"+fence,
+			)
 		}
+
 		sections = append(sections, strings.Join(parts, "\n\n"))
 	}
+
 	return strings.Join(sections, "\n\n")
 }
 
 func metadataReplacementFence(text string) string {
 	maximum, current := 2, 0
+
 	for _, character := range text {
 		if character == '`' {
 			current++
@@ -155,5 +254,6 @@ func metadataReplacementFence(text string) string {
 			current = 0
 		}
 	}
+
 	return strings.Repeat("`", maximum+1)
 }

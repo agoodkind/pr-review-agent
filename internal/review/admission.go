@@ -26,10 +26,43 @@ import (
 // cap cannot be seen whole and must not be reviewed as though it had been.
 const compareFileCap = 300
 
-// admissionVerdict says whether to review the delta, and when not, why.
-type admissionVerdict struct {
-	Skip   bool
-	Reason string
+// AdmissionVerdict reports the ordinary review count and its budget decision.
+type AdmissionVerdict struct {
+	Skip             bool
+	Reason           string
+	ReviewableChunks int
+}
+
+// CheckReviewBudget checks the prepared content review limits.
+//
+// Relationship assessments use a separate work limit and do not count as
+// content review chunks.
+//
+// For example:
+//
+//	verdict := CheckReviewBudget(fileCount, chunks, maxFiles, maxChunks)
+func CheckReviewBudget(
+	fileCount int,
+	chunks []diff.Chunk,
+	maxFiles int,
+	maxChunks int,
+) AdmissionVerdict {
+	reviewable := 0
+
+	for _, chunk := range chunks {
+		if chunk.RelationshipReview {
+			continue
+		}
+
+		for _, piece := range chunk.Pieces {
+			if !piece.Oversized && (piece.Metadata != nil || piece.Patch != "") {
+				reviewable++
+				break
+			}
+		}
+	}
+
+	return admitDelta(fileCount, reviewable, maxFiles, maxChunks)
 }
 
 // admitDelta measures the delta against the configured budgets.
@@ -38,39 +71,51 @@ type admissionVerdict struct {
 // range comes back short with nothing saying so, and reviewing it would report
 // complete coverage over files nobody listed, which is the one thing this
 // service must never do.
-func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) admissionVerdict {
+func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) AdmissionVerdict {
 	if maxFiles > compareFileCap {
 		maxFiles = compareFileCap
 	}
+
 	if fileCount > maxFiles {
-		return admissionVerdict{
-			Skip:   true,
-			Reason: fmt.Sprintf("%d files changed, over the %d file review budget", fileCount, maxFiles),
+		return AdmissionVerdict{
+			Skip:             true,
+			ReviewableChunks: chunkCount,
+			Reason: fmt.Sprintf(
+				"the changed file count (%d) exceeds the %d file review budget",
+				fileCount,
+				maxFiles,
+			),
 		}
 	}
+
 	if chunkCount > maxChunks {
-		return admissionVerdict{
-			Skip:   true,
-			Reason: fmt.Sprintf("%d diff chunks, over the %d chunk review budget", chunkCount, maxChunks),
+		return AdmissionVerdict{
+			Skip:             true,
+			ReviewableChunks: chunkCount,
+			Reason: fmt.Sprintf(
+				"the reviewable chunk count (%d) exceeds the %d chunk review budget",
+				chunkCount,
+				maxChunks,
+			),
 		}
 	}
-	return admissionVerdict{Skip: false, Reason: ""}
+
+	return AdmissionVerdict{Skip: false, Reason: "", ReviewableChunks: chunkCount}
 }
 
-// deltaWork is the delta one run was admitted to review: the files it covers
-// and the chunks the model will be asked about. Admission measures exactly
-// these chunks, so nothing later re-derives a different set from the same diff.
+// deltaWork records the files and assessment requests for one run.
 type deltaWork struct {
-	FileAssessments  []domain.FileAssessment
-	AssessmentModels []string
-	PullRequest      githubapp.PullRequest
-	Files            []diff.FileContext
-	Metadata         []diff.MetadataSource
-	Chunks           []diff.Chunk
+	AssessmentRequests int
+	FileAssessments    []domain.FileAssessment
+	AssessmentModels   []string
+	PullRequest        githubapp.PullRequest
+	Files              []diff.FileContext
+	Metadata           []diff.MetadataSource
+	Chunks             []diff.Chunk
 }
 
-// collectAndAdmit gathers the current pull request and applies the admission
-// gate before any model call. An empty base asks the collector for the pull
+// collectAndAdmit classifies the current change and prepares bounded review requests.
+// An empty base asks the collector for the pull
 // request exactly as GitHub presents it. stop reports whether the caller must
 // return err immediately: true with a nil err is a completed skip, true with a
 // non-nil err is a completed failure, and false means the work is ready for the
@@ -85,96 +130,118 @@ func (service *Service) collectAndAdmit(
 	settings reviewSettings,
 ) (deltaWork, bool, error) {
 	logger := gklog.L(ctx)
+
 	var empty deltaWork
-	input, err := service.collector.CollectRange(ctx, job.PullRequestRef, pullRequest, base)
-	if err != nil {
-		logger.ErrorContext(ctx, "collect pull request diff", slog.String("err", err.Error()))
-		return empty, true, service.failCheck(
-			ctx, job, checkRun.ID, progress.summary(service.now()),
-			checkFailureDiff, fmt.Errorf("collect pull request diff: %w", err),
-		)
-	}
-	progress.reached("the diff")
 
-	fileAdmission := admitDelta(len(input.Files), 0, settings.maxFiles, settings.maxChunks)
-	if fileAdmission.Skip {
-		if err := service.declineReview(ctx, job, checkRun.ID, fileAdmission); err != nil {
-			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSkip, err)
-		}
-		return empty, true, nil
-	}
-	contentInput, assessments, assessmentModels, err := service.classifyLargeInput(ctx, input, settings)
-	if err != nil {
-		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-	}
-	shortfall := classifyStructuralShortfall(deltaWork{
-		FileAssessments:  assessments,
-		AssessmentModels: assessmentModels,
-		PullRequest:      input.PullRequest,
-		Files:            input.Files,
-		Metadata:         input.Metadata,
-		Chunks:           nil,
-	})
-	promptContext, err := pullRequestPrompt(input.PullRequest, input.Files, service.reviewPolicy)
-	if err != nil {
-		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-	}
-	required, err := sourceScopePrompt(shortfall, service.reviewPolicy)
-	if err != nil {
-		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-	}
-	chunks, err := diff.ChunkInput(contentInput, settings.maximumPromptBytes)
-	if err != nil {
-		logger.ErrorContext(ctx, "chunk input", slog.String("err", err.Error()))
-		return empty, true, service.failCheck(
-			ctx, job, checkRun.ID, progress.summary(service.now()),
-			checkFailureDiff, fmt.Errorf("chunk input: %w", err),
-		)
-	}
-	work := deltaWork{FileAssessments: assessments, AssessmentModels: assessmentModels, PullRequest: input.PullRequest, Files: input.Files, Metadata: input.Metadata, Chunks: chunks}
-	work.Chunks, err = BoundModelReviewChunksWithContext(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
-	if err != nil {
-		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-	}
-	shortfall = classifyStructuralShortfall(work)
-	if shortfall.present() {
-		required, err = sourceScopePrompt(shortfall, service.reviewPolicy)
-		if err != nil {
-			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-		}
-		work.Chunks, err = BoundModelReviewChunksWithContext(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
-		if err != nil {
-			return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
-		}
+	admitted, stop, err := service.collectAdmissionInput(
+		ctx,
+		job,
+		pullRequest,
+		checkRun,
+		base,
+		progress,
+		settings,
+		logger,
+	)
+	if stop {
+		return empty, true, err
 	}
 
-	work.Chunks, err = PrepareRelationshipChunks(service.model, work.Chunks, work.Files, settings.minimumImportance, required, promptContext, service.reviewPolicy, settings.maximumPromptBytes)
-	if err != nil {
-		return empty, true, service.failCheck(ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureAnalysis, err)
+	plan, stop, err := service.prepareAdmissionPlan(
+		ctx,
+		job,
+		checkRun,
+		progress,
+		settings,
+		logger,
+		admitted,
+	)
+	if stop {
+		return empty, true, err
 	}
-	chunks = work.Chunks
-	verdict := admitDelta(len(input.Files), len(chunks), settings.maxFiles, settings.maxChunks)
+
+	work, err := service.boundAdmissionChunks(plan, settings)
+	if err != nil {
+		return empty, true, service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureAnalysis,
+			err,
+		)
+	}
+
+	chunks := work.Chunks
+
+	verdict := CheckReviewBudget(
+		len(plan.contentInput.Files),
+		chunks,
+		settings.maxFiles,
+		settings.maxChunks,
+	)
 	if !verdict.Skip {
 		return work, false, nil
 	}
+
 	logger.InfoContext(
 		ctx,
 		"review job skipped",
 		slog.String("reason", verdict.Reason),
-		slog.Int("files", len(input.Files)),
+		slog.Int("files", len(admitted.input.Files)),
 		slog.Int("chunks", len(chunks)),
+		slog.Int("reviewable_chunks", verdict.ReviewableChunks),
 	)
+
 	if err := service.declineReview(ctx, job, checkRun.ID, verdict); err != nil {
 		// A skip that cannot be written is still a run that has to end. Without
 		// this the error travels back to the dispatcher, which only logs it, and
 		// the check stays in progress with nothing on the pull request saying why.
 		return empty, true, service.failCheck(
-			ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSkip, err,
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureSkip,
+			err,
 		)
 	}
+
 	// The caller stops on a skip and never reads the work, so what was measured
 	// travels back unchanged rather than as a second zero value.
 	return work, true, nil
+}
+
+func (service *Service) admitFileInput(
+	input diff.ReviewInput,
+	settings reviewSettings,
+) (AdmissionVerdict, []domain.FileAssessment, []diff.FileContext, error) {
+	if len(input.Files) > compareFileCap {
+		return admitDelta(len(input.Files), 0, compareFileCap, settings.maxChunks), nil, nil, nil
+	}
+
+	var empty AdmissionVerdict
+
+	deterministic, unresolved, err := PlanFileAssessments(input, service.reviewPolicy)
+	if err != nil {
+		return empty, nil, nil, err
+	}
+
+	reviewableFiles := len(input.Files)
+	files := BuildFileIndex(input.Files)
+
+	for _, assessment := range deterministic {
+		if permittedContentExclusion(assessment, files[assessment.Path], service.reviewPolicy) {
+			reviewableFiles--
+		}
+	}
+
+	return admitDelta(
+		reviewableFiles,
+		0,
+		settings.maxFiles,
+		settings.maxChunks,
+	), deterministic, unresolved, nil
 }
 
 // declineReview leaves a delta the admission gate refused exactly as it found
@@ -194,53 +261,62 @@ func (service *Service) declineReview(
 	ctx context.Context,
 	job domain.ReviewJob,
 	checkRunID int64,
-	verdict admissionVerdict,
+	verdict AdmissionVerdict,
 ) error {
 	logger := gklog.L(ctx)
 	// The state is read and written in one call, so nothing this run keeps has
 	// to be carried in from an earlier read that a concurrent edit could have
 	// overtaken. It is the same reason the failure notice is written this way.
-	if err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, existingBody string) summaryCommentContent {
-		prose := RenderSkipBody(verdict.Reason)
-		if preserveCheckpointSummary(existing, existingBody) {
-			prose = renderCheckpointNotice(existingBody, strings.TrimPrefix(prose, "## Review\n\n"))
-		}
-		return summaryCommentContent{
-			Prose: prose,
-			State: marker.State{
-				PolicyRevision: existing.PolicyRevision,
-				// The baseline stays where it was. Advancing it to a head nobody
-				// read would let the next small push measure only its own
-				// commits, approve, and merge the declined range as though it
-				// had been reviewed, and would let a plain redelivery of the
-				// same commit return "already reviewed" with no push at all.
-				// The oversized range therefore stays in every later delta and
-				// keeps being declined until a person splits the pull request,
-				// raises its budget, or asks for the review.
-				LastReviewed: existing.LastReviewed,
-				RunID:        job.DeliveryID,
-				Status:       marker.StateSkipped,
-				// A declined delta read no chunk, so it has nothing to add to
-				// the work already recorded and no business taking any away.
-				// Erasing the chunks an earlier run finished would send the
-				// next run that is allowed to review over work this pull
-				// request has already paid for.
-				Pending:   existing.Pending,
-				Completed: existing.Completed,
-				// The forcing delivery carries forward for the same reason. A
-				// decline is not that delivery finishing, so dropping its record
-				// here would send its own resume over the whole pull request
-				// again.
-				ForcedBy: existing.ForcedBy,
-				// So does the recorded shortfall. A decline read nothing, so it
-				// cannot have cleared a hunk an earlier run could not read.
-				Unread: existing.Unread,
-			},
-		}
-	}); err != nil {
+	if err := service.upsertSummaryCommentFrom(
+		ctx,
+		job,
+		func(existing marker.State, existingBody string) summaryCommentContent {
+			prose := RenderSkipBody(verdict.Reason)
+			if preserveCheckpointSummary(existing, existingBody) {
+				prose = renderCheckpointNotice(
+					existingBody,
+					strings.TrimPrefix(prose, "## Review\n\n"),
+				)
+			}
+
+			return summaryCommentContent{
+				Prose: prose,
+				State: marker.State{
+					PolicyRevision: existing.PolicyRevision,
+					// The baseline stays where it was. Advancing it to a head nobody
+					// read would let the next small push measure only its own
+					// commits, approve, and merge the declined range as though it
+					// had been reviewed, and would let a plain redelivery of the
+					// same commit return "already reviewed" with no push at all.
+					// The oversized range therefore stays in every later delta and
+					// keeps being declined until a person splits the pull request,
+					// raises its budget, or asks for the review.
+					LastReviewed: existing.LastReviewed,
+					RunID:        job.DeliveryID,
+					Status:       marker.StateSkipped,
+					// A declined delta read no chunk, so it has nothing to add to
+					// the work already recorded and no business taking any away.
+					// Erasing the chunks an earlier run finished would send the
+					// next run that is allowed to review over work this pull
+					// request has already paid for.
+					Pending:   existing.Pending,
+					Completed: existing.Completed,
+					// The forcing delivery carries forward for the same reason. A
+					// decline is not that delivery finishing, so dropping its record
+					// here would send its own resume over the whole pull request
+					// again.
+					ForcedBy: existing.ForcedBy,
+					// So does the recorded shortfall. A decline read nothing, so it
+					// cannot have cleared a hunk an earlier run could not read.
+					Unread: existing.Unread,
+				},
+			}
+		},
+	); err != nil {
 		logger.ErrorContext(ctx, "upsert skip notice", slog.String("err", err.Error()))
 		return fmt.Errorf("upsert skip notice: %w", err)
 	}
+
 	if err := service.completeCheckRun(
 		ctx,
 		job.InstallationID,
@@ -253,6 +329,8 @@ func (service *Service) declineReview(
 		logger.ErrorContext(ctx, "complete skipped check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete skipped check run: %w", err)
 	}
+
 	logger.InfoContext(ctx, "review job skip completed", slog.Int64("check_run_id", checkRunID))
+
 	return nil
 }

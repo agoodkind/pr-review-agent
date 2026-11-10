@@ -40,34 +40,52 @@ func (client *Client) ListReviews(
 ) ([]Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews", number))
 	reviews := make([]Review, 0)
-	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
-		var pageReviews []reviewResponse
-		if err := json.Unmarshal(page, &pageReviews); err != nil {
-			client.logger.ErrorContext(ctx, "decode reviews page", slog.String("err", err.Error()))
-			return 0, errors.New("decode reviews page")
-		}
-		for _, item := range pageReviews {
-			head, err := parseHeadSHA(item.CommitID)
-			if err != nil {
-				return 0, err
+
+	err := client.doRESTPaginated(
+		ctx,
+		installationID,
+		path,
+		func(page []byte) (int, error) {
+			var pageReviews []reviewResponse
+			if err := json.Unmarshal(page, &pageReviews); err != nil {
+				client.logger.ErrorContext(
+					ctx,
+					"decode reviews page",
+					slog.String("err", err.Error()),
+				)
+
+				return 0, errors.New("decode reviews page")
 			}
-			reviews = append(reviews, Review{
-				ID:       item.ID,
-				CommitID: head,
-				Author:   item.User.Login,
-				Body:     item.Body,
-				State:    item.State,
-			})
-		}
-		return len(pageReviews), nil
-	})
+
+			for _, item := range pageReviews {
+				head, err := parseHeadSHA(item.CommitID)
+				if err != nil {
+					return 0, err
+				}
+
+				reviews = append(
+					reviews,
+					Review{
+						ID:       item.ID,
+						CommitID: head,
+						Author:   item.User.Login,
+						Body:     item.Body,
+						State:    item.State,
+					},
+				)
+			}
+
+			return len(pageReviews), nil
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	return reviews, nil
 }
 
-// SubmitReview posts one complete pull request review.
+// SubmitReview publishes a GitHub review with the supplied comments and decision.
 func (client *Client) SubmitReview(
 	ctx context.Context,
 	installationID int64,
@@ -81,6 +99,7 @@ func (client *Client) SubmitReview(
 	}
 
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews", number))
+
 	payload := submitReviewBody{
 		CommitID: string(request.CommitID),
 		Body:     request.Body,
@@ -90,13 +109,19 @@ func (client *Client) SubmitReview(
 	if payload.Comments == nil {
 		payload.Comments = []InlineComment{}
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal submit review body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal submit review body",
+			slog.String("err", err.Error()),
+		)
+
 		return Review{}, errors.New("marshal submit review body")
 	}
 
-	body, err := client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	body, err := client.doREST(ctx, installationID, "POST", path, encoded)
 	if err != nil {
 		return Review{}, err
 	}
@@ -114,16 +139,23 @@ func (client *Client) UpdateReview(
 	bodyText string,
 ) (Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews/%d", number, reviewID))
+
 	encoded, err := json.Marshal(updateReviewBody{Body: bodyText})
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal update review body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal update review body",
+			slog.String("err", err.Error()),
+		)
+
 		return Review{}, errors.New("marshal update review body")
 	}
 
-	body, err := client.doREST(ctx, installationID, "PUT", path, nil, encoded)
+	body, err := client.doREST(ctx, installationID, "PUT", path, encoded)
 	if err != nil {
 		return Review{}, err
 	}
+
 	return decodeReview(body, "updated", ctx, client)
 }
 
@@ -135,12 +167,7 @@ type createReviewCommentBody struct {
 	CommitID string `json:"commit_id"`
 }
 
-// CreateReviewComment posts one finding on its own, as soon as it is found.
-//
-// A review submitted with its comments attached publishes nothing until every
-// chunk has answered, so a run that stops early leaves the reader with none of
-// what it did find. Posting each finding on arrival means the work already done
-// survives whatever happens to the rest of the run.
+// CreateReviewComment publishes one inline finding without changing the review decision.
 func (client *Client) CreateReviewComment(
 	ctx context.Context,
 	installationID int64,
@@ -150,23 +177,40 @@ func (client *Client) CreateReviewComment(
 	comment InlineComment,
 ) error {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/comments", number))
+
 	encoded, err := json.Marshal(createReviewCommentBody{
 		InlineComment: comment,
 		CommitID:      string(head),
 	})
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal review comment body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal review comment body",
+			slog.String("err", err.Error()),
+		)
+
 		return errors.New("marshal review comment body")
 	}
 
-	_, err = client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	_, err = client.doREST(ctx, installationID, "POST", path, encoded)
+
 	return err
 }
 
-func decodeReview(body []byte, operation string, ctx context.Context, client *Client) (Review, error) {
+func decodeReview(
+	body []byte,
+	operation string,
+	ctx context.Context,
+	client *Client,
+) (Review, error) {
 	var response reviewResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		client.logger.ErrorContext(ctx, "decode "+operation+" review", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"decode "+operation+" review",
+			slog.String("err", err.Error()),
+		)
+
 		return Review{}, errors.New("decode " + operation + " review")
 	}
 

@@ -26,10 +26,17 @@ const USAGE_READ_FIELDS = new Set([
   "action", "provider_id", "model", "start_ms", "end_ms", "include_start", "include_end",
   "after_sequence", "snapshot_sequence", "page_size",
 ]);
+const TOTALS_READ_FIELDS = new Set([
+  "action", "provider_id", "model", "start_ms", "end_ms", "include_start", "include_end",
+  "after_group", "snapshot_sequence", "page_size", "retention_generation",
+]);
 
 function operatorCanRead(payload) {
   if (payload.action === "storage_stats") {
     return Object.keys(payload).length === 1;
+  }
+  if (payload.action === "query_usage_totals") {
+    return Object.keys(payload).every(function (key) { return TOTALS_READ_FIELDS.has(key); });
   }
   const fields = Object.hasOwn(payload, "action") ? USAGE_READ_FIELDS : DAILY_READ_FIELDS;
   if (Object.hasOwn(payload, "action") && payload.action !== "query_usage") {
@@ -63,7 +70,8 @@ export async function handleProviderBudget(request, env, verifySignature) {
       return new Response("operator token permits counter reads only", { status: 403 });
     }
     if (Object.hasOwn(payload, "action")) {
-      if (payload.action !== "query_usage" && payload.action !== "report_usage" && payload.action !== "storage_stats") {
+      if (payload.action !== "query_usage" && payload.action !== "query_usage_totals" &&
+          payload.action !== "report_usage" && payload.action !== "storage_stats") {
         return new Response("invalid budget action", { status: 400 });
       }
       pathname = `/${payload.action}`;

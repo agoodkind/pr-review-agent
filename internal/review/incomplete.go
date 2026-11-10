@@ -22,31 +22,57 @@ func (service *Service) concludeIncomplete(
 	summary Summary,
 	progress *reviewProgress,
 ) error {
+	service.enrichProviderPeriodUsage(ctx, &summary)
+
+	ctx, cancel := service.publicationContext(ctx)
+	defer cancel()
+
 	logger := gklog.L(ctx)
 	pending := len(state.Pending)
 	unread := pass.unreadChunks()
 	reason := chunkFailureReason(unread)
 	statuses := providerStatuses(unread)
 	classes := make([]string, 0)
+
 	for _, class := range chunkFailureClasses(unread) {
 		classes = append(classes, string(class))
 	}
+
 	recordAssessment(ctx, domain.AssessmentIncomplete, &summary, classes, quotaRecovery(statuses))
 	cause := joinedChunkFailures(ctx, unread)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
 	detail := service.terminalFailureDetail(ctx, job, cause)
+
 	addAttemptedModels(&summary, statuses)
+
 	if _, err := persistAssessment(ctx, checkRun.ID); err != nil {
 		return err
 	}
-	if err := service.upsertSummaryComment(ctx, job, summaryCommentContent{
-		Prose: RenderIncompleteBody(summary, pending, reason, detail, statuses...) + reassessmentNotice(ctx),
-		State: state,
-	}); err != nil {
+
+	if err := service.upsertSummaryComment(
+		ctx,
+		job,
+		summaryCommentContent{
+			Prose: RenderIncompleteBody(
+				summary,
+				pending,
+				reason,
+				detail,
+				statuses...,
+			) + reassessmentNotice(ctx),
+			State: state,
+		},
+	); err != nil {
 		return service.failCheck(
-			ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureSummary, err,
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureSummary,
+			err,
 		)
 	}
+
 	if err := service.completeCheckRun(
 		ctx,
 		job.InstallationID,
@@ -59,16 +85,24 @@ func (service *Service) concludeIncomplete(
 		logger.WarnContext(ctx, "complete incomplete review check", slog.String("err", err.Error()))
 		return errors.Join(err, dismissErr)
 	}
+
 	logger.InfoContext(
 		ctx,
 		"review job left chunks pending",
 		slog.Int("pending", pending),
 		slog.Int64("check_run_id", checkRun.ID),
 	)
+
 	if dismissErr != nil {
-		logger.WarnContext(ctx, "incomplete review withdrawal failed", slog.String("err", dismissErr.Error()))
+		logger.WarnContext(
+			ctx,
+			"incomplete review withdrawal failed",
+			slog.String("err", dismissErr.Error()),
+		)
+
 		return &reportedFailureError{cause: dismissErr}
 	}
+
 	return nil
 }
 
@@ -87,13 +121,17 @@ func incompleteCheckDetail(failures []chunkFailure, summary Summary, detail stri
 	if numbers := unreadChunkNumbers(failures); numbers != "" {
 		parts = append(parts, "Chunks left unread: "+numbers+".")
 	}
+
 	if reason := chunkFailureReason(failures); reason != "" {
 		parts = append(parts, reason)
 	}
+
 	if statuses := renderProviderStatuses(providerStatuses(failures)); statuses != "" {
 		parts = append(parts, statuses)
 	}
+
 	parts = append(parts, detail, RenderDetails(summary))
+
 	return strings.Join(parts, "\n\n")
 }
 
@@ -103,9 +141,14 @@ func incompleteCheckTitle(pending int, reason string) string {
 	if reason == checkFailureDailyBudget {
 		return chunkCount(pending) + " could not be reviewed: app token limit exhausted."
 	}
+
 	if reason == checkFailureMixedUsage {
 		return chunkCount(pending) + " could not be reviewed: app and provider usage exhausted."
 	}
-	return fmt.Sprintf("%s could not be reviewed. Apply `%s` to retry.",
-		chunkCount(pending), domain.RerunReviewLabel)
+
+	return fmt.Sprintf(
+		"%s could not be reviewed. Apply `%s` to retry.",
+		chunkCount(pending),
+		domain.RerunReviewLabel,
+	)
 }

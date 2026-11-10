@@ -12,6 +12,8 @@ type StorageStats struct {
 	Events            int64          `json:"events"`
 	Details           int64          `json:"details"`
 	SDKRecords        int64          `json:"sdk_records"`
+	TotalsBuckets     int64          `json:"totals_buckets"`
+	TotalsGroups      int64          `json:"totals_groups"`
 	SDKPayloadBytes   int64          `json:"sdk_payload_bytes"`
 	OldestAdmissionMS *int64         `json:"oldest_admission_ms"`
 	NewestAdmissionMS *int64         `json:"newest_admission_ms"`
@@ -33,6 +35,8 @@ type RetentionStats struct {
 // Storage reads the existing authenticated provider-budget endpoint.
 func (client *Client) Storage(ctx context.Context) (StorageStats, error) {
 	var result StorageStats
+
 	err := post(ctx, client, storageRequest{Action: "storage_stats"}, &result)
+
 	return result, err
 }

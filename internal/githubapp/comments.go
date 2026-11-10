@@ -39,24 +39,41 @@ func (client *Client) ListIssueComments(
 ) ([]IssueComment, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/issues/%d/comments", number))
 	comments := make([]IssueComment, 0)
-	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
-		var decoded []issueCommentResponse
-		if err := json.Unmarshal(page, &decoded); err != nil {
-			client.logger.ErrorContext(ctx, "decode issue comments page", slog.String("err", err.Error()))
-			return 0, errors.New("decode issue comments page")
-		}
-		for _, item := range decoded {
-			comments = append(comments, IssueComment{
-				ID:     item.ID,
-				Author: item.User.Login,
-				Body:   item.Body,
-			})
-		}
-		return len(decoded), nil
-	})
+
+	err := client.doRESTPaginated(
+		ctx,
+		installationID,
+		path,
+		func(page []byte) (int, error) {
+			var decoded []issueCommentResponse
+			if err := json.Unmarshal(page, &decoded); err != nil {
+				client.logger.ErrorContext(
+					ctx,
+					"decode issue comments page",
+					slog.String("err", err.Error()),
+				)
+
+				return 0, errors.New("decode issue comments page")
+			}
+
+			for _, item := range decoded {
+				comments = append(
+					comments,
+					IssueComment{
+						ID:     item.ID,
+						Author: item.User.Login,
+						Body:   item.Body,
+					},
+				)
+			}
+
+			return len(decoded), nil
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	return comments, nil
 }
 
@@ -94,18 +111,39 @@ func (client *Client) writeIssueComment(
 ) (IssueComment, error) {
 	encoded, err := json.Marshal(issueCommentBody{Body: body})
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal "+operation+" issue comment", slog.String("err", err.Error()))
-		return IssueComment{ID: 0, Author: "", Body: ""}, errors.New("marshal " + operation + " issue comment")
+		client.logger.ErrorContext(
+			ctx,
+			"marshal "+operation+" issue comment",
+			slog.String("err", err.Error()),
+		)
+
+		return IssueComment{
+			ID:     0,
+			Author: "",
+			Body:   "",
+		}, errors.New("marshal " + operation + " issue comment")
 	}
-	responseBody, err := client.doREST(ctx, installationID, method, path, nil, encoded)
+
+	responseBody, err := client.doREST(ctx, installationID, method, path, encoded)
 	if err != nil {
 		return IssueComment{ID: 0, Author: "", Body: ""}, err
 	}
+
 	var decoded issueCommentResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		client.logger.ErrorContext(ctx, "decode "+operation+" issue comment", slog.String("err", err.Error()))
-		return IssueComment{ID: 0, Author: "", Body: ""}, errors.New("decode " + operation + " issue comment")
+		client.logger.ErrorContext(
+			ctx,
+			"decode "+operation+" issue comment",
+			slog.String("err", err.Error()),
+		)
+
+		return IssueComment{
+			ID:     0,
+			Author: "",
+			Body:   "",
+		}, errors.New("decode " + operation + " issue comment")
 	}
+
 	return IssueComment{
 		ID:     decoded.ID,
 		Author: decoded.User.Login,

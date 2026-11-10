@@ -49,46 +49,71 @@ type Response struct {
 // Send requires a storage acknowledgment before review delivery settlement.
 func (client *Client) Send(ctx context.Context, mutation Mutation) (Response, error) {
 	logger := gklog.L(ctx)
+
 	var result Response
+
 	body, err := json.Marshal(mutation)
 	if err != nil {
 		logger.WarnContext(ctx, "encode reassessment mutation", slog.String("err", err.Error()))
 		return result, fmt.Errorf("encode reassessment mutation: %w", err)
 	}
+
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.URL, bytes.NewReader(body))
+
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		client.URL,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		logger.WarnContext(ctx, "create reassessment request", slog.String("err", err.Error()))
 		return result, fmt.Errorf("create reassessment request: %w", err)
 	}
+
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set(SignatureHeader, telemetry.Sign(client.SigningKey, body))
+
 	response, err := client.HTTP.Do(request)
 	if err != nil {
 		logger.WarnContext(ctx, "reassessment storage request", slog.String("err", err.Error()))
 		return result, fmt.Errorf("reassessment storage request: %w", err)
 	}
+
 	defer func() {
 		if closeErr := response.Body.Close(); closeErr != nil {
-			logger.WarnContext(ctx, "close reassessment response", slog.String("err", closeErr.Error()))
+			logger.WarnContext(
+				ctx,
+				"close reassessment response",
+				slog.String("err", closeErr.Error()),
+			)
 		}
 	}()
+
 	if response.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("reassessment storage returned HTTP %d", response.StatusCode)
 	}
+
 	data, readErr := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
 	if readErr != nil {
 		logger.WarnContext(ctx, "read reassessment record", slog.String("err", readErr.Error()))
 		return result, fmt.Errorf("read reassessment record: %w", readErr)
 	}
+
 	var fields map[string]json.RawMessage
-	if shapeErr := json.Unmarshal(data, &fields); shapeErr != nil || fields == nil || len(fields["record"]) == 0 || len(fields["applied"]) == 0 {
+	if shapeErr := json.Unmarshal(
+		data,
+		&fields,
+	); shapeErr != nil || fields == nil || len(fields["record"]) == 0 ||
+		len(fields["applied"]) == 0 {
 		return result, fmt.Errorf("reassessment storage response is incomplete")
 	}
+
 	if err := json.Unmarshal(data, &result); err != nil {
 		logger.WarnContext(ctx, "decode reassessment record", slog.String("err", err.Error()))
 		return result, fmt.Errorf("decode reassessment record: %w", err)
 	}
+
 	return result, nil
 }

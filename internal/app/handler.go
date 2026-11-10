@@ -54,6 +54,7 @@ func reviewSettingsSigningInput(settings string, body []byte) []byte {
 	signed = append(signed, settings...)
 	signed = append(signed, '\n')
 	signed = append(signed, body...)
+
 	return signed
 }
 
@@ -92,28 +93,42 @@ func readReviewSettings(
 ) domain.ReviewSettings {
 	empty := domain.ReviewSettings{
 		ApproveEachCommit: nil,
-		MinimumImportance: 0, MaxFiles: 0, MaxChunks: 0, ChunkTimeout: 0,
-		ChunkConcurrency: 0, MaxPromptBytes: 0,
+		MinimumImportance: 0,
+		MaxFiles:          0,
+		MaxChunks:         0,
+		ChunkTimeout:      0,
+		ChunkConcurrency:  0,
+		MaxPromptBytes:    0,
 	}
+
 	raw := request.Header.Get(reviewSettingsHeader)
 	if raw == "" {
 		return empty
 	}
+
 	signature := request.Header.Get(reviewSettingsSignatureHeader)
-	if err := webhook.VerifySHA256(signature, secret, reviewSettingsSigningInput(raw, body)); err != nil {
+	if err := webhook.VerifySHA256(
+		signature,
+		secret,
+		reviewSettingsSigningInput(raw, body),
+	); err != nil {
 		logger.Error(
 			"review settings refused, signature did not verify",
 			slog.String("err", err.Error()),
 			slog.Bool("signature_present", signature != ""),
 		)
+
 		return empty
 	}
+
 	var payload reviewSettingsPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		logger.Warn("decode review settings header", slog.String("err", err.Error()))
 		return empty
 	}
+
 	timeout := time.Duration(0)
+
 	if payload.ChunkTimeout != "" {
 		parsed, err := time.ParseDuration(payload.ChunkTimeout)
 		if err != nil {
@@ -122,6 +137,7 @@ func readReviewSettings(
 			timeout = parsed
 		}
 	}
+
 	return domain.ReviewSettings{
 		ApproveEachCommit: payload.ApproveEachCommit,
 		MinimumImportance: payload.MinimumImportance,
@@ -187,6 +203,7 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 		handler.handleReassessment(writer, request)
 		return
 	}
+
 	handler.logger.DebugContext(
 		request.Context(),
 		"http request",
@@ -200,12 +217,14 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			writeMethodNotAllowed(writer)
 			return
 		}
+
 		handler.writeReadiness(writer)
 	case routeHealth:
 		if request.Method != http.MethodGet {
 			writeMethodNotAllowed(writer)
 			return
 		}
+
 		handler.writeReadiness(writer)
 	case routeDrain:
 		handler.handleDrain(writer, request)
@@ -214,6 +233,7 @@ func (handler *handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 			writeMethodNotAllowed(writer)
 			return
 		}
+
 		handler.handleGitHubWebhook(writer, request)
 	default:
 		http.NotFound(writer, request)
@@ -226,12 +246,19 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	deliveryID := request.Header.Get("X-Github-Delivery")
 
 	limited := io.LimitReader(request.Body, config.MaximumWebhookBytes+1)
+
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		handler.logger.ErrorContext(request.Context(), "read webhook body", slog.String("err", err.Error()))
+		handler.logger.ErrorContext(
+			request.Context(),
+			"read webhook body",
+			slog.String("err", err.Error()),
+		)
 		http.Error(writer, "read body failed", http.StatusBadRequest)
+
 		return
 	}
+
 	if int64(len(body)) > config.MaximumWebhookBytes {
 		http.Error(writer, "payload too large", http.StatusRequestEntityTooLarge)
 		return
@@ -247,16 +274,24 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 		return
 	}
 
-	event, supported, err := handler.parseReviewEvent(request.Context(), eventType, deliveryID, body)
+	event, supported, err := handler.parseReviewEvent(
+		request.Context(),
+		eventType,
+		deliveryID,
+		body,
+	)
 	if err != nil {
 		writeReviewEventError(writer, err)
 		return
 	}
+
 	if !supported {
 		writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		writer.WriteHeader(http.StatusAccepted)
+
 		return
 	}
+
 	logger := handler.logger.With(
 		slog.String("delivery_id", deliveryID),
 		slog.String("repository", event.Repository.Owner+"/"+event.Repository.Name),
@@ -277,13 +312,20 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	logger = gklog.L(ctx)
 
 	if !handler.cache.Claim(deliveryID) {
-		logger.InfoContext(ctx, "webhook delivery suppressed", slog.String("reason", "duplicate_delivery"))
+		logger.InfoContext(
+			ctx,
+			"webhook delivery suppressed",
+			slog.String("reason", "duplicate_delivery"),
+		)
+
 		if handler.cache.Settled(deliveryID) {
 			writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		} else {
 			writer.Header().Set(deliveryStateHeader, deliveryStatePending)
 		}
+
 		writer.WriteHeader(http.StatusAccepted)
+
 		return
 	}
 
@@ -294,29 +336,44 @@ func (handler *handler) handleGitHubWebhook(writer http.ResponseWriter, request 
 	// over themselves and the body together, and that is what makes them safe to
 	// honor at any point in this function.
 	job := event.Job()
+
 	job.Settings = readReviewSettings(request, body, handler.webhookHMACKey, logger)
 	if handler.suppressScheduledDelivery(ctx, writer, &job, event.RestartsQueue()) {
 		return
 	}
+
 	handler.admitWebhookReview(ctx, writer, job, logger)
 }
 
-func (handler *handler) admitWebhookReview(ctx context.Context, writer http.ResponseWriter, job domain.ReviewJob, logger *slog.Logger) {
+func (handler *handler) admitWebhookReview(
+	ctx context.Context,
+	writer http.ResponseWriter,
+	job domain.ReviewJob,
+	logger *slog.Logger,
+) {
 	deliveryID := job.DeliveryID
+
 	job, admitted, err := handler.admitter.Admit(ctx, job)
 	if err != nil {
 		handler.cache.Release(deliveryID)
 		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", err.Error()))
 		http.Error(writer, "review admission failed", http.StatusBadGateway)
+
 		return
 	}
+
 	// Admit declines only a forced review or verdict refresh with a completed
 	// dedicated check. An unfinished check is admitted again for replay.
 	if !admitted {
-		logger.InfoContext(ctx, "webhook delivery suppressed", slog.String("reason", "already_admitted"))
+		logger.InfoContext(
+			ctx,
+			"webhook delivery suppressed",
+			slog.String("reason", "already_admitted"),
+		)
 		handler.cache.Settle(deliveryID)
 		writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		writer.WriteHeader(http.StatusAccepted)
+
 		return
 	}
 
@@ -326,24 +383,40 @@ func (handler *handler) admitWebhookReview(ctx context.Context, writer http.Resp
 		handler.wakeUnqueuedReview(ctx, job)
 		logger.ErrorContext(ctx, "persist metadata edit", slog.String("err", scheduleErr.Error()))
 		http.Error(writer, "metadata edit scheduling failed", http.StatusServiceUnavailable)
+
 		return
 	}
+
 	if scheduled {
 		handler.cache.Release(deliveryID)
 		writer.Header().Set(deliveryStateHeader, deliveryStateSettled)
 		writer.WriteHeader(http.StatusAccepted)
+
 		return
 	}
+
 	if !handler.dispatcher.Enqueue(job) {
 		handler.cache.Release(deliveryID)
+
 		if err := handler.admitter.Reject(ctx, job, errReviewQueueFull); err != nil {
-			logger.ErrorContext(ctx, "complete rejected review check", slog.String("err", err.Error()))
+			logger.ErrorContext(
+				ctx,
+				"complete rejected review check",
+				slog.String("err", err.Error()),
+			)
 		}
+
 		handler.wakeUnqueuedReview(ctx, job)
-		logger.ErrorContext(ctx, "webhook delivery rejected", slog.String("err", errReviewQueueFull.Error()))
+		logger.ErrorContext(
+			ctx,
+			"webhook delivery rejected",
+			slog.String("err", errReviewQueueFull.Error()),
+		)
 		http.Error(writer, "queue full", http.StatusServiceUnavailable)
+
 		return
 	}
+
 	logger.InfoContext(ctx, "webhook delivery accepted")
 
 	writer.Header().Set(deliveryStateHeader, deliveryStatePending)
@@ -361,26 +434,41 @@ func (handler *handler) parseReviewEvent(
 		if err != nil {
 			return event, supported, fmt.Errorf("parse webhook event: %w", err)
 		}
+
 		return event, supported, nil
 	}
+
 	event, supported, err := webhook.ParseMentionedIssueComment(deliveryID, body, handler.botLogin)
 	if err != nil {
 		return event, supported, fmt.Errorf("parse tagged comment: %w", err)
 	}
+
 	if !supported {
 		return event, false, nil
 	}
+
 	pullRequest, err := handler.pullRequests.GetPullRequest(
-		ctx, event.InstallationID, event.Repository, event.Number,
+		ctx,
+		event.InstallationID,
+		event.Repository,
+		event.Number,
 	)
 	if err != nil {
-		handler.logger.ErrorContext(ctx, "load tagged pull request", slog.String("err", err.Error()))
+		handler.logger.ErrorContext(
+			ctx,
+			"load tagged pull request",
+			slog.String("err", err.Error()),
+		)
+
 		return webhook.PullRequestEvent{}, false, errTaggedPullRequestUnavailable
 	}
+
 	if pullRequest.Draft {
 		return event, false, nil
 	}
+
 	event.Head = pullRequest.Head
+
 	return event, true, nil
 }
 
@@ -389,17 +477,21 @@ func writeReviewEventError(writer http.ResponseWriter, err error) {
 		http.Error(writer, "load pull request failed", http.StatusBadGateway)
 		return
 	}
+
 	http.Error(writer, "malformed payload", http.StatusBadRequest)
 }
 
 func (handler *handler) writeReadiness(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.Header().Set("X-Pr-Agent-Revision", version.SourceRevision())
+
 	if handler.dispatcher.Status().AdmissionClosed {
 		http.Error(writer, "review admission closed", http.StatusServiceUnavailable)
 		return
 	}
+
 	writer.WriteHeader(http.StatusOK)
+
 	if err := json.NewEncoder(writer).Encode(map[string]string{"status": "ok"}); err != nil {
 		http.Error(writer, "encode response failed", http.StatusInternalServerError)
 	}

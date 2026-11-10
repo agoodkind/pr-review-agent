@@ -45,57 +45,98 @@ type deploymentHandoff struct {
 	Service  string
 }
 
-func (settings workerSettings) handoff(configuration DeploymentConfiguration) (deploymentHandoff, error) {
+func (settings workerSettings) handoff(
+	configuration DeploymentConfiguration,
+) (deploymentHandoff, error) {
 	var handoff deploymentHandoff
+
 	flag, exists := settings.binding("REVIEW_HANDOFF")
 	candidate, candidateExists := settings.binding("CANDIDATE_REVIEW_SERVICE")
+
 	if exists && flag.Type != plainTextBindingType {
 		return handoff, errors.New("deployed REVIEW_HANDOFF must use plain text")
 	}
+
 	if !exists || flag.Text == "false" {
 		if candidateExists {
 			return handoff, errors.New("candidate binding requires an enabled deployment handoff")
 		}
+
 		return handoff, nil
 	}
+
 	if flag.Type != plainTextBindingType || flag.Text != "true" {
-		return handoff, errors.New("deployed REVIEW_HANDOFF must contain the plain text true or false")
+		return handoff, errors.New(
+			"deployed REVIEW_HANDOFF must contain the plain text true or false",
+		)
 	}
+
 	revision, revisionExists := settings.binding("REVIEW_HANDOFF_REVISION")
-	if !revisionExists || revision.Type != plainTextBindingType || !revisionPattern.MatchString(revision.Text) {
+	if !revisionExists || revision.Type != plainTextBindingType ||
+		!revisionPattern.MatchString(revision.Text) {
 		return handoff, errors.New("enabled handoff requires its full expected revision")
 	}
-	if !candidateExists || candidate.Type != serviceBindingType || candidate.Entrypoint != "ReviewService" || !defaultServiceEnvironment(candidate.Environment) {
-		return handoff, errors.New("enabled handoff requires a named candidate ReviewService binding")
+
+	if !candidateExists || candidate.Type != serviceBindingType ||
+		candidate.Entrypoint != "ReviewService" ||
+		!defaultServiceEnvironment(candidate.Environment) {
+		return handoff, errors.New(
+			"enabled handoff requires a named candidate ReviewService binding",
+		)
 	}
+
 	for _, slot := range configuration.Slots {
 		if slot.Name == candidate.Service {
-			return deploymentHandoff{Enabled: true, Revision: revision.Text, Service: slot.Name}, nil
+			return deploymentHandoff{
+				Enabled:  true,
+				Revision: revision.Text,
+				Service:  slot.Name,
+			}, nil
 		}
 	}
+
 	return handoff, errors.New("handoff candidate does not match a configured deployment slot")
 }
 
-func (client *Client) workerSettings(ctx context.Context, account, script string, allowMissing bool) (workerSettings, bool, error) {
-	response, status, err := client.request(ctx, http.MethodGet, "/accounts/"+account+"/workers/scripts/"+script+"/settings", nil)
-	if allowMissing && status == http.StatusNotFound && len(response.Errors) == 1 && response.Errors[0].Code == 10007 {
+func (client *Client) workerSettings(
+	ctx context.Context,
+	account string,
+	script string,
+	allowMissing bool,
+) (workerSettings, bool, error) {
+	response, status, err := client.request(
+		ctx,
+		http.MethodGet,
+		"/accounts/"+account+"/workers/scripts/"+script+"/settings",
+		nil,
+	)
+	if allowMissing && status == http.StatusNotFound && len(response.Errors) == 1 &&
+		response.Errors[0].Code == 10007 {
 		return workerSettings{Bindings: nil}, false, nil
 	}
+
 	if err != nil {
 		slog.WarnContext(ctx, "Worker settings read failed", "script", script)
 		return workerSettings{}, false, fmt.Errorf("read Worker %s settings: %w", script, err)
 	}
+
 	var settings workerSettings
 	if json.Unmarshal(response.Result, &settings) != nil || settings.Bindings == nil {
 		return settings, false, errors.New("worker settings omitted readable bindings")
 	}
+
 	seen := make(map[string]bool)
+
 	for _, binding := range settings.Bindings {
 		if binding.Name == "" || seen[binding.Name] {
-			return settings, false, errors.New("worker settings contain missing or duplicate binding names")
+			return settings, false, errors.New(
+				"worker settings contain missing or duplicate binding names",
+			)
 		}
+
 		seen[binding.Name] = true
 	}
+
 	return settings, true, nil
 }
 
@@ -105,48 +146,74 @@ func (settings workerSettings) binding(name string) (workerBinding, bool) {
 			return binding, true
 		}
 	}
+
 	var missing workerBinding
+
 	return missing, false
 }
 
-func (settings workerSettings) selection(configuration DeploymentConfiguration) (deploymentSelection, error) {
+func (settings workerSettings) selection(
+	configuration DeploymentConfiguration,
+) (deploymentSelection, error) {
 	mode, exists := settings.binding("REVIEW_SERVICE_MODE")
 	if exists && mode.Type != "plain_text" {
 		return deploymentSelection{}, errors.New("deployed REVIEW_SERVICE_MODE must be plain text")
 	}
+
 	service, serviceExists := settings.binding("REVIEW_SERVICE")
 	if !exists || mode.Text == "legacy" {
 		legacy, legacyExists := settings.binding("PR_AGENT")
-		if serviceExists || !legacyExists || legacy.Type != "durable_object_namespace" || legacy.ClassName != "PrAgentContainer" || legacy.NamespaceID == "" {
-			return deploymentSelection{}, errors.New("legacy bootstrap requires the deployed PR_AGENT container binding without REVIEW_SERVICE")
+		if serviceExists || !legacyExists || legacy.Type != "durable_object_namespace" ||
+			legacy.ClassName != "PrAgentContainer" ||
+			legacy.NamespaceID == "" {
+			return deploymentSelection{}, errors.New(
+				"legacy bootstrap requires the deployed PR_AGENT container binding without REVIEW_SERVICE",
+			)
 		}
+
 		return deploymentSelection{Mode: "legacy", Service: ""}, nil
 	}
-	if mode.Text != "service" || !serviceExists || service.Type != "service" || service.Entrypoint != "ReviewService" || !defaultServiceEnvironment(service.Environment) {
+
+	if mode.Text != "service" || !serviceExists || service.Type != "service" ||
+		service.Entrypoint != "ReviewService" ||
+		!defaultServiceEnvironment(service.Environment) {
 		return deploymentSelection{}, errors.New("deployed review service selection is invalid")
 	}
+
 	for _, slot := range configuration.Slots {
 		if service.Service == slot.Name {
 			return deploymentSelection{Mode: "service", Service: slot.Name}, nil
 		}
 	}
-	return deploymentSelection{}, errors.New("deployed REVIEW_SERVICE selects an unknown Worker; update the explicit deployment slots")
+
+	return deploymentSelection{}, errors.New(
+		"deployed REVIEW_SERVICE selects an unknown Worker; update the explicit deployment slots",
+	)
 }
 
-func inactiveSlot(configuration DeploymentConfiguration, selection deploymentSelection) DeploymentSlot {
+func inactiveSlot(
+	configuration DeploymentConfiguration,
+	selection deploymentSelection,
+) DeploymentSlot {
 	for _, slot := range configuration.Slots {
 		if slot.Name != selection.Service {
 			return slot
 		}
 	}
+
 	return DeploymentSlot{Name: "", Origin: ""}
 }
 
 func candidateOwnedByGateway(settings workerSettings, gateway string) error {
 	binding, exists := settings.binding("RUNTIME_CONFIGURATION")
-	if !exists || binding.Type != "service" || binding.Service != gateway || binding.Entrypoint != "RuntimeConfiguration" || !defaultServiceEnvironment(binding.Environment) {
-		return errors.New("existing candidate Worker does not bind the expected gateway RuntimeConfiguration; refusing to overwrite it")
+	if !exists || binding.Type != "service" || binding.Service != gateway ||
+		binding.Entrypoint != "RuntimeConfiguration" ||
+		!defaultServiceEnvironment(binding.Environment) {
+		return errors.New(
+			"existing candidate Worker does not bind the expected gateway RuntimeConfiguration; refusing to overwrite it",
+		)
 	}
+
 	return nil
 }
 
@@ -159,11 +226,13 @@ func preserveBindings(before, after workerSettings) error {
 		if deploymentControlBindings[binding.Name] {
 			continue
 		}
+
 		current, exists := after.binding(binding.Name)
 		if !exists || !reflect.DeepEqual(binding, current) {
 			return fmt.Errorf("gateway binding %s changed during preparation", binding.Name)
 		}
 	}
+
 	return nil
 }
 
@@ -182,31 +251,48 @@ func validateGatewayBindings(configuration wranglerConfiguration, settings worke
 			ClassName string `json:"class_name"`
 		} `json:"bindings"`
 	}
-	if json.Unmarshal(configuration["durable_objects"], &durable) != nil || len(durable.Bindings) == 0 {
+	if json.Unmarshal(configuration["durable_objects"], &durable) != nil ||
+		len(durable.Bindings) == 0 {
 		return errors.New("gateway template requires existing Durable Object bindings")
 	}
+
 	for _, configured := range durable.Bindings {
 		deployed, exists := settings.binding(configured.Name)
-		if !exists || deployed.Type != "durable_object_namespace" || deployed.NamespaceID == "" || deployed.ClassName != configured.ClassName {
-			return fmt.Errorf("gateway template Durable Object %s does not match its deployed class and namespace", configured.Name)
+		if !exists || deployed.Type != "durable_object_namespace" || deployed.NamespaceID == "" ||
+			deployed.ClassName != configured.ClassName {
+			return fmt.Errorf(
+				"gateway template Durable Object %s does not match its deployed class and namespace",
+				configured.Name,
+			)
 		}
 	}
+
 	for _, deployed := range settings.Bindings {
 		switch deployed.Type {
 		case serviceBindingType, plainTextBindingType, secretTextBindingType:
 		case durableObjectBindingType:
 			found := false
+
 			for _, configured := range durable.Bindings {
 				if configured.Name == deployed.Name {
 					found = true
 				}
 			}
+
 			if !found {
-				return fmt.Errorf("gateway template omits existing Durable Object binding %s", deployed.Name)
+				return fmt.Errorf(
+					"gateway template omits existing Durable Object binding %s",
+					deployed.Name,
+				)
 			}
 		default:
-			return fmt.Errorf("gateway binding %s has unsupported type %s; preserve it explicitly before deployment", deployed.Name, deployed.Type)
+			return fmt.Errorf(
+				"gateway binding %s has unsupported type %s; preserve it explicitly before deployment",
+				deployed.Name,
+				deployed.Type,
+			)
 		}
 	}
+
 	return nil
 }

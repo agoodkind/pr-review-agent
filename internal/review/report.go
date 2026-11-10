@@ -21,8 +21,10 @@ func (pass *chunkPass) recordOverview(chunk int, overview string) {
 	if validateFullSentence("review overview", overview) != nil {
 		return
 	}
+
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	pass.overviewByChunk[chunk] = append(pass.overviewByChunk[chunk], overview)
 }
 
@@ -30,15 +32,20 @@ func (pass *chunkPass) recordOverview(chunk int, overview string) {
 func (pass *chunkPass) overviews() []string {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	chunks := make([]int, 0, len(pass.overviewByChunk))
 	for chunk := range pass.overviewByChunk {
 		chunks = append(chunks, chunk)
 	}
+
 	sort.Ints(chunks)
+
 	ordered := make([]string, 0, len(pass.overviewByChunk))
+
 	for _, chunk := range chunks {
 		ordered = append(ordered, pass.overviewByChunk[chunk]...)
 	}
+
 	return ordered
 }
 
@@ -47,6 +54,7 @@ func (pass *chunkPass) overviews() []string {
 func (pass *chunkPass) recordReportModel(name string) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	pass.models.add(name)
 	pass.requests++
 }
@@ -62,27 +70,37 @@ func (service *Service) publishCompletedReview(
 	progress *reviewProgress,
 	pass *chunkPass,
 ) error {
-	report, reportCalled := service.generateReport(
-		ctx, pullRequest, pass,
-	)
+	report, reportCalled := service.generateReport(ctx, pullRequest, pass)
 	summary.Report = report
 	summary.Models = pass.analysis().Models
+
 	summary.Usage = UsageFromContext(ctx)
 	if reportCalled {
 		current, err := service.github.GetPullRequest(
-			ctx, job.InstallationID, job.Repository, job.Number,
+			ctx,
+			job.InstallationID,
+			job.Repository,
+			job.Number,
 		)
 		if err != nil {
 			return service.failCheck(
-				ctx, job, checkRun.ID, progress.summary(service.now()), checkFailureRefresh, err,
+				ctx,
+				job,
+				checkRun.ID,
+				progress.summary(service.now()),
+				checkFailureRefresh,
+				err,
 			)
 		}
+
 		if current.Head != head {
 			return service.cancelCheck(ctx, job, checkRun.ID)
 		}
 	}
+
 	publicationCtx, cancelPublication := service.publicationContext(ctx)
 	defer cancelPublication()
+
 	return service.publishVerdict(publicationCtx, job, checkRun, summary, state)
 }
 
@@ -96,14 +114,22 @@ func (service *Service) updateVerdictBody(
 	if standing.Body == "" || standing.Body == body {
 		return nil
 	}
+
 	logger := gklog.L(ctx)
+
 	_, err := service.github.UpdateReview(
-		ctx, job.InstallationID, job.Repository, job.Number, standing.ID, body,
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+		standing.ID,
+		body,
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "update verdict body", slog.String("err", err.Error()))
 		return fmt.Errorf("update verdict body: %w", err)
 	}
+
 	return nil
 }
 
@@ -113,28 +139,46 @@ func (service *Service) generateReport(
 	pass *chunkPass,
 ) (Report, bool) {
 	fallback := SanitizeReport(fallbackReport(pass.overviews()), service.reviewPolicy.Limits())
+
 	reporter, ok := service.model.(Reporter)
 	if !ok {
 		return fallback, false
 	}
+
 	reportCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
 	defer cancel()
-	prompt, err := BuildReportPrompt(service.model, pullRequest, pass.overviews(), pass.settings.maximumPromptBytes, service.reviewPolicy)
+
+	prompt, err := BuildReportPrompt(
+		service.model,
+		pullRequest,
+		pass.overviews(),
+		pass.settings.maximumPromptBytes,
+		service.reviewPolicy,
+	)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "Final report prompt rendering failed", "err", err)
 		return fallback, false
 	}
+
 	completion, err := reporter.Report(reportCtx, prompt)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "write final review report", slog.String("err", err.Error()))
 		return fallback, true
 	}
+
 	pass.recordReportModel(completion.Model)
+
 	report := SanitizeReport(completion.Report, service.reviewPolicy.Limits())
 	if err := report.Validate(); err != nil {
-		gklog.L(ctx).ErrorContext(ctx, "validate final review report", slog.String("err", err.Error()))
+		gklog.L(ctx).ErrorContext(
+			ctx,
+			"validate final review report",
+			slog.String("err", err.Error()),
+		)
+
 		return fallback, true
 	}
+
 	return report, true
 }
 
@@ -147,24 +191,41 @@ func BuildReportPrompt(
 	policy reviewrules.Policy,
 ) (string, error) {
 	var body strings.Builder
-	fmt.Fprintf(&body, "Current title: %s\nCurrent description: %s\n\nReviewed change overviews:", pullRequest.Title, pullRequest.Body)
+	fmt.Fprintf(
+		&body,
+		"Current title: %s\nCurrent description: %s\n\nReviewed change overviews:",
+		pullRequest.Title,
+		pullRequest.Body,
+	)
+
 	for _, overview := range overviews {
 		body.WriteString("\n- ")
 		body.WriteString(overview)
 	}
-	return boundStagePrompt(body.String(), maximumBytes, func(context string, omitted bool) (string, error) {
-		var data reviewrules.PromptData
-		data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(context))
-		prompt, err := renderPrompt(policy, "report.input", data)
-		if err != nil || !omitted {
-			return prompt, err
-		}
-		var noteData reviewrules.PromptData
-		note, err := renderPrompt(policy, "report.context_omitted", noteData)
-		return prompt + "\n\n" + note, err
-	}, func(prompt string) (int, error) {
-		return reportPromptBytes(model, prompt)
-	})
+
+	return boundStagePrompt(
+		body.String(),
+		maximumBytes,
+		func(context string, omitted bool) (string, error) {
+			var data reviewrules.PromptData
+
+			data.Input = policy.WrapUntrusted(policy.EscapeUntrusted(context))
+
+			prompt, err := renderPrompt(policy, "report.input", data)
+			if err != nil || !omitted {
+				return prompt, err
+			}
+
+			var noteData reviewrules.PromptData
+
+			note, err := renderPrompt(policy, "report.context_omitted", noteData)
+
+			return prompt + "\n\n" + note, err
+		},
+		func(prompt string) (int, error) {
+			return reportPromptBytes(model, prompt)
+		},
+	)
 }
 
 func fallbackReport(overviews []string) Report {
@@ -174,9 +235,14 @@ func fallbackReport(overviews []string) Report {
 			walkthrough = append(walkthrough, value)
 		}
 	}
+
 	if len(walkthrough) == 0 {
-		walkthrough = append(walkthrough, "The review examined the changed files and their current diff.")
+		walkthrough = append(
+			walkthrough,
+			"The review examined the changed files and their current diff.",
+		)
 	}
+
 	return Report{
 		Summary:     "This review checked the current pull request against its stated purpose and current changes.",
 		Walkthrough: walkthrough,

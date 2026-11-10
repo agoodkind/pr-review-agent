@@ -26,7 +26,9 @@ func TestLiveClippedContrastsRemainBlockingAtEachLocation(t *testing.T) {
 	bad := clippedLivePassage(t, "clipped-contrast-bad.txt")
 	fixed := clippedLivePassage(t, "clipped-contrast-corrected.txt")
 	if bad == fixed || strings.Contains(originalContent, bad) {
-		t.Fatal("The fixture requires distinct passages and an original file without the violation.")
+		t.Fatal(
+			"The fixture requires distinct passages and an original file without the violation.",
+		)
 	}
 	if strings.Count(fixed, "\n") > strings.Count(bad, "\n") {
 		t.Fatal("The replacement passage must fit within the original passage lines.")
@@ -62,23 +64,60 @@ func TestLiveClippedContrastsRemainBlockingAtEachLocation(t *testing.T) {
 	if threads[0].RootComment.StartLine > threads[1].RootComment.StartLine {
 		firstID, secondID = secondID, firstID
 	}
-	fixture.write(t, ctx, clippedLiveDocument(originalContent, clippedLivePad(fixed, bad), bad, ""), "Correct the first contrast passage in prose fixture")
+	fixture.write(
+		t,
+		ctx,
+		clippedLiveDocument(originalContent, clippedLivePad(fixed, bad), bad, ""),
+		"Correct the first contrast passage in prose fixture",
+	)
 	fixture.await(t, ctx, "CHANGES_REQUESTED", map[string]bool{firstID: true, secondID: false}, 1)
-	clean := clippedLiveDocument(originalContent, clippedLivePad(fixed, bad), clippedLivePad(fixed, bad), "")
+	clean := clippedLiveDocument(
+		originalContent,
+		clippedLivePad(fixed, bad),
+		clippedLivePad(fixed, bad),
+		"",
+	)
 	fixture.write(t, ctx, clean, "Correct the second contrast passage in prose fixture")
 	fixture.await(t, ctx, "APPROVED", map[string]bool{firstID: true, secondID: true}, 0)
-	third := clippedLiveDocument(originalContent, clippedLivePad(fixed, bad), clippedLivePad(fixed, bad), bad)
+	third := clippedLiveDocument(
+		originalContent,
+		clippedLivePad(fixed, bad),
+		clippedLivePad(fixed, bad),
+		bad,
+	)
 	fixture.write(t, ctx, third, "Add the contrast passage at another fixture location")
-	reintroduced := fixture.await(t, ctx, "CHANGES_REQUESTED", map[string]bool{firstID: true, secondID: true}, 1)
-	newThreads := clippedLiveOccurrences(t, reintroduced, fixture.bot, fixture.filePath, fixture.head)
+	reintroduced := fixture.await(
+		t,
+		ctx,
+		"CHANGES_REQUESTED",
+		map[string]bool{firstID: true, secondID: true},
+		1,
+	)
+	newThreads := clippedLiveOccurrences(
+		t,
+		reintroduced,
+		fixture.bot,
+		fixture.filePath,
+		fixture.head,
+	)
 	if len(newThreads) != 1 || newThreads[0].NodeID == firstID || newThreads[0].NodeID == secondID {
 		t.Fatal("The new occurrence did not create its own blocking finding.")
 	}
 	clippedLiveAssertAnchors(t, newThreads, third, bad)
-	t.Logf("The deployed service identified both occurrences, resolved each corrected thread, approved the corrected document, and blocked a new occurrence on %s#%d.", fixture.opts.repository, fixture.opts.pullRequest)
+	t.Logf(
+		"The deployed service identified both occurrences, resolved each corrected thread, approved the corrected document, and blocked a new occurrence on %s#%d.",
+		fixture.opts.repository,
+		fixture.opts.pullRequest,
+	)
 }
 
-func (fixture *clippedLiveFixture) await(t *testing.T, parent context.Context, decision string, resolved map[string]bool, openCount int) reviewBodySnapshot {
+func (fixture *clippedLiveFixture) await(
+	t *testing.T,
+	parent context.Context,
+	decision string,
+	resolved map[string]bool,
+	openCount int,
+) reviewBodySnapshot {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 6*time.Minute)
 	defer cancel()
@@ -87,7 +126,13 @@ func (fixture *clippedLiveFixture) await(t *testing.T, parent context.Context, d
 		if fixture.pullRequest(t, ctx).Head.SHA != fixture.head {
 			t.Fatal("The fixture head changed while waiting for the deployed review.")
 		}
-		snapshot, err := captureReviewBodies(ctx, fixture.client, fixture.opts.installationID, fixture.repo, fixture.opts.pullRequest)
+		snapshot, err := captureReviewBodies(
+			ctx,
+			fixture.client,
+			fixture.opts.installationID,
+			fixture.repo,
+			fixture.opts.pullRequest,
+		)
 		if err != nil {
 			t.Fatal("The deployed fixture review could not be read.")
 		}
@@ -108,7 +153,12 @@ func (fixture *clippedLiveFixture) await(t *testing.T, parent context.Context, d
 					matched = matched && want == thread.Resolved
 				}
 			}
-			next := fmt.Sprintf("The latest decision is %s with %d unresolved findings. The expected thread resolutions match: %t.", actual, open, matched && len(seen) == len(resolved))
+			next := fmt.Sprintf(
+				"The latest decision is %s with %d unresolved findings. The expected thread resolutions match: %t.",
+				actual,
+				open,
+				matched && len(seen) == len(resolved),
+			)
 			if next != last {
 				t.Log(next)
 				last = next
@@ -122,7 +172,13 @@ func (fixture *clippedLiveFixture) await(t *testing.T, parent context.Context, d
 		case <-time.After(5 * time.Second):
 		}
 	}
-	t.Fatalf("The deployed review did not complete with decision %s and %d unresolved findings at %s within six minutes. %s", decision, openCount, fixture.head, last)
+	t.Fatalf(
+		"The deployed review did not complete with decision %s and %d unresolved findings at %s within six minutes. %s",
+		decision,
+		openCount,
+		fixture.head,
+		last,
+	)
 	return reviewBodySnapshot{}
 }
 
@@ -135,7 +191,9 @@ func clippedLiveOccurrences(t *testing.T, snapshot reviewBodySnapshot, bot, file
 		}
 		finding, valid := marker.FindFinding(thread.RootComment.Body)
 		if !valid || string(finding.Head) != head || finding.Importance != 10 {
-			t.Fatal("The fixture occurrence must have a current-commit finding with importance ten.")
+			t.Fatal(
+				"The fixture occurrence must have a current-commit finding with importance ten.",
+			)
 		}
 		result = append(result, thread)
 	}

@@ -19,6 +19,7 @@ func TestReplyLineBreaksCoversEveryBreakCodePoint(t *testing.T) {
 		0x2029, // paragraph separator
 	} {
 		body := "before" + string(codePoint) + "after"
+
 		got := replyLineBreaks.Replace(body)
 		if got != "before\nafter" {
 			t.Fatalf("U+%04X: replaced to %q, want the break reduced to a newline", codePoint, got)
@@ -37,7 +38,13 @@ func TestReplyLineBreaksCoversEveryBreakCodePoint(t *testing.T) {
 	} {
 		runes := []rune(constant.value)
 		if len(runes) != 1 || runes[0] != constant.want {
-			t.Fatalf("%s = %q (%U), want exactly %U", constant.name, constant.value, runes, constant.want)
+			t.Fatalf(
+				"%s = %q (%U), want exactly %U",
+				constant.name,
+				constant.value,
+				runes,
+				constant.want,
+			)
 		}
 	}
 }

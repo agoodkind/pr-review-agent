@@ -24,14 +24,17 @@ func (client *Client) DismissReview(
 	message string,
 ) (Review, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/reviews/%d/dismissals", number, reviewID))
+
 	encoded, err := json.Marshal(dismissReviewBody{Message: message})
 	if err != nil {
 		client.logger.ErrorContext(ctx, "marshal review dismissal", slog.String("err", err.Error()))
 		return Review{}, errors.New("marshal review dismissal")
 	}
-	body, err := client.doREST(ctx, installationID, "PUT", path, nil, encoded)
+
+	body, err := client.doREST(ctx, installationID, "PUT", path, encoded)
 	if err != nil {
 		return Review{}, err
 	}
+
 	return decodeReview(body, "dismissed", ctx, client)
 }

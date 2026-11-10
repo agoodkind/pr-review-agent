@@ -22,34 +22,54 @@ func (service *Service) validateInlineVerdict(
 	job domain.ReviewJob,
 	summary Summary,
 ) error {
-	if summary.Decision != domain.ReviewDecisionRequestChanges && summary.Decision != domain.ReviewDecisionComment {
+	if summary.Decision != domain.ReviewDecisionRequestChanges &&
+		summary.Decision != domain.ReviewDecisionComment {
 		return nil
 	}
+
 	if summary.Decision == domain.ReviewDecisionRequestChanges && len(summary.Metadata) > 0 {
 		for _, finding := range summary.Metadata {
 			if finding.EffectiveSurface() == domain.FindingFile || finding.Validate() != nil {
 				return errors.New("the metadata prose finding is not actionable")
 			}
 		}
+
 		return nil
 	}
+
 	logger := gklog.L(ctx)
-	threads, err := service.github.ListReviewThreads(ctx, job.InstallationID, job.Repository, job.Number)
+
+	threads, err := service.github.ListReviewThreads(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
-		logger.ErrorContext(ctx, "read inline findings before verdict", slog.String("err", err.Error()))
+		logger.ErrorContext(
+			ctx,
+			"read inline findings before verdict",
+			slog.String("err", err.Error()),
+		)
+
 		return fmt.Errorf("read inline findings before verdict: %w", err)
 	}
+
 	if hasUnresolvedBotThread(threads, service.botLogin) {
 		return nil
 	}
+
 	if summary.Decision == domain.ReviewDecisionRequestChanges {
 		if err := service.withdrawUnsupportedVerdicts(ctx, job, false); err != nil {
 			return err
 		}
+
 		err := errors.New("cannot request changes without an actionable inline finding")
 		logger.ErrorContext(ctx, "refuse unsupported verdict", slog.String("err", err.Error()))
+
 		return err
 	}
+
 	return service.withdrawUnsupportedVerdicts(ctx, job, summary.ApprovalWithheld)
 }
 
@@ -60,33 +80,47 @@ func (service *Service) withdrawUnsupportedVerdicts(
 	approvalWithheld bool,
 ) error {
 	logger := gklog.L(ctx)
+
 	reviews, err := service.github.ListReviews(ctx, job.InstallationID, job.Repository, job.Number)
 	if err != nil {
-		logger.ErrorContext(ctx, "read reviews before withholding verdict", slog.String("err", err.Error()))
+		logger.ErrorContext(
+			ctx,
+			"read reviews before withholding verdict",
+			slog.String("err", err.Error()),
+		)
+
 		return fmt.Errorf("read reviews before withholding verdict: %w", err)
 	}
-	withdrawn := 0
-	for _, item := range reviews {
-		if item.Author != service.botLogin {
-			continue
-		}
-		message := unsupportedInlineVerdictMessage
-		if item.State == reviewStateApproved && approvalWithheld {
-			message = withheldApprovalMessage
-		} else if item.State != reviewStateChangesRequested {
-			continue
-		}
-		if _, err := service.github.DismissReview(
-			ctx, job.InstallationID, job.Repository, job.Number, item.ID, message,
-		); err != nil {
-			logger.ErrorContext(ctx, "withdraw unsupported verdict", slog.Int64("review_id", item.ID), slog.String("err", err.Error()))
-			return fmt.Errorf("withdraw unsupported verdict %d: %w", item.ID, err)
-		}
-		withdrawn++
+
+	latest := githubapp.LatestDecisionReview(reviews, service.botLogin)
+
+	message := unsupportedInlineVerdictMessage
+	if latest.State == reviewStateApproved && approvalWithheld {
+		message = withheldApprovalMessage
+	} else if latest.State != reviewStateChangesRequested {
+		return nil
 	}
-	if withdrawn > 0 {
-		logger.InfoContext(ctx, "review verdicts withdrawn", slog.Int("count", withdrawn))
+
+	if _, err := service.github.DismissReview(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+		latest.ID,
+		message,
+	); err != nil {
+		logger.ErrorContext(
+			ctx,
+			"withdraw unsupported verdict",
+			slog.Int64("review_id", latest.ID),
+			slog.String("err", err.Error()),
+		)
+
+		return fmt.Errorf("withdraw unsupported verdict %d: %w", latest.ID, err)
 	}
+
+	logger.InfoContext(ctx, "review verdict withdrawn", slog.Int64("review_id", latest.ID))
+
 	return nil
 }
 
@@ -99,19 +133,28 @@ func (service *Service) submitInlineBackedVerdict(
 	if err := service.validateInlineVerdict(ctx, job, summary); err != nil {
 		return emptyReview(), err
 	}
+
 	body, err := service.nativeVerdictBody(ctx, job, summary)
 	if err != nil {
 		return emptyReview(), err
 	}
-	review, err := service.github.SubmitReview(ctx, job.InstallationID, job.Repository, job.Number, githubapp.SubmitReviewRequest{
-		CommitID: summary.Head,
-		Body:     body,
-		Event:    summary.Decision,
-		Comments: nil,
-	})
+
+	review, err := service.github.SubmitReview(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+		githubapp.SubmitReviewRequest{
+			CommitID: summary.Head,
+			Body:     body,
+			Event:    summary.Decision,
+			Comments: nil,
+		},
+	)
 	if err != nil {
 		logger.ErrorContext(ctx, "submit inline-backed verdict", slog.String("err", err.Error()))
 		return emptyReview(), fmt.Errorf("submit inline-backed verdict: %w", err)
 	}
+
 	return review, nil
 }

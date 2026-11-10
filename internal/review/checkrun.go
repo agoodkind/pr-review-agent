@@ -60,9 +60,11 @@ func needsStarting(checkRun githubapp.CheckRun) bool {
 	if checkRun.Status == checkRunQueued {
 		return true
 	}
+
 	if checkRun.Status != checkRunCompleted {
 		return false
 	}
+
 	return checkRun.Conclusion != checkConclusionSuccess
 }
 
@@ -96,10 +98,16 @@ type dedicatedAdmission struct {
 // emptyDedicatedAdmission is the answer for a delivery that left nothing behind.
 func emptyDedicatedAdmission() dedicatedAdmission {
 	var outcome domain.AssessmentOutcome
+
 	return dedicatedAdmission{
 		checkRun: githubapp.CheckRun{
-			Outcome: outcome,
-			ID:      0, Name: "", Head: "", Status: "", Conclusion: "", ExternalID: "",
+			Outcome:    outcome,
+			ID:         0,
+			Name:       "",
+			Head:       "",
+			Status:     "",
+			Conclusion: "",
+			ExternalID: "",
 		},
 		found:   false,
 		visible: false,
@@ -132,9 +140,11 @@ func (service *Service) priorDedicatedAdmission(
 	head domain.HeadSHA,
 ) (dedicatedAdmission, error) {
 	logger := gklog.L(ctx)
+
 	if !job.Forced && !job.RefreshVerdict && !job.AutomaticReassessment {
 		return emptyDedicatedAdmission(), nil
 	}
+
 	checkRun, found, err := service.github.FindCheckRunByExternalID(
 		ctx,
 		job.InstallationID,
@@ -147,12 +157,15 @@ func (service *Service) priorDedicatedAdmission(
 		logger.ErrorContext(ctx, "find check run by delivery", slog.String("err", err.Error()))
 		return emptyDedicatedAdmission(), fmt.Errorf("find check run by delivery: %w", err)
 	}
+
 	if !found {
 		return emptyDedicatedAdmission(), nil
 	}
+
 	settled := checkRun.Status == checkRunCompleted &&
 		checkRun.Conclusion != checkConclusionCancelled
 	visible := false
+
 	if !settled {
 		latest, latestFound, findErr := service.github.FindCheckRun(
 			ctx,
@@ -165,6 +178,7 @@ func (service *Service) priorDedicatedAdmission(
 			logger.ErrorContext(ctx, "find current check run", slog.String("err", findErr.Error()))
 			return emptyDedicatedAdmission(), fmt.Errorf("find current check run: %w", findErr)
 		}
+
 		visible = latestFound && latest.ID == checkRun.ID
 		if latestFound && latest.ExternalID == job.DeliveryID {
 			checkRun = latest
@@ -173,6 +187,7 @@ func (service *Service) priorDedicatedAdmission(
 				checkRun.Conclusion != checkConclusionCancelled
 		}
 	}
+
 	if !settled {
 		logger.InfoContext(
 			ctx,
@@ -182,6 +197,7 @@ func (service *Service) priorDedicatedAdmission(
 			slog.Bool("visible", visible),
 		)
 	}
+
 	return dedicatedAdmission{
 		checkRun: checkRun,
 		found:    true,
@@ -211,10 +227,12 @@ func (service *Service) ensureCheckRun(
 	head domain.HeadSHA,
 ) (githubapp.CheckRun, bool, error) {
 	logger := gklog.L(ctx)
+
 	prior, err := service.priorDedicatedAdmission(ctx, job, head)
 	if err != nil {
 		return githubapp.CheckRun{}, false, err
 	}
+
 	if prior.found && prior.settled {
 		logger.InfoContext(
 			ctx,
@@ -222,6 +240,7 @@ func (service *Service) ensureCheckRun(
 			slog.String("reason", "duplicate_delivery"),
 			slog.Int64("check_run_id", prior.checkRun.ID),
 		)
+
 		return prior.checkRun, false, nil
 	}
 
@@ -232,6 +251,7 @@ func (service *Service) ensureCheckRun(
 			return githubapp.CheckRun{}, false, err
 		}
 	}
+
 	if needsStarting(checkRun) {
 		if err := service.github.StartCheckRun(
 			ctx,
@@ -243,11 +263,13 @@ func (service *Service) ensureCheckRun(
 			logger.ErrorContext(ctx, "start check run", slog.String("err", err.Error()))
 			return githubapp.CheckRun{}, false, fmt.Errorf("start check run: %w", err)
 		}
+
 		checkRun.Status = checkRunInProgress
 		// The start clears the conclusion on GitHub, so the value carried on is
 		// the one the check now has rather than the one it is leaving behind.
 		checkRun.Conclusion = ""
 	}
+
 	return checkRun, true, nil
 }
 
@@ -265,6 +287,7 @@ func (service *Service) checkRunForHead(
 	head domain.HeadSHA,
 ) (githubapp.CheckRun, error) {
 	logger := gklog.L(ctx)
+
 	checkRun, found, err := service.github.FindCheckRun(
 		ctx,
 		job.InstallationID,
@@ -276,9 +299,11 @@ func (service *Service) checkRunForHead(
 		logger.ErrorContext(ctx, "find check run", slog.String("err", err.Error()))
 		return githubapp.CheckRun{}, fmt.Errorf("find check run: %w", err)
 	}
+
 	if found && !job.Forced && !job.RefreshVerdict && !job.AutomaticReassessment {
 		return checkRun, nil
 	}
+
 	created, err := service.github.CreateCheckRun(
 		ctx,
 		job.InstallationID,
@@ -291,6 +316,7 @@ func (service *Service) checkRunForHead(
 		logger.ErrorContext(ctx, "create check run", slog.String("err", err.Error()))
 		return githubapp.CheckRun{}, fmt.Errorf("create check run: %w", err)
 	}
+
 	return created, nil
 }
 
@@ -316,13 +342,19 @@ func (service *Service) succeed(
 		logger.ErrorContext(ctx, "complete successful check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete check run: %w", err)
 	}
+
 	return nil
 }
 
 // cancelCheck concludes a check run the run abandoned, which is what a head
 // that moved mid review leaves behind.
-func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, checkRunID int64) error {
+func (service *Service) cancelCheck(
+	ctx context.Context,
+	job domain.ReviewJob,
+	checkRunID int64,
+) error {
 	recordAssessment(ctx, domain.AssessmentInterrupted, nil, nil, 0)
+
 	logger := gklog.L(ctx)
 	if err := service.completeCheckRun(
 		ctx,
@@ -336,6 +368,7 @@ func (service *Service) cancelCheck(ctx context.Context, job domain.ReviewJob, c
 		logger.ErrorContext(ctx, "complete cancelled check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete cancelled check run: %w", err)
 	}
+
 	return nil
 }
 
@@ -351,16 +384,23 @@ func (service *Service) completeCheckRun(
 	summary string,
 ) error {
 	logger := gklog.L(ctx)
-	completionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), service.checkCompletionTimeout)
+
+	completionCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		service.checkCompletionTimeout,
+	)
 	defer cancel()
+
 	outcome, outcomeErr := persistAssessment(completionCtx, checkRunID)
 	if outcomeErr != nil {
 		return fmt.Errorf("persist assessment outcome: %w", outcomeErr)
 	}
+
 	text := renderRunLog(ctx)
 	if outcome.Disposition != "" {
 		text += "\n\n" + domain.EncodeAssessmentOutcome(outcome)
 	}
+
 	// The log is rendered before the completion call, so the published text is
 	// everything the run recorded up to the moment it finished.
 	err := service.github.CompleteCheckRun(
@@ -377,5 +417,6 @@ func (service *Service) completeCheckRun(
 		logger.ErrorContext(ctx, "complete check run", slog.String("err", err.Error()))
 		return fmt.Errorf("complete check run: %w", err)
 	}
+
 	return nil
 }

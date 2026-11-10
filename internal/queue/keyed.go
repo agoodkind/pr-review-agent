@@ -26,6 +26,7 @@ func NewKeyedLocker() *KeyedLocker {
 // Lock acquires the mutex for key and returns an unlock function.
 func (locker *KeyedLocker) Lock(key string) func() {
 	locker.mu.Lock()
+
 	entry, ok := locker.locks[key]
 	if !ok {
 		entry = &refCountedMutex{
@@ -36,10 +37,12 @@ func (locker *KeyedLocker) Lock(key string) func() {
 		}
 		locker.locks[key] = entry
 	}
+
 	entry.refs++
 	locker.mu.Unlock()
 
 	entry.mu.Lock()
+
 	return func() {
 		entry.mu.Unlock()
 		entry.holder.release(entry)
@@ -54,5 +57,6 @@ func (locker *KeyedLocker) release(entry *refCountedMutex) {
 	if entry.refs > 0 {
 		return
 	}
+
 	delete(locker.locks, entry.key)
 }

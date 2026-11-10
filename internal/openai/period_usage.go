@@ -1,0 +1,225 @@
+package openai
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"time"
+
+	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/quota"
+	"goodkind.io/pr-review-agent/internal/review"
+)
+
+// LoadProviderPeriodUsage reads recorded provider and requested-model totals once per window.
+func (client *Client) LoadProviderPeriodUsage(
+	ctx context.Context,
+	keys []review.ProviderModelKey,
+	at time.Time,
+) ([]review.ProviderPeriodUsage, error) {
+	if len(keys) == 0 {
+		for _, target := range client.providers {
+			keys = append(
+				keys,
+				review.ProviderModelKey{ProviderID: target.id, RequestedModel: target.model},
+			)
+		}
+	}
+
+	var (
+		results  []review.ProviderPeriodUsage
+		failures []error
+	)
+
+	seen := make(map[review.ProviderModelKey]bool)
+
+	for _, key := range keys {
+		if seen[key] {
+			continue
+		}
+
+		seen[key] = true
+
+		var target provider
+
+		index := slices.IndexFunc(
+			client.providers,
+			func(target provider) bool { return target.id == key.ProviderID },
+		)
+		if index >= 0 {
+			target = client.providers[index]
+		}
+
+		windows := providerUsageWindows(target)
+		if len(windows) == 0 {
+			var emptyWindow quota.Window
+
+			windows = append(windows, emptyWindow)
+		}
+
+		for _, window := range windows {
+			var result review.ProviderPeriodUsage
+
+			result.ProviderID, result.RequestedModel, result.AsOfMS = key.ProviderID, key.RequestedModel, at.UnixMilli()
+			result.Window = window
+
+			if client.budgetURL != "" && len(client.budgetSigningKey) > 0 {
+				var err error
+
+				result, err = client.readProviderPeriod(ctx, target, result)
+				if err != nil {
+					failures = append(
+						failures,
+						fmt.Errorf(
+							"provider %s model %s period usage: %w",
+							key.ProviderID,
+							key.RequestedModel,
+							err,
+						),
+					)
+				}
+			}
+
+			results = append(results, result)
+		}
+	}
+
+	failure := errors.Join(failures...)
+	if failure != nil {
+		gklog.L(ctx).WarnContext(ctx, "Read provider period usage failed", "err", failure)
+	}
+
+	return results, failure
+}
+
+func (client *Client) readProviderPeriod(
+	ctx context.Context,
+	target provider,
+	result review.ProviderPeriodUsage,
+) (review.ProviderPeriodUsage, error) {
+	ctx, cancel := context.WithTimeout(ctx, client.usageQueryTimeout)
+	defer cancel()
+
+	logger := gklog.L(ctx)
+
+	bounds := quota.Bounds{StartMS: 0, EndMS: result.AsOfMS, IncludeStart: true, IncludeEnd: true}
+	if result.Window.Mode != "" {
+		var err error
+
+		bounds, err = result.Window.Bounds(time.UnixMilli(result.AsOfMS))
+		if err != nil {
+			logger.WarnContext(
+				ctx,
+				"Provider period window failed",
+				slog.String("err", err.Error()),
+			)
+
+			return result, fmt.Errorf("calculate provider period window: %w", err)
+		}
+	}
+
+	result.Bounds = bounds
+	if result.AsOfMS < bounds.EndMS {
+		bounds.EndMS, bounds.IncludeEnd = result.AsOfMS, true
+	}
+
+	storage := quota.NewClient(client.budgetURL, client.budgetSigningKey, client.httpClient)
+
+	history, err := storage.QueryTotals(ctx, result.ProviderID, result.RequestedModel, bounds)
+	if err != nil {
+		logger.WarnContext(
+			ctx,
+			"Provider period history query failed",
+			slog.String("err", err.Error()),
+		)
+
+		return result, fmt.Errorf("read provider period history: %w", err)
+	}
+
+	result.HistoryStartMS = history.HistoryStartMS
+
+	result.HistoryComplete = result.Bounds.StartMS >= history.HistoryStartMS
+	if result.Window.Mode == "" {
+		result.Bounds.StartMS = min(history.HistoryStartMS, result.AsOfMS)
+		for _, group := range history.Groups {
+			result.Bounds.StartMS = min(result.Bounds.StartMS, group.FirstAdmittedAtMS)
+		}
+	}
+
+	for _, group := range history.Groups {
+		if group.TotalTokens > quota.MaximumInteger-result.TotalTokens ||
+			group.Requests > quota.MaximumInteger-int64(result.ReportedRequests) {
+			return result, errors.New("provider period usage exceeds the accounting integer range")
+		}
+
+		result.TotalTokens += group.TotalTokens
+		result.ReportedRequests += int(group.Requests)
+
+		cost, priced := periodGroupCost(target, group.ReportedModel, group.Usage)
+		if priced {
+			result.PricedRequests += int(group.Requests)
+			result.EstimatedCostUSD += cost
+		}
+	}
+
+	result.Available = true
+	result.CostComplete = result.PricedRequests == result.ReportedRequests
+
+	return result, nil
+}
+
+func periodGroupCost(target provider, model string, usage quota.Usage) (float64, bool) {
+	pricing, found := config.FindModelPricing(target.pricingByModel, model)
+	if !found ||
+		(usage.InputTokens > 0 && (usage.CachedInputTokens == nil || usage.CacheWriteTokens == nil)) {
+		return 0, false
+	}
+
+	var cached, writes int64
+	if usage.CachedInputTokens != nil {
+		cached = *usage.CachedInputTokens
+	}
+
+	if usage.CacheWriteTokens != nil {
+		writes = *usage.CacheWriteTokens
+	}
+
+	cost, known := pricing.Estimate(
+		usage.InputTokens,
+		cached,
+		writes,
+		usage.OutputTokens,
+		usage.ServiceTier,
+	)
+
+	return cost.TotalUSD(), known
+}
+
+func providerUsageWindows(target provider) []quota.Window {
+	var windows []quota.Window
+	if target.tokenWindow.Mode != "" {
+		windows = append(windows, target.tokenWindow)
+	} else if target.dailyTokenLimit > 0 {
+		windows = append(
+			windows,
+			quota.Window{
+				Mode:     quota.Cron,
+				Duration: "",
+				Anchor:   "",
+				Schedule: "0 0 * * *",
+				Timezone: "UTC",
+			},
+		)
+	}
+
+	for _, limit := range target.tokenLimits {
+		if limit.Limit > 0 && !slices.Contains(windows, limit.Window) {
+			windows = append(windows, limit.Window)
+		}
+	}
+
+	return windows
+}

@@ -26,13 +26,20 @@ func completeChat(
 	report usageReporter,
 ) (string, string, error) {
 	params := newChatParams(target, prompt, policy, schemaName, schema)
-	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params)
+
+	stream := target.sdk.Chat.Completions.NewStreaming(ctx, params, providerOptions(target)...)
 	defer func() { _ = stream.Close() }()
 
 	return readChatCompletion(ctx, target, stream, report)
 }
 
-func newChatParams(target provider, prompt, policy, schemaName string, schema json.RawMessage) openaigo.ChatCompletionNewParams {
+func newChatParams(
+	target provider,
+	prompt string,
+	policy string,
+	schemaName string,
+	schema json.RawMessage,
+) openaigo.ChatCompletionNewParams {
 	params := openaigo.ChatCompletionNewParams{
 		Model:           target.model,
 		ReasoningEffort: shared.ReasoningEffort(target.reasoningEffort),
@@ -40,25 +47,37 @@ func newChatParams(target provider, prompt, policy, schemaName string, schema js
 			openaigo.SystemMessage(policy),
 			openaigo.UserMessage(prompt),
 		},
-		StreamOptions: openaigo.ChatCompletionStreamOptionsParam{IncludeUsage: openaigo.Bool(true)},
+		StreamOptions: openaigo.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openaigo.Bool(true),
+		},
 	}
 	if !target.omitTextFormat {
 		params.ResponseFormat = openaigo.ChatCompletionNewParamsResponseFormatUnion{
 			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
 				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
-					Name: schemaName, Strict: openaigo.Bool(true), Schema: schema,
+					Name:   schemaName,
+					Strict: openaigo.Bool(true),
+					Schema: schema,
 				},
 			},
 		}
 	}
+
 	if !target.omitMaxOutputTokens {
 		params.MaxTokens = openaigo.Int(target.outputTokenLimit())
 	}
+
 	return params
 }
 
-func readChatCompletion(ctx context.Context, target provider, stream *ssestream.Stream[openaigo.ChatCompletionChunk], report usageReporter) (string, string, error) {
+func readChatCompletion(
+	ctx context.Context,
+	target provider,
+	stream *ssestream.Stream[openaigo.ChatCompletionChunk],
+	report usageReporter,
+) (string, string, error) {
 	var content strings.Builder
+
 	model := ""
 	serviceTier := ""
 	usage := openaigo.CompletionUsage{}
@@ -66,6 +85,7 @@ func readChatCompletion(ctx context.Context, target provider, stream *ssestream.
 	hasUsage := false
 	finished := false
 	finishReason := ""
+
 	defer func() {
 		converted := responseUsageFromChat(usage)
 		result := modelUsage(model, converted, hasUsage, target, serviceTier)
@@ -74,49 +94,62 @@ func readChatCompletion(ctx context.Context, target provider, stream *ssestream.
 		result.AcceptedPredictionTokens = usage.CompletionTokensDetails.AcceptedPredictionTokens
 		result.RejectedPredictionTokens = usage.CompletionTokensDetails.RejectedPredictionTokens
 		review.RecordModelUsage(ctx, result)
+
 		if hasUsage {
 			sdkUsage.Model = model
 			report(converted, serviceTier, &sdkUsage)
 		}
 	}()
+
 	for stream.Next() {
 		chunk := stream.Current()
+
 		sdkUsage.ResponseID = cmp.Or(chunk.ID, sdkUsage.ResponseID)
 		if chunk.ServiceTier != "" {
 			serviceTier = string(chunk.ServiceTier)
 		}
+
 		if chunk.Model != "" {
 			model = chunk.Model
 		}
+
 		if chunk.JSON.Usage.Valid() {
 			usage = chunk.Usage
 			hasUsage = true
 			sdkUsage.UsageJSON = chunk.Usage.RawJSON()
 		}
+
 		for _, choice := range chunk.Choices {
 			content.WriteString(choice.Delta.Content)
+
 			if choice.FinishReason != "" {
 				finished = true
 				finishReason = choice.FinishReason
 			}
 		}
 	}
+
 	if err := stream.Err(); err != nil {
 		return "", "", modelProviderError(target.model, err)
 	}
+
 	if finishReason == "length" {
 		return "", "", &TruncatedError{Model: target.model}
 	}
+
 	if !finished || finishReason != "stop" {
 		return "", "", errors.New("chat completion ended without a successful finish reason")
 	}
+
 	result := strings.TrimSpace(content.String())
 	if result == "" {
 		return "", "", errors.New("chat completion missing message content")
 	}
+
 	if model == "" {
 		return result, target.model, nil
 	}
+
 	return result, model, nil
 }
 

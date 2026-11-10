@@ -17,6 +17,7 @@ func dismissedReviewBlocked(dismissal githubapp.ReviewDismissal, legacyBody stri
 		if legacyBody != "" {
 			return dismissedVerdictBlocked(legacyBody), nil
 		}
+
 		return false, errors.New("the original dismissed review decision is unavailable")
 	default:
 		return false, errors.New("the original dismissed review decision is invalid")

@@ -3,12 +3,10 @@ package githubapp
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -30,44 +28,10 @@ type pullRequestResponse struct {
 	Commits int    `json:"commits"`
 }
 
-type changedFileResponse struct {
-	Filename         string  `json:"filename"`
-	PreviousFilename string  `json:"previous_filename"`
-	Status           string  `json:"status"`
-	Patch            *string `json:"patch"`
-	Additions        *int    `json:"additions"`
-	Deletions        *int    `json:"deletions"`
-}
-
-type compareResponse struct {
-	MergeBaseCommit struct {
-		SHA string `json:"sha"`
-	} `json:"merge_base_commit"`
-	Files []changedFileResponse `json:"files"`
-}
-
-// Comparison is what comparing two commits returned: the files that changed, and
-// the commit their patches are measured from.
-//
-// The merge base is part of the answer because GitHub does not diff the base
-// against the head directly. When the two have diverged it diffs from where they
-// last agreed, so the old side of every patch belongs to the merge base rather
-// than to the base that was asked for. A caller mapping coordinates through those
-// patches would be mapping from a commit it never named, and landing on
-// unrelated code. MergeBase is empty when the response did not carry a usable
-// one, which callers must read as "do not assume".
+// Comparison contains local changes and their verified merge base.
 type Comparison struct {
 	MergeBase domain.HeadSHA
 	Files     []ChangedFile
-}
-
-type fileContentResponse struct {
-	Content         string `json:"content"`
-	Encoding        string `json:"encoding"`
-	Type            string `json:"type"`
-	SHA             string `json:"sha"`
-	SubmoduleGitURL string `json:"submodule_git_url"`
-	Size            *int   `json:"size"`
 }
 
 // GetPullRequest loads one pull request by number.
@@ -78,7 +42,8 @@ func (client *Client) GetPullRequest(
 	number int,
 ) (PullRequest, error) {
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d", number))
-	body, err := client.doREST(ctx, installationID, "GET", path, nil, nil)
+
+	body, err := client.doREST(ctx, installationID, "GET", path, nil)
 	if err != nil {
 		return PullRequest{}, err
 	}
@@ -93,19 +58,32 @@ func (client *Client) GetPullRequest(
 	if err != nil {
 		return PullRequest{}, err
 	}
+
 	base, err := parseHeadSHA(response.Base.SHA)
 	if err != nil {
 		return PullRequest{}, err
 	}
+
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
-		client.logger.WarnContext(ctx, "read pull request field presence", slog.String("err", err.Error()))
+		client.logger.WarnContext(
+			ctx,
+			"read pull request field presence",
+			slog.String("err", err.Error()),
+		)
+
 		return PullRequest{}, fmt.Errorf("read pull request field presence: %w", err)
 	}
-	eligibilityKnown := response.Number == number && (response.State == "open" || response.State == "closed") && (response.State != "open" || !response.Merged) && len(fields["draft"]) > 0 && len(fields["merged"]) > 0 && !bytes.Equal(bytes.TrimSpace(fields["draft"]), []byte("null")) && !bytes.Equal(bytes.TrimSpace(fields["merged"]), []byte("null"))
-	metadataKnown := strings.TrimSpace(response.Title) != "" && len(fields["body"]) > 0
 
-	return PullRequest{
+	eligibilityKnown := response.Number == number &&
+		(response.State == "open" || response.State == "closed") &&
+		(response.State != "open" || !response.Merged) &&
+		len(fields["draft"]) > 0 &&
+		len(fields["merged"]) > 0 &&
+		!bytes.Equal(bytes.TrimSpace(fields["draft"]), []byte("null")) &&
+		!bytes.Equal(bytes.TrimSpace(fields["merged"]), []byte("null"))
+	metadataKnown := strings.TrimSpace(response.Title) != "" && len(fields["body"]) > 0
+	pullRequest := PullRequest{
 		EligibilityKnown: eligibilityKnown,
 		MetadataKnown:    metadataKnown,
 		State:            response.State,
@@ -117,64 +95,115 @@ func (client *Client) GetPullRequest(
 		Title:            response.Title,
 		Body:             response.Body,
 		CommitCount:      response.Commits,
-	}, nil
+	}
+
+	scope, err := client.repositorySnapshotScope(ctx, installationID, repo)
+	if err != nil {
+		return PullRequest{}, err
+	}
+
+	if scope != nil && head == scope.head {
+		err := scope.lock(ctx)
+		if err != nil {
+			return PullRequest{}, err
+		}
+
+		if scope.pullRequest == nil {
+			scope.pullRequest = &pullRequest
+		}
+
+		scope.unlock()
+	}
+
+	return pullRequest, nil
 }
 
 // ListPullRequestCommits follows pagination without truncating commit messages.
-func (client *Client) ListPullRequestCommits(ctx context.Context, installationID int64, repo domain.Repository, number int) ([]PullRequestCommit, error) {
+func (client *Client) ListPullRequestCommits(
+	ctx context.Context,
+	installationID int64,
+	repo domain.Repository,
+	number int,
+) ([]PullRequestCommit, error) {
 	var commits []PullRequestCommit
+
 	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/commits?per_page=100", number))
-	err := client.doRESTPaginated(ctx, installationID, path, func(body []byte) (int, error) {
-		var page []struct {
-			SHA    string `json:"sha"`
-			Commit struct {
-				Message string `json:"message"`
-			} `json:"commit"`
-		}
-		if err := json.Unmarshal(body, &page); err != nil {
-			client.logger.WarnContext(ctx, "Decode pull request commits failed", "err", err)
-			return 0, fmt.Errorf("decode pull request commits: %w", err)
-		}
-		for _, item := range page {
-			sha, err := parseHeadSHA(item.SHA)
-			if err != nil {
-				return 0, err
+	err := client.doRESTPaginated(
+		ctx,
+		installationID,
+		path,
+		func(body []byte) (int, error) {
+			var page []struct {
+				SHA    string `json:"sha"`
+				Commit struct {
+					Message string `json:"message"`
+				} `json:"commit"`
 			}
-			commits = append(commits, PullRequestCommit{SHA: sha, Message: item.Commit.Message})
-		}
-		return len(page), nil
-	})
+			if err := json.Unmarshal(body, &page); err != nil {
+				client.logger.WarnContext(ctx, "Decode pull request commits failed", "err", err)
+				return 0, fmt.Errorf("decode pull request commits: %w", err)
+			}
+
+			for _, item := range page {
+				sha, err := parseHeadSHA(item.SHA)
+				if err != nil {
+					return 0, err
+				}
+
+				commits = append(commits, PullRequestCommit{SHA: sha, Message: item.Commit.Message})
+			}
+
+			return len(page), nil
+		},
+	)
+
 	return commits, err
 }
 
-// ListChangedFiles returns every file changed on one pull request.
+// ListChangedFiles computes every changed path from the pinned Git revisions.
+//
+// An active review reuses its initial pull request metadata
+// and cached Git objects.
+//
+// Example:
+//
+//	files, err := client.ListChangedFiles(ctx, installationID, repo, number)
 func (client *Client) ListChangedFiles(
 	ctx context.Context,
 	installationID int64,
 	repo domain.Repository,
 	number int,
 ) ([]ChangedFile, error) {
-	path := client.repoPath(repo, fmt.Sprintf("/pulls/%d/files", number))
-	files := make([]ChangedFile, 0)
-	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
-		var pageFiles []changedFileResponse
-		if err := json.Unmarshal(page, &pageFiles); err != nil {
-			client.logger.ErrorContext(ctx, "decode changed files page", slog.String("err", err.Error()))
-			return 0, errors.New("decode changed files page")
-		}
-		for _, item := range pageFiles {
-			file, err := decodeChangedFile(item)
-			if err != nil {
-				return 0, err
-			}
-			files = append(files, file)
-		}
-		return len(pageFiles), nil
-	})
+	scope, err := client.repositorySnapshotScope(ctx, installationID, repo)
 	if err != nil {
 		return nil, err
 	}
-	return files, nil
+
+	var pullRequest PullRequest
+
+	if scope != nil {
+		err := scope.lock(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		if scope.pullRequest != nil && scope.pullRequest.Number == number {
+			pullRequest = *scope.pullRequest
+		}
+
+		scope.unlock()
+	}
+
+	if pullRequest.Head == "" {
+		pullRequest, err = client.GetPullRequest(ctx, installationID, repo, number)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	comparison, err := client.Compare(ctx, installationID, repo, pullRequest.Base, pullRequest.Head)
+
+	return comparison.Files, err
 }
 
 // FileContent separates file bytes from repository metadata outside the file.
@@ -183,7 +212,13 @@ type FileContent struct {
 	Metadata string
 }
 
-// GetFile loads repository file bytes or a submodule's repository and pinned commit at one ref.
+// GetFile loads pinned Git file bytes or a submodule pointer and URL.
+//
+// GetFile prefixes repository metadata when the Git entry requires it.
+//
+// Example:
+//
+//	content, err := client.GetFile(ctx, installationID, repo, path, ref)
 func (client *Client) GetFile(
 	ctx context.Context,
 	installationID int64,
@@ -195,13 +230,22 @@ func (client *Client) GetFile(
 	if err != nil {
 		return nil, err
 	}
+
 	if content.Metadata == "" {
 		return content.Data, nil
 	}
+
 	return append([]byte(content.Metadata+"\n"), content.Data...), nil
 }
 
-// GetFileContent loads pinned file bytes and keeps submodule repository metadata separate.
+// GetFileContent reads pinned Git bytes and separate repository metadata.
+//
+// A temporary scope deletes extracted files after a standalone read.
+// An active review retains its extracted files until the review scope closes.
+//
+// Example:
+//
+//	content, err := client.GetFileContent(ctx, installationID, repo, path, ref)
 func (client *Client) GetFileContent(
 	ctx context.Context,
 	installationID int64,
@@ -209,57 +253,44 @@ func (client *Client) GetFileContent(
 	path string,
 	ref domain.HeadSHA,
 ) (FileContent, error) {
-	escapedPath := strings.Split(path, "/")
-	for index, segment := range escapedPath {
-		escapedPath[index] = url.PathEscape(segment)
+	pathError := validateSnapshotPath(path)
+	if pathError != nil {
+		return FileContent{}, pathError
 	}
-	apiPath := client.repoPath(repo, "/contents/"+strings.Join(escapedPath, "/"))
-	query := url.Values{}
-	query.Set("ref", string(ref))
 
-	body, err := client.doREST(ctx, installationID, "GET", apiPath, query, nil)
+	scope, err := client.repositorySnapshotScope(ctx, installationID, repo)
 	if err != nil {
 		return FileContent{}, err
 	}
 
-	var response fileContentResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		client.logger.ErrorContext(ctx, "decode file content", slog.String("err", err.Error()))
-		return FileContent{}, errors.New("decode file content")
-	}
-	if response.Type == "submodule" {
-		commit, err := domain.ParseHeadSHA(response.SHA)
-		if err != nil || strings.TrimSpace(response.SubmoduleGitURL) == "" ||
-			strings.ContainsAny(response.SubmoduleGitURL, "\r\n\x00") {
-			return FileContent{}, errors.New("invalid submodule metadata")
-		}
-		return FileContent{
-			Data:     []byte(fmt.Sprintf("Subproject commit %s\n", commit)),
-			Metadata: "Submodule repository: " + response.SubmoduleGitURL,
-		}, nil
-	}
-	if response.Encoding == "none" && response.Type == "file" {
-		content, err := client.getFileBlob(ctx, installationID, repo, response)
+	if scope == nil {
+		var closeSnapshot func() error
+
+		ctx, closeSnapshot, err = client.OpenRepositorySnapshot(ctx, installationID, repo, ref)
 		if err != nil {
 			return FileContent{}, err
 		}
-		return FileContent{Data: content, Metadata: ""}, nil
-	}
-	if response.Encoding != "base64" {
-		return FileContent{}, errors.New("unsupported file encoding")
+
+		defer func() { _ = closeSnapshot() }()
+
+		scope, err = client.repositorySnapshotScope(ctx, installationID, repo)
+		if err != nil {
+			return FileContent{}, err
+		}
 	}
 
-	normalized := strings.ReplaceAll(response.Content, "\n", "")
-	decoded, err := base64.StdEncoding.DecodeString(normalized)
-	if err != nil {
-		client.logger.ErrorContext(ctx, "decode file content", slog.String("err", err.Error()))
-		return FileContent{}, errors.New("decode file content")
-	}
-	return FileContent{Data: decoded, Metadata: ""}, nil
+	return scope.read(ctx, path, ref)
 }
 
-// Compare returns the files changed between two commits and the commit their
-// patches are measured from.
+// Compare computes local patches from the verified merge base
+// to the exact head.
+//
+// Compare requests more ancestry only when cached commits cannot establish
+// the merge base.
+//
+// Example:
+//
+//	comparison, err := client.Compare(ctx, installationID, repo, base, head)
 func (client *Client) Compare(
 	ctx context.Context,
 	installationID int64,
@@ -267,62 +298,10 @@ func (client *Client) Compare(
 	base domain.HeadSHA,
 	head domain.HeadSHA,
 ) (Comparison, error) {
-	path := client.repoPath(repo, fmt.Sprintf("/compare/%s...%s", base, head))
-	comparison := Comparison{MergeBase: "", Files: make([]ChangedFile, 0)}
-	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
-		var response compareResponse
-		if err := json.Unmarshal(page, &response); err != nil {
-			client.logger.ErrorContext(ctx, "decode compare page", slog.String("err", err.Error()))
-			return 0, errors.New("decode compare page")
-		}
-		// Every page repeats the merge base; the first usable one settles it. A
-		// SHA that does not parse leaves it empty, which reads as unknown rather
-		// than as a commit nobody verified.
-		if comparison.MergeBase == "" {
-			if mergeBase, err := parseHeadSHA(response.MergeBaseCommit.SHA); err == nil {
-				comparison.MergeBase = mergeBase
-			}
-		}
-		for _, item := range response.Files {
-			file, err := decodeChangedFile(item)
-			if err != nil {
-				return 0, err
-			}
-			comparison.Files = append(comparison.Files, file)
-		}
-		return len(response.Files), nil
-	})
-	if err != nil {
-		return Comparison{MergeBase: "", Files: nil}, err
+	_, scopeError := client.repositorySnapshotScope(ctx, installationID, repo)
+	if scopeError != nil {
+		return Comparison{}, scopeError
 	}
-	return comparison, nil
-}
 
-func decodeChangedFile(item changedFileResponse) (ChangedFile, error) {
-	if item.Additions != nil && *item.Additions < 0 {
-		return ChangedFile{}, errors.New("changed file additions cannot be negative")
-	}
-	if item.Deletions != nil && *item.Deletions < 0 {
-		return ChangedFile{}, errors.New("changed file deletions cannot be negative")
-	}
-	changed := ChangedFile{
-		Path:              item.Filename,
-		PreviousPath:      item.PreviousFilename,
-		Status:            item.Status,
-		Patch:             "",
-		PatchPresent:      false,
-		Additions:         0,
-		Deletions:         0,
-		ChangeCountsKnown: false,
-	}
-	if item.Additions != nil && item.Deletions != nil {
-		changed.Additions = *item.Additions
-		changed.Deletions = *item.Deletions
-		changed.ChangeCountsKnown = true
-	}
-	if item.Patch != nil {
-		changed.Patch = *item.Patch
-		changed.PatchPresent = true
-	}
-	return changed, nil
+	return client.compareRepositoryCommits(ctx, installationID, repo, base, head, "")
 }

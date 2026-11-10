@@ -60,13 +60,17 @@ func TestChunkIDFollowsTheTextNotThePosition(t *testing.T) {
 	if chunkID(first) != chunkID(moved) {
 		t.Fatalf("chunk id changed with position: %q then %q", chunkID(first), chunkID(moved))
 	}
+
 	if chunkID(first) == chunkID(testChunk("different chunk text")) {
 		t.Fatal("two different chunk texts share one id")
 	}
 }
 
 func TestRemoveChunkIDDropsOnlyTheNamedID(t *testing.T) {
-	remaining := removeChunkID([]string{"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"}, "bbbbbbbbbbbb")
+	remaining := removeChunkID(
+		[]string{"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"},
+		"bbbbbbbbbbbb",
+	)
 
 	if len(remaining) != 2 || remaining[0] != "aaaaaaaaaaaa" || remaining[1] != "cccccccccccc" {
 		t.Fatalf("remaining = %v, want the other two ids in order", remaining)
@@ -94,9 +98,11 @@ func TestPendingWorkIsTheDeltaMinusWhatIsAlreadyRead(t *testing.T) {
 	if len(work.owed) != 2 || work.owed[0] != chunkID(second) || work.owed[1] != chunkID(fresh) {
 		t.Fatalf("owed = %v, want the pending chunk and the new one", work.owed)
 	}
+
 	if len(work.chunks) != 2 {
 		t.Fatalf("chunks = %d, want only the ones still owed", len(work.chunks))
 	}
+
 	if len(work.completed) != 1 || work.completed[0] != chunkID(first) {
 		t.Fatalf("completed = %v, want the already read chunk carried forward", work.completed)
 	}
@@ -120,6 +126,7 @@ func TestPendingWorkDropsCompletedIDsTheDeltaNoLongerHolds(t *testing.T) {
 	if len(work.owed) != 0 {
 		t.Fatalf("owed = %v, want none: the only chunk left was already read", work.owed)
 	}
+
 	if len(work.completed) != 1 || work.completed[0] != chunkID(surviving) {
 		t.Fatalf("completed = %v, want only the id the delta still holds", work.completed)
 	}
@@ -161,9 +168,11 @@ func TestConfirmHeadRefusesADeadContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("confirmHead: want the dead context reported rather than a current head")
 	}
+
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want the context cause", err)
 	}
+
 	if errors.Is(err, errHeadMoved) {
 		t.Fatalf("err = %v, want a dead context reported as itself and not as a moved head", err)
 	}
@@ -207,10 +216,16 @@ type postPlanGitHub struct {
 }
 
 func (github *postPlanGitHub) CreateReviewComment(
-	context.Context, int64, domain.Repository, int, domain.HeadSHA, githubapp.InlineComment,
+	context.Context,
+	int64,
+	domain.Repository,
+	int,
+	domain.HeadSHA,
+	githubapp.InlineComment,
 ) error {
 	answer := github.plan[github.call%len(github.plan)]
 	github.call++
+
 	return answer
 }
 
@@ -230,30 +245,44 @@ func (postPlanModel) Consolidate(context.Context, string) (Consolidation, error)
 
 func postFindingsWithPlan(t *testing.T, plan []error) error {
 	t.Helper()
+
 	postHead := domain.HeadSHA(internalTestHeadSHA)
 	work := deltaWork{
-		Files: []diff.FileContext{{
-			Path:              "main.go",
-			Status:            "modified",
-			Patch:             "@@ -1,2 +1,4 @@\n context\n+two\n+three\n context2\n",
-			CurrentContent:    "context\ntwo\nthree\ncontext2\n",
-			ChangedRightLines: map[int]struct{}{2: {}, 3: {}},
-			ChangedRightHunks: map[int]int{2: 1, 3: 1},
-			CoverageComplete:  true,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:              "main.go",
+				Status:            "modified",
+				Patch:             "@@ -1,2 +1,4 @@\n context\n+two\n+three\n context2\n",
+				CurrentContent:    "context\ntwo\nthree\ncontext2\n",
+				ChangedRightLines: map[int]struct{}{2: {}, 3: {}},
+				ChangedRightHunks: map[int]int{2: 1, 3: 1},
+				CoverageComplete:  true,
+			},
+		},
 		Chunks: nil,
 	}
 	selection := collectPublicationState(nil, nil, summaryCommentTestBotLogin)
-	settings := reviewSettings{minimumImportance: 1, maxFiles: 100, maxChunks: 60, chunkTimeout: time.Minute, maximumPromptBytes: config.MaximumPromptBytes}
+	settings := reviewSettings{
+		minimumImportance:  1,
+		maxFiles:           100,
+		maxChunks:          60,
+		chunkTimeout:       time.Minute,
+		maximumPromptBytes: config.MaximumPromptBytes,
+	}
 	pass := newChunkPass(
 		work,
 		settings,
 		&selection,
 		collectDisputes(nil, summaryCommentTestBotLogin, postHead),
 		"",
+		time.Now(),
 	)
+	pass.nativeRejection = true
 	service := &Service{
-		github:             &postPlanGitHub{headStubGitHub: headStubGitHub{head: postHead}, plan: plan},
+		github: &postPlanGitHub{
+			headStubGitHub: headStubGitHub{head: postHead},
+			plan:           plan,
+		},
 		reviewPolicy:       policytest.Load(t),
 		model:              postPlanModel{},
 		chunkTimeout:       time.Second,
@@ -261,9 +290,26 @@ func postFindingsWithPlan(t *testing.T, plan []error) error {
 		now:                time.Now,
 	}
 	findings := []domain.Finding{
-		{Path: "main.go", StartLine: 2, EndLine: 2, Title: "First defect", Body: "body one", Evidence: "two", Importance: 8},
-		{Path: "main.go", StartLine: 3, EndLine: 3, Title: "Second defect", Body: "body two", Evidence: "three", Importance: 8},
+		{
+			Path:       "main.go",
+			StartLine:  2,
+			EndLine:    2,
+			Title:      "First defect",
+			Body:       "body one",
+			Evidence:   "two",
+			Importance: 8,
+		},
+		{
+			Path:       "main.go",
+			StartLine:  3,
+			EndLine:    3,
+			Title:      "Second defect",
+			Body:       "body two",
+			Evidence:   "three",
+			Importance: 8,
+		},
 	}
+
 	return service.postChunkFindings(
 		context.Background(),
 		summaryCommentTestJob(),
@@ -287,9 +333,11 @@ func TestAMixedPostBatchPendsOnTheTransientNotTheRefusal(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error, want the chunk left pending for the transient failure")
 	}
+
 	if errors.Is(err, errCommentRefused) {
 		t.Fatalf("err = %v, want the pending path: a transient failure was in the batch", err)
 	}
+
 	if !strings.Contains(err.Error(), "connection reset by peer") {
 		t.Fatalf("err = %v, want the transient failure as the recorded cause", err)
 	}
@@ -315,30 +363,43 @@ func TestAFailureToAnswerLeavesTheChunkPending(t *testing.T) {
 		name string
 		err  githubapp.APIError
 	}{
-		{name: "primary rate limit", err: githubapp.APIError{StatusCode: 429, Message: "rate limited"}},
+		{
+			name: "primary rate limit",
+			err:  githubapp.APIError{StatusCode: 429, Message: "rate limited"},
+		},
 		{name: "server error", err: githubapp.APIError{StatusCode: 502, Message: "bad gateway"}},
-		{name: "secondary rate limit as 403", err: githubapp.APIError{
-			StatusCode: 403,
-			Message:    "You have exceeded a secondary rate limit",
-		}},
+		{
+			name: "secondary rate limit as 403",
+			err: githubapp.APIError{
+				StatusCode: 403,
+				Message:    "You have exceeded a secondary rate limit",
+			},
+		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			err := postFindingsWithPlan(t, []error{testCase.err, testCase.err})
-			if err == nil {
-				t.Fatal("no error, want the chunk left pending for GitHub failing to answer")
-			}
-			if errors.Is(err, errCommentRefused) {
-				t.Fatalf("err = %v, want the pending path: the failure was not an answer", err)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				err := postFindingsWithPlan(t, []error{testCase.err, testCase.err})
+				if err == nil {
+					t.Fatal("no error, want the chunk left pending for GitHub failing to answer")
+				}
+
+				if errors.Is(err, errCommentRefused) {
+					t.Fatalf("err = %v, want the pending path: the failure was not an answer", err)
+				}
+			},
+		)
 	}
 }
 
 // A 403 that is not a rate limit is GitHub answering no, such as a permissions
 // refusal, and no later attempt changes that answer.
 func TestAPermissionForbiddenBatchTakesTheRefusedPath(t *testing.T) {
-	forbidden := githubapp.APIError{StatusCode: 403, Message: "Resource not accessible by integration"}
+	forbidden := githubapp.APIError{
+		StatusCode: 403,
+		Message:    "Resource not accessible by integration",
+	}
 
 	err := postFindingsWithPlan(t, []error{forbidden, forbidden})
 
@@ -358,7 +419,10 @@ func (model *deadlineRecordingModel) Review(context.Context, string) (Completion
 	return Completion{}, errors.New("not used")
 }
 
-func (model *deadlineRecordingModel) Consolidate(ctx context.Context, _ string) (Consolidation, error) {
+func (model *deadlineRecordingModel) Consolidate(
+	ctx context.Context,
+	_ string,
+) (Consolidation, error) {
 	model.consolidateDeadline, model.sawConsolidate = ctx.Deadline()
 	return Consolidation{Groups: nil}, nil
 }
@@ -369,34 +433,66 @@ func (model *deadlineRecordingModel) Consolidate(ctx context.Context, _ string) 
 // value, which is the defect the carrying exists to end reappearing one function
 // away from where it was fixed.
 func TestTheConsolidationCallUsesTheDeliverysClock(t *testing.T) {
-	const carried = 12 * time.Second
-	const booted = 30 * time.Minute
+	const (
+		carried = 12 * time.Second
+		booted  = 30 * time.Minute
+	)
+
 	model := &deadlineRecordingModel{consolidateDeadline: time.Time{}, sawConsolidate: false}
 	service := &Service{model: model, chunkTimeout: booted, reviewPolicy: policytest.Load(t)}
 	pass := newChunkPass(
 		deltaWork{Files: nil, Chunks: nil},
-		reviewSettings{minimumImportance: 1, maxFiles: 10, maxChunks: 10, chunkTimeout: carried, maximumPromptBytes: config.MaximumPromptBytes},
+		reviewSettings{
+			minimumImportance:  1,
+			maxFiles:           10,
+			maxChunks:          10,
+			chunkTimeout:       carried,
+			maximumPromptBytes: config.MaximumPromptBytes,
+		},
 		&publicationState{},
 		disputeContext{},
 		"",
+		time.Now(),
 	)
 	candidates := []domain.Finding{
-		{Path: "a.go", StartLine: 1, EndLine: 1, Title: "one", Body: "b", Evidence: "e", Importance: 8},
-		{Path: "b.go", StartLine: 1, EndLine: 1, Title: "two", Body: "b", Evidence: "e", Importance: 8},
+		{
+			Path:       "a.go",
+			StartLine:  1,
+			EndLine:    1,
+			Title:      "one",
+			Body:       "b",
+			Evidence:   "e",
+			Importance: 8,
+		},
+		{
+			Path:       "b.go",
+			StartLine:  1,
+			EndLine:    1,
+			Title:      "two",
+			Body:       "b",
+			Evidence:   "e",
+			Importance: 8,
+		},
 	}
 
 	before := time.Now()
+
 	service.consolidateChunk(context.Background(), candidates, pass)
 
 	if !model.sawConsolidate {
 		t.Fatal("the consolidation call was never made, so this proves nothing about its clock")
 	}
+
 	// The deadline is computed a moment after the timestamp above, so the budget
 	// reads a hair over what was asked for. The tolerance is wide enough to
 	// absorb that and far narrower than the difference this is here to catch.
 	budget := model.consolidateDeadline.Sub(before)
 	if budget > carried+time.Second {
-		t.Fatalf("consolidation budget = %v, want the %v the delivery carried rather than the %v it booted with",
-			budget, carried, booted)
+		t.Fatalf(
+			"consolidation budget = %v, want the %v the delivery carried rather than the %v it booted with",
+			budget,
+			carried,
+			booted,
+		)
 	}
 }

@@ -97,19 +97,23 @@ func keysFrom(
 		endLine:      0,
 		rangeValid:   false,
 	}
+
 	normalizedPath, err := marker.NormalizePath(pathValue)
 	if err != nil {
 		return keys
 	}
+
 	// The path is kept even when the anchor is refused, because the claim text
 	// comparison needs it and does not care where in the file the finding sits.
 	keys.path = normalizedPath
 	if startLine < 1 || endLine < startLine {
 		return keys
 	}
+
 	keys.startLine = startLine
 	keys.endLine = endLine
 	keys.rangeValid = true
+
 	return keys
 }
 
@@ -119,12 +123,15 @@ func candidateKeys(finding domain.Finding) duplicateKeys {
 	if value, err := marker.ClaimKey(finding.Path, finding.Evidence); err == nil {
 		claimKey = value
 	}
+
 	claimTextKey := ""
 	if value, err := marker.ClaimTextKey(finding.Claim); err == nil {
 		claimTextKey = value
 	}
+
 	keys := keysFrom(claimKey, claimTextKey, finding.Path, finding.StartLine, finding.EndLine)
 	keys.locationOnly = finding.Deduplication == reviewrules.DeduplicateLocation
+
 	return keys
 }
 
@@ -143,6 +150,7 @@ func threadKeys(published marker.FindingMarker, comment domain.ReviewComment) du
 		comment.EndLine,
 	)
 	keys.locationOnly = published.Deduplication == reviewrules.DeduplicateLocation
+
 	return keys
 }
 
@@ -171,10 +179,16 @@ func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, 
 	if carried.locationOnly || candidate.locationOnly {
 		if carried.rangeValid && candidate.rangeValid && carried.path == candidate.path &&
 			carried.startLine == candidate.startLine && carried.endLine == candidate.endLine {
-			return duplicateMatch{Sense: senseAnchorRange, Detail: describeOverlap(carried, candidate), Matched: ""}, true
+			return duplicateMatch{
+				Sense:   senseAnchorRange,
+				Detail:  describeOverlap(carried, candidate),
+				Matched: "",
+			}, true
 		}
+
 		return noMatch(), false
 	}
+
 	if carried.claimKey != "" && carried.claimKey == candidate.claimKey {
 		return duplicateMatch{
 			Sense:   senseClaimKey,
@@ -182,6 +196,7 @@ func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, 
 			Matched: "",
 		}, true
 	}
+
 	if sameClaimText(carried, candidate) {
 		return duplicateMatch{
 			Sense:   senseClaimText,
@@ -189,6 +204,7 @@ func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, 
 			Matched: "",
 		}, true
 	}
+
 	if rangesOverlap(carried, candidate) {
 		return duplicateMatch{
 			Sense:   senseAnchorRange,
@@ -196,6 +212,7 @@ func sameClaim(carried duplicateKeys, candidate duplicateKeys) (duplicateMatch, 
 			Matched: "",
 		}, true
 	}
+
 	return noMatch(), false
 }
 
@@ -219,6 +236,7 @@ func sameClaimText(carried duplicateKeys, candidate duplicateKeys) bool {
 	if carried.claimTextKey == "" || carried.claimTextKey != candidate.claimTextKey {
 		return false
 	}
+
 	return carried.path != "" && carried.path == candidate.path
 }
 
@@ -232,9 +250,11 @@ func rangesOverlap(left duplicateKeys, right duplicateKeys) bool {
 	if !left.rangeValid || !right.rangeValid {
 		return false
 	}
+
 	if left.path != right.path {
 		return false
 	}
+
 	return left.startLine <= right.endLine && right.startLine <= left.endLine
 }
 
@@ -256,6 +276,7 @@ func shortClaimKey(claimKey string) string {
 	if len(claimKey) <= claimKeyLogLength {
 		return claimKey
 	}
+
 	return claimKey[:claimKeyLogLength]
 }
 
@@ -292,7 +313,9 @@ func (memory *claimMemory) match(candidate duplicateKeys) (duplicateMatch, bool)
 	if !ok {
 		return noMatch(), false
 	}
+
 	found.Matched = memory.labels[slot]
+
 	return found, true
 }
 
@@ -304,6 +327,7 @@ func firstMatch(carried []duplicateKeys, candidate duplicateKeys) (int, duplicat
 			return slot, found, true
 		}
 	}
+
 	return 0, noMatch(), false
 }
 
@@ -321,15 +345,19 @@ func firstMatch(carried []duplicateKeys, candidate duplicateKeys) (int, duplicat
 // has both sides in front of them.
 func collapseChunkCandidates(ctx context.Context, candidates []domain.Finding) []domain.Finding {
 	survivors := make([]domain.Finding, 0, len(candidates))
+
 	survivorKeys := make([]duplicateKeys, 0, len(candidates))
 	for _, candidate := range candidates {
 		keys := candidateKeys(candidate)
+
 		slot, _, same := firstMatch(survivorKeys, keys)
 		if !same {
 			survivors = append(survivors, candidate)
 			survivorKeys = append(survivorKeys, keys)
+
 			continue
 		}
+
 		// A higher rated restatement takes the slot, which makes the finding
 		// already in it the one withheld. The match is therefore rebuilt in that
 		// direction rather than reused: the one firstMatch computed reads from
@@ -339,11 +367,14 @@ func collapseChunkCandidates(ctx context.Context, candidates []domain.Finding) [
 			logSuppressed(ctx, layerWithinChunk, survivors[slot], replaced)
 			survivors[slot] = candidate
 			survivorKeys[slot] = keys
+
 			continue
 		}
+
 		withheld := suppressionMatch(survivorKeys[slot], keys, survivors[slot].Title)
 		logSuppressed(ctx, layerWithinChunk, candidate, withheld)
 	}
+
 	return survivors
 }
 
@@ -362,9 +393,14 @@ func collapseChunkCandidates(ctx context.Context, candidates []domain.Finding) [
 // has already said so, and the comparison is symmetric, since each of its three
 // senses compares two values that are either equal or not regardless of which
 // side they arrive on.
-func suppressionMatch(kept duplicateKeys, suppressed duplicateKeys, keptLabel string) duplicateMatch {
+func suppressionMatch(
+	kept duplicateKeys,
+	suppressed duplicateKeys,
+	keptLabel string,
+) duplicateMatch {
 	match, _ := sameClaim(kept, suppressed)
 	match.Matched = keptLabel
+
 	return match
 }
 

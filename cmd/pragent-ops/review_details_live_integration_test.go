@@ -45,7 +45,12 @@ func TestLiveReviewDetailsSurviveRefreshFailureAndRecovery(t *testing.T) {
 		t.Fatal("The fixture requires a completed report and verdict section.")
 	}
 	report = strings.TrimSpace(report)
-	details := liveDetailsSection(t, original, "<details>\n<summary>Review details</summary>", "</details>")
+	details := liveDetailsSection(
+		t,
+		original,
+		"<details>\n<summary>Review details</summary>",
+		"</details>",
+	)
 	metadata := liveDetailsSection(t, original, "<!-- pr-review-agent:metadata:v1 ", " -->")
 	fixture.write(t, ctx, strings.Replace(original, metadata, "", 1))
 	failed, failure := fixture.run(t, ctx)
@@ -55,7 +60,12 @@ func TestLiveReviewDetailsSurviveRefreshFailureAndRecovery(t *testing.T) {
 	if err := fixture.logFile.Sync(); err != nil {
 		t.Fatalf("The private provider log could not be synchronized: %v", err)
 	}
-	liveFailureAssertProvider(t, fixture.logPath, fixture.cfg.Providers[0].ID, fixture.cfg.Providers[0].Model)
+	liveFailureAssertProvider(
+		t,
+		fixture.logPath,
+		fixture.cfg.Providers[0].ID,
+		fixture.cfg.Providers[0].Model,
+	)
 	body := fixture.capture(t, ctx)
 	if !strings.Contains(body, details) || !strings.Contains(body, report) {
 		t.Fatal("The failed refresh erased measured review details.")
@@ -67,18 +77,34 @@ func TestLiveReviewDetailsSurviveRefreshFailureAndRecovery(t *testing.T) {
 	if !strings.Contains(body, "Review refresh failed") {
 		t.Fatal("The failed refresh did not explain the operational failure.")
 	}
-	fixture.write(t, ctx, strings.Replace(body, marker.EncodeState(state), metadata+"\n"+marker.EncodeState(state), 1))
+	fixture.write(
+		t,
+		ctx,
+		strings.Replace(
+			body,
+			marker.EncodeState(state),
+			metadata+"\n"+marker.EncodeState(state),
+			1,
+		),
+	)
 	completed, recoveryErr := fixture.run(t, ctx)
 	if recoveryErr != nil {
 		t.Fatalf("The refresh failed during recovery: %v", recoveryErr)
 	}
 	if completed.Disposition != domain.AssessmentCompleted {
-		t.Fatal("The refresh could not recover from the completed assessment without a model request.")
+		t.Fatal(
+			"The refresh could not recover from the completed assessment without a model request.",
+		)
 	}
 	body = fixture.capture(t, ctx)
 	liveDetailsAssertRecovered(t, body, details, report, fixture.before.PullRequest.Head)
 
-	verdict := liveDetailsSection(t, body, "<!-- pr-review-agent:verdict-section:start -->", "<!-- pr-review-agent:verdict-section:end -->")
+	verdict := liveDetailsSection(
+		t,
+		body,
+		"<!-- pr-review-agent:verdict-section:start -->",
+		"<!-- pr-review-agent:verdict-section:end -->",
+	)
 	state, _ = marker.DecodeState(body)
 	legacyState := state
 	legacyState.Status = marker.StateFailed
@@ -92,8 +118,16 @@ func TestLiveReviewDetailsSurviveRefreshFailureAndRecovery(t *testing.T) {
 	if completed.Disposition != domain.AssessmentCompleted {
 		t.Fatal("The legacy failure body could not recover its completed assessment.")
 	}
-	liveDetailsAssertRecovered(t, fixture.capture(t, ctx), details, report, fixture.before.PullRequest.Head)
-	t.Log("The real provider failure, successful refresh, and legacy recovery retained the original measured details and native reviews.")
+	liveDetailsAssertRecovered(
+		t,
+		fixture.capture(t, ctx),
+		details,
+		report,
+		fixture.before.PullRequest.Head,
+	)
+	t.Log(
+		"The real provider failure, successful refresh, and legacy recovery retained the original measured details and native reviews.",
+	)
 }
 
 func liveDetailsSetup(t *testing.T) *liveDetailsFixture {
@@ -115,8 +149,14 @@ func liveDetailsSetup(t *testing.T) *liveDetailsFixture {
 		t.Fatalf("The fixture repository is invalid: %v", err)
 	}
 	before := liveReviewBodyCapture(t, t.Context(), client, opts, repo)
-	if before.PullRequest.State != "open" || before.PullRequest.Draft || !liveReviewBodyFixture(t, opts, before.PullRequest.Title) || validateReviewBodySummary(before, cfg.GitHubBotLogin) != nil {
-		t.Fatal("The regression requires a dedicated open fixture with a completed current-head review.")
+	if before.PullRequest.State != "open" || before.PullRequest.Draft || !liveReviewBodyFixture(
+		t,
+		opts,
+		before.PullRequest.Title,
+	) || validateReviewBodySummary(before, cfg.GitHubBotLogin) != nil {
+		t.Fatal(
+			"The regression requires a dedicated open fixture with a completed current-head review.",
+		)
 	}
 	if githubapp.LatestDecisionReview(before.Reviews, cfg.GitHubBotLogin).State != "APPROVED" {
 		t.Fatal("The fixture requires an existing bot approval.")
@@ -127,13 +167,26 @@ func liveDetailsSetup(t *testing.T) *liveDetailsFixture {
 			original = comment
 		}
 	}
-	if original.ID == 0 || strings.Contains(original.Body, "| Model | unknown |") || !strings.Contains(original.Body, "| Total tokens |") {
+	if original.ID == 0 || strings.Contains(
+		original.Body,
+		"| Model | unknown |",
+	) || !strings.Contains(original.Body, "| Total tokens |") {
 		t.Fatal("The fixture must contain measured model and token details.")
 	}
 	if err := writeReviewBodyBackup(filepath.Join(directory, "before.json"), before); err != nil {
 		t.Fatalf("The original GitHub fixture could not be backed up: %v", err)
 	}
-	fixture := &liveDetailsFixture{opts: opts, cfg: cfg, client: client, service: service, before: before, original: original, expected: original.Body, logFile: logFile, logPath: logPath}
+	fixture := &liveDetailsFixture{
+		opts:     opts,
+		cfg:      cfg,
+		client:   client,
+		service:  service,
+		before:   before,
+		original: original,
+		expected: original.Body,
+		logFile:  logFile,
+		logPath:  logPath,
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -146,9 +199,21 @@ func liveDetailsSetup(t *testing.T) *liveDetailsFixture {
 	return fixture
 }
 
-func (fixture *liveDetailsFixture) run(t *testing.T, ctx context.Context) (domain.AssessmentOutcome, error) {
+func (fixture *liveDetailsFixture) run(t *testing.T, ctx context.Context) (
+	domain.AssessmentOutcome,
+	error,
+) {
 	t.Helper()
-	job := domain.ReviewJob{PullRequestRef: domain.PullRequestRef{Repository: fixture.before.Repository, Number: fixture.opts.pullRequest, InstallationID: fixture.opts.installationID, Head: fixture.before.PullRequest.Head}, DeliveryID: "live-review-details-" + rand.Text(), RefreshVerdict: true}
+	job := domain.ReviewJob{
+		PullRequestRef: domain.PullRequestRef{
+			Repository:     fixture.before.Repository,
+			Number:         fixture.opts.pullRequest,
+			InstallationID: fixture.opts.installationID,
+			Head:           fixture.before.PullRequest.Head,
+		},
+		DeliveryID:     "live-review-details-" + rand.Text(),
+		RefreshVerdict: true,
+	}
 	admitted, accepted, err := fixture.service.Admit(ctx, job)
 	if err != nil {
 		t.Fatalf("The refresh admission failed: %v", err)
@@ -163,8 +228,17 @@ func (fixture *liveDetailsFixture) run(t *testing.T, ctx context.Context) (domai
 
 func (fixture *liveDetailsFixture) capture(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	current := liveReviewBodyCapture(t, ctx, fixture.client, fixture.opts, fixture.before.Repository)
-	if current.PullRequest != fixture.before.PullRequest || !reflect.DeepEqual(current.Reviews, fixture.before.Reviews) || !reflect.DeepEqual(current.Threads, fixture.before.Threads) {
+	current := liveReviewBodyCapture(
+		t,
+		ctx,
+		fixture.client,
+		fixture.opts,
+		fixture.before.Repository,
+	)
+	if current.PullRequest != fixture.before.PullRequest || !reflect.DeepEqual(
+		current.Reviews,
+		fixture.before.Reviews,
+	) || !reflect.DeepEqual(current.Threads, fixture.before.Threads) {
 		t.Fatal("The refresh changed PR metadata, native reviews, or inline threads.")
 	}
 	for _, comment := range current.Comments {

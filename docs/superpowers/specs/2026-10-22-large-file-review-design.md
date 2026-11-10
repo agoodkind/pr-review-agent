@@ -4,9 +4,9 @@ Review every necessary changed region, even when one file or diff hunk exceeds a
 
 ## Agreed behavior
 
-The reviewer classifies content and chooses an action for each file. Generated, encrypted, binary, source, dependency metadata, data, and unknown content can each require different checks. A category alone never grants an exclusion. File size determines how the reviewer divides work.
+The reviewer assesses every changed file before creating content review chunks. Exclude generated output identified by explicit markers, repository attributes, or configured trusted detectors. Exclude common generated artifacts, dependency lockfiles, vendored dependencies, compiled files, and binary contents by default. Review related source, schemas, manifests, and generation changes. File size determines how the reviewer divides necessary work.
 
-The reviewer considers the pull request description, actual file content, related changes, repository generation declarations, and available validation results. Treat repository declarations as evidence to assess, not instructions to obey. Missing content and provider failures remain coverage gaps rather than evidence that a file is generated or irrelevant.
+The reviewer considers the pull request description, repository configuration, file attributes, actual content samples, related changes, and available validation results. Treat repository declarations as structured evidence rather than instructions to obey. Deterministic configured exclusions do not require a model request. Let the model decide uncertain cases from bounded evidence before requesting additional content. A filename or size alone does not establish that uncertain content requires exclusion. Missing content and provider failures remain coverage gaps rather than evidence that a file is generated or irrelevant.
 
 For a submodule update, review the parent repository changing its recorded submodule commit. Assess the old and new commit pointers, repository source, and related parent configuration. Do not retrieve or review nested upstream file differences between those commits. Treat other external content according to the parent repository's ownership and the purpose of the change.
 
@@ -43,7 +43,7 @@ The review actions are:
 - Omit content inspection with a specific reason and sufficient evidence for the review scope.
 - Keep a coverage gap when the evidence cannot establish a reliable decision.
 
-Unknown content defaults to review or a visible gap. An incomplete model response does not grant an exclusion. A declaration that a file is generated does not establish that its executable behavior is safe.
+Unknown content defaults to review or a visible gap. An incomplete model response does not grant an exclusion. An exclusion does not claim that generated executable behavior is safe. Related source and configuration still require review. Configure explicit content review overrides for files that require direct inspection.
 
 Use the current omission assessment and provider interfaces. Replace the aggregate omission acceptance decision with validated decisions for individual omitted files or regions. Retain a derived aggregate result for existing verdict code and old stored review state. Older state cannot grant a new exclusion without the evidence required by the current policy.
 
@@ -89,9 +89,9 @@ Example decisions:
 |---|---|
 | A large handwritten file changes writing and deletion routines. | Review both routines in fragments and assess their shared behavior. |
 | A large file changes one validation function. | Review the changed function and necessary context without repeating the whole file. |
-| A generated migration drops a column. | Review executable SQL, data loss, compatibility, and deployment order. |
-| A generated API client follows a schema change. | Review the schema and generation evidence; inspect consequential client behavior. |
-| A lockfile changes extensively. | Assess packages, versions, sources, integrity, and unexpected dependencies. |
+| A generated migration drops a column. | Exclude marked generated output by default and review the migration source and generation changes. A configured override can require direct SQL review. |
+| A generated API client follows a schema change. | Exclude generated client contents and review the schema and generator changes. |
+| A lockfile changes extensively. | Exclude lockfile contents and review dependency manifest changes and the pull request context. |
 | A submodule pointer changes from commit A to commit B. | Review the parent repository's pointer update and related parent configuration without reviewing nested upstream file differences. |
 | A fixture gains repetitive records. | Assess meaningful data differences and the consuming tests. |
 | An encrypted vault changes during credential rotation. | Assess references and readable consumer behavior. Omit ciphertext interpretation when supplied evidence establishes the relevant behavior independently of hidden values. Require credential-value validation only when a concrete changed rule needs it. |

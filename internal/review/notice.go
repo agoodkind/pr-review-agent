@@ -12,6 +12,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
+	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const (
@@ -32,6 +33,7 @@ func (service *Service) failCheck(
 		gklog.L(ctx).InfoContext(ctx, "review interrupted", slog.String("err", cause.Error()))
 		return cause
 	}
+
 	return service.reportFailedCheck(
 		ctx,
 		job,
@@ -56,16 +58,21 @@ func (service *Service) reportFailedCheck(
 ) error {
 	logger := gklog.L(ctx)
 	progress.Failed = true
+	service.enrichProviderPeriodUsage(ctx, &progress)
+
 	var statuses []ProviderStatus
 	collectProviderStatuses(cause, &statuses)
-	recordAssessment(ctx, domain.AssessmentFailed, &progress, failureNames(cause), quotaRecovery(statuses))
-	var dismissErr error
-	if conclusion != checkConclusionCancelled {
-		dismissErr = service.dismissFailureVerdict(ctx, job, cause)
-	}
+	recordAssessment(
+		ctx,
+		domain.AssessmentFailed,
+		&progress,
+		failureNames(cause),
+		quotaRecovery(statuses),
+	)
 	title := failureTitle(stage, cause)
 	detail := service.terminalFailureDetail(ctx, job, cause)
 	checkSummary := detail + "\n\n" + RenderDetails(progress)
+
 	var completeErr error
 	if checkRunID != 0 {
 		completeErr = service.completeCheckRun(
@@ -78,14 +85,27 @@ func (service *Service) reportFailedCheck(
 			checkSummary,
 		)
 		if completeErr != nil {
-			logger.ErrorContext(ctx, "complete failed check run", slog.String("err", completeErr.Error()))
+			logger.ErrorContext(
+				ctx,
+				"complete failed check run",
+				slog.String("err", completeErr.Error()),
+			)
 		}
 	}
+
 	service.writeFailureSummary(ctx, job, progress, title, detail)
+
+	var dismissErr error
+	if conclusion != checkConclusionCancelled {
+		dismissErr = service.dismissFailureVerdict(ctx, job, cause)
+	}
+
 	if completeErr != nil {
 		return errors.Join(cause, dismissErr, fmt.Errorf("complete check run: %w", completeErr))
 	}
+
 	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
+
 	return &reportedFailureError{cause: errors.Join(cause, dismissErr)}
 }
 
@@ -101,7 +121,7 @@ func (service *Service) reportFailedCheck(
 // A failed model call never reaches here. It leaves its chunk pending rather
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
-	switch failureClassOf(cause) {
+	switch terminalFailureClass(cause) {
 	case config.FailureDailyBudget:
 		return checkFailureDailyBudget
 	case config.FailureUsageExceeded:
@@ -116,9 +136,11 @@ func failureTitle(stage string, cause error) string {
 		return checkFailurePanic
 	case config.FailureOther:
 	}
+
 	if stage == "" {
 		return checkSummaryFailure
 	}
+
 	return stage
 }
 
@@ -130,12 +152,16 @@ func failureTitle(stage string, cause error) string {
 // sees only a chunk count cannot tell it apart from a provider outage.
 func chunkFailureReason(failures []chunkFailure) string {
 	classes := chunkFailureClasses(failures)
-	if slices.Contains(classes, config.FailureDailyBudget) && slices.Contains(classes, config.FailureRateLimited) {
+	if slices.Contains(classes, config.FailureDailyBudget) &&
+		slices.Contains(classes, config.FailureRateLimited) {
 		return checkFailureMixedRateLimit
 	}
-	if slices.Contains(classes, config.FailureDailyBudget) && slices.Contains(classes, config.FailureUsageExceeded) {
+
+	if slices.Contains(classes, config.FailureDailyBudget) &&
+		slices.Contains(classes, config.FailureUsageExceeded) {
 		return checkFailureMixedUsage
 	}
+
 	switch chunkFailureClass(failures) {
 	case config.FailureDailyBudget:
 		return checkFailureDailyBudget
@@ -150,6 +176,7 @@ func chunkFailureReason(failures []chunkFailure) string {
 	case config.FailurePanic, config.FailureOther:
 		return ""
 	}
+
 	return ""
 }
 
@@ -157,11 +184,16 @@ func chunkFailureClass(failures []chunkFailure) config.FailureClass {
 	classes := chunkFailureClasses(failures)
 	for _, class := range classes {
 		switch class {
-		case config.FailureDailyBudget, config.FailureUsageExceeded, config.FailureRateLimited, config.FailureDeadline, config.FailureUnavailable:
+		case config.FailureDailyBudget,
+			config.FailureUsageExceeded,
+			config.FailureRateLimited,
+			config.FailureDeadline,
+			config.FailureUnavailable:
 			return class
 		case config.FailurePanic, config.FailureOther:
 		}
 	}
+
 	return config.FailureOther
 }
 
@@ -170,6 +202,7 @@ func chunkFailureClasses(failures []chunkFailure) []config.FailureClass {
 	for _, failure := range failures {
 		classes = append(classes, failureClassesOf(failure.err)...)
 	}
+
 	return uniqueFailureClasses(classes)
 }
 
@@ -198,11 +231,13 @@ func (service *Service) presentedConclusion(classes []config.FailureClass, block
 	if len(classes) == 0 {
 		return blocking
 	}
+
 	for _, class := range classes {
 		if !service.failureAppearances.Passes(class) {
 			return blocking
 		}
 	}
+
 	return "success"
 }
 
@@ -211,20 +246,25 @@ func failureClassesOf(cause error) []config.FailureClass {
 	if cause == nil {
 		return nil
 	}
+
 	for current := cause; current != nil; {
 		if joined, ok := current.(interface{ Unwrap() []error }); ok {
 			classes := make([]config.FailureClass, 0, len(joined.Unwrap()))
 			for _, err := range joined.Unwrap() {
 				classes = append(classes, failureClassesOf(err)...)
 			}
+
 			return uniqueFailureClasses(classes)
 		}
+
 		wrapped, ok := current.(interface{ Unwrap() error })
 		if !ok {
 			break
 		}
+
 		current = wrapped.Unwrap()
 	}
+
 	return []config.FailureClass{failureClassOf(cause)}
 }
 
@@ -232,15 +272,19 @@ func uniqueFailureClasses(classes []config.FailureClass) []config.FailureClass {
 	if len(classes) == 0 {
 		return []config.FailureClass{config.FailureOther}
 	}
+
 	seen := make(map[config.FailureClass]struct{}, len(classes))
+
 	unique := make([]config.FailureClass, 0, len(classes))
 	for _, class := range classes {
 		if _, found := seen[class]; found {
 			continue
 		}
+
 		seen[class] = struct{}{}
 		unique = append(unique, class)
 	}
+
 	return unique
 }
 
@@ -254,6 +298,7 @@ func publicFailureDetail(job domain.ReviewJob) string {
 	if job.DeliveryID == "" {
 		return "The cause is recorded in this service's log for this run."
 	}
+
 	return "The cause is recorded in this service's log, under run identifier `" + job.DeliveryID + "`."
 }
 
@@ -294,6 +339,7 @@ func usageExceeded(cause error) bool {
 	if !errors.As(cause, &target) {
 		return false
 	}
+
 	return target.UsageExceeded()
 }
 
@@ -312,6 +358,8 @@ func (service *Service) writeFailureSummary(
 	title string,
 	detail string,
 ) {
+	service.enrichProviderPeriodUsage(ctx, &progress)
+
 	ctx, cancel := detachFromReviewDeadline(ctx, service.checkCompletionTimeout)
 	defer cancel()
 
@@ -319,44 +367,74 @@ func (service *Service) writeFailureSummary(
 	progress.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
 	prose := RenderFailureBody(progress, title, detail)
 	prose += reassessmentNotice(ctx)
-	err := service.upsertSummaryCommentFrom(ctx, job, func(existing marker.State, existingBody string) summaryCommentContent {
-		failureProse := prose
-		if preserveCheckpointSummary(existing, existingBody) &&
-			progress.FilesReviewed == 0 && progress.Chunks == 0 && len(progress.Models) == 0 &&
-			len(progress.Observed) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
-			len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0 {
-			failureProse = renderMaintenanceFailure(existingBody, title, detail)
-			if !strings.Contains(existingBody, reviewDetailsStart) {
-				failureProse += "\n\n" + RenderDetails(progress)
+
+	err := service.upsertSummaryCommentFrom(
+		ctx,
+		job,
+		func(existing marker.State, existingBody string) summaryCommentContent {
+			failureProse := prose
+			completedHead, markedComplete := marker.FindReview(existingBody)
+
+			completedPublication := completedHeadState(existing, job.Head) && markedComplete &&
+				completedHead == job.Head &&
+				MetadataMatches(existingBody, job.Head, progress.MetadataRevision)
+			if preserveCheckpointSummary(existing, existingBody) &&
+				(completedPublication || progress.FilesReviewed == 0 && progress.Chunks == 0 && len(
+					progress.Models,
+				) == 0 &&
+					len(
+						progress.Observed,
+					) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
+					len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0) {
+				currentDetail := detail
+
+				if strings.Contains(existingBody, reviewDetailsStart) {
+					var data reviewrules.PromptData
+
+					data.Identity = codeSpan(shortHead(progress.Head))
+					currentDetail = service.renderFailureTemplate(
+						ctx,
+						"failure.saved",
+						data,
+					) + "\n\n" + detail
+				}
+
+				failureProse = renderMaintenanceFailure(existingBody, title, currentDetail)
+				if !strings.Contains(existingBody, reviewDetailsStart) {
+					failureProse += "\n\n" + RenderDetails(progress)
+				}
+
+				failureProse += reassessmentNotice(ctx)
 			}
-			failureProse += reassessmentNotice(ctx)
-		}
-		return summaryCommentContent{
-			Prose: failureProse,
-			State: marker.State{
-				PolicyRevision: existing.PolicyRevision,
-				LastReviewed:   existing.LastReviewed,
-				RunID:          job.DeliveryID,
-				Status:         marker.StateFailed,
-				Pending:        existing.Pending,
-				// The chunks already read carry forward for the same reason the
-				// pending ones do. Dropping them here would send the next run
-				// over work this pull request has already paid for.
-				Completed: existing.Completed,
-				// So does the forcing delivery. A failed run is not that delivery
-				// finishing, and losing the record would make its own resume clear
-				// the very checkpoint this notice is preserving.
-				ForcedBy: existing.ForcedBy,
-				// So does the recorded shortfall, which a failure cannot clear:
-				// dropping it would let the next run advance the baseline over a
-				// hunk that is still unread.
-				Unread: existing.Unread,
-			},
-		}
-	})
+
+			return summaryCommentContent{
+				Prose: failureProse,
+				State: marker.State{
+					PolicyRevision: existing.PolicyRevision,
+					LastReviewed:   existing.LastReviewed,
+					RunID:          job.DeliveryID,
+					Status:         marker.StateFailed,
+					Pending:        existing.Pending,
+					// The chunks already read carry forward for the same reason the
+					// pending ones do. Dropping them here would send the next run
+					// over work this pull request has already paid for.
+					Completed: existing.Completed,
+					// So does the forcing delivery. A failed run is not that delivery
+					// finishing, and losing the record would make its own resume clear
+					// the very checkpoint this notice is preserving.
+					ForcedBy: existing.ForcedBy,
+					// So does the recorded shortfall, which a failure cannot clear:
+					// dropping it would let the next run advance the baseline over a
+					// hunk that is still unread.
+					Unread: existing.Unread,
+				},
+			}
+		},
+	)
 	if err != nil {
 		logger.ErrorContext(ctx, "write failure summary", slog.String("err", err.Error()))
 		return
 	}
+
 	logger.InfoContext(ctx, "failure summary written", slog.Bool("visible", true))
 }

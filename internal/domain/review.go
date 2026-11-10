@@ -32,6 +32,7 @@ func ParseHeadSHA(value string) (HeadSHA, error) {
 	if len(value) != 40 && len(value) != 64 {
 		return "", fmt.Errorf("head sha length %d: want 40 or 64", len(value))
 	}
+
 	for _, character := range value {
 		if character < '0' || character > '9' {
 			if character < 'a' || character > 'f' {
@@ -39,6 +40,7 @@ func ParseHeadSHA(value string) (HeadSHA, error) {
 			}
 		}
 	}
+
 	return HeadSHA(value), nil
 }
 
@@ -202,43 +204,58 @@ func (finding Finding) Validate() error {
 	if err := finding.validateSurface(); err != nil {
 		return err
 	}
+
 	switch finding.CorrectionAction {
 	case "", CorrectionNone, CorrectionReplace, CorrectionDelete:
 	default:
 		return errors.New("finding correction_action is invalid")
 	}
+
 	if finding.EffectiveSurface() != FindingFile {
-		if finding.CorrectionAction == CorrectionReplace && strings.TrimSpace(finding.Suggestion) == "" {
+		if finding.CorrectionAction == CorrectionReplace &&
+			strings.TrimSpace(finding.Suggestion) == "" {
 			return errors.New("metadata prose replacement is empty")
 		}
 	}
+
 	if finding.CorrectionAction == CorrectionNone && finding.Suggestion != "" {
 		return errors.New("an unavailable correction cannot include replacement text")
 	}
+
 	if finding.CorrectionAction == CorrectionDelete && finding.Suggestion != "" {
 		return errors.New("a deletion cannot include replacement text")
 	}
-	if finding.EffectiveSurface() == FindingPullRequestTitle && finding.CorrectionAction == CorrectionDelete {
+
+	if finding.EffectiveSurface() == FindingPullRequestTitle &&
+		finding.CorrectionAction == CorrectionDelete {
 		return errors.New("a pull request title requires a replacement")
 	}
+
 	if strings.TrimSpace(finding.Title) == "" {
 		return errors.New("finding title is required")
 	}
+
 	if strings.TrimSpace(finding.Body) == "" {
 		return errors.New("finding body is required")
 	}
+
 	if finding.EffectiveSurface() == FindingFile && strings.Contains(finding.Suggestion, "```") {
 		return errors.New("finding suggestion contains a markdown fence")
 	}
+
 	if finding.StartLine < 1 {
 		return errors.New("finding start_line must be positive")
 	}
+
 	if finding.EndLine < finding.StartLine {
 		return errors.New("finding end_line must be greater than or equal to start_line")
 	}
-	if finding.Importance < MinimumFindingImportance || finding.Importance > MaximumFindingImportance {
+
+	if finding.Importance < MinimumFindingImportance ||
+		finding.Importance > MaximumFindingImportance {
 		return errors.New("finding importance must be between 1 and 10")
 	}
+
 	return nil
 }
 
@@ -256,12 +273,14 @@ func (finding Finding) validateSurface() error {
 		if finding.Path != "" {
 			return errors.New("commit prose findings cannot set path")
 		}
+
 		if _, err := ParseHeadSHA(string(finding.CommitSHA)); err != nil {
 			return errors.New("commit prose findings require a valid commit_sha")
 		}
 	default:
 		return errors.New("finding surface is invalid")
 	}
+
 	return nil
 }
 
@@ -270,6 +289,7 @@ func (finding Finding) EffectiveSurface() FindingSurface {
 	if finding.Surface == "" {
 		return FindingFile
 	}
+
 	return finding.Surface
 }
 
@@ -296,22 +316,28 @@ func (result ReviewResult) Validate() error {
 		if err := assessment.Validate(); err != nil {
 			return err
 		}
+
 		if assessed[assessment.Path] {
 			return &FileAssessmentValidationError{Field: "duplicate_path"}
 		}
+
 		assessed[assessment.Path] = true
 	}
+
 	seen := make(map[string]struct{}, len(result.Findings))
 	for _, finding := range result.Findings {
 		if err := finding.Validate(); err != nil {
 			return err
 		}
+
 		key := findingKey(finding)
 		if _, exists := seen[key]; exists {
 			return errors.New("duplicate finding")
 		}
+
 		seen[key] = struct{}{}
 	}
+
 	return nil
 }
 
@@ -400,12 +426,15 @@ func (resolution ThreadResolution) Validate() error {
 	if strings.TrimSpace(resolution.ThreadNodeID) == "" {
 		return errors.New("thread_node_id is required")
 	}
+
 	if _, err := ParseResolution(string(resolution.Resolution)); err != nil {
 		return errors.New("parse resolution")
 	}
+
 	if strings.TrimSpace(resolution.Reason) == "" {
 		return errors.New("reason is required")
 	}
+
 	return nil
 }
 
@@ -416,10 +445,13 @@ func ValidateThreadResolutions(resolutions []ThreadResolution) error {
 		if err := resolution.Validate(); err != nil {
 			return err
 		}
+
 		if _, exists := seen[resolution.ThreadNodeID]; exists {
 			return errors.New("duplicate thread_node_id")
 		}
+
 		seen[resolution.ThreadNodeID] = struct{}{}
 	}
+
 	return nil
 }

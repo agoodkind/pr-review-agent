@@ -48,7 +48,13 @@ type AssessmentValidationError struct {
 
 // Error returns validation identifiers and numeric counts without model content.
 func (failure *AssessmentValidationError) Error() string {
-	return fmt.Sprintf("file assessment validation failed: code=%s field=%s observed=%d limit=%d", failure.Code, failure.Field, failure.Observed, failure.Limit)
+	return fmt.Sprintf(
+		"file assessment validation failed: code=%s field=%s observed=%d limit=%d",
+		failure.Code,
+		failure.Field,
+		failure.Observed,
+		failure.Limit,
+	)
 }
 
 // Unwrap preserves callers that continue source review after an incomplete assessment.
@@ -56,11 +62,18 @@ func (failure *AssessmentValidationError) Unwrap() []error {
 	if failure.cause != nil {
 		return []error{ErrAssessmentIncomplete, failure.cause}
 	}
+
 	return []error{ErrAssessmentIncomplete}
 }
 
 func assessmentValidationFailure(code AssessmentValidationCode, observed, limit int) error {
-	return &AssessmentValidationError{Code: code, Field: "", Observed: observed, Limit: limit, cause: nil}
+	return &AssessmentValidationError{
+		Code:     code,
+		Field:    "",
+		Observed: observed,
+		Limit:    limit,
+		cause:    nil,
+	}
 }
 
 func normalizeFileAssessmentError(err error) error {
@@ -68,9 +81,17 @@ func normalizeFileAssessmentError(err error) error {
 	if !errors.As(err, &contract) {
 		return err
 	}
+
 	code, observed := AssessmentContract, 0
 	if contract.Field == "duplicate_path" {
 		code, observed = AssessmentDuplicate, 2
 	}
-	return &AssessmentValidationError{Code: code, Field: contract.Field, Observed: observed, Limit: 1, cause: err}
+
+	return &AssessmentValidationError{
+		Code:     code,
+		Field:    contract.Field,
+		Observed: observed,
+		Limit:    1,
+		cause:    err,
+	}
 }

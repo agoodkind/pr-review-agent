@@ -380,6 +380,87 @@
         }
       ],
       "expected": []
+    },
+    {
+      "id": "structured_measurements_paragraph",
+      "provenance": {
+        "description": "This synthetic benchmark paragraph tests the configured requirement to present several measurements in a table."
+      },
+      "files": [
+        {
+          "path": "docs/benchmark.md",
+          "status": "modified",
+          "patch": "@@ -4,0 +5,1 @@\n+The parser took 120 ms in run 1, 95 ms in run 2, and 87 ms in run 3.\n",
+          "current_content": "# Parser benchmark\n\nThe parser benchmark measures elapsed time for three runs against a fixed 1 KB input on the same test host.\n\nThe parser took 120 ms in run 1, 95 ms in run 2, and 87 ms in run 3.\n",
+          "source_sha256": "6e5b291e05f02d32a31c7f60fc84ca8c189b0f23fcc8458218aec08802f9bcc8"
+        }
+      ],
+      "expected": [
+        {
+          "rule_ids": [
+            "structured_results"
+          ],
+          "path": "docs/benchmark.md",
+          "start_line": 5,
+          "end_line": 5
+        }
+      ]
+    },
+    {
+      "id": "structured_measurements_table",
+      "provenance": {
+        "description": "This synthetic benchmark table tests the compliant form of the configured measurement rule."
+      },
+      "files": [
+        {
+          "path": "docs/benchmark.md",
+          "status": "modified",
+          "patch": "@@ -4,0 +5,7 @@\n+Elapsed times:\n+\n+| Run | Elapsed time |\n+| --- | --- |\n+| 1 | 120 ms |\n+| 2 | 95 ms |\n+| 3 | 87 ms |\n",
+          "current_content": "# Parser benchmark\n\nThe parser benchmark measures elapsed time for three runs against a fixed 1 KB input on the same test host.\n\nElapsed times:\n\n| Run | Elapsed time |\n| --- | --- |\n| 1 | 120 ms |\n| 2 | 95 ms |\n| 3 | 87 ms |\n",
+          "source_sha256": "b2e1f3280c437e33b06b2ebcfcca1770e2008c3b54d7830ace41d9308d837d4a"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "id": "functional_membership_bug",
+      "provenance": {
+        "description": "This synthetic case checks whether a membership function returns true for a matching element."
+      },
+      "files": [
+        {
+          "path": "search.go",
+          "status": "added",
+          "patch": "@@ -0,0 +1,10 @@\n+package search\n+\n+func Contains(values []int, target int) bool {\n+\tfor _, value := range values {\n+\t\tif value == target {\n+\t\t\treturn false\n+\t\t}\n+\t}\n+\treturn false\n+}\n",
+          "current_content": "package search\n\nfunc Contains(values []int, target int) bool {\n\tfor _, value := range values {\n\t\tif value == target {\n\t\t\treturn false\n\t\t}\n\t}\n\treturn false\n}\n"
+        }
+      ],
+      "expected": [
+        {
+          "rule_ids": [
+            "functional_correctness",
+            "ground_findings"
+          ],
+          "path": "search.go",
+          "start_line": 6,
+          "end_line": 6
+        }
+      ]
+    },
+    {
+      "id": "functional_membership_correct",
+      "provenance": {
+        "description": "This synthetic case checks whether a membership function returns true for a matching element."
+      },
+      "files": [
+        {
+          "path": "search.go",
+          "status": "added",
+          "patch": "@@ -0,0 +1,10 @@\n+package search\n+\n+func Contains(values []int, target int) bool {\n+\tfor _, value := range values {\n+\t\tif value == target {\n+\t\t\treturn true\n+\t\t}\n+\t}\n+\treturn false\n+}\n",
+          "current_content": "package search\n\nfunc Contains(values []int, target int) bool {\n\tfor _, value := range values {\n\t\tif value == target {\n\t\t\treturn true\n\t\t}\n\t}\n\treturn false\n}\n"
+        }
+      ],
+      "expected": []
     }
   ]
 }

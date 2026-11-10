@@ -14,12 +14,15 @@ func (limit Limit) Validate() error {
 	if limit.Limit <= 0 || limit.Limit > MaximumInteger {
 		return errors.New("token limit must be positive and within the storage integer range")
 	}
+
 	seen := make(map[TokenType]bool, len(limit.TokenTypes))
 	for _, tokenType := range limit.TokenTypes {
 		if (tokenType != InputTokens && tokenType != OutputTokens) || seen[tokenType] {
 			return errors.New("token types must contain input and/or output once")
 		}
+
 		seen[tokenType] = true
 	}
+
 	return limit.Window.Validate()
 }

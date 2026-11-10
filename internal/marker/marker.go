@@ -73,6 +73,7 @@ func Review(head domain.HeadSHA, decision domain.ReviewDecision) string {
 	if wire := reviewDecisionWire(decision); wire != "" {
 		body += " decision=" + wire
 	}
+
 	return body + markerSuffix
 }
 
@@ -99,10 +100,12 @@ func FindReview(body string) (domain.HeadSHA, bool) {
 	if len(matches) < 2 {
 		return "", false
 	}
+
 	head, err := domain.ParseHeadSHA(matches[1])
 	if err != nil {
 		return "", false
 	}
+
 	return head, true
 }
 
@@ -115,6 +118,7 @@ func ReviewBlocked(body string) bool {
 	if len(matches) < 3 {
 		return false
 	}
+
 	return matches[2] == "request_changes"
 }
 
@@ -141,53 +145,57 @@ func Finding(head domain.HeadSHA, finding domain.Finding) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	body := fmt.Sprintf(
-		"%s%s importance=%d id=%s",
-		findingPrefix,
-		head,
-		finding.Importance,
-		id,
-	)
+
+	body := fmt.Sprintf("%s%s importance=%d id=%s", findingPrefix, head, finding.Importance, id)
 	if claim, claimErr := ClaimKey(finding.Path, finding.Evidence); claimErr == nil {
 		body += " claim=" + claim
 	}
+
 	if claimText, claimTextErr := ClaimTextKey(finding.Claim); claimTextErr == nil {
 		body += " claimtext=" + claimText
 	}
+
 	if finding.Deduplication == reviewrules.DeduplicateLocation {
 		body += fmt.Sprintf(" scope=location start=%d end=%d", finding.StartLine, finding.EndLine)
 	}
+
 	return body + markerSuffix, nil
 }
 
 // FindFinding extracts a finding marker from a comment body.
 func FindFinding(body string) (FindingMarker, bool) {
 	var empty FindingMarker
+
 	matches := findingPattern.FindStringSubmatch(body)
 	if len(matches) != 9 {
 		return empty, false
 	}
+
 	head, err := domain.ParseHeadSHA(matches[1])
 	if err != nil {
 		return empty, false
 	}
+
 	startLine, endLine := 0, 0
 	if matches[7] != "" {
 		startLine, err = strconv.Atoi(matches[7])
 		if err != nil {
 			return empty, false
 		}
+
 		endLine, err = strconv.Atoi(matches[8])
 		if err != nil || endLine < startLine {
 			return empty, false
 		}
 	}
+
 	var importance int
 	if matches[2] == "10" {
 		importance = 10
 	} else {
 		importance = int(matches[2][0] - '0')
 	}
+
 	// matches[4] and matches[5] are empty for a marker written before their key
 	// existed, which is every marker already on an open pull request.
 	return FindingMarker{
@@ -219,6 +227,7 @@ func ClaimKey(pathValue string, evidence string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	line := normalizeEvidenceLine(evidence)
 	if line == "" {
 		return "", errors.New("finding carries no evidence line")
@@ -231,6 +240,7 @@ func ClaimKey(pathValue string, evidence string) (string, error) {
 	buffer.WriteString(line)
 
 	sum := sha256.Sum256(buffer.Bytes())
+
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -246,9 +256,11 @@ func normalizeEvidenceLine(evidence string) string {
 	if line == "" {
 		return ""
 	}
+
 	if line[0] == '+' || line[0] == '-' {
 		line = strings.TrimSpace(line[1:])
 	}
+
 	return strings.Join(strings.Fields(line), " ")
 }
 
@@ -277,6 +289,7 @@ func ClaimTextKey(claim string) (string, error) {
 	buffer.WriteString(normalized)
 
 	sum := sha256.Sum256(buffer.Bytes())
+
 	return hex.EncodeToString(sum[:]), nil
 }
 
@@ -289,6 +302,7 @@ func ClaimTextKey(claim string) (string, error) {
 func normalizeClaim(claim string) string {
 	normalized := strings.ToLower(strings.Join(strings.Fields(claim), " "))
 	normalized = strings.TrimRight(normalized, ".,;:!?")
+
 	return strings.TrimSpace(normalized)
 }
 
@@ -298,8 +312,10 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 	if err != nil {
 		return "", err
 	}
+
 	title := strings.TrimSpace(finding.Title)
 	body := strings.TrimSpace(finding.Body)
+
 	parts := []string{
 		"### " + title,
 		body,
@@ -307,7 +323,9 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 	if finding.Suggestion != "" || finding.CorrectionAction == domain.CorrectionDelete {
 		parts = append(parts, suggestionPrefix+finding.Suggestion+suggestionSuffix)
 	}
+
 	parts = append(parts, markerText)
+
 	return strings.Join(parts, "\n\n"), nil
 }
 
@@ -319,6 +337,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	}
 
 	markerRange := findingPattern.FindStringIndex(comment.Body)
+
 	withoutMarker := strings.TrimSpace(comment.Body[:markerRange[0]])
 	if !strings.HasPrefix(withoutMarker, "### ") {
 		return "", domain.Finding{}, errors.New("finding title missing")
@@ -328,15 +347,21 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	if titleEnd < 0 {
 		return "", domain.Finding{}, errors.New("finding title format invalid")
 	}
+
 	title := strings.TrimSpace(withoutMarker[len("### "):titleEnd])
 	body := strings.TrimSpace(withoutMarker[titleEnd+2:])
 	suggestion := ""
+
 	suggestionSeparator := "\n\n" + suggestionPrefix
 	if suggestionStart := strings.LastIndex(body, suggestionSeparator); suggestionStart >= 0 {
 		if !strings.HasSuffix(body, suggestionSuffix) {
 			return "", domain.Finding{}, errors.New("finding suggestion format invalid")
 		}
-		suggestion = strings.TrimSuffix(body[suggestionStart+len(suggestionSeparator):], suggestionSuffix)
+
+		suggestion = strings.TrimSuffix(
+			body[suggestionStart+len(suggestionSeparator):],
+			suggestionSuffix,
+		)
 		body = strings.TrimSpace(body[:suggestionStart])
 	}
 
@@ -363,6 +388,7 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	} else if strings.Contains(withoutMarker, suggestionPrefix+suggestionSuffix) {
 		finding.CorrectionAction = domain.CorrectionDelete
 	}
+
 	if err := finding.Validate(); err != nil {
 		return "", domain.Finding{}, errors.New("invalid finding")
 	}
@@ -371,10 +397,12 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 	if marker.OriginalStartLine > 0 {
 		identity.StartLine, identity.EndLine = marker.OriginalStartLine, marker.OriginalEndLine
 	}
+
 	recomputedID, err := FindingID(identity)
 	if err != nil {
 		return "", domain.Finding{}, err
 	}
+
 	if recomputedID != marker.ID {
 		return "", domain.Finding{}, errors.New("finding marker id mismatch")
 	}
@@ -385,16 +413,20 @@ func DecodeFindingBody(comment domain.ReviewComment) (domain.HeadSHA, domain.Fin
 // NormalizePath canonicalizes a repository-relative path for marker hashing.
 func NormalizePath(value string) (string, error) {
 	normalized := strings.ReplaceAll(value, "\\", "/")
+
 	normalized = path.Clean(normalized)
 	if normalized == "." || normalized == "" {
 		return "", errors.New("path is empty")
 	}
+
 	if strings.HasPrefix(normalized, "/") {
 		return "", errors.New("absolute path is not allowed")
 	}
+
 	if normalized == ".." || strings.HasPrefix(normalized, "../") {
 		return "", errors.New("path traversal is not allowed")
 	}
+
 	return normalized, nil
 }
 
@@ -404,6 +436,7 @@ func FindingID(finding domain.Finding) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	title := strings.TrimSpace(finding.Title)
 	title = strings.ToLower(strings.Join(strings.Fields(title), " "))
 
@@ -412,11 +445,13 @@ func FindingID(finding domain.Finding) (string, error) {
 	buffer.WriteString(normalizedPath)
 	writeLengthHex(&buffer, len(title))
 	buffer.WriteString(title)
+
 	if finding.Deduplication == reviewrules.DeduplicateLocation {
 		fmt.Fprintf(&buffer, ":%d:%d", finding.StartLine, finding.EndLine)
 	}
 
 	sum := sha256.Sum256(buffer.Bytes())
+
 	return hex.EncodeToString(sum[:]), nil
 }
 

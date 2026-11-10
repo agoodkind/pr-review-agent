@@ -34,22 +34,40 @@ func (service *Service) upsertSummaryComment(
 	job domain.ReviewJob,
 	content summaryCommentContent,
 ) error {
-	return service.upsertSummaryCommentFrom(ctx, job, func(marker.State, string) summaryCommentContent {
-		return content
-	})
+	return service.upsertSummaryCommentFrom(
+		ctx,
+		job,
+		func(marker.State, string) summaryCommentContent {
+			return content
+		},
+	)
 }
 
 // announceStart records the current run without moving its checkpoint.
-func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob, head domain.HeadSHA) {
-	err := service.upsertSummaryCommentFrom(ctx, job, func(state marker.State, existingBody string) summaryCommentContent {
-		state.RunID = job.DeliveryID
-		state.Status = marker.StateReviewing
-		prose := RenderStartedBody(head)
-		if preserveCheckpointSummary(state, existingBody) {
-			prose = renderCheckpointNotice(existingBody, strings.TrimPrefix(prose, "## Review\n\n"))
-		}
-		return summaryCommentContent{Prose: prose, State: state}
-	})
+func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob, summary Summary) {
+	err := service.upsertSummaryCommentFrom(
+		ctx,
+		job,
+		func(state marker.State, existingBody string) summaryCommentContent {
+			state.RunID = job.DeliveryID
+			state.Status = marker.StateReviewing
+
+			prose := RenderStartedBody(summary.Head)
+			if preserveCheckpointSummary(state, existingBody) {
+				prose = renderCheckpointNotice(
+					existingBody,
+					strings.TrimPrefix(prose, "## Review\n\n"),
+				)
+			}
+
+			if !strings.Contains(prose, reviewDetailsStart) {
+				service.enrichProviderPeriodUsage(ctx, &summary)
+				prose += "\n\n" + RenderDetails(summary)
+			}
+
+			return summaryCommentContent{Prose: prose, State: state}
+		},
+	)
 	if err != nil {
 		gklog.L(ctx).WarnContext(ctx, "announce review start", slog.String("err", err.Error()))
 	}
@@ -73,42 +91,83 @@ func (service *Service) upsertSummaryCommentFrom(
 	job domain.ReviewJob,
 	build func(marker.State, string) summaryCommentContent,
 ) error {
+	return service.upsertSummaryCommentFromChecked(
+		ctx,
+		job,
+		func(state marker.State, body string) (summaryCommentContent, error) {
+			return build(state, body), nil
+		},
+	)
+}
+
+// upsertSummaryCommentFromChecked rejects invalid content before writing a comment.
+func (service *Service) upsertSummaryCommentFromChecked(
+	ctx context.Context,
+	job domain.ReviewJob,
+	build func(marker.State, string) (summaryCommentContent, error),
+) error {
 	logger := gklog.L(ctx)
-	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
+
+	comments, err := service.github.ListIssueComments(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
 		logger.ErrorContext(ctx, "list issue comments", slog.String("err", err.Error()))
 		return fmt.Errorf("list issue comments: %w", err)
 	}
+
 	if existing, found := findSummaryComment(comments, service.botLogin); found {
 		existingState, decoded := marker.DecodeState(existing.Body)
 		if marker.HasState(existing.Body) && !decoded {
 			return fmt.Errorf("the saved review state cannot be decoded")
 		}
+
 		if !decoded {
 			existingState.RunID = job.DeliveryID
 			existingState.Status = marker.StateDone
 		}
+
+		content, err := build(existingState, existing.Body)
+		if err != nil {
+			return err
+		}
+
 		if _, err := service.github.UpdateIssueComment(
 			ctx,
 			job.InstallationID,
 			job.Repository,
 			existing.ID,
-			renderSummaryComment(build(existingState, existing.Body)),
+			renderSummaryComment(content),
 		); err != nil {
 			logger.ErrorContext(ctx, "update summary comment", slog.String("err", err.Error()))
 			return fmt.Errorf("update summary comment: %w", err)
 		}
+
 		logger.InfoContext(ctx, "summary comment updated", slog.Int64("comment_id", existing.ID))
+
 		return nil
 	}
-	firstContent := build(
+
+	firstContent, err := build(
 		marker.State{
 			PolicyRevision: "",
-			LastReviewed:   "", RunID: job.DeliveryID, Status: marker.StateDone, Pending: nil,
-			Completed: nil, ForcedBy: "", Unread: nil,
+			LastReviewed:   "",
+			RunID:          job.DeliveryID,
+			Status:         marker.StateDone,
+			Pending:        nil,
+			Completed:      nil,
+			ForcedBy:       "",
+			Unread:         nil,
 		},
 		"",
 	)
+	if err != nil {
+		return err
+	}
+
 	created, err := service.github.CreateIssueComment(
 		ctx,
 		job.InstallationID,
@@ -120,7 +179,9 @@ func (service *Service) upsertSummaryCommentFrom(
 		logger.ErrorContext(ctx, "create summary comment", slog.String("err", err.Error()))
 		return fmt.Errorf("create summary comment: %w", err)
 	}
+
 	logger.InfoContext(ctx, "summary comment created", slog.Int64("comment_id", created.ID))
+
 	return nil
 }
 
@@ -132,15 +193,20 @@ func renderSummaryComment(content summaryCommentContent) string {
 
 // findSummaryComment returns the bot's own comment carrying the state
 // marker, the same way findSummaryReview finds the bot's visible review.
-func findSummaryComment(comments []githubapp.IssueComment, botLogin string) (githubapp.IssueComment, bool) {
+func findSummaryComment(
+	comments []githubapp.IssueComment,
+	botLogin string,
+) (githubapp.IssueComment, bool) {
 	for _, comment := range comments {
 		if comment.Author != botLogin {
 			continue
 		}
+
 		if marker.HasState(comment.Body) || marker.HasSummary(comment.Body) {
 			return comment, true
 		}
 	}
+
 	return githubapp.IssueComment{ID: 0, Author: "", Body: ""}, false
 }
 
@@ -151,30 +217,63 @@ func (service *Service) readState(
 	job domain.ReviewJob,
 ) (marker.State, bool, error) {
 	logger := gklog.L(ctx)
-	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
+
+	comments, err := service.github.ListIssueComments(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
 		logger.ErrorContext(ctx, "list issue comments", slog.String("err", err.Error()))
-		return marker.State{PolicyRevision: "", LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil}, false, fmt.Errorf("list issue comments: %w", err)
+
+		return marker.State{
+			PolicyRevision: "",
+			LastReviewed:   "",
+			RunID:          "",
+			Status:         "",
+			Pending:        nil,
+			Completed:      nil,
+			ForcedBy:       "",
+			Unread:         nil,
+		}, false, fmt.Errorf("list issue comments: %w", err)
 	}
+
 	if comment, found := findSummaryComment(comments, service.botLogin); found {
 		if state, ok := marker.DecodeState(comment.Body); ok {
 			return state, true, nil
 		}
+
 		if marker.HasState(comment.Body) {
 			return marker.State{}, false, fmt.Errorf("the saved review state cannot be decoded")
 		}
 	}
-	return marker.State{PolicyRevision: "", LastReviewed: "", RunID: "", Status: "", Pending: nil, Completed: nil, ForcedBy: "", Unread: nil}, false, nil
+
+	return marker.State{
+		PolicyRevision: "",
+		LastReviewed:   "",
+		RunID:          "",
+		Status:         "",
+		Pending:        nil,
+		Completed:      nil,
+		ForcedBy:       "",
+		Unread:         nil,
+	}, false, nil
 }
 
 // loadDurableState requires a successful read before the run selects unfinished work.
-func (service *Service) loadDurableState(ctx context.Context, job domain.ReviewJob) (marker.State, bool, error) {
+func (service *Service) loadDurableState(
+	ctx context.Context,
+	job domain.ReviewJob,
+) (marker.State, bool, error) {
 	logger := gklog.L(ctx)
+
 	state, hasState, err := service.readState(ctx, job)
 	if err != nil {
 		logger.WarnContext(ctx, "read durable review state", slog.String("err", err.Error()))
 		return state, hasState, fmt.Errorf("read durable review state: %w", err)
 	}
+
 	if hasState {
 		logger.InfoContext(
 			ctx,
@@ -183,5 +282,6 @@ func (service *Service) loadDurableState(ctx context.Context, job domain.ReviewJ
 			slog.String("run_id", state.RunID),
 		)
 	}
+
 	return state, hasState, nil
 }

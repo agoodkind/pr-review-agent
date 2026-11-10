@@ -25,6 +25,7 @@ const (
 
 func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -38,18 +39,28 @@ func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{reconcileErr: errors.New("reconcile failed")}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err == nil {
 		t.Fatal("Reconcile: want error")
 	}
+
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none after model failure", github.resolveCalls)
 	}
@@ -57,6 +68,7 @@ func TestEndToEndReconciliationFailureIsolation(t *testing.T) {
 
 func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 	finding := sampleFinding()
+
 	ownedBody, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -66,38 +78,61 @@ func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 		head: domain.HeadSHA(testCurrentHead),
 		threads: []githubapp.ReviewThread{
 			ownedThread("thread-owned", ownedBody, finding, false),
-			{NodeID: "thread-resolved", Resolved: true, RootComment: botComment(ownedBody, finding)},
-			{NodeID: "thread-foreign", Resolved: false, RootComment: foreignComment(ownedBody, finding)},
+			{
+				NodeID:      "thread-resolved",
+				Resolved:    true,
+				RootComment: botComment(ownedBody, finding),
+			},
+			{
+				NodeID:      "thread-foreign",
+				Resolved:    false,
+				RootComment: foreignComment(ownedBody, finding),
+			},
 		},
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Status:       "modified",
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Status:       "modified",
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-owned",
-			Resolution:   domain.ResolutionResolved,
-			Reason:       "fixed",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-owned",
+				Resolution:   domain.ResolutionResolved,
+				Reason:       "fixed",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
+
 	job := testJob()
 	if _, err := service.Reconcile(context.Background(), job); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 1 {
 		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
 	}
+
 	if !strings.Contains(model.prompts[0], "thread-owned") {
 		t.Fatalf("prompt missing owned thread: %q", model.prompts[0])
 	}
+
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-owned" {
 		t.Fatalf("resolve calls = %v, want [thread-owned]", github.resolveCalls)
 	}
@@ -105,10 +140,12 @@ func TestReconcileSelectsOnlyUnresolvedOwnedMarkedThreads(t *testing.T) {
 
 func TestReconcileIgnoresForeignMalformedAndCurrentHeadThreads(t *testing.T) {
 	finding := sampleFinding()
+
 	oldBody, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody old: %v", err)
 	}
+
 	currentBody, err := marker.EncodeFindingBody(domain.HeadSHA(testCurrentHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody current: %v", err)
@@ -117,21 +154,46 @@ func TestReconcileIgnoresForeignMalformedAndCurrentHeadThreads(t *testing.T) {
 	github := &fakeGitHub{
 		head: domain.HeadSHA(testCurrentHead),
 		threads: []githubapp.ReviewThread{
-			{NodeID: "thread-foreign", Resolved: false, RootComment: foreignComment(oldBody, finding)},
-			{NodeID: "thread-malformed", Resolved: false, RootComment: botComment("not a finding body", finding)},
-			{NodeID: "thread-current", Resolved: false, RootComment: botComment(currentBody, finding)},
-			{NodeID: "thread-deleted", Resolved: false, RootComment: domain.ReviewComment{Author: testBotLogin, Body: ""}},
+			{
+				NodeID:      "thread-foreign",
+				Resolved:    false,
+				RootComment: foreignComment(oldBody, finding),
+			},
+			{
+				NodeID:      "thread-malformed",
+				Resolved:    false,
+				RootComment: botComment("not a finding body", finding),
+			},
+			{
+				NodeID:      "thread-current",
+				Resolved:    false,
+				RootComment: botComment(currentBody, finding),
+			},
+			{
+				NodeID:      "thread-deleted",
+				Resolved:    false,
+				RootComment: domain.ReviewComment{Author: testBotLogin, Body: ""},
+			},
 		},
 	}
 	model := &fakeModel{}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 0 {
 		t.Fatalf("model prompt count = %d, want 0", len(model.prompts))
 	}
+
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none", github.resolveCalls)
 	}
@@ -139,6 +201,7 @@ func TestReconcileIgnoresForeignMalformedAndCurrentHeadThreads(t *testing.T) {
 
 func TestReconcileResolvesOnlyProvenFixedOrInvalidFindings(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -153,34 +216,59 @@ func TestReconcileResolvesOnlyProvenFixedOrInvalidFindings(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
 		resolutions: []domain.ThreadResolution{
-			{ThreadNodeID: "thread-resolved", Resolution: domain.ResolutionResolved, Reason: "fixed"},
-			{ThreadNodeID: "thread-open", Resolution: domain.ResolutionOpen, Reason: "still applies"},
+			{
+				ThreadNodeID: "thread-resolved",
+				Resolution:   domain.ResolutionResolved,
+				Reason:       "fixed",
+			},
+			{
+				ThreadNodeID: "thread-open",
+				Resolution:   domain.ResolutionOpen,
+				Reason:       "still applies",
+			},
 		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-resolved" {
 		t.Fatalf("resolve calls = %v, want [thread-resolved]", github.resolveCalls)
 	}
+
 	if !threads[0].Resolved || threads[1].Resolved {
-		t.Fatalf("resolved states = [%t %t], want [true false]", threads[0].Resolved, threads[1].Resolved)
+		t.Fatalf(
+			"resolved states = [%t %t], want [true false]",
+			threads[0].Resolved,
+			threads[1].Resolved,
+		)
 	}
 }
 
 func TestReconcileLeavesOpenAndUncertainFindingsOpen(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -195,23 +283,41 @@ func TestReconcileLeavesOpenAndUncertainFindingsOpen(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Patch:        "@@ -1,1 +1,1 @@\n context\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Patch:        "@@ -1,1 +1,1 @@\n context\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
 		resolutions: []domain.ThreadResolution{
-			{ThreadNodeID: "thread-open", Resolution: domain.ResolutionOpen, Reason: "still applies"},
-			{ThreadNodeID: "thread-uncertain", Resolution: domain.ResolutionUncertain, Reason: "unclear"},
+			{
+				ThreadNodeID: "thread-open",
+				Resolution:   domain.ResolutionOpen,
+				Reason:       "still applies",
+			},
+			{
+				ThreadNodeID: "thread-uncertain",
+				Resolution:   domain.ResolutionUncertain,
+				Reason:       "unclear",
+			},
 		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none", github.resolveCalls)
 	}
@@ -219,6 +325,7 @@ func TestReconcileLeavesOpenAndUncertainFindingsOpen(t *testing.T) {
 
 func TestReconcilePostsNoReplies(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -232,24 +339,36 @@ func TestReconcilePostsNoReplies(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-one",
-			Resolution:   domain.ResolutionResolved,
-			Reason:       "fixed",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-one",
+				Resolution:   domain.ResolutionResolved,
+				Reason:       "fixed",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if github.replyCalls != 0 {
 		t.Fatalf("reply calls = %d, want 0", github.replyCalls)
 	}
@@ -257,6 +376,7 @@ func TestReconcilePostsNoReplies(t *testing.T) {
 
 func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -271,11 +391,13 @@ func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 		resolveErrors: map[string]error{
 			"thread-fail": errors.New("resolve failed"),
 		},
@@ -287,17 +409,28 @@ func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
+
 	_, err = service.Reconcile(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("Reconcile: want aggregate error")
 	}
+
 	if !strings.Contains(err.Error(), "thread-fail") {
 		t.Fatalf("error = %q, want thread-fail failure", err.Error())
 	}
+
 	if len(github.resolveCalls) != 2 {
 		t.Fatalf("resolve calls = %v, want two attempts", github.resolveCalls)
 	}
+
 	if github.resolveCalls[1] != "thread-ok" {
 		t.Fatalf("second resolve call = %q, want thread-ok", github.resolveCalls[1])
 	}
@@ -305,6 +438,7 @@ func TestReconcileContinuesAfterOneThreadFailure(t *testing.T) {
 
 func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -323,11 +457,13 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n-issue line\n+fixed line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
 		resolutions: []domain.ThreadResolution{
@@ -336,14 +472,24 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
+
 	_, err = service.Reconcile(context.Background(), testJob())
 	if err == nil {
 		t.Fatal("Reconcile: want head changed error")
 	}
+
 	if !strings.Contains(err.Error(), "head changed") {
 		t.Fatalf("error = %q, want head changed", err.Error())
 	}
+
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none after head change", github.resolveCalls)
 	}
@@ -351,6 +497,7 @@ func TestReconcileStopsMutationsWhenHeadChanges(t *testing.T) {
 
 func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -361,24 +508,37 @@ func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 		threads: []githubapp.ReviewThread{
 			ownedThread("thread-missing", body, finding, false),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:   finding.Path,
-			Status: "removed",
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:   finding.Path,
+				Status: "removed",
+			},
+		},
 	}
 	model := &fakeModel{}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 0 {
 		t.Fatalf("model prompt count = %d, want 0 for removed file", len(model.prompts))
 	}
+
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-missing" {
 		t.Fatalf("resolve calls = %v, want [thread-missing]", github.resolveCalls)
 	}
+
 	if !threads[0].Resolved {
 		t.Fatal("thread remains unresolved")
 	}
@@ -386,6 +546,7 @@ func TestReconcileResolvesRemovedFindingFileWithoutModel(t *testing.T) {
 
 func TestReconcileSendsShortenedFileAnchorToModel(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -401,20 +562,31 @@ func TestReconcileSendsShortenedFileAnchorToModel(t *testing.T) {
 		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-shortened",
-			Resolution:   domain.ResolutionOpen,
-			Reason:       "cannot prove the defect gone",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-shortened",
+				Resolution:   domain.ResolutionOpen,
+				Reason:       "cannot prove the defect gone",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 1 {
 		t.Fatalf("model prompt count = %d, want 1 for shortened file", len(model.prompts))
 	}
+
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none without a model verdict", github.resolveCalls)
 	}
@@ -422,6 +594,7 @@ func TestReconcileSendsShortenedFileAnchorToModel(t *testing.T) {
 
 func TestReconcileShowsTheLatestPullRequestDiffAfterInsertions(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -436,6 +609,7 @@ func TestReconcileShowsTheLatestPullRequestDiffAfterInsertions(t *testing.T) {
 	// the assertion below would hold whether or not the coordinates were
 	// remapped, and a remapping regression would pass unnoticed.
 	insertedLines := make([]string, 0, shiftedInsertionCount)
+
 	patchLines := []string{
 		fmt.Sprintf("@@ -1,3 +1,%d @@", shiftedInsertionCount+3),
 		" line1",
@@ -445,6 +619,7 @@ func TestReconcileShowsTheLatestPullRequestDiffAfterInsertions(t *testing.T) {
 		insertedLines = append(insertedLines, inserted)
 		patchLines = append(patchLines, "+"+inserted)
 	}
+
 	patchLines = append(patchLines, "-issue line", "+fixed line", " line3")
 
 	currentFile := "line1\n" + strings.Join(insertedLines, "\n") + "\nfixed line\nline3"
@@ -456,28 +631,41 @@ func TestReconcileShowsTheLatestPullRequestDiffAfterInsertions(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte(currentFile),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Status:       "modified",
-			Patch:        strings.Join(patchLines, "\n") + "\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Status:       "modified",
+				Patch:        strings.Join(patchLines, "\n") + "\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-shifted",
-			Resolution:   domain.ResolutionResolved,
-			Reason:       "fixed",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-shifted",
+				Resolution:   domain.ResolutionResolved,
+				Reason:       "fixed",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 1 {
 		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
 	}
+
 	prompt := model.prompts[0]
 	if !strings.Contains(prompt, "Latest pull request diff for this file:") ||
 		!strings.Contains(prompt, "fixed line") {
@@ -495,12 +683,14 @@ const shiftedInsertionCount = 30
 // instead of refusing to reason about an unresolved finding.
 func TestReconcileUsesTheLatestPullRequestAfterARestack(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	insertedLines := make([]string, 0, shiftedInsertionCount)
+
 	patchLines := []string{
 		fmt.Sprintf("@@ -1,3 +1,%d @@", shiftedInsertionCount+3),
 		" line1",
@@ -510,6 +700,7 @@ func TestReconcileUsesTheLatestPullRequestAfterARestack(t *testing.T) {
 		insertedLines = append(insertedLines, inserted)
 		patchLines = append(patchLines, "+"+inserted)
 	}
+
 	patchLines = append(patchLines, "-issue line", "+fixed line", " line3")
 
 	github := &fakeGitHub{
@@ -518,34 +709,51 @@ func TestReconcileUsesTheLatestPullRequestAfterARestack(t *testing.T) {
 			ownedThread("thread-diverged", body, finding, false),
 		},
 		files: map[string][]byte{
-			finding.Path: []byte("line1\n" + strings.Join(insertedLines, "\n") + "\nfixed line\nline3"),
+			finding.Path: []byte(
+				"line1\n" + strings.Join(insertedLines, "\n") + "\nfixed line\nline3",
+			),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Status:       "modified",
-			Patch:        strings.Join(patchLines, "\n") + "\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Status:       "modified",
+				Patch:        strings.Join(patchLines, "\n") + "\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-diverged",
-			Resolution:   domain.ResolutionResolved,
-			Reason:       "fixed",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-diverged",
+				Resolution:   domain.ResolutionResolved,
+				Reason:       "fixed",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 1 || !strings.Contains(model.prompts[0], "fixed line") {
 		t.Fatalf("prompt = %q, want the latest pull request state", model.prompts)
 	}
+
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-diverged" {
 		t.Fatalf("resolve calls = %v, want [thread-diverged]", github.resolveCalls)
 	}
+
 	if !threads[0].Resolved {
 		t.Fatal("the confirmed fixed thread remains unresolved")
 	}
@@ -553,6 +761,7 @@ func TestReconcileUsesTheLatestPullRequestAfterARestack(t *testing.T) {
 
 func TestReconcileResolvesARemovedFileInTheLatestPullRequest(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
@@ -563,25 +772,43 @@ func TestReconcileResolvesARemovedFileInTheLatestPullRequest(t *testing.T) {
 		threads: []githubapp.ReviewThread{
 			ownedThread("thread-removed", body, finding, false),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:   finding.Path,
-			Status: "removed",
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:   finding.Path,
+				Status: "removed",
+			},
+		},
 	}
 	model := &fakeModel{}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
+
 	threads, err := service.Reconcile(context.Background(), testJob())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 0 {
-		t.Fatalf("model prompt count = %d, want 0: a removed file needs no model", len(model.prompts))
+		t.Fatalf(
+			"model prompt count = %d, want 0: a removed file needs no model",
+			len(model.prompts),
+		)
 	}
+
 	if len(github.resolveCalls) != 1 || github.resolveCalls[0] != "thread-removed" {
-		t.Fatalf("resolve calls = %v, want [thread-removed]: the file the finding anchors to is gone",
-			github.resolveCalls)
+		t.Fatalf(
+			"resolve calls = %v, want [thread-removed]: the file the finding anchors to is gone",
+			github.resolveCalls,
+		)
 	}
+
 	if !threads[0].Resolved {
 		t.Fatal("an obsolete thread was left open because the comparison happened to be diverged")
 	}
@@ -591,25 +818,30 @@ func TestReconcileResolvesARemovedFileInTheLatestPullRequest(t *testing.T) {
 // satisfied by the diff section of the prompt.
 func currentCodeSection(t *testing.T, prompt string) string {
 	t.Helper()
+
 	_, after, found := strings.Cut(prompt, "Current file excerpt")
 	if !found {
 		t.Fatalf("prompt has no current code section: %q", prompt)
 	}
+
 	section, _, found := strings.Cut(after, "\n\nLatest pull request diff for this file:")
 	if !found {
 		t.Fatalf("prompt has no diff section: %q", prompt)
 	}
+
 	return section
 }
 
 func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	const renamedPath = "internal/app/server.go"
+
 	github := &fakeGitHub{
 		head: domain.HeadSHA(testCurrentHead),
 		threads: []githubapp.ReviewThread{
@@ -618,29 +850,42 @@ func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
 		files: map[string][]byte{
 			renamedPath: []byte("line1\nissue line\nline3"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         renamedPath,
-			PreviousPath: finding.Path,
-			Status:       "renamed",
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         renamedPath,
+				PreviousPath: finding.Path,
+				Status:       "renamed",
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-renamed",
-			Resolution:   domain.ResolutionOpen,
-			Reason:       "defect remains after rename",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-renamed",
+				Resolution:   domain.ResolutionOpen,
+				Reason:       "defect remains after rename",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 1 || !strings.Contains(model.prompts[0], "issue line") {
 		t.Fatalf("model prompts = %q, want renamed file context", model.prompts)
 	}
+
 	if len(github.resolveCalls) != 0 {
 		t.Fatalf("resolve calls = %v, want none", github.resolveCalls)
 	}
@@ -650,22 +895,26 @@ func TestReconcileFollowsRenamedFindingFile(t *testing.T) {
 // must carry it, or a reply disproving the finding can never move the model.
 func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testCurrentHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	const replyText = "Declined: the compose file configures no authorizer, so this check cannot fire."
+
 	thread := ownedThread("thread-replied", body, finding, false)
 	thread.RootComment.DatabaseID = 99
-	thread.Replies = []domain.ReviewComment{{
-		DatabaseID: 801,
-		Author:     "other-user",
-		Body:       replyText,
-		Path:       finding.Path,
-		StartLine:  finding.StartLine,
-		EndLine:    finding.EndLine,
-	}}
+	thread.Replies = []domain.ReviewComment{
+		{
+			DatabaseID: 801,
+			Author:     "other-user",
+			Body:       replyText,
+			Path:       finding.Path,
+			StartLine:  finding.StartLine,
+			EndLine:    finding.EndLine,
+		},
+	}
 
 	github := &fakeGitHub{
 		head:    domain.HeadSHA(testCurrentHead),
@@ -673,36 +922,52 @@ func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Status:       "modified",
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Status:       "modified",
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-replied",
-			Resolution:   domain.ResolutionOpen,
-			Reason:       "the defect still applies",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-replied",
+				Resolution:   domain.ResolutionOpen,
+				Reason:       "the defect still applies",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	job := testJob()
+
 	job.ThreadRootCommentID = 99
 	if _, err := service.Reconcile(context.Background(), job); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 1 {
 		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
 	}
+
 	if !strings.Contains(model.prompts[0], replyText) {
 		t.Fatalf("prompt missing the author reply: %q", model.prompts[0])
 	}
+
 	if !strings.Contains(model.prompts[0], "other-user") {
 		t.Fatalf("prompt does not attribute the reply: %q", model.prompts[0])
 	}
+
 	for _, want := range []string{"Current pull request", "Current description"} {
 		if !strings.Contains(model.prompts[0], want) {
 			t.Fatalf("prompt missing latest pull request context %q: %q", want, model.prompts[0])
@@ -716,23 +981,29 @@ func TestReconcilePromptCarriesAuthorReplies(t *testing.T) {
 // The prompt keeps the most recent replies and says how many it left out.
 func TestReconcileBoundsALongThreadAndSaysWhatItOmitted(t *testing.T) {
 	finding := sampleFinding()
+
 	body, err := marker.EncodeFindingBody(domain.HeadSHA(testFindingHead), finding)
 	if err != nil {
 		t.Fatalf("EncodeFindingBody: %v", err)
 	}
 
 	const replyCount = 60
+
 	thread := ownedThread("thread-long", body, finding, false)
+
 	for index := range replyCount {
-		thread.Replies = append(thread.Replies, domain.ReviewComment{
-			DatabaseID: int64(800 + index),
-			Author:     "other-user",
-			// Each reply is a substantial paragraph, as a real argument is.
-			Body:      fmt.Sprintf("reply %d: %s", index, strings.Repeat("word ", 60)),
-			Path:      finding.Path,
-			StartLine: finding.StartLine,
-			EndLine:   finding.EndLine,
-		})
+		thread.Replies = append(
+			thread.Replies,
+			domain.ReviewComment{
+				DatabaseID: int64(800 + index),
+				Author:     "other-user",
+				// Each reply is a substantial paragraph, as a real argument is.
+				Body:      fmt.Sprintf("reply %d: %s", index, strings.Repeat("word ", 60)),
+				Path:      finding.Path,
+				StartLine: finding.StartLine,
+				EndLine:   finding.EndLine,
+			},
+		)
 	}
 
 	github := &fakeGitHub{
@@ -741,40 +1012,62 @@ func TestReconcileBoundsALongThreadAndSaysWhatItOmitted(t *testing.T) {
 		files: map[string][]byte{
 			finding.Path: []byte("line1\nissue line\nline3\n"),
 		},
-		compareFiles: []githubapp.ChangedFile{{
-			Path:         finding.Path,
-			Status:       "modified",
-			Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
-			PatchPresent: true,
-		}},
+		compareFiles: []githubapp.ChangedFile{
+			{
+				Path:         finding.Path,
+				Status:       "modified",
+				Patch:        "@@ -1,3 +1,3 @@\n line1\n issue line\n line3\n",
+				PatchPresent: true,
+			},
+		},
 	}
 	model := &fakeModel{
-		resolutions: []domain.ThreadResolution{{
-			ThreadNodeID: "thread-long",
-			Resolution:   domain.ResolutionOpen,
-			Reason:       "the defect still applies",
-		}},
+		resolutions: []domain.ThreadResolution{
+			{
+				ThreadNodeID: "thread-long",
+				Resolution:   domain.ResolutionOpen,
+				Reason:       "the defect still applies",
+			},
+		},
 	}
 
-	service := reconcile.NewService(github, model, testBotLogin, nil, config.MaximumPromptBytes, policytest.Load(t))
+	service := reconcile.NewService(
+		github,
+		model,
+		testBotLogin,
+		nil,
+		config.MaximumPromptBytes,
+		policytest.Load(t),
+	)
 	if _, err := service.Reconcile(context.Background(), testJob()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(model.prompts) != 1 {
 		t.Fatalf("model prompt count = %d, want 1", len(model.prompts))
 	}
+
 	prompt := model.prompts[0]
 	if len(prompt) > config.MaximumPromptBytes {
-		t.Fatalf("prompt is %d bytes, over the %d byte budget, so it fails every time it is retried",
-			len(prompt), config.MaximumPromptBytes)
+		t.Fatalf(
+			"prompt is %d bytes, over the %d byte budget, so it fails every time it is retried",
+			len(prompt),
+			config.MaximumPromptBytes,
+		)
 	}
+
 	// The newest reply is the one that answers the current state of the code.
 	if !strings.Contains(prompt, fmt.Sprintf("reply %d:", replyCount-1)) {
 		t.Fatalf("prompt dropped the most recent reply:\n%s", prompt)
 	}
+
 	if !strings.Contains(prompt, "older replies are not shown") {
-		t.Fatalf("prompt does not say the discussion was cut, so the excerpt reads as all of it:\n%s", prompt)
+		t.Fatalf(
+			"prompt does not say the discussion was cut, so the excerpt reads as all of it:\n%s",
+			prompt,
+		)
 	}
+
 	if strings.Contains(prompt, "reply 0:") {
 		t.Fatalf("prompt kept the oldest reply, so nothing was actually bounded:\n%s", prompt)
 	}
@@ -833,6 +1126,7 @@ func botComment(body string, finding domain.Finding) domain.ReviewComment {
 func foreignComment(body string, finding domain.Finding) domain.ReviewComment {
 	comment := botComment(body, finding)
 	comment.Author = "other-user"
+
 	return comment
 }
 
@@ -868,6 +1162,7 @@ func (fake *fakeGitHub) ListChangedFiles(
 	if fake.compareError != nil {
 		return nil, fake.compareError
 	}
+
 	return fake.compareFiles, nil
 }
 
@@ -881,10 +1176,12 @@ func (fake *fakeGitHub) GetFile(
 	if err := fake.getFileErrors[path]; err != nil {
 		return nil, err
 	}
+
 	content, ok := fake.files[path]
 	if !ok {
 		return nil, fmt.Errorf("file %s not found", path)
 	}
+
 	return content, nil
 }
 
@@ -895,10 +1192,12 @@ func (fake *fakeGitHub) GetPullRequest(
 	_ int,
 ) (githubapp.PullRequest, error) {
 	fake.getPullCount++
+
 	head := fake.head
 	if fake.headAfterModel != "" && fake.getPullCount > 1 {
 		head = fake.headAfterModel
 	}
+
 	return githubapp.PullRequest{
 		Number: 42,
 		Head:   head,
@@ -916,6 +1215,7 @@ func (fake *fakeGitHub) ResolveReviewThread(
 	if err := fake.resolveErrors[threadNodeID]; err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -925,10 +1225,14 @@ type fakeModel struct {
 	reconcileErr error
 }
 
-func (fake *fakeModel) Reconcile(_ context.Context, prompt string) ([]domain.ThreadResolution, error) {
+func (fake *fakeModel) Reconcile(
+	_ context.Context,
+	prompt string,
+) ([]domain.ThreadResolution, error) {
 	fake.prompts = append(fake.prompts, prompt)
 	if fake.reconcileErr != nil {
 		return nil, fake.reconcileErr
 	}
+
 	return fake.resolutions, nil
 }

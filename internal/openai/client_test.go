@@ -46,98 +46,171 @@ func testCFClientSecretValue() string {
 func TestChatCompletionsReview(t *testing.T) {
 	geminiState := &testServerState{completionContent: validReviewContent()}
 	geminiState.streamResponse = func(writer http.ResponseWriter) {
-		writeStreamFrames(writer, []map[string]any{
-			{
-				"id": "chat-fixture", "object": "chat.completion.chunk", "created": 1,
-				"model": "fixture-gemini", "choices": []map[string]any{{
-					"index": 0,
-					"delta": map[string]any{"content": validReviewContent()}, "finish_reason": nil,
-				}},
-			},
-			{
-				"id": "chat-fixture", "object": "chat.completion.chunk", "created": 1,
-				"model": "fixture-gemini", "choices": []map[string]any{{
-					"index": 0,
-					"delta": map[string]any{}, "finish_reason": "stop",
-				}},
-			},
-			{
-				"id": "chat-fixture", "object": "chat.completion.chunk", "created": 1,
-				"model": "fixture-gemini", "choices": []any{}, "usage": map[string]any{
-					"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120,
-					"prompt_tokens_details": map[string]any{"cached_tokens": 10},
+		writeStreamFrames(
+			writer,
+			[]map[string]any{
+				{
+					"id":      "chat-fixture",
+					"object":  "chat.completion.chunk",
+					"created": 1,
+					"model":   "fixture-gemini",
+					"choices": []map[string]any{
+						{
+							"index":         0,
+							"delta":         map[string]any{"content": validReviewContent()},
+							"finish_reason": nil,
+						},
+					},
+				},
+				{
+					"id":      "chat-fixture",
+					"object":  "chat.completion.chunk",
+					"created": 1,
+					"model":   "fixture-gemini",
+					"choices": []map[string]any{
+						{
+							"index":         0,
+							"delta":         map[string]any{},
+							"finish_reason": "stop",
+						},
+					},
+				},
+				{
+					"id":      "chat-fixture",
+					"object":  "chat.completion.chunk",
+					"created": 1,
+					"model":   "fixture-gemini",
+					"choices": []any{},
+					"usage": map[string]any{
+						"prompt_tokens":         100,
+						"completion_tokens":     20,
+						"total_tokens":          120,
+						"prompt_tokens_details": map[string]any{"cached_tokens": 10},
+					},
 				},
 			},
-		})
+		)
 	}
+
 	geminiServer := newProviderServer(geminiState)
 	defer geminiServer.Close()
+
 	fallbackState := &testServerState{completionContent: validReviewContent()}
+
 	fallbackServer := newProviderServer(fallbackState)
 	defer fallbackServer.Close()
-	client := openai.NewClient(config.Config{
-		ReviewPolicy: policytest.Load(t), Providers: []config.ProviderConfig{
-			{
-				ID: "gemini", BaseURL: mustParseURL(t, geminiServer.URL), APIKey: testAPIKeyValue(),
-				Model: "fixture-gemini", API: config.ChatCompletionsAPI,
-			},
-			{
-				ID: "fallback", BaseURL: mustParseURL(t, fallbackServer.URL), APIKey: testFallbackAPIKeyValue(), // gitleaks:allow
-				Model: testFallbackModel,
+
+	client := openai.NewClient(
+		config.Config{
+			ReviewPolicy: policytest.Load(t),
+			Providers: []config.ProviderConfig{
+				{
+					ID:      "gemini",
+					BaseURL: mustParseURL(t, geminiServer.URL),
+					APIKey:  testAPIKeyValue(),
+					Model:   "fixture-gemini",
+					API:     config.ChatCompletionsAPI,
+				},
+				{
+					ID:      "fallback",
+					BaseURL: mustParseURL(t, fallbackServer.URL),
+					APIKey:  testFallbackAPIKeyValue(), // gitleaks:allow
+					Model:   testFallbackModel,
+				},
 			},
 		},
-	}, geminiServer.Client())
+		geminiServer.Client(),
+	)
 	ctx, recorder := review.WithUsageRecorder(context.Background())
+
 	completion, err := client.Review(ctx, "review input")
 	if err != nil {
 		t.Fatalf("Review with Gemini: %v", err)
 	}
+
 	if completion.Model != "fixture-gemini" || atomic.LoadInt32(&fallbackState.requestCount) != 0 {
-		t.Fatalf("completion model = %q, fallback requests = %d", completion.Model, fallbackState.requestCount)
+		t.Fatalf(
+			"completion model = %q, fallback requests = %d",
+			completion.Model,
+			fallbackState.requestCount,
+		)
 	}
+
 	usage := recorder.Summary()
-	if usage.InputTokens != 100 || usage.CachedInputTokens != 10 || usage.OutputTokens != 20 || usage.TotalTokens != 120 {
+	if usage.InputTokens != 100 || usage.CachedInputTokens != 10 || usage.OutputTokens != 20 ||
+		usage.TotalTokens != 120 {
 		t.Fatalf("Gemini usage = %+v", usage)
 	}
 }
 
 func TestRoutersReportSelectedModel(t *testing.T) {
 	for _, routerModel := range []string{config.AutoRouterModel, config.FreeRouterModel} {
-		t.Run(routerModel, func(t *testing.T) {
-			state := &testServerState{completionContent: validReviewContent()}
-			server := newProviderServer(state)
-			defer server.Close()
-			const selectedModel = "fixture-selected-model"
-			state.streamResponse = func(writer http.ResponseWriter) {
-				writeStreamFrames(writer, []map[string]any{
-					responseTextDelta(validReviewContent()),
-					responseCompleted(validReviewContent(), selectedModel, map[string]any{
-						"input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
-					}),
-				})
-			}
-			autoRouterCostTier := config.AutoRouterCostTier("")
-			if routerModel == config.AutoRouterModel {
-				autoRouterCostTier = config.AutoRouterCostLow
-			}
-			client := openai.NewClient(config.Config{
-				ReviewPolicy: policytest.Load(t), Providers: []config.ProviderConfig{{
-					ID: "openrouter", BaseURL: mustParseURL(t, server.URL), APIKey: testAPIKeyValue(),
-					Model: routerModel, AutoRouterCostTier: autoRouterCostTier,
-				}},
-			}, server.Client())
-			ctx, recorder := review.WithUsageRecorder(context.Background())
-			completion, err := client.Review(ctx, "review input")
-			if err != nil {
-				t.Fatalf("Review: %v", err)
-			}
-			if completion.Model != selectedModel {
-				t.Fatalf("completion model = %q, want %q", completion.Model, selectedModel)
-			}
-			if usage := recorder.Summary(); len(usage.Models) != 1 || usage.Models[0].RequestedModel != routerModel || usage.Models[0].Model != selectedModel {
-				t.Fatalf("usage models = %+v, want requested and selected models", usage.Models)
-			}
-		})
+		t.Run(
+			routerModel,
+			func(t *testing.T) {
+				state := &testServerState{completionContent: validReviewContent()}
+
+				server := newProviderServer(state)
+				defer server.Close()
+
+				const selectedModel = "fixture-selected-model"
+
+				state.streamResponse = func(writer http.ResponseWriter) {
+					writeStreamFrames(
+						writer,
+						[]map[string]any{
+							responseTextDelta(validReviewContent()),
+							responseCompleted(
+								validReviewContent(),
+								selectedModel,
+								map[string]any{
+									"input_tokens":  10,
+									"output_tokens": 2,
+									"total_tokens":  12,
+								},
+							),
+						},
+					)
+				}
+
+				autoRouterCostTier := config.AutoRouterCostTier("")
+				if routerModel == config.AutoRouterModel {
+					autoRouterCostTier = config.AutoRouterCostLow
+				}
+
+				client := openai.NewClient(
+					config.Config{
+						ReviewPolicy: policytest.Load(t),
+						Providers: []config.ProviderConfig{
+							{
+								ID:                 "openrouter",
+								BaseURL:            mustParseURL(t, server.URL),
+								APIKey:             testAPIKeyValue(),
+								Model:              routerModel,
+								AutoRouterCostTier: autoRouterCostTier,
+							},
+						},
+					},
+					server.Client(),
+				)
+				ctx, recorder := review.WithUsageRecorder(context.Background())
+
+				completion, err := client.Review(ctx, "review input")
+				if err != nil {
+					t.Fatalf("Review: %v", err)
+				}
+
+				if completion.Model != selectedModel {
+					t.Fatalf("completion model = %q, want %q", completion.Model, selectedModel)
+				}
+
+				if usage := recorder.Summary(); len(usage.Models) != 1 ||
+					usage.Models[0].RequestedModel != routerModel ||
+					usage.Models[0].Model != selectedModel {
+					t.Fatalf("usage models = %+v, want requested and selected models", usage.Models)
+				}
+			},
+		)
 	}
 }
 
@@ -151,20 +224,35 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1", state.requestCount)
 	}
 
 	request := state.lastRequest
 	if request.Method != http.MethodPost || request.URL.Path != "/responses" {
-		t.Fatalf("request = %s %s, want POST /responses at the configured base URL", request.Method, request.URL.Path)
+		t.Fatalf(
+			"request = %s %s, want POST /responses at the configured base URL",
+			request.Method,
+			request.URL.Path,
+		)
 	}
+
 	if request.Header.Get("Authorization") != "Bearer "+testAPIKeyValue() {
-		t.Fatalf("Authorization = %q, want Bearer prefix with api key", request.Header.Get("Authorization"))
+		t.Fatalf(
+			"Authorization = %q, want Bearer prefix with api key",
+			request.Header.Get("Authorization"),
+		)
 	}
+
 	if request.Header.Get("Cf-Access-Client-Id") != testCFClientIDValue() {
-		t.Fatalf("Cf-Access-Client-Id = %q, want %q", request.Header.Get("Cf-Access-Client-Id"), testCFClientIDValue())
+		t.Fatalf(
+			"Cf-Access-Client-Id = %q, want %q",
+			request.Header.Get("Cf-Access-Client-Id"),
+			testCFClientIDValue(),
+		)
 	}
+
 	if request.Header.Get("Cf-Access-Client-Secret") != testCFClientSecretValue() {
 		t.Fatalf("Cf-Access-Client-Secret mismatch")
 	}
@@ -173,45 +261,68 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if body["model"] != testPrimaryModel {
 		t.Fatalf("model = %v, want %q", body["model"], testPrimaryModel)
 	}
+
 	reasoning, ok := body["reasoning"].(map[string]any)
 	if !ok || reasoning["effort"] != string(config.DefaultReasoningEffort) {
 		t.Fatalf("reasoning = %v, want effort %q", body["reasoning"], config.DefaultReasoningEffort)
 	}
+
 	if body["max_output_tokens"] != float64(config.MaximumOutputTokens) {
-		t.Fatalf("max_output_tokens = %v, want %d", body["max_output_tokens"], config.MaximumOutputTokens)
+		t.Fatalf(
+			"max_output_tokens = %v, want %d",
+			body["max_output_tokens"],
+			config.MaximumOutputTokens,
+		)
 	}
+
 	if body["stream"] != true {
 		t.Fatalf("stream = %v, want true", body["stream"])
 	}
+
 	if body["store"] != false {
 		t.Fatalf("store = %v, want false", body["store"])
 	}
+
 	if body["input"] != "review input" {
 		t.Fatalf("input = %v, want review input", body["input"])
 	}
+
 	systemContent, ok := body["instructions"].(string)
 	if !ok {
 		t.Fatalf("instructions = %v, want string", body["instructions"])
 	}
+
 	configuredPolicy, err := review.PolicyHeader(policytest.Load(t), 7, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !strings.Contains(systemContent, configuredPolicy) {
 		t.Fatalf("system message missing configured review rules")
 	}
-	if !strings.Contains(systemContent, "importance 7 or higher") {
-		t.Fatalf("system message missing configured importance")
+
+	if !strings.Contains(
+		systemContent,
+		"Classify every concrete defect from importance 1 through 10.",
+	) ||
+		strings.Contains(systemContent, "importance 7 or higher") {
+		t.Fatal(
+			"The system instructions must classify every score without repeating the startup publication threshold.",
+		)
 	}
+
 	if strings.Contains(systemContent, "security breach") {
 		t.Fatalf("system message restricts configurable importance to fixed categories")
 	}
+
 	if !strings.Contains(systemContent, "Return only JSON") {
 		t.Fatalf("system message missing JSON-only fallback")
 	}
+
 	if !strings.Contains(systemContent, `"findings"`) {
 		t.Fatalf("system message missing review schema fallback")
 	}
+
 	// Coverage is a fact about what this service handed the model, so the model
 	// is never asked for it. A schema that asks anyway gets a boolean filled in
 	// blind, and one blind false used to block the whole head.
@@ -223,40 +334,50 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("text = %v, want object", body["text"])
 	}
+
 	jsonSchema, ok := textFormat["format"].(map[string]any)
 	if !ok || jsonSchema["type"] != "json_schema" {
 		t.Fatalf("text.format = %v, want json_schema type", textFormat["format"])
 	}
+
 	if jsonSchema["strict"] != true {
 		t.Fatalf("strict = %v, want true", jsonSchema["strict"])
 	}
+
 	if jsonSchema["name"] != "review_result" {
 		t.Fatalf("schema name = %v, want review_result", jsonSchema["name"])
 	}
+
 	schema, ok := jsonSchema["schema"].(map[string]any)
 	if !ok {
 		t.Fatalf("schema = %v, want object", jsonSchema["schema"])
 	}
+
 	properties, ok := schema["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("schema properties = %v, want object", schema["properties"])
 	}
+
 	findings, ok := properties["findings"].(map[string]any)
 	if !ok {
 		t.Fatalf("findings schema = %v, want object", properties["findings"])
 	}
+
 	items, ok := findings["items"].(map[string]any)
 	if !ok {
 		t.Fatalf("finding items = %v, want object", findings["items"])
 	}
+
 	findingProperties, ok := items["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("finding properties = %v, want object", items["properties"])
 	}
+
 	required, ok := items["required"].([]any)
 	if !ok {
 		t.Fatalf("finding required = %v, want array", items["required"])
 	}
+
 	// The schema is strict and refuses any property it does not name, so a
 	// field absent from properties is a field the model cannot return at all,
 	// and one absent from required is a field a strict schema rejects outright.
@@ -265,6 +386,7 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 		if !ok || property["type"] != "string" {
 			t.Fatalf("%s schema = %v, want string", field, findingProperties[field])
 		}
+
 		if !slices.Contains(required, any(field)) {
 			t.Fatalf("finding required = %v, want %s", required, field)
 		}
@@ -277,6 +399,7 @@ func TestReviewSendsExactModelHeadersPolicyAndSchema(t *testing.T) {
 // empty string is what keeps such an answer usable instead of failing the run.
 func TestReviewDecodesTheClaimAndAcceptsAnAnswerWithoutOne(t *testing.T) {
 	const claim = "the changed line writes to a nil map"
+
 	cases := []struct {
 		name    string
 		content string
@@ -284,37 +407,42 @@ func TestReviewDecodesTheClaimAndAcceptsAnAnswerWithoutOne(t *testing.T) {
 	}{
 		{
 			name: "answer carrying a claim",
-			content: `{"coverage_complete":true,"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
+			content: `{"coverage_complete":true,"inspection_requests":[],"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
 				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
 				`"evidence":"cache[key] = value","claim":"` + claim + `","suggestion":"","importance":8}]}`,
 			want: claim,
 		},
 		{
 			name: "answer from the older schema",
-			content: `{"coverage_complete":true,"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
+			content: `{"coverage_complete":true,"inspection_requests":[],"findings":[{"rule_id":"ground_findings","path":"main.go","start_line":2,` +
 				`"end_line":2,"title":"Nil map write","body":"The changed line writes to a nil map.",` +
 				`"evidence":"cache[key] = value","suggestion":"","importance":8}]}`,
 			want: "",
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			client, server, state := newTestClient(t)
-			defer server.Close()
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				client, server, state := newTestClient(t)
+				defer server.Close()
 
-			state.completionContent = testCase.content
+				state.completionContent = testCase.content
 
-			completion, err := client.Review(context.Background(), "prompt")
-			if err != nil {
-				t.Fatalf("Review: %v", err)
-			}
-			if len(completion.Result.Findings) != 1 {
-				t.Fatalf("findings = %d, want 1", len(completion.Result.Findings))
-			}
-			if got := completion.Result.Findings[0].Claim; got != testCase.want {
-				t.Fatalf("claim = %q, want %q", got, testCase.want)
-			}
-		})
+				completion, err := client.Review(context.Background(), "prompt")
+				if err != nil {
+					t.Fatalf("Review: %v", err)
+				}
+
+				if len(completion.Result.Findings) != 1 {
+					t.Fatalf("findings = %d, want 1", len(completion.Result.Findings))
+				}
+
+				if got := completion.Result.Findings[0].Claim; got != testCase.want {
+					t.Fatalf("claim = %q, want %q", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -323,10 +451,12 @@ func TestReviewRejectsInvalidFindings(t *testing.T) {
 	defer server.Close()
 
 	state.completionContent = `{"findings":[{"path":"a.go","start_line":1,"end_line":1,"title":"t","body":"b","importance":0}]}`
+
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review with invalid importance: want error")
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
 	}
@@ -345,6 +475,7 @@ func TestReviewDoesNotRetryTransientHTTPFailures(t *testing.T) {
 	if _, err := client.Review(context.Background(), "prompt"); err == nil {
 		t.Fatal("Review: want the first HTTP failure")
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
 	}
@@ -360,11 +491,13 @@ func TestReviewDoesNotRetryAuthenticationFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want authentication error")
 	}
+
 	for _, detail := range []string{"HTTP 401 Unauthorized", "request_failed", "request failed"} {
 		if !strings.Contains(err.Error(), detail) {
 			t.Fatalf("error = %q, want %q", err, detail)
 		}
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1", state.requestCount)
 	}
@@ -387,6 +520,7 @@ func TestReviewReportsGatewayFoldedUpstreamMessage(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want provider error")
 	}
+
 	if !strings.Contains(err.Error(), "You have used all included usage.") {
 		t.Fatalf("error = %q, want the folded upstream message", err)
 	}
@@ -395,13 +529,16 @@ func TestReviewReportsGatewayFoldedUpstreamMessage(t *testing.T) {
 	if !errors.As(err, &providerError) {
 		t.Fatalf("error = %q, want a *openai.ProviderError", err)
 	}
+
 	if !providerError.UsageExceeded() {
 		t.Fatalf("UsageExceeded() = false for %q, want true", err)
 	}
+
 	var reported interface{ ProviderStatus() review.ProviderStatus }
 	if !errors.As(err, &reported) {
 		t.Fatalf("error = %q, want provider status", err)
 	}
+
 	status := reported.ProviderStatus()
 	if status.Model != testPrimaryModel || status.Cause != review.ProviderUsageExhausted {
 		t.Fatalf("provider status = %+v", status)
@@ -415,9 +552,13 @@ func TestProviderErrorClassifiesUsageExhaustion(t *testing.T) {
 		want          bool
 	}{
 		{
-			name:          "openai insufficient quota",
-			providerError: openai.ProviderError{StatusCode: 429, Type: "insufficient_quota", Code: "insufficient_quota"},
-			want:          true,
+			name: "openai insufficient quota",
+			providerError: openai.ProviderError{
+				StatusCode: 429,
+				Type:       "insufficient_quota",
+				Code:       "insufficient_quota",
+			},
+			want: true,
 		},
 		{
 			name: "gateway folded usage limit",
@@ -456,11 +597,14 @@ func TestProviderErrorClassifiesUsageExhaustion(t *testing.T) {
 		},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			if got := testCase.providerError.UsageExceeded(); got != testCase.want {
-				t.Fatalf("UsageExceeded() = %v, want %v", got, testCase.want)
-			}
-		})
+		t.Run(
+			testCase.name,
+			func(t *testing.T) {
+				if got := testCase.providerError.UsageExceeded(); got != testCase.want {
+					t.Fatalf("UsageExceeded() = %v, want %v", got, testCase.want)
+				}
+			},
+		)
 	}
 }
 
@@ -469,9 +613,12 @@ func TestReviewRejectsUnterminatedStream(t *testing.T) {
 	defer server.Close()
 
 	state.streamResponse = func(writer http.ResponseWriter) {
-		writeStreamFrames(writer, []map[string]any{
-			responseTextDelta(validReviewContent()),
-		})
+		writeStreamFrames(
+			writer,
+			[]map[string]any{
+				responseTextDelta(validReviewContent()),
+			},
+		)
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
@@ -485,23 +632,29 @@ func TestReviewRejectsIncompleteFinishReason(t *testing.T) {
 	defer server.Close()
 
 	state.streamResponse = func(writer http.ResponseWriter) {
-		writeStreamFrames(writer, []map[string]any{
-			responseTextDelta(validReviewContent()),
-			responseIncomplete(validReviewContent()),
-		})
+		writeStreamFrames(
+			writer,
+			[]map[string]any{
+				responseTextDelta(validReviewContent()),
+				responseIncomplete(validReviewContent()),
+			},
+		)
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review: want a truncated answer error")
 	}
+
 	var truncatedError *openai.TruncatedError
 	if !errors.As(err, &truncatedError) {
 		t.Fatalf("error = %q, want a *openai.TruncatedError", err)
 	}
+
 	if truncatedError.Model != testPrimaryModel {
 		t.Fatalf("model = %q, want %q", truncatedError.Model, testPrimaryModel)
 	}
+
 	if !truncatedError.Truncated() {
 		t.Fatalf("Truncated() = false for %q, want true", err)
 	}
@@ -512,20 +665,25 @@ func TestReviewRejectsIncompleteFinishReason(t *testing.T) {
 func TestTruncatedAnswerDoesNotEngageTheFallback(t *testing.T) {
 	fixture := newFallbackTestClient(t, false)
 	fixture.primary.streamResponse = func(writer http.ResponseWriter) {
-		writeStreamFrames(writer, []map[string]any{
-			responseTextDelta(validReviewContent()),
-			responseIncomplete(validReviewContent()),
-		})
+		writeStreamFrames(
+			writer,
+			[]map[string]any{
+				responseTextDelta(validReviewContent()),
+				responseIncomplete(validReviewContent()),
+			},
+		)
 	}
 
 	_, err := fixture.client.Review(context.Background(), "prompt")
 	if err == nil {
 		t.Fatal("Review: want a truncated answer error")
 	}
+
 	var truncatedError *openai.TruncatedError
 	if !errors.As(err, &truncatedError) {
 		t.Fatalf("error = %q, want a *openai.TruncatedError", err)
 	}
+
 	if fixture.fallback.requestCount != 0 {
 		t.Fatalf("fallback request count = %d, want 0", fixture.fallback.requestCount)
 	}
@@ -571,9 +729,11 @@ func TestReconcileAcceptsOnlyKnownResolutionValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if len(resolutions) != 3 {
 		t.Fatalf("resolution count = %d, want 3", len(resolutions))
 	}
+
 	if resolutions[0].Resolution != domain.ResolutionResolved {
 		t.Fatalf("first resolution = %q, want resolved", resolutions[0].Resolution)
 	}
@@ -589,6 +749,7 @@ func TestReconcileRejectsDuplicateThreadIDs(t *testing.T) {
 	if err == nil {
 		t.Fatal("Reconcile duplicate thread ids: want error")
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
 	}
@@ -607,9 +768,11 @@ func TestConsolidateAcceptsAWellFormedGrouping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Consolidate: %v", err)
 	}
+
 	if len(consolidation.Groups) != 1 {
 		t.Fatalf("group count = %d, want 1", len(consolidation.Groups))
 	}
+
 	if len(consolidation.Groups[0].Candidates) != 2 {
 		t.Fatalf("candidates = %v, want two", consolidation.Groups[0].Candidates)
 	}
@@ -626,6 +789,7 @@ func TestConsolidateRejectsACandidateInTwoGroups(t *testing.T) {
 	if err == nil {
 		t.Fatal("Consolidate a candidate in two groups: want error")
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
 	}
@@ -644,6 +808,7 @@ func TestConsolidateRejectsACandidateNumberBelowTheFirst(t *testing.T) {
 	if err == nil {
 		t.Fatal("Consolidate a candidate number below the first: want error")
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", state.requestCount)
 	}
@@ -656,12 +821,15 @@ func TestFallbackStaysUnusedWhenThePrimaryAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	if completion.Model != testPrimaryModel {
 		t.Fatalf("model = %q, want the primary model %q", completion.Model, testPrimaryModel)
 	}
+
 	if fixture.primary.requestCount != 1 {
 		t.Fatalf("primary request count = %d, want 1", fixture.primary.requestCount)
 	}
+
 	if fixture.fallback.requestCount != 0 {
 		t.Fatalf("fallback request count = %d, want 0", fixture.fallback.requestCount)
 	}
@@ -669,38 +837,59 @@ func TestFallbackStaysUnusedWhenThePrimaryAnswers(t *testing.T) {
 
 func TestConfiguredProviderOrderContinuesAfterUsageLimits(t *testing.T) {
 	states := []*testServerState{
-		{completionContent: validReviewContent(), statusSequence: []int{http.StatusBadRequest}, errorPayload: gatewayUsageExceededPayload()},
-		{completionContent: validReviewContent(), statusSequence: []int{http.StatusBadRequest}, errorPayload: gatewayUsageExceededPayload()},
+		{
+			completionContent: validReviewContent(),
+			statusSequence:    []int{http.StatusBadRequest},
+			errorPayload:      gatewayUsageExceededPayload(),
+		},
+		{
+			completionContent: validReviewContent(),
+			statusSequence:    []int{http.StatusBadRequest},
+			errorPayload:      gatewayUsageExceededPayload(),
+		},
 		{completionContent: validReviewContent()},
 	}
+
 	providers := make([]config.ProviderConfig, 0, len(states))
 	for index, state := range states {
 		server := newProviderServer(state)
 		t.Cleanup(server.Close)
-		providers = append(providers, config.ProviderConfig{
-			BaseURL:             mustParseURL(t, server.URL),
-			Model:               "model-" + strconv.Itoa(index),
-			APIKey:              testAPIKeyValue(),
-			OmitMaxOutputTokens: index == 2,
-			OmitTextFormat:      index == 2,
-		})
+		providers = append(
+			providers,
+			config.ProviderConfig{
+				BaseURL:             mustParseURL(t, server.URL),
+				Model:               "model-" + strconv.Itoa(index),
+				APIKey:              testAPIKeyValue(),
+				OmitMaxOutputTokens: index == 2,
+				OmitTextFormat:      index == 2,
+			},
+		)
 	}
-	client := openai.NewClient(config.Config{ReviewPolicy: policytest.Load(t), Providers: providers, MinimumImportance: 7}, nil)
+
+	client := openai.NewClient(
+		config.Config{ReviewPolicy: policytest.Load(t), Providers: providers, MinimumImportance: 7},
+		nil,
+	)
+
 	completion, err := client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	if completion.Model != "model-2" {
 		t.Fatalf("model = %q, want model-2", completion.Model)
 	}
+
 	for index, state := range states {
 		if state.requestCount != 1 {
 			t.Fatalf("provider %d request count = %d, want 1", index, state.requestCount)
 		}
 	}
+
 	if _, sent := states[2].lastRequestBody["max_output_tokens"]; sent {
 		t.Fatal("Codex provider request included max_output_tokens")
 	}
+
 	if _, sent := states[2].lastRequestBody["text"]; sent {
 		t.Fatal("Codex provider request included text format")
 	}
@@ -714,6 +903,7 @@ func TestDisabledProviderReceivesNoRequests(t *testing.T) {
 	}
 	disabled := &testServerState{completionContent: validReviewContent()}
 	secondary := &testServerState{completionContent: validReviewContent()}
+
 	servers := []*httptest.Server{
 		newProviderServer(primary),
 		newProviderServer(disabled),
@@ -722,22 +912,59 @@ func TestDisabledProviderReceivesNoRequests(t *testing.T) {
 	for _, server := range servers {
 		t.Cleanup(server.Close)
 	}
-	client := openai.NewClient(config.Config{
-		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
-		Providers: []config.ProviderConfig{
-			{ID: "primary", BaseURL: mustParseURL(t, servers[0].URL), Model: "primary-model", APIKey: testAPIKeyValue()},
-			{ID: "clyde", BaseURL: mustParseURL(t, servers[1].URL), Model: "clyde-model", APIKey: testFallbackAPIKeyValue(), Disabled: true},
-			{ID: "secondary", BaseURL: mustParseURL(t, servers[2].URL), Model: "secondary-model", APIKey: testAPIKeyValue()},
+
+	policy := policytest.Load(t)
+	primaryURL := mustParseURL(t, servers[0].URL)
+	primaryKey := testAPIKeyValue()
+	disabledURL := mustParseURL(t, servers[1].URL)
+	fixtureAPIKey := testFallbackAPIKeyValue()
+	secondaryURL := mustParseURL(t, servers[2].URL)
+	secondaryKey := testAPIKeyValue()
+
+	client := openai.NewClient(
+		config.Config{
+			ReviewPolicy:      policy,
+			MinimumImportance: 7,
+			Providers: []config.ProviderConfig{
+				{
+					ID:      "primary",
+					BaseURL: primaryURL,
+					Model:   "primary-model",
+					APIKey:  primaryKey,
+				},
+				{
+					ID:       "clyde",
+					BaseURL:  disabledURL,
+					Model:    "clyde-model",
+					APIKey:   fixtureAPIKey,
+					Disabled: true,
+				},
+				{
+					ID:      "secondary",
+					BaseURL: secondaryURL,
+					Model:   "secondary-model",
+					APIKey:  secondaryKey,
+				},
+			},
 		},
-	}, nil)
+		nil,
+	)
 
 	completion, err := client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	if completion.Model != "secondary-model" || primary.requestCount != 1 || disabled.requestCount != 0 || secondary.requestCount != 1 {
-		t.Fatalf("model = %q, requests = primary %d, disabled %d, secondary %d",
-			completion.Model, primary.requestCount, disabled.requestCount, secondary.requestCount)
+
+	if completion.Model != "secondary-model" || primary.requestCount != 1 ||
+		disabled.requestCount != 0 ||
+		secondary.requestCount != 1 {
+		t.Fatalf(
+			"model = %q, requests = primary %d, disabled %d, secondary %d",
+			completion.Model,
+			primary.requestCount,
+			disabled.requestCount,
+			secondary.requestCount,
+		)
 	}
 }
 
@@ -745,74 +972,140 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 	primaryState := &testServerState{completionContent: validReviewContent()}
 	primaryServer := newProviderServer(primaryState)
 	t.Cleanup(primaryServer.Close)
+
 	secondaryState := &testServerState{completionContent: validReviewContent()}
 	secondaryServer := newProviderServer(secondaryState)
 	t.Cleanup(secondaryServer.Close)
 
 	signingKey := []byte("fixture-budget-signing-key")
 	reservationCount := 0
-	budgetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			t.Errorf("read reservation: %v", err)
-			writer.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if request.Header.Get("X-Pr-Agent-Budget-Signature") != telemetry.Sign(signingKey, body) {
-			t.Error("budget request has an invalid signature")
-			writer.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		var admission struct {
-			ProviderID string `json:"provider_id"`
-			Model      string `json:"model"`
-			Limit      int64  `json:"limit"`
-		}
-		if err := json.Unmarshal(body, &admission); err != nil {
-			t.Errorf("decode admission: %v", err)
-			writer.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if admission.ProviderID != "capped" || admission.Model != testPrimaryModel || admission.Limit != 2_000_000 {
-			t.Errorf("admission = %+v", admission)
-		}
-		reservationCount++
-		writeJSON(writer, http.StatusOK, map[string]any{
-			"allowed": false, "day": "2026-09-29", "used": 2_000_000,
-			"limit": 2_000_000, "remaining": 0,
-		})
-	}))
+	budgetServer := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				t.Errorf("read reservation: %v", err)
+				writer.WriteHeader(http.StatusBadRequest)
+
+				return
+			}
+
+			if request.Header.Get("X-Pr-Agent-Budget-Signature") != telemetry.Sign(
+				signingKey,
+				body,
+			) {
+				t.Error("budget request has an invalid signature")
+				writer.WriteHeader(http.StatusUnauthorized)
+
+				return
+			}
+
+			var admission struct {
+				ProviderID string `json:"provider_id"`
+				Model      string `json:"model"`
+				Limit      int64  `json:"limit"`
+			}
+			if err := json.Unmarshal(body, &admission); err != nil {
+				t.Errorf("decode admission: %v", err)
+				writer.WriteHeader(http.StatusBadRequest)
+
+				return
+			}
+
+			if admission.ProviderID != "capped" || admission.Model != testPrimaryModel ||
+				admission.Limit != 2_000_000 {
+				t.Errorf("admission = %+v", admission)
+			}
+
+			reservationCount++
+
+			writeJSON(
+				writer,
+				http.StatusOK,
+				map[string]any{
+					"allowed":   false,
+					"day":       "2026-09-29",
+					"used":      2_000_000,
+					"limit":     2_000_000,
+					"remaining": 0,
+				},
+			)
+		}),
+	)
 	t.Cleanup(budgetServer.Close)
 
-	client := openai.NewClient(config.Config{
-		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
-		GitHubWebhookSecret: signingKey, // gitleaks:allow
-		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
-		Providers: []config.ProviderConfig{
-			{ID: "capped", BaseURL: mustParseURL(t, primaryServer.URL), Model: testPrimaryModel, APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000},
-			{ID: "uncapped", BaseURL: mustParseURL(t, secondaryServer.URL), Model: testFallbackModel, APIKey: testFallbackAPIKeyValue()}, // gitleaks:allow
+	policy := policytest.Load(t)
+	budgetURL := mustParseURL(t, budgetServer.URL)
+	primaryURL := mustParseURL(t, primaryServer.URL)
+	primaryKey := testAPIKeyValue()
+	secondaryURL := mustParseURL(t, secondaryServer.URL)
+	fixtureAPIKey := testFallbackAPIKeyValue()
+
+	client := openai.NewClient(
+		config.Config{
+			ReviewPolicy:        policy,
+			MinimumImportance:   7,
+			GitHubWebhookSecret: signingKey, // gitleaks:allow
+			ProviderBudgetURL:   budgetURL,
+			Providers: []config.ProviderConfig{
+				{
+					ID:              "capped",
+					BaseURL:         primaryURL,
+					Model:           testPrimaryModel,
+					APIKey:          primaryKey,
+					DailyTokenLimit: 2_000_000,
+				},
+				{
+					ID:      "uncapped",
+					BaseURL: secondaryURL,
+					Model:   testFallbackModel,
+					APIKey:  fixtureAPIKey,
+				}, // gitleaks:allow
+			},
 		},
-	}, budgetServer.Client())
+		budgetServer.Client(),
+	)
+
 	completion, err := client.Review(context.Background(), "prompt")
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
-	if completion.Model != testFallbackModel || primaryState.requestCount != 0 || secondaryState.requestCount != 1 || reservationCount != 1 {
-		t.Fatalf("model = %q, primary requests = %d, secondary requests = %d, reservations = %d", completion.Model, primaryState.requestCount, secondaryState.requestCount, reservationCount)
+
+	if completion.Model != testFallbackModel || primaryState.requestCount != 0 ||
+		secondaryState.requestCount != 1 ||
+		reservationCount != 1 {
+		t.Fatalf(
+			"model = %q, primary requests = %d, secondary requests = %d, reservations = %d",
+			completion.Model,
+			primaryState.requestCount,
+			secondaryState.requestCount,
+			reservationCount,
+		)
 	}
-	cappedClient := openai.NewClient(config.Config{
-		ReviewPolicy: policytest.Load(t), GitHubWebhookSecret: signingKey, // gitleaks:allow
-		ProviderBudgetURL: mustParseURL(t, budgetServer.URL),
-		Providers: []config.ProviderConfig{{
-			ID: "capped", BaseURL: mustParseURL(t, primaryServer.URL), Model: testPrimaryModel,
-			APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000,
-		}},
-	}, budgetServer.Client())
+
+	cappedClient := openai.NewClient(
+		config.Config{
+			ReviewPolicy:        policytest.Load(t),
+			GitHubWebhookSecret: signingKey, // gitleaks:allow
+			ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
+			Providers: []config.ProviderConfig{
+				{
+					ID:              "capped",
+					BaseURL:         mustParseURL(t, primaryServer.URL),
+					Model:           testPrimaryModel,
+					APIKey:          testAPIKeyValue(),
+					DailyTokenLimit: 2_000_000,
+				},
+			},
+		},
+		budgetServer.Client(),
+	)
 	_, err = cappedClient.Review(context.Background(), "prompt")
+
 	var reported interface{ ProviderStatus() review.ProviderStatus }
 	if !errors.As(err, &reported) {
 		t.Fatalf("denied review error = %v, want provider status", err)
 	}
+
 	status := reported.ProviderStatus()
 	if status.ProviderID != "capped" || status.Model != testPrimaryModel || !status.QuotaKnown ||
 		status.Used != 2_000_000 || status.Limit != 2_000_000 || status.Remaining != 0 ||
@@ -824,12 +1117,21 @@ func TestDailyBudgetDenialUsesNextProvider(t *testing.T) {
 func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 	providerState := &testServerState{completionContent: validReviewContent()}
 	providerState.streamResponse = func(writer http.ResponseWriter) {
-		writeStreamFrames(writer, []map[string]any{
-			responseTextDelta(validReviewContent()),
-			responseCompleted(validReviewContent(), testPrimaryModel, map[string]any{
-				"input_tokens": 1000, "output_tokens": 200, "total_tokens": 1200,
-			}),
-		})
+		writeStreamFrames(
+			writer,
+			[]map[string]any{
+				responseTextDelta(validReviewContent()),
+				responseCompleted(
+					validReviewContent(),
+					testPrimaryModel,
+					map[string]any{
+						"input_tokens":  1000,
+						"output_tokens": 200,
+						"total_tokens":  1200,
+					},
+				),
+			},
+		)
 	}
 	providerServer := newProviderServer(providerState)
 	t.Cleanup(providerServer.Close)
@@ -838,58 +1140,100 @@ func TestDailyBudgetReportsProviderUsage(t *testing.T) {
 	checkCount := 0
 	reportCount := 0
 	reportedTokens := int64(0)
-	budgetServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil || request.Header.Get("X-Pr-Agent-Budget-Signature") != telemetry.Sign(signingKey, body) {
-			writer.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		var payload struct {
-			ProviderID string `json:"provider_id"`
-			Model      string `json:"model"`
-			Day        string `json:"legacy_day"`
-			Tokens     int64  `json:"legacy_tokens"`
-			Limit      int64  `json:"limit"`
-		}
-		if err := json.Unmarshal(body, &payload); err != nil || payload.ProviderID != "capped" || payload.Model != testPrimaryModel {
-			writer.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if payload.Day == "" {
-			checkCount++
-			writeJSON(writer, http.StatusOK, map[string]any{
-				"allowed": reportedTokens < payload.Limit, "day": "2026-09-29",
-				"used": reportedTokens, "limit": payload.Limit, "remaining": payload.Limit - reportedTokens,
-			})
-			return
-		}
-		if payload.Day != "2026-09-29" {
-			writer.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		reportCount++
-		reportedTokens += payload.Tokens
-		writeJSON(writer, http.StatusOK, map[string]bool{"reported": true})
-	}))
+	budgetServer := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			body, err := io.ReadAll(request.Body)
+			if err != nil ||
+				request.Header.Get("X-Pr-Agent-Budget-Signature") != telemetry.Sign(
+					signingKey,
+					body,
+				) {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			var payload struct {
+				ProviderID string `json:"provider_id"`
+				Model      string `json:"model"`
+				Day        string `json:"legacy_day"`
+				Tokens     int64  `json:"legacy_tokens"`
+				Limit      int64  `json:"limit"`
+			}
+			if err := json.Unmarshal(
+				body,
+				&payload,
+			); err != nil || payload.ProviderID != "capped" ||
+				payload.Model != testPrimaryModel {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			if payload.Day == "" {
+				checkCount++
+
+				writeJSON(
+					writer,
+					http.StatusOK,
+					map[string]any{
+						"allowed":   reportedTokens < payload.Limit,
+						"day":       "2026-09-29",
+						"used":      reportedTokens,
+						"limit":     payload.Limit,
+						"remaining": payload.Limit - reportedTokens,
+					},
+				)
+
+				return
+			}
+
+			if payload.Day != "2026-09-29" {
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			reportCount++
+			reportedTokens += payload.Tokens
+
+			writeJSON(writer, http.StatusOK, map[string]bool{"reported": true})
+		}),
+	)
 	t.Cleanup(budgetServer.Close)
 
-	client := openai.NewClient(config.Config{
-		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
-		GitHubWebhookSecret: signingKey, // gitleaks:allow
-		ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
-		Providers: []config.ProviderConfig{{
-			ID: "capped", BaseURL: mustParseURL(t, providerServer.URL),
-			Model: testPrimaryModel, APIKey: testAPIKeyValue(), DailyTokenLimit: 2_000_000,
-			DailyTokenTypes: []config.TokenType{config.InputTokens},
-		}},
-	}, budgetServer.Client())
+	client := openai.NewClient(
+		config.Config{
+			ReviewPolicy:        policytest.Load(t),
+			MinimumImportance:   7,
+			GitHubWebhookSecret: signingKey, // gitleaks:allow
+			ProviderBudgetURL:   mustParseURL(t, budgetServer.URL),
+			Providers: []config.ProviderConfig{
+				{
+					ID:              "capped",
+					BaseURL:         mustParseURL(t, providerServer.URL),
+					Model:           testPrimaryModel,
+					APIKey:          testAPIKeyValue(),
+					DailyTokenLimit: 2_000_000,
+					DailyTokenTypes: []config.TokenType{config.InputTokens},
+				},
+			},
+		},
+		budgetServer.Client(),
+	)
+
 	for range 2 {
 		if _, err := client.Review(context.Background(), "prompt"); err != nil {
 			t.Fatalf("Review: %v", err)
 		}
 	}
-	if checkCount != 2 || reportCount != 2 || reportedTokens != 2000 || providerState.requestCount != 2 {
-		t.Fatalf("checks = %d, reports = %d, tokens = %d, provider requests = %d", checkCount, reportCount, reportedTokens, providerState.requestCount)
+
+	if checkCount != 2 || reportCount != 2 || reportedTokens != 2000 ||
+		providerState.requestCount != 2 {
+		t.Fatalf(
+			"checks = %d, reports = %d, tokens = %d, provider requests = %d",
+			checkCount,
+			reportCount,
+			reportedTokens,
+			providerState.requestCount,
+		)
 	}
 }
 
@@ -902,9 +1246,11 @@ func TestFallbackAnswersWhenThePrimaryReportsExhaustedUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	if completion.Model != testFallbackModel {
 		t.Fatalf("model = %q, want the fallback model %q", completion.Model, testFallbackModel)
 	}
+
 	if fixture.fallback.requestCount != 1 {
 		t.Fatalf("fallback request count = %d, want 1", fixture.fallback.requestCount)
 	}
@@ -913,10 +1259,12 @@ func TestFallbackAnswersWhenThePrimaryReportsExhaustedUsage(t *testing.T) {
 	if body["model"] != testFallbackModel {
 		t.Fatalf("fallback model = %v, want %q", body["model"], testFallbackModel)
 	}
+
 	authorization := fixture.fallback.lastRequest.Header.Get("Authorization")
 	if authorization != "Bearer "+testFallbackAPIKeyValue() {
 		t.Fatalf("fallback Authorization = %q, want the fallback key", authorization)
 	}
+
 	if header := fixture.fallback.lastRequest.Header.Get("Cf-Access-Client-Id"); header != "" {
 		t.Fatalf("Cf-Access-Client-Id = %q, want none for a public endpoint", header)
 	}
@@ -936,9 +1284,11 @@ func TestFallbackAnswersOpenAIQuotaFailureAndReturnsToPrimaryAfterRecovery(t *te
 	if err != nil {
 		t.Fatalf("quota Review: %v", err)
 	}
+
 	if completion.Model != testFallbackModel {
 		t.Fatalf("quota model = %q, want %q", completion.Model, testFallbackModel)
 	}
+
 	if fixture.fallback.lastRequest.Header.Get("Cf-Access-Client-Id") != testCFClientIDValue() {
 		t.Fatal("fallback did not receive its configured Access credentials")
 	}
@@ -947,15 +1297,24 @@ func TestFallbackAnswersOpenAIQuotaFailureAndReturnsToPrimaryAfterRecovery(t *te
 	if err != nil {
 		t.Fatalf("recovered Review: %v", err)
 	}
+
 	if completion.Model != testPrimaryModel {
 		t.Fatalf("recovered model = %q, want %q", completion.Model, testPrimaryModel)
 	}
+
 	if fixture.primary.requestCount != 2 || fixture.fallback.requestCount != 1 {
-		t.Fatalf("requests = primary %d, fallback %d, want 2 and 1",
-			fixture.primary.requestCount, fixture.fallback.requestCount)
+		t.Fatalf(
+			"requests = primary %d, fallback %d, want 2 and 1",
+			fixture.primary.requestCount,
+			fixture.fallback.requestCount,
+		)
 	}
+
 	if recorder.Summary().Requests != 3 {
-		t.Fatalf("recorded requests = %d, want 3 including the quota refusal", recorder.Summary().Requests)
+		t.Fatalf(
+			"recorded requests = %d, want 3 including the quota refusal",
+			recorder.Summary().Requests,
+		)
 	}
 }
 
@@ -967,11 +1326,15 @@ func TestFallbackSendsAccessHeadersOnlyWhenConfigured(t *testing.T) {
 	if _, err := fixture.client.Review(context.Background(), "prompt"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	header := fixture.fallback.lastRequest.Header.Get("Cf-Access-Client-Id")
 	if header != testCFClientIDValue() {
 		t.Fatalf("Cf-Access-Client-Id = %q, want %q", header, testCFClientIDValue())
 	}
-	if fixture.fallback.lastRequest.Header.Get("Cf-Access-Client-Secret") != testCFClientSecretValue() {
+
+	if fixture.fallback.lastRequest.Header.Get(
+		"Cf-Access-Client-Secret",
+	) != testCFClientSecretValue() {
 		t.Fatal("fallback Cf-Access-Client-Secret mismatch")
 	}
 }
@@ -985,6 +1348,7 @@ func TestReconcileUsesTheFallbackToo(t *testing.T) {
 	if _, err := fixture.client.Reconcile(context.Background(), "prompt"); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
+
 	if fixture.fallback.requestCount != 1 {
 		t.Fatalf("fallback request count = %d, want 1", fixture.fallback.requestCount)
 	}
@@ -1004,9 +1368,11 @@ func TestFallbackStaysUnusedForAFailureThatIsNotExhaustedUsage(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want the primary error")
 	}
+
 	if !strings.Contains(err.Error(), "upstream_malformed_request") {
 		t.Fatalf("err = %q, want the primary cause", err)
 	}
+
 	if fixture.fallback.requestCount != 0 {
 		t.Fatalf("fallback request count = %d, want 0", fixture.fallback.requestCount)
 	}
@@ -1022,18 +1388,24 @@ func TestFallbackEngagesForUsageExhaustionReportedInAStream(t *testing.T) {
 	fixture.primary.streamResponse = func(writer http.ResponseWriter) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
-		_, _ = writer.Write([]byte(`data: {"error":{"message":"scan codex SSE events: ` +
-			`The usage limit has been reached","type":"invalid_request_error",` +
-			`"code":"upstream_failed"}}` + "\n\n"))
+		_, _ = writer.Write(
+			[]byte(
+				`data: {"error":{"message":"scan codex SSE events: ` +
+					`The usage limit has been reached","type":"invalid_request_error",` +
+					`"code":"upstream_failed"}}` + "\n\n",
+			),
+		)
 	}
 	fixture.fallback.completionContent = validReviewContent()
 
 	if _, err := fixture.client.Review(context.Background(), "prompt"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	if got := atomic.LoadInt32(&fixture.fallback.requestCount); got != 1 {
 		t.Fatalf("fallback request count = %d, want 1", got)
 	}
+
 	if got := atomic.LoadInt32(&fixture.primary.requestCount); got != 1 {
 		t.Fatalf("primary request count = %d, want 1 without a retry", got)
 	}
@@ -1048,9 +1420,11 @@ func TestFallbackStaysUnusedForADroppedStream(t *testing.T) {
 	if _, err := fixture.client.Review(context.Background(), "prompt"); err == nil {
 		t.Fatal("Review: want the stream failure")
 	}
+
 	if got := atomic.LoadInt32(&fixture.fallback.requestCount); got != 0 {
 		t.Fatalf("fallback request count = %d, want 0", got)
 	}
+
 	if got := atomic.LoadInt32(&fixture.primary.requestCount); got != 1 {
 		t.Fatalf("primary request count = %d, want 1 without retry", got)
 	}
@@ -1066,9 +1440,11 @@ func TestBothProvidersFailingReportsBothCauses(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want an error")
 	}
+
 	if !strings.Contains(err.Error(), "The usage limit has been reached") {
 		t.Fatalf("err = %q, want the primary cause", err)
 	}
+
 	if !strings.Contains(err.Error(), "HTTP 401 Unauthorized") {
 		t.Fatalf("err = %q, want the fallback cause", err)
 	}
@@ -1077,6 +1453,7 @@ func TestBothProvidersFailingReportsBothCauses(t *testing.T) {
 	if !errors.As(err, &providerError) {
 		t.Fatalf("err = %q, want a *openai.ProviderError in the chain", err)
 	}
+
 	if !providerError.UsageExceeded() {
 		t.Fatalf("err = %q, want the usage classifier to still match", err)
 	}
@@ -1093,12 +1470,14 @@ func TestPrimaryErrorIsUnchangedWithoutAFallback(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want an error")
 	}
+
 	want := "model provider returned HTTP 400 Bad Request: invalid_request_error: upstream_failed: " +
 		"scan codex SSE events: The usage limit has been reached " +
 		"(Clyde request_id=chatcmpl-c6d74129dc85c5f42cd0a490)"
 	if err.Error() != want {
 		t.Fatalf("err = %q, want %q", err, want)
 	}
+
 	if state.requestCount != 1 {
 		t.Fatalf("request count = %d, want 1", state.requestCount)
 	}
@@ -1118,6 +1497,7 @@ func brokenStreamPayload() string {
 func writeBrokenStream(writer http.ResponseWriter) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
+
 	encoded, _ := json.Marshal(responseTextDelta(`{"findings":`))
 	_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	_, _ = writer.Write([]byte("data: " + brokenStreamPayload() + "\n\n"))
@@ -1133,13 +1513,16 @@ func TestReviewDoesNotRetryABrokenStream(t *testing.T) {
 	if err == nil {
 		t.Fatal("Review: want the stream failure")
 	}
+
 	var streamError *openai.StreamError
 	if !errors.As(err, &streamError) {
 		t.Fatalf("error = %q, want a *openai.StreamError", err)
 	}
+
 	if streamError.Model != testPrimaryModel {
 		t.Fatalf("model = %q, want %q", streamError.Model, testPrimaryModel)
 	}
+
 	if got := atomic.LoadInt32(&state.requestCount); got != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", got)
 	}
@@ -1154,14 +1537,19 @@ func TestReviewDoesNotRetryUsageExhaustionReportedInAStream(t *testing.T) {
 	state.streamResponse = func(writer http.ResponseWriter) {
 		writer.Header().Set("Content-Type", "text/event-stream")
 		writer.WriteHeader(http.StatusOK)
-		_, _ = writer.Write([]byte(`data: {"error":{"message":"scan codex SSE events: ` +
-			`upstream_code=usage_limit_reached","type":"invalid_request_error",` +
-			`"code":"upstream_failed"}}` + "\n\n"))
+		_, _ = writer.Write(
+			[]byte(
+				`data: {"error":{"message":"scan codex SSE events: ` +
+					`upstream_code=usage_limit_reached","type":"invalid_request_error",` +
+					`"code":"upstream_failed"}}` + "\n\n",
+			),
+		)
 	}
 
 	if _, err := client.Review(context.Background(), "prompt"); err == nil {
 		t.Fatal("Review: want the usage failure")
 	}
+
 	if got := atomic.LoadInt32(&state.requestCount); got != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", got)
 	}
@@ -1174,17 +1562,22 @@ func TestReviewDoesNotRetryATruncatedAnswer(t *testing.T) {
 	defer server.Close()
 
 	state.streamResponse = func(writer http.ResponseWriter) {
-		writeStreamFrames(writer, []map[string]any{
-			responseTextDelta(validReviewContent()),
-			responseIncomplete(validReviewContent()),
-		})
+		writeStreamFrames(
+			writer,
+			[]map[string]any{
+				responseTextDelta(validReviewContent()),
+				responseIncomplete(validReviewContent()),
+			},
+		)
 	}
 
 	_, err := client.Review(context.Background(), "prompt")
+
 	var truncatedError *openai.TruncatedError
 	if !errors.As(err, &truncatedError) {
 		t.Fatalf("error = %q, want a *openai.TruncatedError", err)
 	}
+
 	if got := atomic.LoadInt32(&state.requestCount); got != 1 {
 		t.Fatalf("request count = %d, want 1 without retry", got)
 	}
@@ -1206,28 +1599,41 @@ func TestReviewRecordsDetailedStreamUsageAndEstimatedCost(t *testing.T) {
 				"reasoning_tokens": 40,
 			},
 		}
-		writeStreamFrames(writer, []map[string]any{
-			responseTextDelta(validReviewContent()),
-			responseCompleted(validReviewContent(), testPrimaryModel+"-2026-09-13", usage),
-		})
+		writeStreamFrames(
+			writer,
+			[]map[string]any{
+				responseTextDelta(validReviewContent()),
+				responseCompleted(validReviewContent(), testPrimaryModel+"-2026-09-13", usage),
+			},
+		)
 	}
 
 	ctx, recorder := review.WithUsageRecorder(context.Background())
 	if _, err := client.Review(ctx, "prompt"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	if state.lastRequestBody["stream"] != true {
 		t.Fatalf("stream = %v, want true", state.lastRequestBody["stream"])
 	}
+
 	usage := recorder.Summary()
-	if usage.Requests != 1 || usage.ReportedRequests != 1 || usage.InputTokens != 1000 || usage.CachedInputTokens != 400 ||
-		usage.OutputTokens != 200 || usage.ReasoningTokens != 40 || usage.TotalTokens != 1200 {
+	if usage.Requests != 1 || usage.ReportedRequests != 1 || usage.InputTokens != 1000 ||
+		usage.CachedInputTokens != 400 ||
+		usage.OutputTokens != 200 ||
+		usage.ReasoningTokens != 40 ||
+		usage.TotalTokens != 1200 {
 		t.Fatalf("usage = %+v, want streamed Responses token fields", usage)
 	}
+
 	if usage.EstimatedInputCostUSD != 0.0006 || usage.EstimatedCachedInputCostUSD != 0.0001 ||
 		usage.EstimatedOutputCostUSD != 0.0004 || usage.EstimatedCostUSD != 0.0011 {
-		t.Fatalf("estimated costs = %+v, want input 0.0006, cached input 0.0001, output 0.0004, total 0.0011", usage)
+		t.Fatalf(
+			"estimated costs = %+v, want input 0.0006, cached input 0.0001, output 0.0004, total 0.0011",
+			usage,
+		)
 	}
+
 	if usage.PricedRequests != 1 || len(usage.Models) != 1 || !usage.Models[0].Priced ||
 		usage.Models[0].RequestedModel != testPrimaryModel ||
 		usage.Models[0].Model != testPrimaryModel+"-2026-09-13" {
@@ -1243,9 +1649,12 @@ func TestReviewRecordsSuccessfulRequestWithoutReportedUsage(t *testing.T) {
 	if _, err := client.Review(ctx, "prompt"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
+
 	usage := recorder.Summary()
 	if usage.Requests != 1 || usage.ReportedRequests != 0 || usage.PricedRequests != 0 ||
-		usage.TotalTokens != 0 || usage.EstimatedCostUSD != 0 || len(usage.Models) != 1 || usage.Models[0].Priced {
+		usage.TotalTokens != 0 || usage.EstimatedCostUSD != 0 || len(
+		usage.Models,
+	) != 1 || usage.Models[0].Priced {
 		t.Fatalf("usage = %+v, want one successful request without reported tokens", usage)
 	}
 }
@@ -1255,10 +1664,12 @@ func TestReviewRecordsFailedRequestWithoutReportedUsage(t *testing.T) {
 	defer server.Close()
 
 	state.statusSequence = []int{http.StatusBadRequest}
+
 	ctx, recorder := review.WithUsageRecorder(context.Background())
 	if _, err := client.Review(ctx, "prompt"); err == nil {
 		t.Fatal("Review: want provider error")
 	}
+
 	usage := recorder.Summary()
 	if usage.Requests != 1 || usage.ReportedRequests != 0 || usage.PricedRequests != 0 ||
 		usage.TotalTokens != 0 || usage.EstimatedCostUSD != 0 || len(usage.Models) != 1 ||
@@ -1285,8 +1696,9 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 	state := &testServerState{completionContent: validReviewContent()}
 	server := newProviderServer(state)
 	cfg := config.Config{
-		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
-		ReviewModel: testPrimaryModel,
+		ReviewPolicy:      policytest.Load(t),
+		MinimumImportance: 7,
+		ReviewModel:       testPrimaryModel,
 		ReviewModelPricing: map[string]config.ModelPricing{
 			testPrimaryModel: {
 				InputPerMillionTokens:       1,
@@ -1299,6 +1711,7 @@ func newTestClient(t *testing.T) (*openai.Client, *httptest.Server, *testServerS
 		CFAccessClientID:     testCFClientIDValue(),
 		CFAccessClientSecret: testCFClientSecretValue(), // gitleaks:allow
 	}
+
 	return openai.NewClient(cfg, server.Client()), server, state
 }
 
@@ -1317,11 +1730,13 @@ func newFallbackTestClient(t *testing.T, withAccessHeaders bool) *fallbackFixtur
 	fallbackState := &testServerState{completionContent: validReviewContent()}
 	primaryServer := newProviderServer(primaryState)
 	t.Cleanup(primaryServer.Close)
+
 	fallbackServer := newProviderServer(fallbackState)
 	t.Cleanup(fallbackServer.Close)
 
 	cfg := config.Config{
-		ReviewPolicy: policytest.Load(t), MinimumImportance: 7,
+		ReviewPolicy:            policytest.Load(t),
+		MinimumImportance:       7,
 		ReviewModel:             testPrimaryModel,
 		ClydeBaseURL:            mustParseURL(t, primaryServer.URL),
 		ClydeAPIKey:             testAPIKeyValue(),
@@ -1346,55 +1761,70 @@ func newFallbackTestClient(t *testing.T, withAccessHeaders bool) *fallbackFixtur
 
 func mustParseURL(t *testing.T, value string) *url.URL {
 	t.Helper()
+
 	parsed, err := url.Parse(value)
 	if err != nil {
 		t.Fatalf("Parse URL %q: %v", value, err)
 	}
+
 	return parsed
 }
 
 func newProviderServer(state *testServerState) *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		atomic.AddInt32(&state.requestCount, 1)
-		state.lastRequest = request
-		body, err := readJSONBody(request)
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		state.lastRequestBody = body
+	return httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			atomic.AddInt32(&state.requestCount, 1)
+			state.lastRequest = request
 
-		status := http.StatusOK
-		if state.statusIndex < len(state.statusSequence) {
-			status = state.statusSequence[state.statusIndex]
-			state.statusIndex++
-		}
-
-		if status < http.StatusOK || status >= http.StatusMultipleChoices {
-			writer.Header().Set("Retry-After-Ms", "0")
-			payload := state.errorPayload
-			if payload == nil {
-				payload = map[string]any{
-					"message": "request failed",
-					"type":    "invalid_request_error",
-					"param":   "",
-					"code":    "request_failed",
-				}
+			body, err := readJSONBody(request)
+			if err != nil {
+				http.Error(writer, err.Error(), http.StatusBadRequest)
+				return
 			}
-			writeJSON(writer, status, map[string]any{"error": payload})
-			return
-		}
-		if state.streamResponse != nil {
-			state.streamResponse(writer)
-			return
-		}
-		if body["stream"] == true {
-			writeStream(writer, state.completionContent)
-			return
-		}
 
-		writeJSON(writer, status, responseObject(state.completionContent, testPrimaryModel, "completed", nil))
-	}))
+			state.lastRequestBody = body
+
+			status := http.StatusOK
+			if state.statusIndex < len(state.statusSequence) {
+				status = state.statusSequence[state.statusIndex]
+				state.statusIndex++
+			}
+
+			if status < http.StatusOK || status >= http.StatusMultipleChoices {
+				writer.Header().Set("Retry-After-Ms", "0")
+
+				payload := state.errorPayload
+				if payload == nil {
+					payload = map[string]any{
+						"message": "request failed",
+						"type":    "invalid_request_error",
+						"param":   "",
+						"code":    "request_failed",
+					}
+				}
+
+				writeJSON(writer, status, map[string]any{"error": payload})
+
+				return
+			}
+
+			if state.streamResponse != nil {
+				state.streamResponse(writer)
+				return
+			}
+
+			if body["stream"] == true {
+				writeStream(writer, state.completionContent)
+				return
+			}
+
+			writeJSON(
+				writer,
+				status,
+				responseObject(state.completionContent, testPrimaryModel, "completed", nil),
+			)
+		}),
+	)
 }
 
 // gatewayUsageExceededPayload is the error body the deployed gateway returned
@@ -1410,7 +1840,7 @@ func gatewayUsageExceededPayload() map[string]any {
 }
 
 func validReviewContent() string {
-	return `{"findings":[]}`
+	return `{"overview":"","omissions_acceptable":false,"decision_reason":"","file_assessments":[],"findings":[],"inspection_requests":[]}`
 }
 
 func writeJSON(writer http.ResponseWriter, status int, payload any) {
@@ -1420,51 +1850,74 @@ func writeJSON(writer http.ResponseWriter, status int, payload any) {
 }
 
 func writeStream(writer http.ResponseWriter, content string) {
-	writeStreamFrames(writer, []map[string]any{
-		responseTextDelta(content),
-		responseCompleted(content, testPrimaryModel, nil),
-	})
+	writeStreamFrames(
+		writer,
+		[]map[string]any{
+			responseTextDelta(content),
+			responseCompleted(content, testPrimaryModel, nil),
+		},
+	)
 }
 
 func responseTextDelta(content string) map[string]any {
 	return map[string]any{
-		"type": "response.output_text.delta", "delta": content,
-		"item_id": "item-test", "output_index": 0, "content_index": 0,
+		"type":          "response.output_text.delta",
+		"delta":         content,
+		"item_id":       "item-test",
+		"output_index":  0,
+		"content_index": 0,
 	}
 }
 
 func responseObject(content, model, status string, usage map[string]any) map[string]any {
 	response := map[string]any{
-		"id": "resp-test", "object": "response", "model": model, "status": status,
-		"output": []map[string]any{{
-			"id": "item-test", "type": "message", "role": "assistant", "status": "completed",
-			"content": []map[string]any{{"type": "output_text", "text": content, "annotations": []any{}}},
-		}},
+		"id":     "resp-test",
+		"object": "response",
+		"model":  model,
+		"status": status,
+		"output": []map[string]any{
+			{
+				"id":     "item-test",
+				"type":   "message",
+				"role":   "assistant",
+				"status": "completed",
+				"content": []map[string]any{
+					{"type": "output_text", "text": content, "annotations": []any{}},
+				},
+			},
+		},
 	}
 	if usage != nil {
 		response["usage"] = usage
 	}
+
 	return response
 }
 
 func responseCompleted(content, model string, usage map[string]any) map[string]any {
-	return map[string]any{"type": "response.completed", "response": responseObject(content, model, "completed", usage)}
+	return map[string]any{
+		"type":     "response.completed",
+		"response": responseObject(content, model, "completed", usage),
+	}
 }
 
 func responseIncomplete(content string) map[string]any {
 	response := responseObject(content, testPrimaryModel, "incomplete", nil)
 	response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
+
 	return map[string]any{"type": "response.incomplete", "response": response}
 }
 
 func writeStreamFrames(writer http.ResponseWriter, chunks []map[string]any) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
+
 	for _, chunk := range chunks {
 		encoded, _ := json.Marshal(chunk)
 		if eventType, ok := chunk["type"].(string); ok {
 			_, _ = writer.Write([]byte("event: " + eventType + "\n"))
 		}
+
 		_, _ = writer.Write([]byte("data: " + string(encoded) + "\n\n"))
 	}
 }
@@ -1473,13 +1926,16 @@ func readJSONBody(request *http.Request) (map[string]any, error) {
 	defer func() {
 		_ = request.Body.Close()
 	}()
+
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		return nil, err
 	}
+
 	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return nil, err
 	}
+
 	return decoded, nil
 }

@@ -25,11 +25,14 @@ func TruncateCheckRunText(text string) string {
 	if len(text) <= MaximumCheckRunTextBytes {
 		return text
 	}
+
 	budget := MaximumCheckRunTextBytes - len(checkRunTextTruncationNotice)
+
 	tail := text[len(text)-budget:]
 	if newline := strings.IndexByte(tail, '\n'); newline >= 0 && newline+1 < len(tail) {
 		tail = tail[newline+1:]
 	}
+
 	return checkRunTextTruncationNotice + tail
 }
 
@@ -85,6 +88,7 @@ type updateCheckRunBody struct {
 // emptyCheckRun is the zero check run returned beside a miss or a failure.
 func emptyCheckRun() CheckRun {
 	var outcome domain.AssessmentOutcome
+
 	return CheckRun{
 		Outcome:    outcome,
 		ID:         0,
@@ -134,45 +138,65 @@ func (client *Client) listCheckRuns(
 	) + "?" + query.Encode()
 
 	runs := make([]CheckRun, 0)
-	err := client.doRESTPaginated(ctx, installationID, path, func(page []byte) (int, error) {
-		var response checkRunsListResponse
-		if err := json.Unmarshal(page, &response); err != nil {
-			client.logger.ErrorContext(ctx, "decode check runs page", slog.String("err", err.Error()))
-			return 0, errors.New("decode check runs page")
-		}
-		for _, item := range response.CheckRuns {
-			if item.Name != name {
-				continue
+
+	err := client.doRESTPaginated(
+		ctx,
+		installationID,
+		path,
+		func(page []byte) (int, error) {
+			var response checkRunsListResponse
+			if err := json.Unmarshal(page, &response); err != nil {
+				client.logger.ErrorContext(
+					ctx,
+					"decode check runs page",
+					slog.String("err", err.Error()),
+				)
+
+				return 0, errors.New("decode check runs page")
 			}
-			// A check run name belongs to nobody, so another app can publish one
-			// with this name on this head, and reading that as this service's own
-			// result would let a stranger's conclusion decide whether a review
-			// runs. Another app's run always names that app, so an owner that is
-			// present and different is the whole test. An absent owner is not
-			// evidence of anything and is left alone, because filtering on what a
-			// response did not say would drop this service's own work.
-			if item.App.ID != 0 && item.App.ID != client.cfg.GitHubAppID {
-				continue
+
+			for _, item := range response.CheckRuns {
+				if item.Name != name {
+					continue
+				}
+
+				// A check run name belongs to nobody, so another app can publish one
+				// with this name on this head, and reading that as this service's own
+				// result would let a stranger's conclusion decide whether a review
+				// runs. Another app's run always names that app, so an owner that is
+				// present and different is the whole test. An absent owner is not
+				// evidence of anything and is left alone, because filtering on what a
+				// response did not say would drop this service's own work.
+				if item.App.ID != 0 && item.App.ID != client.cfg.GitHubAppID {
+					continue
+				}
+
+				headSHA, err := parseHeadSHA(item.HeadSHA)
+				if err != nil {
+					return 0, err
+				}
+
+				runs = append(
+					runs,
+					CheckRun{
+						Outcome:    domain.DecodeAssessmentOutcome(item.Output.Text),
+						ID:         item.ID,
+						Name:       item.Name,
+						Head:       headSHA,
+						Status:     item.Status,
+						Conclusion: item.Conclusion,
+						ExternalID: item.ExternalID,
+					},
+				)
 			}
-			headSHA, err := parseHeadSHA(item.HeadSHA)
-			if err != nil {
-				return 0, err
-			}
-			runs = append(runs, CheckRun{
-				Outcome:    domain.DecodeAssessmentOutcome(item.Output.Text),
-				ID:         item.ID,
-				Name:       item.Name,
-				Head:       headSHA,
-				Status:     item.Status,
-				Conclusion: item.Conclusion,
-				ExternalID: item.ExternalID,
-			})
-		}
-		return len(response.CheckRuns), nil
-	})
+
+			return len(response.CheckRuns), nil
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	return runs, nil
 }
 
@@ -192,9 +216,11 @@ func (client *Client) FindCheckRun(
 	if err != nil {
 		return emptyCheckRun(), false, err
 	}
+
 	if len(runs) == 0 {
 		return emptyCheckRun(), false, nil
 	}
+
 	return runs[0], true, nil
 }
 
@@ -222,15 +248,18 @@ func (client *Client) FindCheckRunByExternalID(
 	if externalID == "" {
 		return emptyCheckRun(), false, nil
 	}
+
 	runs, err := client.listCheckRuns(ctx, installationID, repo, head, name, checkRunFilterAll)
 	if err != nil {
 		return emptyCheckRun(), false, err
 	}
+
 	for _, run := range runs {
 		if run.ExternalID == externalID {
 			return run, true, nil
 		}
 	}
+
 	return emptyCheckRun(), false, nil
 }
 
@@ -251,13 +280,19 @@ func (client *Client) CreateCheckRun(
 		Status:     "queued",
 		ExternalID: externalID,
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal create check run body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal create check run body",
+			slog.String("err", err.Error()),
+		)
+
 		return CheckRun{}, errors.New("marshal create check run body")
 	}
 
-	body, err := client.doREST(ctx, installationID, "POST", path, nil, encoded)
+	body, err := client.doREST(ctx, installationID, "POST", path, encoded)
 	if err != nil {
 		return CheckRun{}, err
 	}
@@ -280,12 +315,20 @@ func (client *Client) StartCheckRun(
 		DetailsURL: detailsURL,
 		Output:     nil,
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal start check run body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal start check run body",
+			slog.String("err", err.Error()),
+		)
+
 		return errors.New("marshal start check run body")
 	}
-	_, err = client.doREST(ctx, installationID, "PATCH", path, nil, encoded)
+
+	_, err = client.doREST(ctx, installationID, "PATCH", path, encoded)
+
 	return err
 }
 
@@ -312,12 +355,20 @@ func (client *Client) CompleteCheckRun(
 			Text:    TruncateCheckRunText(text),
 		},
 	}
+
 	encoded, err := json.Marshal(payload)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal complete check run body", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal complete check run body",
+			slog.String("err", err.Error()),
+		)
+
 		return errors.New("marshal complete check run body")
 	}
-	_, err = client.doREST(ctx, installationID, "PATCH", path, nil, encoded)
+
+	_, err = client.doREST(ctx, installationID, "PATCH", path, encoded)
+
 	return err
 }
 
@@ -327,10 +378,12 @@ func decodeCheckRun(body []byte, ctx context.Context, client *Client) (CheckRun,
 		client.logger.ErrorContext(ctx, "decode check run", slog.String("err", err.Error()))
 		return CheckRun{}, errors.New("decode check run")
 	}
+
 	head, err := parseHeadSHA(response.HeadSHA)
 	if err != nil {
 		return CheckRun{}, err
 	}
+
 	return CheckRun{
 		ID:         response.ID,
 		Outcome:    domain.DecodeAssessmentOutcome(response.Output.Text),

@@ -27,6 +27,7 @@ func TestALoggedLineReachesTheReceiver(t *testing.T) {
 	if forwarder == nil {
 		t.Fatal("NewForwarder returned nil for a configured endpoint")
 	}
+
 	logger := slog.New(forwarder)
 
 	logger.Info("review job started", slog.Int("pull_request", 282))
@@ -39,16 +40,20 @@ func TestALoggedLineReachesTheReceiver(t *testing.T) {
 	if len(batches) != 1 {
 		t.Fatalf("batches = %d, want 1", len(batches))
 	}
+
 	if len(batches[0].Records) != 1 {
 		t.Fatalf("records = %d, want 1", len(batches[0].Records))
 	}
+
 	record := batches[0].Records[0]
 	if record.Message != "review job started" {
 		t.Fatalf("message = %q, want the logged message", record.Message)
 	}
+
 	if record.Fields["pull_request"] != "282" {
 		t.Fatalf("fields = %v, want the logged attribute", record.Fields)
 	}
+
 	if !received.signatureValid() {
 		t.Fatal("batch signature did not verify with the shared secret")
 	}
@@ -57,9 +62,11 @@ func TestALoggedLineReachesTheReceiver(t *testing.T) {
 // A receiver that is unreachable must not stop the service from logging or
 // reviewing, so a failed shipment is discarded rather than retried forever.
 func TestAnUnreachableReceiverDoesNotBlockLogging(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusInternalServerError)
-	}))
+	server := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusInternalServerError)
+		}),
+	)
 	t.Cleanup(server.Close)
 
 	forwarder := telemetry.NewForwarder(server.URL, []byte(testSigningKey), nil)
@@ -68,6 +75,7 @@ func TestAnUnreachableReceiverDoesNotBlockLogging(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+
 		for range 100 {
 			logger.Info("noise")
 		}
@@ -78,6 +86,7 @@ func TestAnUnreachableReceiverDoesNotBlockLogging(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("logging blocked on an unreachable receiver")
 	}
+
 	if err := forwarder.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -88,6 +97,7 @@ func TestNoDestinationReturnsNoForwarder(t *testing.T) {
 	if telemetry.NewForwarder("", []byte(testSigningKey), nil) != nil {
 		t.Fatal("NewForwarder returned a forwarder without an endpoint")
 	}
+
 	if telemetry.NewForwarder("https://example.test/logs", nil, nil) != nil {
 		t.Fatal("NewForwarder returned a forwarder without a secret")
 	}
@@ -109,6 +119,7 @@ func (recorder *batchRecorder) ServeHTTP(writer http.ResponseWriter, request *ht
 		writer.WriteHeader(http.StatusBadRequest)
 		return
 	}
+
 	var batch telemetry.Batch
 	if err := json.Unmarshal(body, &batch); err != nil {
 		writer.WriteHeader(http.StatusBadRequest)
@@ -117,21 +128,29 @@ func (recorder *batchRecorder) ServeHTTP(writer http.ResponseWriter, request *ht
 
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	recorder.captured = append(recorder.captured, batch)
-	recorder.valid = request.Header.Get(telemetry.SignatureHeader) == telemetry.Sign([]byte(testSigningKey), body)
+	recorder.valid = request.Header.Get(telemetry.SignatureHeader) == telemetry.Sign(
+		[]byte(testSigningKey),
+		body,
+	)
+
 	writer.WriteHeader(http.StatusOK)
 }
 
 func (recorder *batchRecorder) batches() []telemetry.Batch {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	copied := make([]telemetry.Batch, len(recorder.captured))
 	copy(copied, recorder.captured)
+
 	return copied
 }
 
 func (recorder *batchRecorder) signatureValid() bool {
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()
+
 	return recorder.valid
 }

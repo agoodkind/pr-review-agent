@@ -31,6 +31,7 @@ func chunkFailureReasons(failures []chunkFailure) []string {
 	for _, failure := range failures {
 		reasons = append(reasons, fmt.Sprintf("chunk %d: %s", failure.chunk, failure.err.Error()))
 	}
+
 	return reasons
 }
 
@@ -41,6 +42,7 @@ func unreadChunkNumbers(failures []chunkFailure) string {
 	for _, failure := range failures {
 		numbers = append(numbers, strconv.Itoa(failure.chunk))
 	}
+
 	return strings.Join(numbers, ", ")
 }
 
@@ -50,6 +52,7 @@ func logChunkFailures(ctx context.Context, failures []chunkFailure, chunks int, 
 	if len(failures) == 0 {
 		return
 	}
+
 	gklog.L(ctx).ErrorContext(
 		ctx,
 		"review chunks unread",
@@ -71,7 +74,11 @@ type findingCollector struct {
 	reported          int
 }
 
-func newFindingCollector(files []diff.FileContext, metadata []diff.MetadataSource, minimumImportance int) *findingCollector {
+func newFindingCollector(
+	files []diff.FileContext,
+	metadata []diff.MetadataSource,
+	minimumImportance int,
+) *findingCollector {
 	return &findingCollector{
 		fileIndex:         BuildFileIndex(files),
 		metadataIndex:     BuildMetadataIndex(metadata),
@@ -92,11 +99,13 @@ func (collector *findingCollector) collect(findings []domain.Finding) {
 		if _, exists := collector.seen[key]; exists {
 			continue
 		}
+
 		collector.seen[key] = struct{}{}
 
 		if !isAnchored(sanitized, collector.fileIndex, collector.metadataIndex) {
 			continue
 		}
+
 		collector.observed = append(collector.observed, sanitized)
 		if sanitized.Importance >= collector.minimumImportance {
 			collector.anchored = append(collector.anchored, sanitized)
@@ -108,23 +117,25 @@ func (collector *findingCollector) collect(findings []domain.Finding) {
 // works with: sanitized text and a path that matches the diff.
 func normalizeFinding(finding domain.Finding) domain.Finding {
 	sanitized := sanitizeFinding(finding)
+
 	sanitized.Surface = finding.EffectiveSurface()
 	if sanitized.Surface == domain.FindingFile {
 		if normalizedPath, err := marker.NormalizePath(sanitized.Path); err == nil {
 			sanitized.Path = normalizedPath
 		}
 	}
+
 	return sanitized
 }
 
-// GroundedFindings returns the findings whose evidence appears in the source
-// the model was shown, normalized and ready for the collector.
+// GroundedFindings returns findings supported by the supplied source.
 //
-// It runs before the collector rather than only before publication. A finding
-// aimed at another chunk used to reach the collector, count toward the run's own
-// analysis, and carry weight in what the review concluded, while the publication
-// test refused it and no reader ever saw it. A claim nobody can be shown must
-// not decide anything, so it is refused once, at the door.
+// The function normalizes findings and rejects unsupported evidence before
+// the collector counts them.
+//
+// For example:
+//
+//	grounded := GroundedFindings(ctx, findings, files, metadata, chunkText)
 func GroundedFindings(
 	ctx context.Context,
 	findings []domain.Finding,
@@ -133,6 +144,7 @@ func GroundedFindings(
 	chunkText string,
 ) []domain.Finding {
 	logger := gklog.L(ctx)
+
 	grounded := make([]domain.Finding, 0, len(findings))
 	for _, finding := range findings {
 		sanitized := normalizeFinding(finding)
@@ -144,20 +156,29 @@ func GroundedFindings(
 				slog.String("title", sanitized.Title),
 				slog.String("evidence", sanitized.Evidence),
 			)
+
 			continue
 		}
+
 		grounded = append(grounded, sanitized)
 	}
+
 	return grounded
 }
 
-// EligibleFindings returns the grounded findings that anchor to changed lines
-// and meet the importance floor.
+// EligibleFindings selects grounded findings for publication.
 //
-// Everything it returns is posted, because the review stands behind every defect
-// it reports and rationing them is how a reader ends up acting on the wrong one.
-// Duplicates stay in, because the caller suppresses them against what the pull
-// request already carries.
+// A finding must identify changed source and meet the importance floor. The
+// caller suppresses existing pull request duplicates.
+//
+// For example:
+//
+//	eligible := EligibleFindings(
+//		findings,
+//		files,
+//		metadata,
+//		minimumImportance,
+//	)
 func EligibleFindings(
 	findings []domain.Finding,
 	fileIndex map[string]diff.FileContext,
@@ -170,11 +191,14 @@ func EligibleFindings(
 		if !isAnchored(sanitized, fileIndex, metadataIndex) {
 			continue
 		}
+
 		if sanitized.Importance < minimumImportance {
 			continue
 		}
+
 		eligible = append(eligible, sanitized)
 	}
+
 	return eligible
 }
 
@@ -191,19 +215,25 @@ func findingGrounded(
 ) bool {
 	if finding.EffectiveSurface() != domain.FindingFile {
 		source, found := metadataIndex[finding.Target()]
-		return found && metadataFindingAnchored(finding, source) && matchesFileLine(chunkText, finding.Evidence)
+
+		return found && metadataFindingAnchored(finding, source) &&
+			matchesFileLine(chunkText, finding.Evidence)
 	}
+
 	evidence := strings.TrimSpace(finding.Evidence)
 	if evidence == "" {
 		return false
 	}
+
 	if matchesDiffLine(chunkText, evidence) {
 		return true
 	}
+
 	file, ok := fileIndex[finding.Path]
 	if !ok {
 		return false
 	}
+
 	return matchesFileLine(file.CurrentContent, evidence)
 }
 
@@ -223,14 +253,17 @@ func matchesDiffLine(chunkText string, evidence string) bool {
 	if want == "" {
 		return false
 	}
+
 	for line := range strings.SplitSeq(chunkText, "\n") {
 		if strings.TrimSpace(line) == want {
 			return true
 		}
+
 		if strings.TrimSpace(stripDiffMarker(line)) == want {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -245,11 +278,13 @@ func matchesFileLine(content string, evidence string) bool {
 	if want == "" {
 		return false
 	}
+
 	for line := range strings.SplitSeq(content, "\n") {
 		if strings.TrimSpace(line) == want {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -260,6 +295,7 @@ func stripDiffMarker(line string) string {
 	if line == "" {
 		return line
 	}
+
 	switch line[0] {
 	case '+', '-', ' ':
 		return line[1:]
@@ -279,6 +315,7 @@ func truncated(err error) bool {
 	if !errors.As(err, &target) {
 		return false
 	}
+
 	return target.Truncated()
 }
 
@@ -311,6 +348,7 @@ func unreadableHunksIn(chunk diff.Chunk) []unreadHunk {
 	for _, piece := range chunk.Pieces {
 		hunks = append(hunks, unreadPiece(piece, truncatedAnswerReason))
 	}
+
 	return hunks
 }
 
@@ -341,113 +379,159 @@ func reviewChunk(
 	now func() time.Time,
 	requiredSupport ...string,
 ) (chunkAnalysis, error) {
-	return reviewChunkObserved(ctx, model, chunk, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, nil, requiredSupport...)
+	return reviewChunkObserved(
+		ctx,
+		model,
+		chunk,
+		minimumImportance,
+		policy,
+		maximumBytes,
+		files,
+		disputes,
+		models,
+		requests,
+		now,
+		nil,
+		requiredSupport...,
+	)
 }
 
 func reviewChunkObserved(
-	ctx context.Context, model Model, chunk diff.Chunk, minimumImportance int,
-	policy reviewrules.Policy, maximumBytes int, files []diff.FileContext, disputes string,
-	models *modelSet, requests *int, now func() time.Time,
-	observe func(diff.Chunk, domain.ReviewResult) error, requiredSupport ...string,
+	ctx context.Context,
+	model Model,
+	chunk diff.Chunk,
+	minimumImportance int,
+	policy reviewrules.Policy,
+	maximumBytes int,
+	files []diff.FileContext,
+	disputes string,
+	models *modelSet,
+	requests *int,
+	now func() time.Time,
+	observe func(diff.Chunk, domain.ReviewResult) error,
+	requiredSupport ...string,
 ) (chunkAnalysis, error) {
 	logger := gklog.L(ctx)
 	nothing := chunkAnalysis{Results: nil, Unreadable: nil}
 	required := strings.Join(requiredSupport, "")
-	bounded, err := BoundModelReviewChunksWithContext(model, []diff.Chunk{chunk}, files, minimumImportance, required, disputes, policy, maximumBytes)
+
+	bounded, err := BoundModelReviewChunksWithContext(
+		model,
+		[]diff.Chunk{chunk},
+		files,
+		minimumImportance,
+		required,
+		disputes,
+		policy,
+		maximumBytes,
+	)
 	if err != nil {
 		logger.ErrorContext(ctx, "Review input size preparation failed", "err", err)
 		return nothing, err
 	}
+
 	if len(bounded) > 1 {
-		return reviewChunkParts(ctx, model, bounded, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, observe, required)
+		return reviewChunkParts(
+			ctx,
+			model,
+			bounded,
+			minimumImportance,
+			policy,
+			maximumBytes,
+			files,
+			disputes,
+			models,
+			requests,
+			now,
+			observe,
+			required,
+		)
 	}
+
 	chunk = bounded[0]
-	prompt, err := BuildModelReviewPrompt(model, chunk, minimumImportance, required, disputes, policy, maximumBytes)
+
+	prompt, err := BuildModelReviewPrompt(
+		model,
+		chunk,
+		minimumImportance,
+		required,
+		disputes,
+		policy,
+		maximumBytes,
+	)
 	if err != nil {
 		logger.ErrorContext(ctx, "Review prompt rendering failed", "err", err)
 		return nothing, err
 	}
+
 	*requests++
 	startedAt := now()
 	completion, err := model.Review(ctx, prompt)
 	elapsed := now().Sub(startedAt)
+
+	attempt := chunkReviewAttempt{
+		model:             model,
+		chunk:             chunk,
+		minimumImportance: minimumImportance,
+		policy:            policy,
+		maximumBytes:      maximumBytes,
+		files:             files,
+		disputes:          disputes,
+		models:            models,
+		requests:          requests,
+		now:               now,
+		observe:           observe,
+		required:          required,
+		prompt:            prompt,
+		elapsed:           elapsed,
+	}
 	if err == nil {
-		if validateErr := completion.Result.Validate(); validateErr != nil {
-			logger.ErrorContext(ctx, "validate review result", slog.String("err", validateErr.Error()))
-			return nothing, fmt.Errorf("validate review result: %w", validateErr)
-		}
-		models.add(completion.Model)
-		logger.InfoContext(
-			ctx,
-			"review chunk completed",
-			slog.Int("chunk", chunk.Index),
-			slog.Int("chunks", chunk.Total),
-			slog.Duration("elapsed", elapsed),
-			slog.String("model", completion.Model),
-			slog.Int("findings", len(completion.Result.Findings)),
-			slog.Int("paths", len(chunk.Paths)),
-			slog.Int("prompt_bytes", len(prompt)),
-		)
-		analysis := chunkAnalysis{
-			Results:    []domain.ReviewResult{completion.Result},
-			Unreadable: nil,
-		}
-		if observe != nil {
-			return analysis, observe(chunk, completion.Result)
-		}
-		return analysis, nil
-	}
-	// Every request that failed is timed here, before the truncation branch
-	// decides what to do about it. A truncated request still spent its duration
-	// on the review budget, and the split and skip logs below carry neither the
-	// duration nor the size that caused the split.
-	logger.LogAttrs(
-		ctx,
-		requestFailureLevel(err),
-		"review chunk request failed",
-		slog.Int("chunk", chunk.Index),
-		slog.Int("chunks", chunk.Total),
-		slog.Duration("elapsed", elapsed),
-		slog.Bool("truncated", truncated(err)),
-		slog.Any("paths", chunk.Paths),
-		slog.Int("prompt_bytes", len(prompt)),
-		slog.String("err", err.Error()),
-	)
-	var sizeFailure *diff.PromptSizeError
-	if !truncated(err) && !errors.As(err, &sizeFailure) {
-		return nothing, fmt.Errorf("review chunk %d/%d: %w", chunk.Index, chunk.Total, err)
+		return attempt.complete(ctx, completion, logger)
 	}
 
-	first, second, canSplit := chunk.Split()
-	if !canSplit {
-		logger.WarnContext(
-			ctx,
-			"review chunk skipped after truncation",
-			slog.Int("chunk", chunk.Index),
-			slog.Any("paths", chunk.Paths),
-			slog.String("err", err.Error()),
-		)
-		return chunkAnalysis{Results: nil, Unreadable: unreadableHunksIn(chunk)}, nil
-	}
-
-	logger.InfoContext(
-		ctx,
-		"review chunk split after truncation",
-		slog.Int("chunk", chunk.Index),
-		slog.Int("hunks", len(chunk.Pieces)),
-	)
-	return reviewChunkParts(ctx, model, []diff.Chunk{first, second}, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, observe, required)
+	return attempt.retry(ctx, err, logger)
 }
 
-func reviewChunkParts(ctx context.Context, model Model, chunks []diff.Chunk, minimumImportance int, policy reviewrules.Policy, maximumBytes int, files []diff.FileContext, disputes string, models *modelSet, requests *int, now func() time.Time, observe func(diff.Chunk, domain.ReviewResult) error, required string) (chunkAnalysis, error) {
+func reviewChunkParts(
+	ctx context.Context,
+	model Model,
+	chunks []diff.Chunk,
+	minimumImportance int,
+	policy reviewrules.Policy,
+	maximumBytes int,
+	files []diff.FileContext,
+	disputes string,
+	models *modelSet,
+	requests *int,
+	now func() time.Time,
+	observe func(diff.Chunk, domain.ReviewResult) error,
+	required string,
+) (chunkAnalysis, error) {
 	combined := chunkAnalysis{Results: nil, Unreadable: nil}
+
 	for _, chunk := range chunks {
-		part, err := reviewChunkObserved(ctx, model, chunk, minimumImportance, policy, maximumBytes, files, disputes, models, requests, now, observe, required)
+		part, err := reviewChunkObserved(
+			ctx,
+			model,
+			chunk,
+			minimumImportance,
+			policy,
+			maximumBytes,
+			files,
+			disputes,
+			models,
+			requests,
+			now,
+			observe,
+			required,
+		)
 		combined.merge(part)
+
 		if err != nil {
 			return combined, err
 		}
 	}
+
 	return combined, nil
 }
 
@@ -458,6 +542,7 @@ func requestFailureLevel(err error) slog.Level {
 	if truncated(err) {
 		return slog.LevelWarn
 	}
+
 	return slog.LevelError
 }
 
@@ -473,90 +558,155 @@ func (set *modelSet) add(name string) {
 	if name == "" {
 		return
 	}
+
 	if set.seen == nil {
 		set.seen = make(map[string]struct{})
 	}
+
 	if _, exists := set.seen[name]; exists {
 		return
 	}
+
 	set.seen[name] = struct{}{}
 	set.names = append(set.names, name)
 }
 
-// BuildPrompt assembles one chunk's model prompt for production and live evaluation.
+// BuildPrompt renders the model input for one review chunk.
 //
-// disputes is the relevant reviewer context, empty when the pull request
-// carries no open finding or resolved finding from this head. It comes first,
-// because what has already been raised and answered has to be in view before
-// the model reads the code and decides what to say about it.
-func BuildPrompt(chunk diff.Chunk, minimumImportance int, disputes string, policy reviewrules.Policy, maximumBytes int) (string, error) {
+// The prompt includes reviewer disputes before source content. The function
+// rejects prompts that exceed the byte limit.
+//
+// For example:
+//
+//	prompt, err := BuildPrompt(chunk, floor, disputes, policy, maximumBytes)
+func BuildPrompt(
+	chunk diff.Chunk,
+	minimumImportance int,
+	disputes string,
+	policy reviewrules.Policy,
+	maximumBytes int,
+) (string, error) {
 	prompt, err := renderChunkPrompt(chunk, minimumImportance, disputes, policy)
 	if err != nil {
 		return "", err
 	}
+
 	if len(prompt) > maximumBytes {
 		return "", &diff.PromptSizeError{Actual: len(prompt), Limit: maximumBytes}
 	}
+
 	return prompt, nil
 }
 
-// BoundReviewChunks measures the configured input template and supplied context.
-func BoundReviewChunks(chunks []diff.Chunk, files []diff.FileContext, minimumImportance int, disputes string, policy reviewrules.Policy, maximumBytes int) ([]diff.Chunk, error) {
-	bounded, err := diff.BoundChunks(chunks, files, maximumBytes, func(chunk diff.Chunk) (int, error) {
-		prompt, err := renderChunkPrompt(chunk, minimumImportance, disputes, policy)
-		return len(prompt), err
-	})
+// BoundReviewChunks limits rendered model input sizes.
+//
+// The function measures the configured template and supplied context when
+// dividing review chunks.
+//
+// For example:
+//
+//	chunks, err := BoundReviewChunks(
+//		chunks,
+//		files,
+//		floor,
+//		disputes,
+//		policy,
+//		limit,
+//	)
+func BoundReviewChunks(
+	chunks []diff.Chunk,
+	files []diff.FileContext,
+	minimumImportance int,
+	disputes string,
+	policy reviewrules.Policy,
+	maximumBytes int,
+) ([]diff.Chunk, error) {
+	bounded, err := diff.BoundChunks(
+		chunks,
+		files,
+		maximumBytes,
+		func(chunk diff.Chunk) (int, error) {
+			prompt, err := renderChunkPrompt(chunk, minimumImportance, disputes, policy)
+			return len(prompt), err
+		},
+	)
 	if err != nil {
 		slog.Warn("Review input budget preparation failed", "err", err)
 		return nil, fmt.Errorf("prepare bounded review input: %w", err)
 	}
+
 	return bounded, nil
 }
 
-func renderChunkPrompt(chunk diff.Chunk, minimumImportance int, disputes string, policy reviewrules.Policy) (string, error) {
+func renderChunkPrompt(
+	chunk diff.Chunk,
+	minimumImportance int,
+	disputes string,
+	policy reviewrules.Policy,
+) (string, error) {
 	rows, err := diff.ChangedSourceRows(chunk)
 	if err != nil {
 		slog.Warn("Changed source row preparation failed", "err", err)
 		return "", fmt.Errorf("prepare changed source rows: %w", err)
 	}
+
 	anchors, err := json.Marshal(rows)
 	if err != nil {
 		slog.Warn("Changed source row encoding failed", "err", err)
 		return "", fmt.Errorf("encode changed source rows: %w", err)
 	}
+
 	var data reviewrules.PromptData
+
 	data.MinimumImportance = minimumImportance
 	data.Input = policy.WrapUntrusted(chunk.Text)
 	data.Anchors = policy.WrapUntrusted(string(anchors))
 	data.Disputes = disputes
+
 	for _, path := range chunk.Paths {
 		instruction := policy.FileClassificationPathInstructions(path)
 		if instruction == "" {
 			continue
 		}
+
 		var pathData reviewrules.PromptData
+
 		pathData.Path, pathData.Input = policy.EscapeUntrusted(path), instruction
+
 		text, err := renderPrompt(policy, "review.path_instructions", pathData)
 		if err != nil {
 			return "", err
 		}
+
 		data.Disputes = text + "\n" + data.Disputes
 	}
+
 	if chunk.RelationshipReview {
 		var relationshipData reviewrules.PromptData
+
 		relationshipData.Path = strings.Join(chunk.Paths, ", ")
+
 		instructions, err := renderPrompt(policy, "relationship.input", relationshipData)
 		if err != nil {
 			return "", err
 		}
+
 		data.Disputes = instructions + "\n" + data.Disputes
 	}
+
 	data.Index = chunk.Index
 	data.Total = chunk.Total
+
 	return renderPrompt(policy, "review.input", data)
 }
 
-// BuildFileIndex applies the path normalization used by publication.
+// BuildFileIndex indexes files by normalized publication paths.
+//
+// The function skips paths that the marker path validator rejects.
+//
+// For example:
+//
+//	index := BuildFileIndex(files)
 func BuildFileIndex(files []diff.FileContext) map[string]diff.FileContext {
 	index := make(map[string]diff.FileContext, len(files))
 	for _, file := range files {
@@ -564,8 +714,10 @@ func BuildFileIndex(files []diff.FileContext) map[string]diff.FileContext {
 		if err != nil {
 			continue
 		}
+
 		index[normalizedPath] = file
 	}
+
 	return index
 }
 
@@ -575,24 +727,38 @@ func inputCoverageComplete(files []diff.FileContext) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
-func isAnchored(finding domain.Finding, fileIndex map[string]diff.FileContext, metadataIndex map[domain.FindingTarget]diff.MetadataSource) bool {
+func isAnchored(
+	finding domain.Finding,
+	fileIndex map[string]diff.FileContext,
+	metadataIndex map[domain.FindingTarget]diff.MetadataSource,
+) bool {
 	if finding.EffectiveSurface() != domain.FindingFile {
 		source, found := metadataIndex[finding.Target()]
 		return found && metadataFindingAnchored(finding, source)
 	}
+
 	normalizedPath, err := marker.NormalizePath(finding.Path)
 	if err != nil {
 		return false
 	}
+
 	file, ok := fileIndex[normalizedPath]
 	if !ok {
 		return false
 	}
-	if !diff.ValidRange(file.ChangedRightLines, file.ChangedRightHunks, finding.StartLine, finding.EndLine) {
+
+	if !diff.ValidRange(
+		file.ChangedRightLines,
+		file.ChangedRightHunks,
+		finding.StartLine,
+		finding.EndLine,
+	) {
 		return false
 	}
+
 	return true
 }

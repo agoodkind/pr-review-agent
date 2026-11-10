@@ -181,6 +181,7 @@ func (client *Client) ListReviewThreads(
 ) ([]ReviewThread, error) {
 	threads := make([]ReviewThread, 0)
 	cursor := ""
+
 	for {
 		variables := reviewThreadsVariables{
 			Owner:  repo.Owner,
@@ -188,13 +189,20 @@ func (client *Client) ListReviewThreads(
 			Number: number,
 			Cursor: nil,
 		}
+
 		if cursor != "" {
 			cursorCopy := cursor
 			variables.Cursor = &cursorCopy
 		}
+
 		encoded, err := json.Marshal(variables)
 		if err != nil {
-			client.logger.ErrorContext(ctx, "marshal review threads variables", slog.String("err", err.Error()))
+			client.logger.ErrorContext(
+				ctx,
+				"marshal review threads variables",
+				slog.String("err", err.Error()),
+			)
+
 			return nil, errors.New("marshal review threads variables")
 		}
 
@@ -207,7 +215,12 @@ func (client *Client) ListReviewThreads(
 			Data reviewThreadsResponse `json:"data"`
 		}
 		if err := json.Unmarshal(body, &envelope); err != nil {
-			client.logger.ErrorContext(ctx, "decode review threads", slog.String("err", err.Error()))
+			client.logger.ErrorContext(
+				ctx,
+				"decode review threads",
+				slog.String("err", err.Error()),
+			)
+
 			return nil, errors.New("decode review threads")
 		}
 
@@ -216,15 +229,21 @@ func (client *Client) ListReviewThreads(
 			if err != nil {
 				return nil, err
 			}
+
 			if node.Comments.PageInfo.HasNextPage {
 				rest, err := client.listRemainingThreadComments(
-					ctx, installationID, node.ID, node.Comments.PageInfo.EndCursor,
+					ctx,
+					installationID,
+					node.ID,
+					node.Comments.PageInfo.EndCursor,
 				)
 				if err != nil {
 					return nil, err
 				}
+
 				thread.Replies = append(thread.Replies, rest...)
 			}
+
 			threads = append(threads, thread)
 		}
 
@@ -232,8 +251,10 @@ func (client *Client) ListReviewThreads(
 		if !pageInfo.HasNextPage {
 			break
 		}
+
 		cursor = pageInfo.EndCursor
 	}
+
 	return threads, nil
 }
 
@@ -247,14 +268,21 @@ func (client *Client) listRemainingThreadComments(
 	cursor string,
 ) ([]domain.ReviewComment, error) {
 	replies := make([]domain.ReviewComment, 0)
+
 	for cursor != "" {
 		cursorCopy := cursor
+
 		encoded, err := json.Marshal(threadCommentsVariables{
 			ThreadID: threadNodeID,
 			Cursor:   &cursorCopy,
 		})
 		if err != nil {
-			client.logger.ErrorContext(ctx, "marshal thread comments variables", slog.String("err", err.Error()))
+			client.logger.ErrorContext(
+				ctx,
+				"marshal thread comments variables",
+				slog.String("err", err.Error()),
+			)
+
 			return nil, errors.New("marshal thread comments variables")
 		}
 
@@ -267,7 +295,12 @@ func (client *Client) listRemainingThreadComments(
 			Data threadCommentsResponse `json:"data"`
 		}
 		if err := json.Unmarshal(body, &envelope); err != nil {
-			client.logger.ErrorContext(ctx, "decode thread comments", slog.String("err", err.Error()))
+			client.logger.ErrorContext(
+				ctx,
+				"decode thread comments",
+				slog.String("err", err.Error()),
+			)
+
 			return nil, errors.New("decode thread comments")
 		}
 
@@ -275,13 +308,16 @@ func (client *Client) listRemainingThreadComments(
 		for _, comment := range comments.Nodes {
 			replies = append(replies, decodeThreadComment(comment))
 		}
+
 		// A page that reports another page without moving the cursor would loop
 		// forever, so an unchanged or empty cursor ends the walk.
 		if !comments.PageInfo.HasNextPage || comments.PageInfo.EndCursor == cursor {
 			break
 		}
+
 		cursor = comments.PageInfo.EndCursor
 	}
+
 	return replies, nil
 }
 
@@ -294,11 +330,18 @@ func (client *Client) ResolveReviewThread(
 	variables := resolveReviewThreadVariables{
 		ThreadID: threadNodeID,
 	}
+
 	encoded, err := json.Marshal(variables)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "marshal resolve review thread variables", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"marshal resolve review thread variables",
+			slog.String("err", err.Error()),
+		)
+
 		return errors.New("marshal resolve review thread variables")
 	}
+
 	body, err := client.doGraphQL(ctx, installationID, resolveReviewThreadMutation, encoded)
 	if err != nil {
 		return err
@@ -308,17 +351,28 @@ func (client *Client) ResolveReviewThread(
 		Data resolveReviewThreadResponse `json:"data"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		client.logger.ErrorContext(ctx, "decode resolve review thread", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"decode resolve review thread",
+			slog.String("err", err.Error()),
+		)
+
 		return errors.New("decode resolve review thread")
 	}
 
 	thread := envelope.Data.ResolveReviewThread.Thread
 	if thread.ID != threadNodeID {
-		return fmt.Errorf("resolve review thread id mismatch: got %q want %q", thread.ID, threadNodeID)
+		return fmt.Errorf(
+			"resolve review thread id mismatch: got %q want %q",
+			thread.ID,
+			threadNodeID,
+		)
 	}
+
 	if !thread.IsResolved {
 		return errors.New("resolve review thread did not mark thread resolved")
 	}
+
 	return nil
 }
 
@@ -326,6 +380,7 @@ func decodeReviewThread(node reviewThreadNode) (ReviewThread, error) {
 	if len(node.Comments.Nodes) == 0 {
 		return ReviewThread{}, errors.New("review thread missing root comment")
 	}
+
 	replies := make([]domain.ReviewComment, 0, len(node.Comments.Nodes)-1)
 	for _, reply := range node.Comments.Nodes[1:] {
 		replies = append(replies, decodeThreadComment(reply))
@@ -349,20 +404,25 @@ func decodeThreadComment(comment reviewCommentNode) domain.ReviewComment {
 	if comment.Author.TypeName == "Bot" && !strings.HasSuffix(author, "[bot]") {
 		author += "[bot]"
 	}
+
 	endLine := comment.Line
 	if endLine < 1 {
 		endLine = comment.OriginalLine
 	}
+
 	startLine := comment.StartLine
 	if startLine < 1 {
 		startLine = comment.OriginalStartLine
 	}
+
 	if startLine < 1 {
 		startLine = endLine
 	}
+
 	if endLine < 1 {
 		endLine = startLine
 	}
+
 	return domain.ReviewComment{
 		DatabaseID: comment.DatabaseID,
 		Author:     author,

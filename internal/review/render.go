@@ -46,6 +46,8 @@ type Summary struct {
 	Published               []domain.Finding
 	Fallback                []domain.Finding
 	Metadata                []domain.Finding
+	metadataCheckpoint      *findingCheckpoint
+	fallbackCheckpoint      *findingCheckpoint
 	MetadataRevision        string
 	MetadataFindingsDisplay reviewrules.FindingDisplay
 	Omissions               []unreadHunk
@@ -57,7 +59,8 @@ type Summary struct {
 	Reached string
 	// Failed marks a review that stopped early, so the detail table reports
 	// progress rather than a result.
-	Failed bool
+	Failed     bool
+	InProgress bool
 	// Forced marks a run a label asked for, so the top-level review comment can
 	// explain why the same pull request was reviewed again.
 	Forced bool
@@ -68,15 +71,15 @@ func (summary Summary) Verdict() string {
 	if summary.Decision == domain.ReviewDecisionComment {
 		return "This review neither approves nor requests changes."
 	}
+
 	if summary.Decision != domain.ReviewDecisionRequestChanges {
-		return "This review found no severe defects."
+		return "This review did not identify findings at or above the minimum importance."
 	}
+
 	if len(unpublishedSummaryFindings(summary, summary.Metadata)) > 0 {
-		if summary.MetadataFindingsDisplay == reviewrules.FindingsHidden {
-			return "Correct the pull-request prose findings."
-		}
-		return "Correct the prose findings below."
+		return "Resolve the findings in the rejection review."
 	}
+
 	return "Resolve the open inline findings."
 }
 
@@ -85,9 +88,11 @@ func (summary Summary) Title() string {
 	if summary.Decision == domain.ReviewDecisionComment {
 		return "Review needs attention"
 	}
+
 	if summary.Decision == domain.ReviewDecisionRequestChanges {
 		return "Changes requested"
 	}
+
 	return "Approved"
 }
 
@@ -101,12 +106,22 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 		{"Files reviewed", fmt.Sprintf("`%d`", summary.FilesReviewed)},
 		{"Diff chunks", fmt.Sprintf("`%d`", summary.Chunks)},
 	}
-	if summary.Failed {
+	switch {
+	case summary.InProgress:
+		rows = append(rows, [2]string{"Status", "Review in progress"})
+	case summary.Failed:
 		rows = append(rows, [2]string{"Reached", formatReached(summary.Reached)})
-	} else {
-		rows = append(rows, [2]string{"All file content inspected", formatYesNo(summary.CoverageComplete)})
-		rows = append(rows, [2]string{"Review scope assessed", formatYesNo(reviewScopeAssessed(summary))})
+	default:
+		rows = append(
+			rows,
+			[2]string{"All file content inspected", formatYesNo(summary.CoverageComplete)},
+		)
+		rows = append(
+			rows,
+			[2]string{"Review scope assessed", formatYesNo(reviewScopeAssessed(summary))},
+		)
 	}
+
 	rows = append(
 		rows,
 		[2]string{"Forced run", formatYesNo(summary.Forced)},
@@ -117,40 +132,59 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 		[2]string{"Prior bot review IDs", formatReviewTraceIDs(summary.PriorReviews)},
 		[2]string{"Bot thread IDs", formatThreadTraceIDs(summary.Threads)},
 		[2]string{"Bot threads open", fmt.Sprintf("`%d`", countOpenThreadTraces(summary.Threads))},
-		[2]string{"Bot threads resolved", fmt.Sprintf("`%d`", countResolvedThreadTraces(summary.Threads))},
+		[2]string{
+			"Bot threads resolved",
+			fmt.Sprintf("`%d`", countResolvedThreadTraces(summary.Threads)),
+		},
 	)
 
 	var builder strings.Builder
 	builder.WriteString("<details>\n<summary>Review details</summary>\n\n")
+
 	if acceptedFileScope(summary) && summary.FileAssessmentNote != "" {
 		builder.WriteString(summary.FileAssessmentNote + "\n\n")
 	}
-	if reason := scopeDecisionReason(summary.DecisionReason, summary.Omissions, summary.FileAssessments); reason != "" {
+
+	if reason := scopeDecisionReason(
+		summary.DecisionReason,
+		summary.Omissions,
+		summary.FileAssessments,
+	); reason != "" {
 		builder.WriteString("#### Review scope\n\n" + reason + "\n\n")
 	}
+
 	if summary.FileAssessmentsDisplay == reviewrules.FindingsCollapsed {
-		builder.WriteString(renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes))
+		builder.WriteString(
+			renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes),
+		)
 	}
+
 	builder.WriteString("| | |\n| --- | --- |\n")
+
 	for _, row := range rows {
 		fmt.Fprintf(&builder, "| %s | %s |\n", row[0], row[1])
 	}
+
 	if providerDetails := renderProviderDetails(summary.Usage); providerDetails != "" {
 		builder.WriteString(providerDetails)
 	} else if providerAttempts := renderProviderStatuses(statuses); providerAttempts != "" {
 		builder.WriteString("\n" + providerAttempts + "\n")
 	}
+
 	builder.WriteString(renderUsageDetails(summary.Usage))
 	builder.WriteString("\n</details>")
+
 	return builder.String()
 }
 
 func reviewScopeAssessed(summary Summary) bool {
 	for _, assessment := range summary.FileAssessments {
-		if assessment.Action == domain.FileActionGap || assessment.Action == domain.FileActionInspectRelated {
+		if assessment.Action == domain.FileActionGap ||
+			assessment.Action == domain.FileActionInspectRelated {
 			return false
 		}
 	}
+
 	return summary.CoverageComplete || summary.OmissionsAccepted
 }
 
@@ -158,13 +192,16 @@ func acceptedFileScope(summary Summary) bool {
 	if !summary.OmissionsAccepted || summary.Failed {
 		return false
 	}
+
 	excluded := false
+
 	for _, assessment := range summary.FileAssessments {
 		switch assessment.Action {
 		case domain.FileActionExclude:
 			if !assessment.PermitsContentExclusion() {
 				return false
 			}
+
 			excluded = true
 		case domain.FileActionReview:
 			if !assessment.Reviewed {
@@ -176,6 +213,7 @@ func acceptedFileScope(summary Summary) bool {
 			return false
 		}
 	}
+
 	return excluded
 }
 
@@ -183,18 +221,35 @@ func acceptedFileScope(summary Summary) bool {
 func RenderBody(summary Summary) string {
 	parts := []string{
 		"## Review",
-		"### Summary\n\n" + renderReportSummary(summary.Report),
-		"### Changes\n\n" + renderWalkthrough(summary.Report),
 		renderVerdictSection(summary, false),
+		renderReportSection(summary.Report),
 	}
 	if summary.FileAssessmentsDisplay == reviewrules.FindingsExpanded {
-		parts = append(parts, renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes))
+		parts = append(
+			parts,
+			renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes),
+		)
 	}
+
 	if len(summary.Omissions) > 0 && !summary.OmissionsAccepted {
 		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
 	}
+
 	parts = append(parts, RenderDetails(summary), marker.Summary()+"\n"+RenderVerdictBody(summary))
+
 	return strings.Join(parts, "\n\n")
+}
+
+func renderReportSection(report Report) string {
+	return strings.Join(
+		[]string{
+			reportSectionStart,
+			"### Summary\n\n" + renderReportSummary(report),
+			"### Changes\n\n" + renderWalkthrough(report),
+			reportSectionEnd,
+		},
+		"\n\n",
+	)
 }
 
 func renderReportSummary(report Report) string {
@@ -202,6 +257,7 @@ func renderReportSummary(report Report) string {
 	if value != "" {
 		return value
 	}
+
 	return "This review checked the current pull request against its stated purpose and current changes."
 }
 
@@ -212,9 +268,11 @@ func renderWalkthrough(report Report) string {
 			lines = append(lines, "- "+value)
 		}
 	}
+
 	if len(lines) == 0 {
 		return "The review examined the changed files and their current diff."
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -222,32 +280,36 @@ func renderOmissions(hunks []unreadHunk) string {
 	if len(hunks) == 0 {
 		return "The review omitted no changed content."
 	}
+
 	return renderUnreadHunks(hunks)
 }
 
 const (
 	verdictSectionStart = "<!-- pr-review-agent:verdict-section:start -->"
 	verdictSectionEnd   = "<!-- pr-review-agent:verdict-section:end -->"
+	reportSectionStart  = "<!-- pr-review-agent:report-section:start -->"
+	reportSectionEnd    = "<!-- pr-review-agent:report-section:end -->"
 )
 
 func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
 	parts := []string{verdictSectionStart, "### Verdict", verdictLead(summary)}
-	if metadata := renderSummaryMetadata(summary); metadata != "" {
-		parts = append(parts, metadata)
+	if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(parts, findings)
 	}
-	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
-		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
-	}
+
 	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
 		parts = append(parts, withdrawnBlockNote)
 	}
+
 	parts = append(parts, verdictSectionEnd)
+
 	return strings.Join(parts, "\n\n")
 }
 
 func sanitizeReportText(value string) string {
 	value = strings.TrimSpace(sanitizeProse(value))
 	value = strings.ReplaceAll(value, "<!--", "&lt;!--")
+
 	return strings.ReplaceAll(value, "-->", "--&gt;")
 }
 
@@ -259,19 +321,25 @@ func renderFallbackFindings(findings []domain.Finding) string {
 	if len(findings) == 0 {
 		return ""
 	}
+
 	sorted := append([]domain.Finding{}, findings...)
 	sortFindings(sorted)
+
 	explanation := "GitHub could not place the finding inline, so it appears here."
 	if len(sorted) != 1 {
 		explanation = "GitHub could not place the findings inline, so they appear here."
 	}
+
 	sections := []string{explanation, "#### Findings"}
+
 	for _, finding := range sorted {
 		normalizedPath, err := marker.NormalizePath(finding.Path)
 		if err != nil {
 			continue
 		}
+
 		finding = sanitizeFinding(finding)
+
 		parts := []string{
 			fmt.Sprintf("#### %s:%d: %s", codeSpan(normalizedPath), finding.EndLine, finding.Title),
 			finding.Body,
@@ -279,8 +347,10 @@ func renderFallbackFindings(findings []domain.Finding) string {
 		if finding.Suggestion != "" {
 			parts = append(parts, "```suggestion\n"+finding.Suggestion+"\n```")
 		}
+
 		sections = append(sections, strings.Join(parts, "\n\n"))
 	}
+
 	return strings.Join(sections, "\n\n")
 }
 
@@ -288,26 +358,34 @@ func renderFallbackFindings(findings []domain.Finding) string {
 // and for native reviews that require a body. Native approvals omit this data.
 func RenderVerdictBody(summary Summary) string {
 	parts := make([]string, 0, 5)
+
 	parts = append(parts, marker.Review(summary.Head, summary.Decision))
-	if assessments := encodeFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes); assessments != "" {
+	if assessments := encodeFileAssessments(
+		summary.FileAssessments,
+		summary.FileAssessmentMaximumBytes,
+	); assessments != "" {
 		parts = append(parts, assessments)
 	}
+
 	if summary.ApprovalWithheld || summary.Decision == domain.ReviewDecisionComment {
 		parts = append(parts, approvalWithheldMarker)
 	}
+
 	if omissions := encodeOmissionMarker(summary.Omissions); omissions != "" {
 		parts = append(parts, omissions)
 		parts = append(parts, encodeOmissionDecisionMarker(summary.OmissionsAccepted))
 	}
-	if reason := encodeDecisionReasonMarker(scopeDecisionReason(summary.DecisionReason, summary.Omissions, summary.FileAssessments)); reason != "" {
+
+	if reason := encodeDecisionReasonMarker(
+		scopeDecisionReason(summary.DecisionReason, summary.Omissions, summary.FileAssessments),
+	); reason != "" {
 		parts = append(parts, reason)
 	}
-	if summary.MetadataRevision != "" {
-		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
+
+	if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
+		parts = append(parts, checkpoints)
 	}
-	if fallback := encodeFallbackRecord(summary); fallback != "" {
-		parts = append(parts, fallback)
-	}
+
 	return strings.Join(parts, "\n")
 }
 
@@ -338,16 +416,21 @@ const withdrawnBlockNote = "The blocking review on this commit was dismissed by 
 // blockWithdrawn says a person dismissed the verdict at this head, which the
 // prose has to carry because the refresh then submits no blocking review and
 // the comment is the only place a reader learns why.
-func renderVerdictRefreshProse(summary Summary, blockWithdrawn bool, details, reportPrefix string) string {
-	parts := []string{reportPrefix, renderVerdictSection(summary, blockWithdrawn)}
+func renderVerdictRefreshProse(
+	summary Summary,
+	blockWithdrawn bool,
+	details string,
+	reportPrefix string,
+) string {
+	parts := []string{
+		renderVerdictBeforeReport(reportPrefix, renderVerdictSection(summary, blockWithdrawn)),
+	}
 	if len(summary.Omissions) > 0 && !summary.OmissionsAccepted {
 		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
 	}
-	parts = append(
-		parts,
-		details,
-		marker.Summary()+"\n"+RenderVerdictBody(summary),
-	)
+
+	parts = append(parts, details, marker.Summary()+"\n"+RenderVerdictBody(summary))
+
 	return strings.Join(parts, "\n\n")
 }
 
@@ -355,38 +438,79 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 	if len(summary.FileAssessments) == 0 {
 		summary.FileAssessments = decodeFileAssessments(existingBody)
 	}
+
 	prose := stripMaintenanceFailure(stripDurableStateMarker(existingBody))
+
 	fallbackRecord, recordedFallback := readFallbackRecord(prose, summary.Head)
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && recordedFallback {
 		summary.Fallback = fallbackRecord.Findings
 	}
+
 	start := strings.Index(prose, verdictSectionStart)
 	if start < 0 {
-		return renderVerdictRefreshProse(summary, blockWithdrawn, preservedReviewDetails(prose, summary), preservedReportPrefix(prose))
+		return renderVerdictRefreshProse(
+			summary,
+			blockWithdrawn,
+			preservedReviewDetails(prose, summary),
+			preservedReportPrefix(prose),
+		)
 	}
+
 	endOffset := strings.Index(prose[start:], verdictSectionEnd)
 	if endOffset < 0 {
-		return renderVerdictRefreshProse(summary, blockWithdrawn, preservedReviewDetails(prose, summary), preservedReportPrefix(prose))
+		return renderVerdictRefreshProse(
+			summary,
+			blockWithdrawn,
+			preservedReviewDetails(prose, summary),
+			preservedReportPrefix(prose),
+		)
 	}
+
 	end := start + endOffset + len(verdictSectionEnd)
+
 	verdict := renderVerdictSection(summary, blockWithdrawn)
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && !recordedFallback {
-		if fallbackStart := strings.Index(prose[start:end], fallbackSectionStart); fallbackStart >= 0 {
+		if fallbackStart := strings.Index(
+			prose[start:end],
+			fallbackSectionStart,
+		); fallbackStart >= 0 {
 			fallback := prose[start+fallbackStart : end]
 			if fallbackEnd := strings.Index(fallback, fallbackSectionEnd); fallbackEnd >= 0 {
 				retained := fallback[:fallbackEnd+len(fallbackSectionEnd)]
-				verdict = strings.Replace(verdict, verdictSectionEnd, retained+"\n\n"+verdictSectionEnd, 1)
+				verdict = strings.Replace(
+					verdict,
+					verdictSectionEnd,
+					retained+"\n\n"+verdictSectionEnd,
+					1,
+				)
 			}
 		}
 	}
-	updated := strings.TrimSpace(prose[:start]) + "\n\n" +
-		verdict + prose[end:]
+
+	updated := renderVerdictBeforeReport(strings.TrimSpace(prose[:start]), verdict) + prose[end:]
+
 	updated = refreshThreadDetails(updated, summary)
 	if markerStart := strings.LastIndex(updated, marker.Summary()); markerStart >= 0 {
 		updated = strings.TrimSpace(updated[:markerStart]) + "\n\n" + marker.Summary() + "\n" +
 			RenderVerdictBody(summary)
 	}
+
 	return updated
+}
+
+func renderVerdictBeforeReport(reportPrefix, verdict string) string {
+	heading, report, _ := strings.Cut(reportPrefix, "\n\n")
+	parts := []string{heading, verdict}
+
+	if report != "" {
+		if !strings.HasPrefix(report, reportSectionStart) {
+			report = reportSectionStart + "\n\n" + report + "\n\n" + reportSectionEnd
+		}
+
+		parts = append(parts, report)
+	}
+
+	return strings.Join(parts, "\n\n")
 }
 
 func stripDurableStateMarker(body string) string {
@@ -394,6 +518,7 @@ func stripDurableStateMarker(body string) string {
 	if index := strings.LastIndex(body, stateMarker); index >= 0 {
 		return strings.TrimSpace(body[:index])
 	}
+
 	return strings.TrimSpace(body)
 }
 
@@ -403,6 +528,7 @@ func refreshThreadDetails(body string, summary Summary) string {
 		"Bot threads open":     fmt.Sprintf("`%d`", countOpenThreadTraces(summary.Threads)),
 		"Bot threads resolved": fmt.Sprintf("`%d`", countResolvedThreadTraces(summary.Threads)),
 	}
+
 	lines := strings.Split(body, "\n")
 	for index, line := range lines {
 		for label, value := range rows {
@@ -411,6 +537,7 @@ func refreshThreadDetails(body string, summary Summary) string {
 			}
 		}
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -419,11 +546,14 @@ func renderBlocking(reasons []string) string {
 	if len(reasons) == 0 {
 		return ""
 	}
+
 	lines := make([]string, 0, len(reasons)+1)
 	lines = append(lines, "Resolve these inline findings:")
+
 	for _, reason := range reasons {
 		lines = append(lines, "- "+reason)
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -431,6 +561,7 @@ func formatReached(reached string) string {
 	if strings.TrimSpace(reached) == "" {
 		return "nothing"
 	}
+
 	return reached
 }
 
@@ -439,6 +570,7 @@ func shortHead(head domain.HeadSHA) string {
 	if len(value) <= shortHeadLength {
 		return value
 	}
+
 	return value[:shortHeadLength]
 }
 
@@ -446,10 +578,12 @@ func formatModels(models []string) string {
 	if len(models) == 0 {
 		return "unknown"
 	}
+
 	quoted := make([]string, 0, len(models))
 	for _, model := range models {
 		quoted = append(quoted, "`"+model+"`")
 	}
+
 	return strings.Join(quoted, ", ")
 }
 
@@ -460,6 +594,7 @@ func formatDuration(duration time.Duration) string {
 	if seconds == 1 {
 		return "`1` second"
 	}
+
 	return fmt.Sprintf("`%d` seconds", seconds)
 }
 
@@ -467,6 +602,7 @@ func formatYesNo(value bool) string {
 	if value {
 		return "yes"
 	}
+
 	return "no"
 }
 
@@ -474,6 +610,7 @@ func formatCountAndImportances(findings []domain.Finding) string {
 	if len(findings) == 0 {
 		return "`0`"
 	}
+
 	return fmt.Sprintf("`%d` at importance %s", len(findings), formatFindingImportances(findings))
 }
 
@@ -488,10 +625,15 @@ func formatCountAndImportances(findings []domain.Finding) string {
 // It carries no review marker. Nothing has been reviewed yet, and a marker here
 // would tell the next run this head was done.
 func RenderStartedBody(head domain.HeadSHA) string {
-	return strings.Join([]string{
-		"## Review",
-		"Reviewing `" + shortHead(head) + "`. This comment is rewritten when the review finishes.",
-	}, "\n\n")
+	return strings.Join(
+		[]string{
+			"## Review",
+			"Reviewing `" + shortHead(
+				head,
+			) + "`. This comment is rewritten when the review finishes.",
+		},
+		"\n\n",
+	)
 }
 
 // RenderFailureBody renders the visible summary for a review that could not
@@ -504,21 +646,28 @@ func RenderStartedBody(head domain.HeadSHA) string {
 // untrusted text in this body to contain.
 func RenderFailureBody(summary Summary, title string, detail string) string {
 	summary.Failed = true
+
 	parts := []string{"## Review", strings.TrimSpace(title)}
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
 		parts = append(parts, trimmedDetail)
 	}
+
 	hasVerdict := summary.ApprovalWithheld && summary.Decision != ""
 	if hasVerdict {
 		summary.Decision = domain.ReviewDecisionComment
 		parts = append(parts, renderVerdictSection(summary, false), RenderVerdictBody(summary))
-	} else if metadata := renderSummaryMetadata(summary); metadata != "" {
-		parts = append(parts, metadata)
+	} else if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(parts, findings)
 	}
-	if !hasVerdict && summary.MetadataRevision != "" {
-		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
+
+	if !hasVerdict {
+		if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
+			parts = append(parts, checkpoints)
+		}
 	}
+
 	parts = append(parts, RenderDetails(summary), marker.Summary())
+
 	return strings.Join(parts, "\n\n")
 }
 
@@ -526,19 +675,28 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 // declined before any model call. It carries no review marker, because the
 // gate never touches a review object and the head it names was never reviewed.
 func RenderSkipBody(reason string) string {
-	return strings.Join([]string{
-		"## Review",
-		"The review skipped this pull request because " + reason + ".",
-	}, "\n\n")
+	return strings.Join(
+		[]string{
+			"## Review",
+			"The review skipped this pull request because " + reason + ".",
+		},
+		"\n\n",
+	)
 }
 
 // RenderProgressBody reports the current head and remaining chunks.
 func RenderProgressBody(head domain.HeadSHA, remaining int) string {
-	progress := fmt.Sprintf("Reviewing `%s`. %s still to read.", shortHead(head), chunkCount(remaining))
+	progress := fmt.Sprintf(
+		"Reviewing `%s`. %s still to read.",
+		shortHead(head),
+		chunkCount(remaining),
+	)
 	if remaining == 0 {
 		progress = "Reviewing `" + shortHead(head) + "`. Every chunk has been read."
 	}
+
 	parts := []string{"## Review", progress}
+
 	return strings.Join(parts, "\n\n")
 }
 
@@ -571,49 +729,59 @@ func codeSpan(text string) string {
 // The table reports coverage rather than a stage. This run reached the end and
 // published a verdict, so there is no stage it stopped at, and a chunk nobody
 // read is exactly what the coverage row is for.
-func RenderIncompleteBody(summary Summary, pending int, reason string, detail string, statuses ...ProviderStatus) string {
-	lead := fmt.Sprintf("%s could not be reviewed on `%s`.", chunkCount(pending), shortHead(summary.Head))
+func RenderIncompleteBody(
+	summary Summary,
+	pending int,
+	reason string,
+	detail string,
+	statuses ...ProviderStatus,
+) string {
+	lead := fmt.Sprintf(
+		"%s could not be reviewed on `%s`.",
+		chunkCount(pending),
+		shortHead(summary.Head),
+	)
+
 	if reason == checkFailureDailyBudget || reason == checkFailureMixedUsage {
 		legacyDaily := false
+
 		for _, status := range statuses {
 			if status.Cause == ProviderAppBudgetDenied && status.TokenWindow.Mode == "" {
 				legacyDaily = true
 				break
 			}
 		}
+
 		if legacyDaily {
 			lead += " The app's daily token limit resets at 00:00 UTC."
 		}
 	} else {
 		lead += fmt.Sprintf(" Apply the `%s` label to retry this head.", domain.RerunReviewLabel)
 	}
-	blocking := removeBlockingReasons(
-		summary.Blocking,
-		unreviewedHeadReason,
-	)
+
+	blocking := removeBlockingReasons(summary.Blocking, unreviewedHeadReason)
 	coverageReason := unreviewedHeadReason
 	parts := []string{
 		"## Review",
 		lead,
 	}
+
 	for _, note := range []string{reason, coverageReason, renderBlocking(blocking), detail} {
 		if trimmed := strings.TrimSpace(note); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
-	if fallback := renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)); fallback != "" {
-		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
+
+	if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(parts, findings)
 	}
-	if record := encodeFallbackRecord(summary); record != "" {
-		parts = append(parts, record)
+
+	if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
+		parts = append(parts, checkpoints)
 	}
-	if metadata := renderSummaryMetadata(summary); metadata != "" {
-		parts = append(parts, metadata)
-	}
-	if summary.MetadataRevision != "" {
-		parts = append(parts, encodeMetadataRecord(metadataRecordFromSummary(summary)))
-	}
+
 	parts = append(parts, RenderDetails(summary, statuses...))
+
 	return strings.Join(parts, "\n\n")
 }
 
@@ -624,6 +792,7 @@ func removeBlockingReasons(reasons []string, removed ...string) []string {
 			kept = append(kept, reason)
 		}
 	}
+
 	return kept
 }
 
@@ -634,6 +803,7 @@ func replaceBlockingReason(reasons []string, oldReason string, newReason string)
 			replaced[index] = newReason
 		}
 	}
+
 	return replaced
 }
 
@@ -643,11 +813,15 @@ func chunkCount(count int) string {
 	if count == 1 {
 		return "1 chunk"
 	}
+
 	return fmt.Sprintf("%d chunks", count)
 }
 
 // RenderInline renders anchored findings as GitHub inline review comments.
-func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.InlineComment, error) {
+func RenderInline(
+	head domain.HeadSHA,
+	findings []domain.Finding,
+) ([]githubapp.InlineComment, error) {
 	sorted := append([]domain.Finding{}, findings...)
 	sortFindings(sorted)
 
@@ -658,28 +832,32 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			slog.Error("normalize finding path", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("normalize finding path: %w", err)
 		}
+
 		// The evidence and the claim sentence reach the encoder, and no further.
 		// Each is hashed into one of the marker's keys, which is what lets a
 		// later run recognize a reworded restatement of this same claim; the
 		// rendered body still prints neither, so the reader sees no quoted
 		// source line they already have beside the comment, and no label the
 		// model wrote for the service rather than for them.
-		body, err := marker.EncodeFindingBody(head, domain.Finding{
-			Surface:          domain.FindingFile,
-			CommitSHA:        "",
-			CorrectionAction: finding.CorrectionAction,
-			RuleID:           finding.RuleID,
-			Deduplication:    finding.Deduplication,
-			Path:             normalizedPath,
-			StartLine:        finding.StartLine,
-			EndLine:          finding.EndLine,
-			Title:            sanitizeProse(finding.Title),
-			Body:             sanitizeProse(finding.Body),
-			Evidence:         finding.Evidence,
-			Claim:            finding.Claim,
-			Suggestion:       finding.Suggestion,
-			Importance:       finding.Importance,
-		})
+		body, err := marker.EncodeFindingBody(
+			head,
+			domain.Finding{
+				Surface:          domain.FindingFile,
+				CommitSHA:        "",
+				CorrectionAction: finding.CorrectionAction,
+				RuleID:           finding.RuleID,
+				Deduplication:    finding.Deduplication,
+				Path:             normalizedPath,
+				StartLine:        finding.StartLine,
+				EndLine:          finding.EndLine,
+				Title:            sanitizeProse(finding.Title),
+				Body:             sanitizeProse(finding.Body),
+				Evidence:         finding.Evidence,
+				Claim:            finding.Claim,
+				Suggestion:       finding.Suggestion,
+				Importance:       finding.Importance,
+			},
+		)
 		if err != nil {
 			slog.Error("encode finding body", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("encode finding body: %w", err)
@@ -697,7 +875,9 @@ func RenderInline(head domain.HeadSHA, findings []domain.Finding) ([]githubapp.I
 			comment.StartLine = finding.StartLine
 			comment.StartSide = "RIGHT"
 		}
+
 		comments = append(comments, comment)
 	}
+
 	return comments, nil
 }

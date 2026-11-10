@@ -38,18 +38,27 @@ type queryValues struct {
 }
 
 func renderQuery(name string, values queryValues) (string, error) {
-	for _, value := range []*string{&values.ID, &values.Cursor, &values.Search, &values.Owner, &values.Repository} {
+	for _, value := range []*string{
+		&values.ID,
+		&values.Cursor,
+		&values.Search,
+		&values.Owner,
+		&values.Repository,
+	} {
 		encoded, err := json.Marshal(*value)
 		if err != nil {
 			slog.Warn("GitHub query string encoding failed", "operation", name)
 			return "", fmt.Errorf("encode GraphQL string: %w", err)
 		}
+
 		*value = string(encoded)
 	}
+
 	var output bytes.Buffer
 	if err := queryTemplates.ExecuteTemplate(&output, name, values); err != nil {
 		return "", errors.New("GitHub query template could not be rendered")
 	}
+
 	return output.String(), nil
 }
 
@@ -193,27 +202,36 @@ func (target Target) String() string {
 func ParseTarget(value string) (Target, error) {
 	repository, numberText, found := strings.Cut(value, "#")
 	parts := strings.Split(repository, "/")
+
 	number, err := strconv.ParseInt(numberText, 10, 64)
 	if !found || len(parts) != 2 || parts[0] == "" || parts[1] == "" || err != nil || number <= 0 {
 		return Target{}, errors.New("pull request identifier must use OWNER/REPOSITORY#NUMBER")
 	}
+
 	return Target{Repository: repository, Number: number}, nil
 }
 
 func gh(ctx context.Context, args ...string) ([]byte, error) {
 	slog.DebugContext(ctx, "GitHub evidence request started", "operation", args[0])
+
 	data, err := exec.CommandContext(ctx, "gh", args...).Output()
 	if err != nil {
 		if ctx.Err() != nil {
 			slog.WarnContext(ctx, "GitHub request canceled", "operation", args[0])
 			return nil, fmt.Errorf("GitHub request canceled: %w", ctx.Err())
 		}
+
 		var exitError *exec.ExitError
 		if errors.As(err, &exitError) {
-			return nil, fmt.Errorf("GitHub CLI request failed with exit status %d; provider output remains private", exitError.ExitCode())
+			return nil, fmt.Errorf(
+				"GitHub CLI request failed with exit status %d; provider output remains private",
+				exitError.ExitCode(),
+			)
 		}
+
 		return nil, errors.New("GitHub CLI could not start")
 	}
+
 	return data, nil
 }
 
@@ -223,10 +241,12 @@ func DefaultOwner(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
 	var actor Actor
 	if err = json.Unmarshal(data, &actor); err != nil || actor.Login == "" {
 		return "", errors.New("GitHub authenticated owner could not be decoded; provide --owner")
 	}
+
 	return actor.Login, nil
 }
 
@@ -240,75 +260,107 @@ func graph(ctx context.Context, query string) (map[string]json.RawMessage, error
 	if err != nil {
 		return nil, err
 	}
+
 	var response graphResponse
 	if err = json.Unmarshal(data, &response); err != nil {
 		return nil, errors.New("GitHub GraphQL response could not be decoded")
 	}
+
 	if len(response.Errors) != 0 {
 		return nil, errors.New("GitHub GraphQL returned errors; the capture is incomplete")
 	}
+
 	return response.Data, nil
 }
 
-func completeConnection[T connectionNode](ctx context.Context, id, kind, name, fields string, connection *Connection[T]) error {
+func completeConnection[T connectionNode](
+	ctx context.Context,
+	id string,
+	kind string,
+	name string,
+	fields string,
+	connection *Connection[T],
+) error {
 	connection.Pages = 1
 	seen := make(map[string]bool)
+
 	for connection.PageInfo.HasNextPage {
 		cursor := connection.PageInfo.EndCursor
 		if cursor == "" || seen[cursor] {
 			return errors.New("GitHub connection pagination did not advance")
 		}
+
 		seen[cursor] = true
+
 		var values queryValues
+
 		selection, err := renderQuery(fields, values)
 		if err != nil {
 			return err
 		}
+
 		values.ID, values.Kind, values.Connection, values.Cursor, values.Selection = id, kind, name, cursor, selection
+
 		query, err := renderQuery("connection", values)
 		if err != nil {
 			return err
 		}
+
 		data, err := graph(ctx, query)
 		if err != nil {
 			return err
 		}
+
 		var node map[string]json.RawMessage
 		if err = json.Unmarshal(data["node"], &node); err != nil {
 			return errors.New("GitHub paginated node could not be decoded")
 		}
+
 		var next Connection[T]
 		if err = json.Unmarshal(node[name], &next); err != nil {
 			return errors.New("GitHub connection could not be decoded")
 		}
+
 		connection.Nodes = append(connection.Nodes, next.Nodes...)
 		connection.PageInfo = next.PageInfo
+
 		connection.Pages++
 		if next.TotalCount != connection.TotalCount {
 			return errors.New("GitHub connection changed during pagination; retry the capture")
 		}
 	}
+
 	if len(connection.Nodes) != connection.TotalCount {
 		return errors.New("GitHub connection count does not match its complete page list")
 	}
+
 	return nil
 }
 
 func discover(ctx context.Context, owner string, from, end time.Time) ([]Target, error) {
-	search := "is:pr user:" + owner + " updated:" + from.Format(time.RFC3339) + ".." + end.Format(time.RFC3339)
+	search := "is:pr user:" + owner + " updated:" + from.Format(time.RFC3339) + ".." + end.Format(
+		time.RFC3339,
+	)
+
 	var targets []Target
+
 	cursor := ""
+
 	for {
 		var values queryValues
+
 		values.Search, values.Cursor = search, cursor
+
 		query, err := renderQuery("search", values)
 		if err != nil {
 			return nil, err
 		}
+
 		data, err := graph(ctx, query)
 		if err != nil {
 			return nil, err
 		}
+
 		var result struct {
 			IssueCount int           `json:"issueCount"`
 			PageInfo   PageInfo      `json:"pageInfo"`
@@ -317,129 +369,217 @@ func discover(ctx context.Context, owner string, from, end time.Time) ([]Target,
 		if err = json.Unmarshal(data["search"], &result); err != nil {
 			return nil, errors.New("GitHub search results could not be decoded")
 		}
+
 		if result.IssueCount >= githubSearchLimit {
-			return nil, errors.New("GitHub search contains at least 1000 results; use a narrower window")
+			return nil, errors.New(
+				"GitHub search contains at least 1000 results; use a narrower window",
+			)
 		}
+
 		for _, pullRequest := range result.Nodes {
 			if !pullRequest.UpdatedAt.Before(from) && !pullRequest.UpdatedAt.After(end) {
-				targets = append(targets, Target{Repository: pullRequest.Repository.NameWithOwner, Number: pullRequest.Number})
+				targets = append(
+					targets,
+					Target{
+						Repository: pullRequest.Repository.NameWithOwner,
+						Number:     pullRequest.Number,
+					},
+				)
 			}
 		}
+
 		if !result.PageInfo.HasNextPage {
 			return targets, nil
 		}
+
 		if result.PageInfo.EndCursor == "" || result.PageInfo.EndCursor == cursor {
 			return nil, errors.New("GitHub search pagination did not advance")
 		}
+
 		cursor = result.PageInfo.EndCursor
 	}
 }
 
 // CaptureGitHub exhausts every connection and rejects searches at the API result cap.
-func CaptureGitHub(ctx context.Context, owner string, from, end time.Time, logTargets []Target) ([]PullRequest, error) {
+func CaptureGitHub(
+	ctx context.Context,
+	owner string,
+	from time.Time,
+	end time.Time,
+	logTargets []Target,
+) ([]PullRequest, error) {
 	targets, err := discover(ctx, owner, from, end)
 	if err != nil {
 		return nil, err
 	}
+
 	targets = uniqueTargets(owner, append(targets, logTargets...))
 	captured := make([]PullRequest, 0, len(targets))
 	rulesByBranch := make(map[string]BranchRules)
+
 	for _, target := range targets {
 		pr, captureErr := capturePullRequest(ctx, target)
 		if captureErr != nil {
-			slog.WarnContext(ctx, "GitHub pull request capture failed", "pull_request", target.String())
+			slog.WarnContext(
+				ctx,
+				"GitHub pull request capture failed",
+				"pull_request",
+				target.String(),
+			)
+
 			return nil, fmt.Errorf("capture %s: %w", target.String(), captureErr)
 		}
+
 		key := target.Repository + "/" + pr.BaseRefName
+
 		rules, exists := rulesByBranch[key]
 		if !exists {
 			rules = readBranchRules(ctx, target.Repository, pr.BaseRefName)
 			rulesByBranch[key] = rules
 		}
+
 		pr.BranchRules = rules
 		captured = append(captured, *pr)
 	}
+
 	return captured, nil
 }
 
 func uniqueTargets(owner string, targets []Target) []Target {
 	unique := make(map[string]Target)
+
 	for _, target := range targets {
 		if strings.EqualFold(strings.Split(target.Repository, "/")[0], owner) {
 			unique[target.String()] = target
 		}
 	}
+
 	result := make([]Target, 0, len(unique))
 	for _, target := range unique {
 		result = append(result, target)
 	}
-	sort.Slice(result, func(left, right int) bool { return result[left].String() < result[right].String() })
+
+	sort.Slice(
+		result,
+		func(left, right int) bool { return result[left].String() < result[right].String() },
+	)
+
 	return result
 }
 
 func capturePullRequest(ctx context.Context, target Target) (*PullRequest, error) {
 	parts := strings.SplitN(target.Repository, "/", 2)
+
 	var values queryValues
+
 	values.Owner, values.Repository, values.Number = parts[0], parts[1], target.Number
+
 	query, err := renderQuery("pullRequest", values)
 	if err != nil {
 		return nil, err
 	}
+
 	data, err := graph(ctx, query)
 	if err != nil {
 		return nil, err
 	}
+
 	var repository struct {
 		PullRequest *PullRequest `json:"pullRequest"`
 	}
 	if json.Unmarshal(data["repository"], &repository) != nil || repository.PullRequest == nil {
 		return nil, errors.New("GitHub pull request could not be decoded")
 	}
+
 	if err = completePullRequest(ctx, repository.PullRequest); err != nil {
 		return nil, err
 	}
+
 	return repository.PullRequest, nil
 }
 
 func completePullRequest(ctx context.Context, pr *PullRequest) error {
 	for _, err := range []error{
 		completeConnection(ctx, pr.ID, "PullRequest", "reviews", "reviews", &pr.Reviews),
-		completeConnection(ctx, pr.ID, "PullRequest", "latestOpinionatedReviews", "reviews", &pr.LatestOpinionatedReviews),
-		completeConnection(ctx, pr.ID, "PullRequest", "reviewThreads", "threads", &pr.ReviewThreads),
+		completeConnection(
+			ctx,
+			pr.ID,
+			"PullRequest",
+			"latestOpinionatedReviews",
+			"reviews",
+			&pr.LatestOpinionatedReviews,
+		),
+		completeConnection(
+			ctx,
+			pr.ID,
+			"PullRequest",
+			"reviewThreads",
+			"threads",
+			&pr.ReviewThreads,
+		),
 		completeConnection(ctx, pr.ID, "PullRequest", "comments", "comments", &pr.Comments),
 	} {
 		if err != nil {
 			return err
 		}
 	}
+
 	for index := range pr.ReviewThreads.Nodes {
 		thread := &pr.ReviewThreads.Nodes[index]
-		if err := completeConnection(ctx, thread.ID, "PullRequestReviewThread", "comments", "threadComments", &thread.Comments); err != nil {
+		if err := completeConnection(
+			ctx,
+			thread.ID,
+			"PullRequestReviewThread",
+			"comments",
+			"threadComments",
+			&thread.Comments,
+		); err != nil {
 			return err
 		}
 	}
+
 	if pr.StatusCheckRollup == nil {
 		return nil
 	}
+
 	rollup := pr.StatusCheckRollup
-	return completeConnection(ctx, rollup.ID, "StatusCheckRollup", "contexts", "checks", &rollup.Contexts)
+
+	return completeConnection(
+		ctx,
+		rollup.ID,
+		"StatusCheckRollup",
+		"contexts",
+		"checks",
+		&rollup.Contexts,
+	)
 }
 
 func readBranchRules(ctx context.Context, repository, branch string) BranchRules {
 	var rules BranchRules
-	raw, err := gh(ctx, "api", "--paginate", "--slurp", "repos/"+repository+"/rules/branches/"+url.PathEscape(branch)+"?per_page=100")
+
+	raw, err := gh(
+		ctx,
+		"api",
+		"--paginate",
+		"--slurp",
+		"repos/"+repository+"/rules/branches/"+url.PathEscape(branch)+"?per_page=100",
+	)
 	if err != nil {
 		rules.Error = "GitHub branch rules could not be read"
 		return rules
 	}
+
 	var pages [][]BranchRule
 	if json.Unmarshal(raw, &pages) != nil {
 		rules.Error = "GitHub branch rules could not be decoded"
 		return rules
 	}
+
 	for _, page := range pages {
 		rules.Rules = append(rules.Rules, page...)
 	}
+
 	rules.Known = true
+
 	return rules
 }

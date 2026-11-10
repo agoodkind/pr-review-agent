@@ -50,16 +50,19 @@ func (cache *tokenCache) get(installationID int64) (string, bool) {
 	if !ok {
 		return "", false
 	}
+
 	if cache.now().Add(tokenRefreshLead).After(entry.expiresAt) {
 		delete(cache.tokens, installationID)
 		return "", false
 	}
+
 	return entry.value, true
 }
 
 func (cache *tokenCache) set(installationID int64, value string, expiresAt time.Time) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+
 	cache.tokens[installationID] = installationToken{
 		value:     value,
 		expiresAt: expiresAt,
@@ -87,6 +90,7 @@ func buildAppJWT(privateKey *rsa.PrivateKey, appID int64, now time.Time) (string
 	if err != nil {
 		return "", errors.New("marshal jwt header")
 	}
+
 	claimsJSON, err := json.Marshal(claims)
 	if err != nil {
 		return "", errors.New("marshal jwt claims")
@@ -131,20 +135,38 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 	}
 
 	path := fmt.Sprintf("/app/installations/%d/access_tokens", installationID)
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.restURL(path), http.NoBody)
+
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		client.restURL(path),
+		http.NoBody,
+	)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "create installation token request", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"create installation token request",
+			slog.String("err", err.Error()),
+		)
+
 		return "", errors.New("create installation token request")
 	}
+
 	request.Header.Set("Authorization", "Bearer "+jwt)
 	request.Header.Set("Accept", githubAcceptHeader)
 	request.Header.Set(githubAPIVersionHeader, githubAPIVersionValue)
 
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "request installation token", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"request installation token",
+			slog.String("err", err.Error()),
+		)
+
 		return "", fmt.Errorf("request installation token: %w", err)
 	}
+
 	defer func() {
 		_, _ = io.Copy(io.Discard, response.Body)
 		_ = response.Body.Close()
@@ -152,21 +174,34 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 
 	body, err := readLimitedBody(response.Body)
 	if err != nil {
-		client.logger.ErrorContext(ctx, "read installation token response", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"read installation token response",
+			slog.String("err", err.Error()),
+		)
+
 		return "", errors.New("read installation token response")
 	}
+
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return "", newAPIError(response.StatusCode, sanitizeErrorBody(body))
 	}
 
 	var parsed installationTokenResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		client.logger.ErrorContext(ctx, "decode installation token response", slog.String("err", err.Error()))
+		client.logger.ErrorContext(
+			ctx,
+			"decode installation token response",
+			slog.String("err", err.Error()),
+		)
+
 		return "", errors.New("decode installation token response")
 	}
+
 	if strings.TrimSpace(parsed.Token) == "" {
 		return "", errors.New("installation token missing")
 	}
+
 	client.logger.InfoContext(
 		ctx,
 		"installation token granted",
@@ -177,5 +212,6 @@ func (client *Client) installationToken(ctx context.Context, installationID int6
 	)
 
 	client.tokens.set(installationID, parsed.Token, parsed.ExpiresAt)
+
 	return parsed.Token, nil
 }

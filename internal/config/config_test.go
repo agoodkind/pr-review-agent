@@ -20,15 +20,19 @@ func TestEndToEndLoadEnablesReviewRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.GitHubPrivateKey == nil {
 		t.Fatal("GitHubPrivateKey is nil")
 	}
+
 	if len(cfg.GitHubWebhookSecret) == 0 {
 		t.Fatal("GitHubWebhookSecret is empty")
 	}
+
 	if cfg.ClydeBaseURL == nil || cfg.ClydeBaseURL.String() == "" {
 		t.Fatal("ClydeBaseURL is empty")
 	}
+
 	if cfg.GitHubAPIBaseURL == nil || cfg.GitHubAPIBaseURL.String() == "" {
 		t.Fatal("GitHubAPIBaseURL is empty")
 	}
@@ -39,6 +43,7 @@ func TestLoadRequiresEverySecret(t *testing.T) {
 	if err == nil {
 		t.Fatal("empty env: want error")
 	}
+
 	for _, secret := range []string{
 		"GITHUB_APP_ID",
 		"GITHUB_PRIVATE_KEY",
@@ -64,6 +69,7 @@ func TestLoadAllowsPrimaryWithoutAccessHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.CFAccessClientID != "" || cfg.CFAccessClientSecret != "" {
 		t.Fatal("primary Cloudflare Access values are set")
 	}
@@ -74,15 +80,23 @@ func TestLoadWithoutFallbackLeavesTheFallbackUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.HasFallback() {
 		t.Fatal("HasFallback() = true, want false when no fallback is configured")
 	}
+
 	if cfg.FallbackBaseURL != nil {
 		t.Fatalf("FallbackBaseURL = %v, want nil", cfg.FallbackBaseURL)
 	}
+
 	if cfg.FallbackModel != "" || cfg.FallbackAPIKey != "" {
-		t.Fatalf("fallback model = %q, key set = %t, want both empty", cfg.FallbackModel, cfg.FallbackAPIKey != "")
+		t.Fatalf(
+			"fallback model = %q, key set = %t, want both empty",
+			cfg.FallbackModel,
+			cfg.FallbackAPIKey != "",
+		)
 	}
+
 	if cfg.FallbackOnUsageExceeded {
 		t.Fatal("FallbackOnUsageExceeded = true, want false without a fallback")
 	}
@@ -93,21 +107,27 @@ func TestLoadReadsACompleteFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if !cfg.HasFallback() {
 		t.Fatal("HasFallback() = false, want true")
 	}
+
 	if cfg.FallbackBaseURL.String() != "https://fallback.example" {
 		t.Fatalf("FallbackBaseURL = %q, want https://fallback.example", cfg.FallbackBaseURL)
 	}
+
 	if cfg.FallbackModel != "fixture-fallback-model" {
 		t.Fatalf("FallbackModel = %q, want fixture-fallback-model", cfg.FallbackModel)
 	}
+
 	if cfg.FallbackAPIKey == "" {
 		t.Fatal("FallbackAPIKey is empty")
 	}
+
 	if !cfg.FallbackOnUsageExceeded {
 		t.Fatal("FallbackOnUsageExceeded = false, want true by default")
 	}
+
 	if cfg.FallbackCFAccessClientID != "" || cfg.FallbackCFAccessClientSecret != "" {
 		t.Fatal("Cloudflare Access values are set although none were configured")
 	}
@@ -120,54 +140,79 @@ func TestLoadRejectsAPartialFallback(t *testing.T) {
 		"FALLBACK_API_KEY":  {"FALLBACK_BASE_URL", "FALLBACK_MODEL"},
 	}
 	for present, wantMissing := range cases {
-		t.Run(present, func(t *testing.T) {
-			only := map[string]string{present: completeFallback(map[string]string{})[present]}
-			_, err := loadWithOverrides(only)
-			if err == nil {
-				t.Fatalf("Load with only %s: want error", present)
-			}
-			for _, name := range wantMissing {
-				if !strings.Contains(err.Error(), name) {
-					t.Fatalf("error %q missing %q", err.Error(), name)
+		t.Run(
+			present,
+			func(t *testing.T) {
+				only := map[string]string{present: completeFallback(map[string]string{})[present]}
+
+				_, err := loadWithOverrides(only)
+				if err == nil {
+					t.Fatalf("Load with only %s: want error", present)
 				}
-			}
-		})
+
+				for _, name := range wantMissing {
+					if !strings.Contains(err.Error(), name) {
+						t.Fatalf("error %q missing %q", err.Error(), name)
+					}
+				}
+			},
+		)
 	}
 }
 
 func TestLoadRejectsAPlaintextFallbackURL(t *testing.T) {
-	_, err := loadWithOverrides(completeFallback(map[string]string{
-		"FALLBACK_BASE_URL": "http://fallback.example",
-	}))
+	_, err := loadWithOverrides(
+		completeFallback(map[string]string{
+			"FALLBACK_BASE_URL": "http://fallback.example",
+		}),
+	)
 	if err == nil || !strings.Contains(err.Error(), "FALLBACK_BASE_URL") {
 		t.Fatalf("Load with plaintext fallback URL: err = %v, want FALLBACK_BASE_URL", err)
 	}
 }
 
 func TestLoadRequiresBothFallbackAccessValuesTogether(t *testing.T) {
-	t.Run("both set", func(t *testing.T) {
-		cfg, err := loadWithOverrides(completeFallback(map[string]string{
-			"FALLBACK_CF_ACCESS_CLIENT_ID":     "fixture-fallback-cf-id",
-			"FALLBACK_CF_ACCESS_CLIENT_SECRET": "fixture-fallback-cf-" + strings.Repeat("d", 8),
-		}))
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if cfg.FallbackCFAccessClientID != "fixture-fallback-cf-id" {
-			t.Fatalf("FallbackCFAccessClientID = %q", cfg.FallbackCFAccessClientID)
-		}
-		if cfg.FallbackCFAccessClientSecret == "" {
-			t.Fatal("FallbackCFAccessClientSecret is empty")
-		}
-	})
-
-	for _, present := range []string{"FALLBACK_CF_ACCESS_CLIENT_ID", "FALLBACK_CF_ACCESS_CLIENT_SECRET"} {
-		t.Run("only "+present, func(t *testing.T) {
-			_, err := loadWithOverrides(completeFallback(map[string]string{present: "fixture-value"}))
-			if err == nil {
-				t.Fatalf("Load with only %s: want error", present)
+	t.Run(
+		"both set",
+		func(t *testing.T) {
+			cfg, err := loadWithOverrides(
+				completeFallback(map[string]string{
+					"FALLBACK_CF_ACCESS_CLIENT_ID": "fixture-fallback-cf-id",
+					"FALLBACK_CF_ACCESS_CLIENT_SECRET": "fixture-fallback-cf-" + strings.Repeat(
+						"d",
+						8,
+					),
+				}),
+			)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
 			}
-		})
+
+			if cfg.FallbackCFAccessClientID != "fixture-fallback-cf-id" {
+				t.Fatalf("FallbackCFAccessClientID = %q", cfg.FallbackCFAccessClientID)
+			}
+
+			if cfg.FallbackCFAccessClientSecret == "" {
+				t.Fatal("FallbackCFAccessClientSecret is empty")
+			}
+		},
+	)
+
+	for _, present := range []string{
+		"FALLBACK_CF_ACCESS_CLIENT_ID",
+		"FALLBACK_CF_ACCESS_CLIENT_SECRET",
+	} {
+		t.Run(
+			"only "+present,
+			func(t *testing.T) {
+				_, err := loadWithOverrides(
+					completeFallback(map[string]string{present: "fixture-value"}),
+				)
+				if err == nil {
+					t.Fatalf("Load with only %s: want error", present)
+				}
+			},
+		)
 	}
 }
 
@@ -179,10 +224,13 @@ func TestLoadRejectsAnUnknownFallbackTrigger(t *testing.T) {
 }
 
 func TestLoadAcceptsTheUsageExceededTrigger(t *testing.T) {
-	cfg, err := loadWithOverrides(completeFallback(map[string]string{"FALLBACK_ON": FallbackOnUsageExceeded}))
+	cfg, err := loadWithOverrides(
+		completeFallback(map[string]string{"FALLBACK_ON": FallbackOnUsageExceeded}),
+	)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if !cfg.FallbackOnUsageExceeded {
 		t.Fatal("FallbackOnUsageExceeded = false, want true")
 	}
@@ -190,10 +238,12 @@ func TestLoadAcceptsTheUsageExceededTrigger(t *testing.T) {
 
 func TestFallbackFailureNeverNamesASecretValue(t *testing.T) {
 	fallbackKey := "fixture-fallback-key-" + strings.Repeat("z", 12)
+
 	_, err := loadWithOverrides(map[string]string{"FALLBACK_API_KEY": fallbackKey})
 	if err == nil {
 		t.Fatal("Load with only FALLBACK_API_KEY: want error")
 	}
+
 	if strings.Contains(err.Error(), fallbackKey) {
 		t.Fatal("error names the fallback key value")
 	}
@@ -205,9 +255,11 @@ func completeFallback(overrides map[string]string) map[string]string {
 		"FALLBACK_MODEL":    "fixture-fallback-model",
 		"FALLBACK_API_KEY":  "fixture-fallback-" + strings.Repeat("e", 8),
 	}
+
 	for key, value := range overrides {
 		values[key] = value
 	}
+
 	return values
 }
 
@@ -217,24 +269,31 @@ func TestLoadParsesPKCS1AndPKCS8RSAKeys(t *testing.T) {
 		t.Fatalf("GenerateKey: %v", err)
 	}
 
-	pkcs1 := string(pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	}))
+	pkcs1 := string(
+		pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+		}),
+	)
+
 	pkcs8Bytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
 	if err != nil {
 		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
 	}
-	pkcs8 := string(pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: pkcs8Bytes,
-	}))
+
+	pkcs8 := string(
+		pem.EncodeToMemory(&pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: pkcs8Bytes,
+		}),
+	)
 
 	for _, keyText := range []string{pkcs1, pkcs8} {
 		cfg, err := loadWithKey(keyText)
 		if err != nil {
 			t.Fatalf("Load with key: %v", err)
 		}
+
 		if cfg.GitHubPrivateKey == nil {
 			t.Fatal("GitHubPrivateKey is nil")
 		}
@@ -258,15 +317,19 @@ func TestLoadUsesPortAndGitHubURLDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load defaults: %v", err)
 	}
+
 	if cfg.Port != "3000" {
 		t.Fatalf("Port = %q, want 3000", cfg.Port)
 	}
+
 	if cfg.GitHubBotLogin != testBotLogin {
 		t.Fatalf("GitHubBotLogin = %q, want %q", cfg.GitHubBotLogin, testBotLogin)
 	}
+
 	if cfg.GitHubAPIBaseURL.String() != "https://api.github.com" {
 		t.Fatalf("GitHubAPIBaseURL = %q", cfg.GitHubAPIBaseURL)
 	}
+
 	if cfg.GitHubGraphQLURL.String() != "https://api.github.com/graphql" {
 		t.Fatalf("GitHubGraphQLURL = %q", cfg.GitHubGraphQLURL)
 	}
@@ -277,6 +340,7 @@ func TestLoadUsesConfiguredMinimumImportance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.MinimumImportance != 9 {
 		t.Fatalf("MinimumImportance = %d, want 9", cfg.MinimumImportance)
 	}
@@ -289,6 +353,7 @@ func TestLoadIgnoresARunWideReviewTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewChunkTimeout != 5*time.Minute {
 		t.Fatalf("ReviewChunkTimeout = %s, want the per call default 5m", cfg.ReviewChunkTimeout)
 	}
@@ -299,6 +364,7 @@ func TestLoadUsesReviewMaxFilesDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewMaxFiles != 100 {
 		t.Fatalf("ReviewMaxFiles = %d, want 100", cfg.ReviewMaxFiles)
 	}
@@ -309,6 +375,7 @@ func TestLoadUsesConfiguredReviewMaxFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewMaxFiles != 40 {
 		t.Fatalf("ReviewMaxFiles = %d, want 40", cfg.ReviewMaxFiles)
 	}
@@ -326,6 +393,7 @@ func TestLoadUsesReviewMaxChunksDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewMaxChunks != 60 {
 		t.Fatalf("ReviewMaxChunks = %d, want 60", cfg.ReviewMaxChunks)
 	}
@@ -336,6 +404,7 @@ func TestLoadUsesConfiguredReviewMaxChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewMaxChunks != 20 {
 		t.Fatalf("ReviewMaxChunks = %d, want 20", cfg.ReviewMaxChunks)
 	}
@@ -353,6 +422,7 @@ func TestLoadUsesReviewChunkTimeoutDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewChunkTimeout != 5*time.Minute {
 		t.Fatalf("ReviewChunkTimeout = %s, want 5m", cfg.ReviewChunkTimeout)
 	}
@@ -363,6 +433,7 @@ func TestLoadUsesConfiguredReviewChunkTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewChunkTimeout != 90*time.Second {
 		t.Fatalf("ReviewChunkTimeout = %s, want 90s", cfg.ReviewChunkTimeout)
 	}
@@ -380,6 +451,7 @@ func TestLoadUsesConfiguredReviewWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ReviewWorkers != 4 {
 		t.Fatalf("ReviewWorkers = %d, want 4", cfg.ReviewWorkers)
 	}
@@ -406,6 +478,7 @@ func TestLoadRejectsPlaintextClydeURL(t *testing.T) {
 
 func TestLoadErrorsDoNotContainSecretValues(t *testing.T) {
 	secret := "fixture-" + strings.Repeat("z", 12)
+
 	_, err := loadWithOverrides(map[string]string{
 		"GITHUB_WEBHOOK_SECRET": "",
 		"CLYDE_API_KEY":         secret,
@@ -413,6 +486,7 @@ func TestLoadErrorsDoNotContainSecretValues(t *testing.T) {
 	if err == nil {
 		t.Fatal("missing webhook secret: want error")
 	}
+
 	if strings.Contains(err.Error(), secret) {
 		t.Fatalf("error leaks secret: %q", err.Error())
 	}
@@ -429,14 +503,17 @@ func TestLoadModelPricingMatchesExactAndLongestModelPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	exact, found := cfg.PricingForModel("gpt-5-mini-2026-09-13")
 	if !found || exact.InputPerMillionTokens != 5 {
 		t.Fatalf("exact pricing = %+v, %v, want exact model rates", exact, found)
 	}
+
 	prefix, found := cfg.PricingForModel("gpt-5-mini-2026-10-01")
 	if !found || prefix.InputPerMillionTokens != 3 {
 		t.Fatalf("prefix pricing = %+v, %v, want longest model prefix rates", prefix, found)
 	}
+
 	if _, found := cfg.PricingForModel("gpt-50"); found {
 		t.Fatal("gpt prefix matched gpt-50 without a model boundary")
 	}
@@ -468,7 +545,9 @@ func TestLoadRuntimeUsesFileSettingsAndEnvironmentSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fixture: %v", err)
 	}
-	data := []byte(`{
+
+	data := []byte(
+		`{
 		"GITHUB_APP_ID": "12345",
 		"GITHUB_BOT_LOGIN": "fixture-bot[bot]",
 		"CLYDE_BASE_URL": "https://clyde.example/v1",
@@ -484,17 +563,22 @@ func TestLoadRuntimeUsesFileSettingsAndEnvironmentSecrets(t *testing.T) {
 				"output_per_million_tokens": 0.50
 			}
 		}
-	}`)
+	}`,
+	)
+
 	cfg, err := LoadRuntime(data, lookup)
 	if err != nil {
 		t.Fatalf("LoadRuntime: %v", err)
 	}
+
 	if cfg.ReviewModel != "gpt-6-luna" || cfg.MinimumImportance != 8 {
 		t.Fatalf("review settings = %q, %d", cfg.ReviewModel, cfg.MinimumImportance)
 	}
+
 	if cfg.ClydeAPIKey == "" || cfg.GitHubPrivateKey == nil || len(cfg.GitHubWebhookSecret) == 0 {
 		t.Fatal("environment credentials were not loaded")
 	}
+
 	pricing, ok := cfg.PricingForModel("gpt-6-luna-2026-09-22")
 	if !ok || pricing.OutputPerMillionTokens != 0.50 {
 		t.Fatalf("pricing = %+v, %t", pricing, ok)
@@ -524,9 +608,11 @@ func TestLoadKeepsADisabledProviderInPriority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if len(cfg.Providers) != 2 || cfg.Providers[0].Disabled || cfg.Providers[0].ID != "primary" {
 		t.Fatalf("primary = %+v", cfg.Providers[0])
 	}
+
 	clyde := cfg.Providers[1]
 	if clyde.ID != "clyde" || !clyde.Disabled || clyde.APIKey == "" {
 		t.Fatalf("clyde disabled = %t, id = %q", clyde.Disabled, clyde.ID)
@@ -562,10 +648,13 @@ func TestLoadFailureAppearance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if !cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
 		t.Fatal("usage exhaustion appearance does not pass")
 	}
-	if cfg.ServiceFailureAppearance.Passes(FailureDailyBudget) || cfg.ServiceFailureAppearance.Passes(FailureUnavailable) {
+
+	if cfg.ServiceFailureAppearance.Passes(FailureDailyBudget) ||
+		cfg.ServiceFailureAppearance.Passes(FailureUnavailable) {
 		t.Fatal("an omitted or failing class was treated as pass")
 	}
 }
@@ -589,6 +678,7 @@ func TestOmittedFailureAppearanceBlocksEveryClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+
 	if cfg.ServiceFailureAppearance.Passes(FailureUsageExceeded) {
 		t.Fatal("omitted appearance passed usage exhaustion")
 	}
@@ -606,6 +696,7 @@ func loadWithOverrides(overrides map[string]string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+
 	return Load(lookup)
 }
 
@@ -614,15 +705,20 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 	if err != nil {
 		return nil, err
 	}
-	defaultKey := string(pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
-	}))
+
+	defaultKey := string(
+		pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+		}),
+	)
 	runtimePath := filepath.Join("..", "..", "runtime.json")
+
 	runtimeData, err := os.ReadFile(runtimePath)
 	if err != nil {
 		return nil, err
 	}
+
 	var policyFiles struct {
 		RulesFile   string `json:"REVIEW_RULES_FILE"`
 		PromptsFile string `json:"REVIEW_PROMPTS_FILE"`
@@ -630,11 +726,15 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 	if err := json.Unmarshal(runtimeData, &policyFiles); err != nil {
 		return nil, err
 	}
+
 	rulesFile, err := filepath.Abs(filepath.Join(filepath.Dir(runtimePath), policyFiles.RulesFile))
 	if err != nil {
 		return nil, err
 	}
-	promptsFile, err := filepath.Abs(filepath.Join(filepath.Dir(runtimePath), policyFiles.PromptsFile))
+
+	promptsFile, err := filepath.Abs(
+		filepath.Join(filepath.Dir(runtimePath), policyFiles.PromptsFile),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -654,6 +754,7 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 		"REVIEW_RULES_FILE":       rulesFile,
 		"REVIEW_PROMPTS_FILE":     promptsFile,
 	}
+
 	for key, value := range overrides {
 		values[key] = value
 	}
@@ -663,6 +764,7 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 		if !ok {
 			return "", false
 		}
+
 		return value, true
 	}, nil
 }

@@ -13,14 +13,17 @@ func LoadReviewPolicy(lookup LookupEnv) (reviewrules.Policy, error) {
 	if !configured {
 		return reviewrules.Policy{}, fmt.Errorf("REVIEW_RULES_FILE is required")
 	}
+
 	prompts, configured := loadRequiredText(lookup, "REVIEW_PROMPTS_FILE")
 	if !configured {
 		return reviewrules.Policy{}, fmt.Errorf("REVIEW_PROMPTS_FILE is required")
 	}
+
 	policy, err := reviewrules.LoadPolicy(rules, prompts)
 	if err != nil {
 		slog.Warn("Review policy loading failed", "err", err)
 		return reviewrules.Policy{}, fmt.Errorf("load review policy: %w", err)
 	}
+
 	return policy, nil
 }

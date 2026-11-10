@@ -49,10 +49,12 @@ const (
 // context, which is the shape every file in these tests carries.
 func coveragePatch(addedLines int) string {
 	lines := make([]string, 0, addedLines+2)
+
 	lines = append(lines, fmt.Sprintf("@@ -1,1 +1,%d @@", addedLines+1), " package main")
 	for index := 0; index < addedLines; index++ {
 		lines = append(lines, "+"+coverageAddedLine(index))
 	}
+
 	return strings.Join(lines, "\n")
 }
 
@@ -60,9 +62,11 @@ func coveragePatch(addedLines int) string {
 func coverageContent(addedLines int) string {
 	lines := make([]string, 0, addedLines+1)
 	lines = append(lines, "package main")
+
 	for index := 0; index < addedLines; index++ {
 		lines = append(lines, coverageAddedLine(index))
 	}
+
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -70,6 +74,7 @@ func coverageAddedLine(index int) string {
 	if index == 0 {
 		return "added"
 	}
+
 	return fmt.Sprintf("pad%d%s", index, strings.Repeat("x", coveragePaddingWidth))
 }
 
@@ -90,40 +95,49 @@ func (oversizedHunkCollector) CollectRange(
 		{path: coverageReadablePath, addedLines: 1},
 		{path: coverageUnreadablePath, addedLines: coverageOversizedLines},
 	}
+
 	files := make([]diff.FileContext, 0, len(specs))
 	for _, spec := range specs {
 		patch := coveragePatch(spec.addedLines)
+
 		changed, hunks, err := diff.ChangedRightLines(patch)
 		if err != nil {
 			return diff.ReviewInput{}, err
 		}
-		files = append(files, diff.FileContext{
-			Path:              spec.path,
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    coverageContent(spec.addedLines),
-			ChangedRightLines: changed,
-			ChangedRightHunks: hunks,
-			CoverageComplete:  true,
-			Gap:               diff.CoverageGapNone,
-		})
+
+		files = append(
+			files,
+			diff.FileContext{
+				Path:              spec.path,
+				Status:            "modified",
+				Patch:             patch,
+				CurrentContent:    coverageContent(spec.addedLines),
+				ChangedRightLines: changed,
+				ChangedRightHunks: hunks,
+				CoverageComplete:  true,
+				Gap:               diff.CoverageGapNone,
+			},
+		)
 	}
+
 	return diff.ReviewInput{PullRequest: pullRequest, Files: files, MergeBase: ""}, nil
 }
 
 // coverageFinding is the defect the model reports in the hunk it could read.
 func coverageFinding() domain.ReviewResult {
 	return domain.ReviewResult{
-		Findings: []domain.Finding{{
-			Path:       coverageReadablePath,
-			StartLine:  2,
-			EndLine:    2,
-			Title:      "Severe defect",
-			Body:       "The changed line breaks core behavior.",
-			Evidence:   "added",
-			Suggestion: "",
-			Importance: 9,
-		}},
+		Findings: []domain.Finding{
+			{
+				Path:       coverageReadablePath,
+				StartLine:  2,
+				EndLine:    2,
+				Title:      "Severe defect",
+				Body:       "The changed line breaks core behavior.",
+				Evidence:   "added",
+				Suggestion: "",
+				Importance: 9,
+			},
+		},
 	}
 }
 
@@ -138,22 +152,26 @@ func (readableOnlyCollector) CollectRange(
 	_ domain.HeadSHA,
 ) (diff.ReviewInput, error) {
 	patch := coveragePatch(1)
+
 	changed, hunks, err := diff.ChangedRightLines(patch)
 	if err != nil {
 		return diff.ReviewInput{}, err
 	}
+
 	return diff.ReviewInput{
 		PullRequest: pullRequest,
-		Files: []diff.FileContext{{
-			Path:              coverageReadablePath,
-			Status:            "modified",
-			Patch:             patch,
-			CurrentContent:    coverageContent(1),
-			ChangedRightLines: changed,
-			ChangedRightHunks: hunks,
-			CoverageComplete:  true,
-			Gap:               diff.CoverageGapNone,
-		}},
+		Files: []diff.FileContext{
+			{
+				Path:              coverageReadablePath,
+				Status:            "modified",
+				Patch:             patch,
+				CurrentContent:    coverageContent(1),
+				ChangedRightLines: changed,
+				ChangedRightHunks: hunks,
+				CoverageComplete:  true,
+				Gap:               diff.CoverageGapNone,
+			},
+		},
 		MergeBase: "",
 	}, nil
 }
@@ -161,23 +179,26 @@ func (readableOnlyCollector) CollectRange(
 // seedReviewedBaseline puts a completed earlier run's checkpoint on the pull
 // request, so a test can tell a baseline that was held from one never set.
 func seedReviewedBaseline(fixture *serviceFixture) {
-	seedStateNaming(fixture, coveragePriorHead)
+	seedStateNaming(fixture, fixture.collectionBase())
 }
 
 // seedStateNaming puts a completed run's checkpoint on the pull request, naming
 // the commit that run read whole.
 func seedStateNaming(fixture *serviceFixture, reviewed string) {
-	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
-		"id": float64(2000),
-		"body": "## Review\n" + marker.EncodeState(marker.State{
-			LastReviewed: domain.HeadSHA(reviewed),
-			RunID:        "delivery-0",
-			Status:       marker.StateDone,
-			Pending:      nil,
-			Completed:    nil,
-		}),
-		"user": map[string]any{"login": testBotLogin},
-	})
+	fixture.state.issueComments = append(
+		fixture.state.issueComments,
+		map[string]any{
+			"id": float64(2000),
+			"body": "## Review\n" + marker.EncodeState(marker.State{
+				LastReviewed: domain.HeadSHA(reviewed),
+				RunID:        "delivery-0",
+				Status:       marker.StateDone,
+				Pending:      nil,
+				Completed:    nil,
+			}),
+			"user": map[string]any{"login": testBotLogin},
+		},
+	)
 }
 
 // A clean run approves, whatever a model answer says about coverage.
@@ -191,11 +212,14 @@ func seedStateNaming(fixture *serviceFixture, reviewed string) {
 // answer set the whole pass incomplete. Coverage is this service's own
 // observation now, so nothing a model answers about it decides anything.
 func TestACleanRunApprovesWhateverTheModelSaysAboutCoverage(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         readableOnlyCollector{},
-		minimumImportance: 9,
-		model:             &sequenceModel{results: []domain.ReviewResult{{Findings: nil}}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         readableOnlyCollector{},
+			minimumImportance: 9,
+			model:             &sequenceModel{results: []domain.ReviewResult{{Findings: nil}}},
+		},
+	)
 	seedReviewedBaseline(fixture)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
@@ -203,16 +227,21 @@ func TestACleanRunApprovesWhateverTheModelSaysAboutCoverage(t *testing.T) {
 	}
 
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
-		t.Fatalf("event = %v, want APPROVE over a head this run read whole",
-			fixture.state.lastSubmitReview["event"])
+		t.Fatalf(
+			"event = %v, want APPROVE over a head this run read whole",
+			fixture.state.lastSubmitReview["event"],
+		)
 	}
+
 	body := failureSummaryComment(t, fixture)
 	if strings.Contains(body, unreviewedHeadSentence) {
 		t.Fatalf("summary blocks a head with nothing unread:\n%s", body)
 	}
+
 	if !strings.Contains(body, "| All file content inspected | yes |") {
 		t.Fatalf("summary reports incomplete coverage on a run that read everything:\n%s", body)
 	}
+
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
 		t.Fatalf("last reviewed = %q, want the head this run read whole", state.LastReviewed)
@@ -226,18 +255,28 @@ func TestACleanRunApprovesWhateverTheModelSaysAboutCoverage(t *testing.T) {
 // that combination, so believing the body rather than the checkpoint would hold
 // those blocks standing on a fact that was never true.
 func TestAResolutionTrustsTheCheckpointOverAStaleVerdictSentence(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: [][]map[string]any{{{
-			"id":        float64(4100),
-			"commit_id": testHeadSHA,
-			"state":     "CHANGES_REQUESTED",
-			// The whole sentence, because that is what the refresh used to test
-			// the body for. A fragment would pass whichever signal decided.
-			"body": "Changes requested.\n\nWaiting on:\n- " + testUnreviewedHeadReason + "\n\n" +
-				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
-			"user": map[string]any{"login": testBotLogin},
-		}}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			reviewPages: [][]map[string]any{
+				{
+					{
+						"id":        float64(4100),
+						"commit_id": testHeadSHA,
+						"state":     "CHANGES_REQUESTED",
+						// The whole sentence, because that is what the refresh used to test
+						// the body for. A fragment would pass whichever signal decided.
+						"body": "Changes requested.\n\nWaiting on:\n- " + testUnreviewedHeadReason + "\n\n" +
+							marker.Review(
+								domain.HeadSHA(testHeadSHA),
+								domain.ReviewDecisionRequestChanges,
+							),
+						"user": map[string]any{"login": testBotLogin},
+					},
+				},
+			},
+		},
+	)
 	seedStateNaming(fixture, testHeadSHA)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
@@ -245,8 +284,10 @@ func TestAResolutionTrustsTheCheckpointOverAStaleVerdictSentence(t *testing.T) {
 	}
 
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
-		t.Fatalf("event = %v, want the stale block cleared once every thread is resolved",
-			fixture.state.lastSubmitReview["event"])
+		t.Fatalf(
+			"event = %v, want the stale block cleared once every thread is resolved",
+			fixture.state.lastSubmitReview["event"],
+		)
 	}
 }
 
@@ -258,38 +299,54 @@ func TestAResolutionTrustsTheCheckpointOverAStaleVerdictSentence(t *testing.T) {
 // shortfall, and advance the baseline over code nobody has ever read. One run
 // cannot show that. The second one can.
 func TestAnUnreadChunkIsNotRecordedAsReadSoALaterRunStillHoldsTheBaseline(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         multiHunkCollector{},
-		minimumImportance: 9,
-		model:             &truncatedModel{truncateCalls: 1000},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         multiHunkCollector{},
+			minimumImportance: 9,
+			model:             &truncatedModel{truncateCalls: 1000},
+		},
+	)
 	seedReviewedBaseline(fixture)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
+
 	first := decodedSummaryState(t, fixture)
 	if len(first.Completed) != 0 {
-		t.Fatalf("completed after the first run = %v, want no chunk recorded as read",
-			first.Completed)
+		t.Fatalf(
+			"completed after the first run = %v, want no chunk recorded as read",
+			first.Completed,
+		)
 	}
+
 	if first.LastReviewed != domain.HeadSHA(coveragePriorHead) {
-		t.Fatalf("last reviewed after the first run = %q, want the held baseline",
-			first.LastReviewed)
+		t.Fatalf(
+			"last reviewed after the first run = %q, want the held baseline",
+			first.LastReviewed,
+		)
 	}
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
+
 	second := decodedSummaryState(t, fixture)
 	if second.LastReviewed != domain.HeadSHA(coveragePriorHead) {
-		t.Fatalf("last reviewed after the second run = %q, want the baseline still held over hunks nobody read",
-			second.LastReviewed)
+		t.Fatalf(
+			"last reviewed after the second run = %q, want the baseline still held over hunks nobody read",
+			second.LastReviewed,
+		)
 	}
+
 	if len(fixture.state.submittedReviews) != 0 {
-		t.Fatalf("submitted reviews = %v, want none from either run",
-			fixture.state.submittedReviews)
+		t.Fatalf(
+			"submitted reviews = %v, want none from either run",
+			fixture.state.submittedReviews,
+		)
 	}
+
 	if conclusion := fixture.state.lastUpdateCheckRun["conclusion"]; conclusion != "action_required" {
 		t.Fatalf("check conclusion after the second run = %v, want action_required", conclusion)
 	}
@@ -299,22 +356,35 @@ func TestAnUnreadChunkIsNotRecordedAsReadSoALaterRunStillHoldsTheBaseline(t *tes
 func TestAnAssessmentCannotPublishAnUnanchoredFinding(t *testing.T) {
 	result := coverageFinding()
 	result.DecisionReason = "The unread change cannot be checked from the available context."
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         oversizedHunkCollector{},
-		minimumImportance: 9,
-		model:             &sequenceModel{results: []domain.ReviewResult{result}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         oversizedHunkCollector{},
+			minimumImportance: 9,
+			model:             &sequenceModel{results: []domain.ReviewResult{result}},
+		},
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("an unfinished file assessment submitted a native verdict: %v", fixture.state.lastSubmitReview)
+		t.Fatalf(
+			"an unfinished file assessment submitted a native verdict: %v",
+			fixture.state.lastSubmitReview,
+		)
 	}
+
 	if len(fixture.state.streamedComments) != 0 {
-		t.Fatalf("preflight output created inline comments without supplied anchors: %v", fixture.state.streamedComments)
+		t.Fatalf(
+			"preflight output created inline comments without supplied anchors: %v",
+			fixture.state.streamedComments,
+		)
 	}
+
 	body := failureSummaryComment(t, fixture)
+
 	for _, want := range []string{coverageUnreadablePath, "### Omissions"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary comment does not contain %q:\n%s", want, body)
@@ -328,19 +398,25 @@ func TestAnAggregateAnswerCannotAcceptUnreadFileContent(t *testing.T) {
 		OmissionsAcceptable: true,
 		DecisionReason:      "The stated purpose and readable changes explain the unread change.",
 	}
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         oversizedHunkCollector{},
-		minimumImportance: 9,
-		model:             &sequenceModel{results: []domain.ReviewResult{result}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         oversizedHunkCollector{},
+			minimumImportance: 9,
+			model:             &sequenceModel{results: []domain.ReviewResult{result}},
+		},
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+
 	if fixture.state.lastSubmitReview["event"] == string(domain.ReviewDecisionApprove) {
 		t.Fatal("an aggregate answer approved unread content without a file assessment")
 	}
+
 	body := failureSummaryComment(t, fixture)
+
 	for _, want := range []string{coverageUnreadablePath, "### Omissions"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary comment does not contain %q:\n%s", want, body)
@@ -351,10 +427,13 @@ func TestAnAggregateAnswerCannotAcceptUnreadFileContent(t *testing.T) {
 // A chunk whose model call failed stays pending and gives the reader a retry
 // that does not require changing the commit.
 func TestAFailedChunkOffersASameHeadRetry(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		minimumImportance: 9,
-		model:             &sequenceModel{err: errors.New("the provider did not answer")},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			minimumImportance: 9,
+			model:             &sequenceModel{err: errors.New("the provider did not answer")},
+		},
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -364,10 +443,12 @@ func TestAFailedChunkOffersASameHeadRetry(t *testing.T) {
 	if !strings.Contains(title, rerunInstruction) {
 		t.Fatalf("check title = %q, want the same-head retry action", title)
 	}
+
 	state := decodedSummaryState(t, fixture)
 	if len(state.Pending) != 1 {
 		t.Fatalf("pending = %v, want the chunk that failed", state.Pending)
 	}
+
 	if state.Status != marker.StateReviewing {
 		t.Fatalf("status = %q, want %q", state.Status, marker.StateReviewing)
 	}
@@ -381,16 +462,26 @@ func TestAFailedChunkOffersASameHeadRetry(t *testing.T) {
 // was read, so it decides, and a valid approval is not replaced by a block
 // nobody can clear.
 func TestACheckpointAboutAnotherCommitLeavesTheVerdictBodyToDecide(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: [][]map[string]any{{{
-			"id":        float64(4100),
-			"commit_id": testHeadSHA,
-			"state":     "CHANGES_REQUESTED",
-			"body": "Changes requested.\n\n" +
-				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
-			"user": map[string]any{"login": testBotLogin},
-		}}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			reviewPages: [][]map[string]any{
+				{
+					{
+						"id":        float64(4100),
+						"commit_id": testHeadSHA,
+						"state":     "CHANGES_REQUESTED",
+						"body": "Changes requested.\n\n" +
+							marker.Review(
+								domain.HeadSHA(testHeadSHA),
+								domain.ReviewDecisionRequestChanges,
+							),
+						"user": map[string]any{"login": testBotLogin},
+					},
+				},
+			},
+		},
+	)
 	seedReviewedBaseline(fixture)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
@@ -398,8 +489,10 @@ func TestACheckpointAboutAnotherCommitLeavesTheVerdictBodyToDecide(t *testing.T)
 	}
 
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
-		t.Fatalf("event = %v, want the approval the verdict at this head supports",
-			fixture.state.lastSubmitReview["event"])
+		t.Fatalf(
+			"event = %v, want the approval the verdict at this head supports",
+			fixture.state.lastSubmitReview["event"],
+		)
 	}
 }
 
@@ -410,25 +503,38 @@ func TestACheckpointAboutAnotherCommitLeavesTheVerdictBodyToDecide(t *testing.T)
 // the failure as an absence would fall back to a body that says nothing about
 // it, and approve a head nobody covered.
 func TestAFailedStateReadStopsTheRefreshRatherThanApproving(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		issueCommentStatus: http.StatusInternalServerError,
-		reviewPages: [][]map[string]any{{{
-			"id":        float64(4100),
-			"commit_id": testHeadSHA,
-			"state":     "CHANGES_REQUESTED",
-			"body": "Changes requested.\n\n" +
-				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
-			"user": map[string]any{"login": testBotLogin},
-		}}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			issueCommentStatus: http.StatusInternalServerError,
+			reviewPages: [][]map[string]any{
+				{
+					{
+						"id":        float64(4100),
+						"commit_id": testHeadSHA,
+						"state":     "CHANGES_REQUESTED",
+						"body": "Changes requested.\n\n" +
+							marker.Review(
+								domain.HeadSHA(testHeadSHA),
+								domain.ReviewDecisionRequestChanges,
+							),
+						"user": map[string]any{"login": testBotLogin},
+					},
+				},
+			},
+		},
+	)
 
 	err := fixture.run(context.Background(), fixture.job())
 	if err == nil {
 		t.Fatal("Run: nil, want the failed state read reported rather than swallowed")
 	}
+
 	if len(fixture.state.submittedReviews) != 0 {
-		t.Fatalf("submitted reviews = %v, want none decided from a read that failed",
-			fixture.state.submittedReviews)
+		t.Fatalf(
+			"submitted reviews = %v, want none decided from a read that failed",
+			fixture.state.submittedReviews,
+		)
 	}
 }
 
@@ -449,17 +555,22 @@ func (model *partiallyReadableModel) Review(
 	if model.calls != model.answerOnCall {
 		return review.Completion{}, &openai.TruncatedError{Model: testReviewModel}
 	}
+
 	return review.Completion{
-		Result: domain.ReviewResult{Findings: []domain.Finding{{
-			Path:       "main.go",
-			StartLine:  2,
-			EndLine:    2,
-			Title:      "Severe defect",
-			Body:       "The changed line breaks core behavior.",
-			Evidence:   "added1",
-			Suggestion: "",
-			Importance: 9,
-		}}},
+		Result: domain.ReviewResult{
+			Findings: []domain.Finding{
+				{
+					Path:       "main.go",
+					StartLine:  2,
+					EndLine:    2,
+					Title:      "Severe defect",
+					Body:       "The changed line breaks core behavior.",
+					Evidence:   "added1",
+					Suggestion: "",
+					Importance: 9,
+				},
+			},
+		},
 		Model: testReviewModel,
 	}, nil
 }
@@ -475,46 +586,68 @@ func (model *partiallyReadableModel) Review(
 // One run cannot show that, because the run that saw the shortfall still holds
 // the baseline on what it remembers. The second one can.
 func TestAPartlyReadChunkKeepsTheBaselineHeldOnTheNextRun(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         multiHunkCollector{},
-		minimumImportance: 9,
-		// The whole chunk truncates, splits, and the first half answers; the
-		// second half truncates down to single hunks that cannot split again.
-		model: &partiallyReadableModel{answerOnCall: 2},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         multiHunkCollector{},
+			minimumImportance: 9,
+			// The whole chunk truncates, splits, and the first half answers; the
+			// second half truncates down to single hunks that cannot split again.
+			model: &partiallyReadableModel{answerOnCall: 2},
+		},
+	)
 	seedReviewedBaseline(fixture)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
+
 	first := decodedSummaryState(t, fixture)
 	if len(first.Completed) != 0 {
-		t.Fatalf("completed after the first run = %v, want no partly read chunk recorded as complete",
-			first.Completed)
+		t.Fatalf(
+			"completed after the first run = %v, want no partly read chunk recorded as complete",
+			first.Completed,
+		)
 	}
+
 	if len(first.Pending) != 1 {
-		t.Fatalf("pending after the first run = %v, want the partly read chunk retained",
-			first.Pending)
+		t.Fatalf(
+			"pending after the first run = %v, want the partly read chunk retained",
+			first.Pending,
+		)
 	}
+
 	if len(first.Unread) == 0 {
-		t.Fatalf("unread after the first run = %v, want the chunk's shortfall recorded durably",
-			first.Unread)
+		t.Fatalf(
+			"unread after the first run = %v, want the chunk's shortfall recorded durably",
+			first.Unread,
+		)
 	}
+
 	if first.LastReviewed != domain.HeadSHA(coveragePriorHead) {
-		t.Fatalf("last reviewed after the first run = %q, want the held baseline", first.LastReviewed)
+		t.Fatalf(
+			"last reviewed after the first run = %q, want the held baseline",
+			first.LastReviewed,
+		)
 	}
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
+
 	second := decodedSummaryState(t, fixture)
 	if second.LastReviewed != domain.HeadSHA(coveragePriorHead) {
-		t.Fatalf("last reviewed after the second run = %q, want the baseline still held over a hunk nobody read",
-			second.LastReviewed)
+		t.Fatalf(
+			"last reviewed after the second run = %q, want the baseline still held over a hunk nobody read",
+			second.LastReviewed,
+		)
 	}
+
 	// Blocking here is right, because the half that answered found a real defect.
 	// Approving would not be: part of this head has never been read.
-	if event := fixture.state.lastSubmitReview["event"]; event == string(domain.ReviewDecisionApprove) {
+	if event := fixture.state.lastSubmitReview["event"]; event == string(
+		domain.ReviewDecisionApprove,
+	) {
 		t.Fatal("the second run approved a head part of which nobody has read")
 	}
 }
@@ -526,25 +659,31 @@ func TestAPartlyReadChunkKeepsTheBaselineHeldOnTheNextRun(t *testing.T) {
 // would block the pull request forever on code that is gone, which is the one
 // way this record could be worse than the bug it fixes.
 func TestARecordedShortfallIsDroppedOnceItsChunkIsGone(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         readableOnlyCollector{},
-		minimumImportance: 9,
-		model:             &sequenceModel{results: []domain.ReviewResult{{Findings: nil}}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         readableOnlyCollector{},
+			minimumImportance: 9,
+			model:             &sequenceModel{results: []domain.ReviewResult{{Findings: nil}}},
+		},
+	)
 	// A checkpoint naming a shortfall against a chunk this delta does not hold.
-	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
-		"id": float64(2000),
-		"body": "## Review\n" + marker.EncodeState(marker.State{
-			LastReviewed: domain.HeadSHA(coveragePriorHead),
-			RunID:        "delivery-0",
-			Status:       marker.StateReviewing,
-			Pending:      nil,
-			Completed:    nil,
-			ForcedBy:     "",
-			Unread:       []string{"deadbeefdead"},
-		}),
-		"user": map[string]any{"login": testBotLogin},
-	})
+	fixture.state.issueComments = append(
+		fixture.state.issueComments,
+		map[string]any{
+			"id": float64(2000),
+			"body": "## Review\n" + marker.EncodeState(marker.State{
+				LastReviewed: domain.HeadSHA(coveragePriorHead),
+				RunID:        "delivery-0",
+				Status:       marker.StateReviewing,
+				Pending:      nil,
+				Completed:    nil,
+				ForcedBy:     "",
+				Unread:       []string{"deadbeefdead"},
+			}),
+			"user": map[string]any{"login": testBotLogin},
+		},
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -552,9 +691,12 @@ func TestARecordedShortfallIsDroppedOnceItsChunkIsGone(t *testing.T) {
 
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
-		t.Fatalf("last reviewed = %q, want the baseline advanced once the unread chunk left the delta",
-			state.LastReviewed)
+		t.Fatalf(
+			"last reviewed = %q, want the baseline advanced once the unread chunk left the delta",
+			state.LastReviewed,
+		)
 	}
+
 	if len(state.Unread) != 0 {
 		t.Fatalf("unread = %v, want the stale id dropped", state.Unread)
 	}
@@ -562,10 +704,13 @@ func TestARecordedShortfallIsDroppedOnceItsChunkIsGone(t *testing.T) {
 
 // A chunk that panics returns its worker slot, so later chunks can start.
 func TestAPanickingChunkReturnsItsWorkerSlot(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector: manyChunkCollector{},
-		model:     panicModel{},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector: manyChunkCollector{},
+			model:     panicModel{},
+		},
+	)
 
 	// A timeout turns the former deadlock into a test failure.
 	done := make(chan error, 1)
@@ -578,81 +723,110 @@ func TestAPanickingChunkReturnsItsWorkerSlot(t *testing.T) {
 		if err == nil {
 			t.Fatal("Run returned no error, want the panic reported")
 		}
+
 		if !strings.Contains(err.Error(), "panicked") {
 			t.Fatalf("Run error = %v, want the chunk panic reported", err)
 		}
 	case <-time.After(20 * time.Second):
-		t.Fatal("the run never returned: every worker slot was consumed by a panic and never given back")
+		t.Fatal(
+			"the run never returned: every worker slot was consumed by a panic and never given back",
+		)
 	}
 }
 
 // An active review keeps ownership of the top-level comment and verdict until it finishes.
 func TestAnActiveReviewPreventsAVerdictRefresh(t *testing.T) {
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		reviewPages: [][]map[string]any{{{
-			"id":        float64(4100),
-			"commit_id": testHeadSHA,
-			"state":     "CHANGES_REQUESTED",
-			"body": "Changes requested.\n\n" +
-				marker.Review(domain.HeadSHA(testHeadSHA), domain.ReviewDecisionRequestChanges),
-			"user": map[string]any{"login": testBotLogin},
-		}}},
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			reviewPages: [][]map[string]any{
+				{
+					{
+						"id":        float64(4100),
+						"commit_id": testHeadSHA,
+						"state":     "CHANGES_REQUESTED",
+						"body": "Changes requested.\n\n" +
+							marker.Review(
+								domain.HeadSHA(testHeadSHA),
+								domain.ReviewDecisionRequestChanges,
+							),
+						"user": map[string]any{"login": testBotLogin},
+					},
+				},
+			},
+		},
+	)
 	// This head was read whole, and a run on a commit after it left a chunk owed
 	// before the branch was reset back here.
-	fixture.state.issueComments = append(fixture.state.issueComments, map[string]any{
-		"id": float64(2000),
-		"body": "## Review\n" + marker.EncodeState(marker.State{
-			LastReviewed: domain.HeadSHA(testHeadSHA),
-			RunID:        "delivery-0",
-			Status:       marker.StateReviewing,
-			Pending:      []string{"c0ffeec0ffee"},
-			Completed:    nil,
-			ForcedBy:     "",
-			Unread:       nil,
-		}),
-		"user": map[string]any{"login": testBotLogin},
-	})
+	fixture.state.issueComments = append(
+		fixture.state.issueComments,
+		map[string]any{
+			"id": float64(2000),
+			"body": "## Review\n" + marker.EncodeState(marker.State{
+				LastReviewed: domain.HeadSHA(testHeadSHA),
+				RunID:        "delivery-0",
+				Status:       marker.StateReviewing,
+				Pending:      []string{"c0ffeec0ffee"},
+				Completed:    nil,
+				ForcedBy:     "",
+				Unread:       nil,
+			}),
+			"user": map[string]any{"login": testBotLogin},
+		},
+	)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
 	if fixture.state.lastSubmitReview != nil {
-		t.Fatalf("submitted review = %v, want none while a review is active",
-			fixture.state.lastSubmitReview)
+		t.Fatalf(
+			"submitted review = %v, want none while a review is active",
+			fixture.state.lastSubmitReview,
+		)
 	}
 }
 
 // A fully unread chunk advances after a later run reads it successfully.
 func TestAFullyUnreadChunkClearsAfterASuccessfulRetry(t *testing.T) {
 	model := &truncatedModel{truncateCalls: 1000}
-	fixture := newServiceFixture(t, serviceFixtureOptions{
-		collector:         multiHunkCollector{},
-		minimumImportance: 9,
-		model:             model,
-	})
+	fixture := newServiceFixture(
+		t,
+		serviceFixtureOptions{
+			collector:         multiHunkCollector{},
+			minimumImportance: 9,
+			model:             model,
+		},
+	)
 	seedReviewedBaseline(fixture)
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
+
 	first := decodedSummaryState(t, fixture)
 	if len(first.Pending) != 1 {
 		t.Fatalf("pending after first run = %v, want one unread chunk", first.Pending)
 	}
+
 	if len(first.Unread) != 1 {
-		t.Fatalf("unread after first run = %v, want the unread chunk recorded for the final decision", first.Unread)
+		t.Fatalf(
+			"unread after first run = %v, want the unread chunk recorded for the final decision",
+			first.Unread,
+		)
 	}
+
 	model.truncateCalls = model.calls
 
 	if err := fixture.run(context.Background(), fixture.job()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
+
 	second := decodedSummaryState(t, fixture)
 	if second.LastReviewed != domain.HeadSHA(testHeadSHA) {
 		t.Fatalf("last reviewed = %q, want the head after the retry succeeded", second.LastReviewed)
 	}
+
 	if len(second.Pending) != 0 || len(second.Unread) != 0 {
 		t.Fatalf("pending = %v, unread = %v, want no remaining work", second.Pending, second.Unread)
 	}

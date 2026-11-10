@@ -2,8 +2,10 @@
 package openai
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,19 +58,22 @@ type (
 	responseEventType         string
 	responseTerminalEventType string
 	responseErrorCode         string
+	responseOutputItemType    string
 )
 
 const (
-	responseOutputTextDelta   responseEventType         = "response.output_text.delta"
-	responseCompleted         responseEventType         = "response.completed"
-	responseIncomplete        responseEventType         = "response.incomplete"
-	responseFailed            responseEventType         = "response.failed"
-	responseError             responseEventType         = "error"
-	terminalCompleted         responseTerminalEventType = "response.completed"
-	terminalIncomplete        responseTerminalEventType = "response.incomplete"
-	terminalFailed            responseTerminalEventType = "response.failed"
-	responseRateLimitExceeded responseErrorCode         = "rate_limit_exceeded"
-	responseServerError       responseErrorCode         = "server_error"
+	responseOutputTextDelta    responseEventType         = "response.output_text.delta"
+	responseCompleted          responseEventType         = "response.completed"
+	responseIncomplete         responseEventType         = "response.incomplete"
+	responseFailed             responseEventType         = "response.failed"
+	responseError              responseEventType         = "error"
+	terminalCompleted          responseTerminalEventType = "response.completed"
+	terminalIncomplete         responseTerminalEventType = "response.incomplete"
+	terminalFailed             responseTerminalEventType = "response.failed"
+	responseRateLimitExceeded  responseErrorCode         = "rate_limit_exceeded"
+	responseServerError        responseErrorCode         = "server_error"
+	responseOutputMessage      responseOutputItemType    = "message"
+	responseOutputFunctionCall responseOutputItemType    = "function_call"
 )
 
 // Client performs structured Responses requests.
@@ -83,21 +88,99 @@ type Client struct {
 	budgetURL               string
 	budgetSigningKey        []byte
 	budgetReportPolicy      quota.ReportPolicy
+	usageQueryTimeout       time.Duration
 	httpClient              *http.Client
 	now                     clock.Clock
 	maximumRequestBytes     int
 }
 
-// NewClient constructs an SDK client for each configured provider.
+// NewClient constructs a client for the configured providers.
+//
+// The client uses the supplied HTTP client, or the default HTTP client when
+// the argument is nil.
+//
+// For example:
+//
+//	client := NewClient(cfg, http.DefaultClient)
 func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	configuredProviders := cfg.Providers
+
+	configuredProviders, fallbackOnUsageExceeded := configuredModelProviders(cfg)
+
+	client := &Client{
+		providers:               make([]provider, 0, len(configuredProviders)),
+		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
+		providerFailurePolicy:   config.ResolveProviderFailurePolicy(cfg.ProviderFailurePolicy),
+		requestTimeout:          resolveRequestTimeout(cfg.ReviewChunkTimeout),
+		minimumImportance:       cfg.MinimumImportance,
+		ruleImportance:          cfg.RuleImportance,
+		reviewPolicy:            cfg.ReviewPolicy,
+		budgetURL:               "",
+		budgetSigningKey:        cfg.GitHubWebhookSecret,
+		budgetReportPolicy:      cfg.BudgetReportPolicy(),
+		usageQueryTimeout:       cfg.UsageQueryTimeout(),
+		httpClient:              httpClient,
+		now:                     clock.System,
+		maximumRequestBytes:     cfg.PromptBytes(),
+	}
+	if cfg.ProviderBudgetURL != nil {
+		client.budgetURL = cfg.ProviderBudgetURL.String()
+	}
+
+	modelHTTPClient := requestBoundHTTPClient(httpClient, client.maximumRequestBytes)
+
+	for _, configured := range configuredProviders {
+		if configured.Disabled {
+			continue
+		}
+
+		client.providers = append(
+			client.providers,
+			provider{
+				id: configured.ID,
+				sdk: newProviderSDK(
+					modelHTTPClient,
+					configured.BaseURL,
+					configured.APIKey,
+					configured.CFAccessClientID,
+					configured.CFAccessClientSecret,
+				),
+				model:               configured.Model,
+				reasoningEffort:     config.ResolveReasoningEffort(configured.ReasoningEffort),
+				apiKey:              configured.APIKey,
+				baseURL:             configured.BaseURL,
+				httpClient:          modelHTTPClient,
+				dailyTokenLimit:     configured.DailyTokenLimit,
+				dailyTokenTypes:     configured.DailyTokenTypes,
+				tokenLimit:          configured.TokenLimit,
+				tokenTypes:          configured.TokenTypes,
+				tokenWindow:         configured.TokenWindow,
+				tokenLimits:         configured.TokenLimits,
+				maxOutputTokens:     configured.MaxOutputTokens,
+				omitMaxOutputTokens: configured.OmitMaxOutputTokens,
+				omitTextFormat:      configured.OmitTextFormat,
+				autoRouterCostTier:  configured.AutoRouterCostTier,
+				api:                 config.ResolveProviderAPI(configured.API),
+				pricingByModel:      cfg.ReviewModelPricing,
+				requestTimeout:      configured.RequestTimeout,
+			},
+		)
+	}
+
+	return client
+}
+
+func configuredModelProviders(cfg config.Config) ([]config.ProviderConfig, bool) {
+	if len(cfg.Providers) > 0 {
+		return cfg.Providers, true
+	}
+
 	var emptyWindow quota.Window
-	fallbackOnUsageExceeded := true
-	if len(configuredProviders) == 0 {
-		configuredProviders = []config.ProviderConfig{{
+
+	providers := []config.ProviderConfig{
+		{
 			ID:                   "primary",
 			BaseURL:              cfg.ClydeBaseURL,
 			APIKey:               cfg.ClydeAPIKey,
@@ -118,9 +201,12 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 			CFAccessClientSecret: cfg.CFAccessClientSecret, // gitleaks:allow
 			Disabled:             false,
 			RequestTimeout:       0,
-		}}
-		if cfg.HasFallback() {
-			configuredProviders = append(configuredProviders, config.ProviderConfig{
+		},
+	}
+	if cfg.HasFallback() {
+		providers = append(
+			providers,
+			config.ProviderConfig{
 				ID:                   "fallback",
 				BaseURL:              cfg.FallbackBaseURL,
 				APIKey:               cfg.FallbackAPIKey,
@@ -141,57 +227,11 @@ func NewClient(cfg config.Config, httpClient *http.Client) *Client {
 				CFAccessClientSecret: cfg.FallbackCFAccessClientSecret, // gitleaks:allow
 				Disabled:             false,
 				RequestTimeout:       0,
-			})
-		}
-		fallbackOnUsageExceeded = cfg.FallbackOnUsageExceeded
+			},
+		)
 	}
-	client := &Client{
-		providers:               make([]provider, 0, len(configuredProviders)),
-		fallbackOnUsageExceeded: fallbackOnUsageExceeded,
-		providerFailurePolicy:   config.ResolveProviderFailurePolicy(cfg.ProviderFailurePolicy),
-		requestTimeout:          resolveRequestTimeout(cfg.ReviewChunkTimeout),
-		minimumImportance:       cfg.MinimumImportance,
-		ruleImportance:          cfg.RuleImportance,
-		reviewPolicy:            cfg.ReviewPolicy,
-		budgetURL:               "",
-		budgetSigningKey:        cfg.GitHubWebhookSecret,
-		budgetReportPolicy:      cfg.BudgetReportPolicy(),
-		httpClient:              httpClient,
-		now:                     clock.System,
-		maximumRequestBytes:     cfg.PromptBytes(),
-	}
-	if cfg.ProviderBudgetURL != nil {
-		client.budgetURL = cfg.ProviderBudgetURL.String()
-	}
-	modelHTTPClient := requestBoundHTTPClient(httpClient, client.maximumRequestBytes)
-	for _, configured := range configuredProviders {
-		if configured.Disabled {
-			continue
-		}
-		client.providers = append(client.providers, provider{
-			id:                  configured.ID,
-			sdk:                 newProviderSDK(modelHTTPClient, configured.BaseURL, configured.APIKey, configured.CFAccessClientID, configured.CFAccessClientSecret),
-			model:               configured.Model,
-			reasoningEffort:     config.ResolveReasoningEffort(configured.ReasoningEffort),
-			apiKey:              configured.APIKey,
-			baseURL:             configured.BaseURL,
-			httpClient:          modelHTTPClient,
-			dailyTokenLimit:     configured.DailyTokenLimit,
-			dailyTokenTypes:     configured.DailyTokenTypes,
-			tokenLimit:          configured.TokenLimit,
-			tokenTypes:          configured.TokenTypes,
-			tokenWindow:         configured.TokenWindow,
-			tokenLimits:         configured.TokenLimits,
-			maxOutputTokens:     configured.MaxOutputTokens,
-			omitMaxOutputTokens: configured.OmitMaxOutputTokens,
-			omitTextFormat:      configured.OmitTextFormat,
-			autoRouterCostTier:  configured.AutoRouterCostTier,
-			api:                 config.ResolveProviderAPI(configured.API),
-			pricingByModel:      cfg.ReviewModelPricing,
-			requestTimeout:      configured.RequestTimeout,
-		})
-	}
-	return client
+
+	return providers, cfg.FallbackOnUsageExceeded
 }
 
 // newProviderSDK builds one SDK handle. It sends the Cloudflare Access headers
@@ -215,26 +255,45 @@ func newProviderSDK(
 			option.WithHeader("Cf-Access-Client-Secret", cfAccessClientSecret),
 		)
 	}
+
 	if baseURL != nil {
 		opts = append(opts, option.WithBaseURL(strings.TrimRight(baseURL.String(), "/")+"/"))
 	}
+
 	return openaigo.NewClient(opts...)
 }
 
-// Review requests one structured review completion and reports the model that
-// served it, which is the fallback model whenever the primary refused.
+// Review requests one structured review completion.
+//
+// The result reports the model that completed the request, including a
+// fallback model after a primary refusal.
+//
+// For example:
+//
+//	completion, err := client.Review(ctx, prompt)
 func (client *Client) Review(ctx context.Context, prompt string) (review.Completion, error) {
 	schema, err := MarshalReviewSchema(client.reviewPolicy)
 	if err != nil {
 		return review.Completion{}, err
 	}
-	policy, err := review.PolicyHeader(client.reviewPolicy, client.minimumImportance, client.ruleImportance)
+
+	policy, err := review.PolicyHeader(
+		client.reviewPolicy,
+		client.minimumImportance,
+		client.ruleImportance,
+	)
 	if err != nil {
 		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "Review policy rendering failed")
+
 		return review.Completion{}, fmt.Errorf("render review policy: %w", err)
 	}
-	var result domain.ReviewResult
+
+	var (
+		result      domain.ReviewResult
+		inspections []review.InspectionRequest
+	)
+
 	model, err := client.complete(
 		ctx,
 		prompt,
@@ -242,30 +301,113 @@ func (client *Client) Review(ctx context.Context, prompt string) (review.Complet
 		reviewSchemaName,
 		schema,
 		func(content string) error {
-			candidate, decodeErr := domain.UnmarshalReviewResult([]byte(content), client.reviewPolicy.Catalog(), client.ruleImportance)
+			candidate, decodeErr := domain.UnmarshalReviewResult(
+				[]byte(content),
+				client.reviewPolicy.Catalog(),
+				client.ruleImportance,
+			)
 			if decodeErr != nil {
 				gklog.L(ctx).WarnContext(ctx, "Model review result was rejected")
 				return fmt.Errorf("decode model review result: %w", decodeErr)
 			}
+
 			result = candidate
+
+			inspections, decodeErr = inspectionRequests(ctx, []byte(content), reviewSchemaName)
+			if decodeErr != nil {
+				return decodeErr
+			}
+
 			return nil
 		},
 	)
 	if err != nil {
 		return review.Completion{}, err
 	}
-	return review.Completion{Result: result, Model: model}, nil
+
+	return review.Completion{Result: result, Model: model, InspectionRequests: inspections}, nil
 }
 
-// Report requests the final prose for a completed deterministic review.
+func inspectionRequests(
+	ctx context.Context,
+	content []byte,
+	schemaName string,
+) ([]review.InspectionRequest, error) {
+	logger := gklog.L(ctx)
+
+	var envelope struct {
+		Requests json.RawMessage `json:"inspection_requests"`
+	}
+	if err := json.Unmarshal(content, &envelope); err != nil {
+		logger.WarnContext(ctx, "The client could not decode the inspection response.", "err", err)
+		return nil, fmt.Errorf("decode inspection requests: %w", err)
+	}
+
+	present := len(envelope.Requests) > 0
+	null := bytes.Equal(bytes.TrimSpace(envelope.Requests), []byte("null"))
+
+	attributes := []slog.Attr{
+		slog.String("schema_name", schemaName),
+		slog.Bool("inspection_requests_present", present),
+		slog.Bool("inspection_requests_null", null),
+		slog.Int("completion_bytes", len(content)),
+		slog.String("completion_sha256", fmt.Sprintf("%x", sha256.Sum256(content))),
+	}
+	if !present || null {
+		logger.LogAttrs(
+			ctx,
+			slog.LevelWarn,
+			"The model did not return the required inspection request array.",
+			attributes...,
+		)
+
+		return nil, errors.New("inspection_requests must be an explicit JSON array")
+	}
+
+	var requests []review.InspectionRequest
+	if err := json.Unmarshal(envelope.Requests, &requests); err != nil {
+		logger.WarnContext(
+			ctx,
+			"The model returned an invalid inspection request array.",
+			"err",
+			err,
+			"schema_name",
+			schemaName,
+		)
+
+		return nil, fmt.Errorf("decode inspection requests: %w", err)
+	}
+
+	attributes = append(attributes, slog.Int("inspection_requests", len(requests)))
+	logger.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"The client decoded the inspection request array.",
+		attributes...,
+	)
+
+	return requests, nil
+}
+
+// Report requests prose for a completed deterministic review.
+//
+// The client applies the configured report policy and decodes the structured
+// report.
+//
+// For example:
+//
+//	completion, err := client.Report(ctx, prompt)
 func (client *Client) Report(ctx context.Context, prompt string) (review.ReportCompletion, error) {
 	policy, err := review.ReportPolicy(client.reviewPolicy)
 	if err != nil {
 		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "Report policy rendering failed")
+
 		return review.ReportCompletion{}, fmt.Errorf("render report policy: %w", err)
 	}
+
 	var report review.Report
+
 	model, err := client.complete(
 		ctx,
 		prompt,
@@ -277,29 +419,46 @@ func (client *Client) Report(ctx context.Context, prompt string) (review.ReportC
 			if decodeErr := json.Unmarshal([]byte(content), &candidate); decodeErr != nil {
 				return errors.New("decode structured output: " + decodeErr.Error())
 			}
+
 			candidate = review.SanitizeReport(candidate, client.reviewPolicy.Limits())
 			if validateErr := candidate.Validate(); validateErr != nil {
 				return errors.New("validate review report: " + validateErr.Error())
 			}
+
 			report = candidate
+
 			return nil
 		},
 	)
 	if err != nil {
 		return review.ReportCompletion{}, err
 	}
+
 	return review.ReportCompletion{Report: report, Model: model}, nil
 }
 
-// Reconcile requests one structured thread reconciliation completion.
-func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.ThreadResolution, error) {
+// Reconcile requests structured thread decisions.
+//
+// The client applies the reconciliation policy before decoding thread
+// resolutions.
+//
+// For example:
+//
+//	resolutions, err := client.Reconcile(ctx, prompt)
+func (client *Client) Reconcile(
+	ctx context.Context,
+	prompt string,
+) ([]domain.ThreadResolution, error) {
 	policy, err := review.ReconciliationPolicy(client.reviewPolicy)
 	if err != nil {
 		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "Reconciliation policy rendering failed")
+
 		return nil, fmt.Errorf("render reconciliation policy: %w", err)
 	}
+
 	var resolutions []domain.ThreadResolution
+
 	_, err = client.complete(
 		ctx,
 		prompt,
@@ -313,43 +472,73 @@ func (client *Client) Reconcile(ctx context.Context, prompt string) ([]domain.Th
 			if decodeErr := json.Unmarshal([]byte(content), &response); decodeErr != nil {
 				return errors.New("decode structured output: " + decodeErr.Error())
 			}
-			if validateErr := domain.ValidateThreadResolutions(response.Resolutions); validateErr != nil {
+
+			if validateErr := domain.ValidateThreadResolutions(
+				response.Resolutions,
+			); validateErr != nil {
 				return errors.New("validate thread resolutions: " + validateErr.Error())
 			}
+
 			resolutions = response.Resolutions
+
 			return nil
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
+
 	return resolutions, nil
 }
 
-// Consolidate requests one structured grouping of a chunk's own findings.
-func (client *Client) Consolidate(ctx context.Context, prompt string) (review.Consolidation, error) {
+// Consolidate requests a grouping of one chunk's findings.
+//
+// The client applies the consolidation policy and decodes the resulting
+// groups.
+//
+// For example:
+//
+//	consolidation, err := client.Consolidate(ctx, prompt)
+func (client *Client) Consolidate(
+	ctx context.Context,
+	prompt string,
+) (review.Consolidation, error) {
 	logger := gklog.L(ctx)
+
 	policy, err := review.ConsolidationPolicy(client.reviewPolicy)
 	if err != nil {
 		logger.WarnContext(ctx, "Consolidation policy rendering failed")
 		return review.Consolidation{}, fmt.Errorf("render consolidation policy: %w", err)
 	}
+
 	var consolidation review.Consolidation
-	_, err = client.complete(ctx, prompt, policy, consolidateSchemaName, consolidateSchemaJSON, func(content string) error {
-		var candidate review.Consolidation
-		if decodeErr := json.Unmarshal([]byte(content), &candidate); decodeErr != nil {
-			return errors.New("decode structured output: " + decodeErr.Error())
-		}
-		if validateErr := candidate.ValidateShape(); validateErr != nil {
-			return errors.New("validate consolidation: " + validateErr.Error())
-		}
-		consolidation = candidate
-		return nil
-	})
+
+	_, err = client.complete(
+		ctx,
+		prompt,
+		policy,
+		consolidateSchemaName,
+		consolidateSchemaJSON,
+		func(content string) error {
+			var candidate review.Consolidation
+			if decodeErr := json.Unmarshal([]byte(content), &candidate); decodeErr != nil {
+				return errors.New("decode structured output: " + decodeErr.Error())
+			}
+
+			if validateErr := candidate.ValidateShape(); validateErr != nil {
+				return errors.New("validate consolidation: " + validateErr.Error())
+			}
+
+			consolidation = candidate
+
+			return nil
+		},
+	)
 	if err != nil {
 		logger.WarnContext(ctx, "Consolidation provider selection failed")
 		return review.Consolidation{}, err
 	}
+
 	return consolidation, nil
 }
 
@@ -363,42 +552,68 @@ func (client *Client) complete(
 	accept func(string) error,
 ) (string, error) {
 	logger := gklog.L(ctx)
-	instructions, err := structuredOutputPrompt(ctx, client.reviewPolicy, policy, schemaName, schema)
+
+	instructions, err := structuredOutputPrompt(
+		ctx,
+		client.reviewPolicy,
+		policy,
+		schemaName,
+		schema,
+	)
 	if err != nil {
 		return "", err
 	}
+
 	if err := client.checkRequestSizes(ctx, prompt, instructions, schemaName, schema); err != nil {
 		return "", err
 	}
+
 	var failures []error
+
 	for index, target := range client.providers {
 		if parentErr := ctx.Err(); parentErr != nil {
 			logger.WarnContext(ctx, "Model provider selection cancelled")
 			return "", errors.Join(append(failures, parentErr)...)
 		}
-		_, model, budget, attemptErr := client.attemptCompletion(ctx, target, prompt, instructions, schemaName, schema, accept)
+
+		_, model, budget, attemptErr := client.attemptCompletion(
+			ctx,
+			target,
+			prompt,
+			instructions,
+			schemaName,
+			schema,
+			accept,
+		)
 		if attemptErr == nil {
 			client.recordProviderAttempt(ctx, target, budget, nil, false)
 			return model, nil
 		}
+
 		failure := &providerAttemptError{provider: target, budget: budget, cause: attemptErr}
-		fallback := ctx.Err() == nil && index < len(client.providers)-1 && client.shouldUseFallback(attemptErr)
+		fallback := ctx.Err() == nil && index < len(client.providers)-1 &&
+			client.shouldUseFallback(attemptErr)
 		client.recordProviderAttempt(ctx, target, budget, attemptErr, fallback)
 		logProviderAttempt(ctx, failure)
 		failures = append(failures, failure)
+
 		if !fallback {
 			if parentErr := ctx.Err(); parentErr != nil {
 				failures = append(failures, parentErr)
 			}
+
 			logger.WarnContext(ctx, "Model provider selection failed")
+
 			return "", errors.Join(failures...)
 		}
 	}
+
 	return "", errors.New("no model providers configured")
 }
 
 func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 	status := failure.ProviderStatus()
+
 	attributes := []slog.Attr{
 		slog.String("provider_id", status.ProviderID),
 		slog.String("configured_model", status.Model),
@@ -410,27 +625,37 @@ func logProviderAttempt(ctx context.Context, failure *providerAttemptError) {
 	}
 	if status.QuotaKnown && status.QuotaSnapshot.Bounds.EndMS > 0 {
 		accounting := status.QuotaSnapshot
+
 		mode := status.TokenWindow.Mode
 		if mode == "" {
 			mode = quota.Fixed
 		}
-		attributes = append(attributes,
+
+		attributes = append(
+			attributes,
 			slog.String("quota_window_mode", string(mode)),
 			slog.Int64("quota_window_start_ms", accounting.Bounds.StartMS),
 			slog.Int64("quota_window_end_ms", accounting.Bounds.EndMS),
 			slog.Int64("quota_available_at_ms", accounting.AvailableAtMS),
 			slog.Int64("quota_history_start_ms", accounting.HistoryStartMS),
-			slog.Bool("quota_history_complete", accounting.HistoryComplete))
+			slog.Bool("quota_history_complete", accounting.HistoryComplete),
+		)
 	}
+
 	var apiError *ProviderError
 	if errors.As(failure.cause, &apiError) {
 		attributes = append(attributes, slog.String("api_code", apiError.Code))
 		if apiError.StatusCode == 0 {
 			attributes = append(attributes, slog.String("api_source", "stream"))
 		} else {
-			attributes = append(attributes, slog.String("api_source", "http"), slog.Int("api_status", apiError.StatusCode))
+			attributes = append(
+				attributes,
+				slog.String("api_source", "http"),
+				slog.Int("api_status", apiError.StatusCode),
+			)
 		}
 	}
+
 	gklog.L(ctx).LogAttrs(ctx, slog.LevelWarn, "model provider attempt failed", attributes...)
 }
 
@@ -440,18 +665,23 @@ func (client *Client) shouldUseFallback(err error) bool {
 	if client.providerFailurePolicy == config.ProviderAnyFailure {
 		return true
 	}
+
 	if !client.fallbackOnUsageExceeded {
 		return false
 	}
+
 	var budgetError *budgetAdmissionError
 	if errors.As(err, &budgetError) {
 		return true
 	}
+
 	var providerError *ProviderError
 	if !errors.As(err, &providerError) {
 		return false
 	}
-	return providerError.UsageExceeded() || providerError.RateLimited() || providerError.ProviderUnavailable()
+
+	return providerError.UsageExceeded() || providerError.RateLimited() ||
+		providerError.ProviderUnavailable()
 }
 
 func completeWith(
@@ -467,48 +697,60 @@ func completeWith(
 	if err != nil {
 		return "", "", err
 	}
-	stream := target.sdk.Responses.NewStreaming(ctx, params, responseOptions(target)...)
+
+	stream := target.sdk.Responses.NewStreaming(ctx, params, providerOptions(target)...)
 	defer func() {
 		_ = stream.Close()
 	}()
 
-	var content strings.Builder
 	var (
+		content       strings.Builder
 		responseModel string
 		serviceTier   string
 		usage         responses.ResponseUsage
 		hasUsage      bool
 	)
+
 	sdkUsage := quota.SDKUsage{API: string(target.api), Model: "", ResponseID: "", UsageJSON: ""}
 	completed := false
 	incompleteReason := ""
+
 	var streamFailure error
+
 	defer func() {
-		review.RecordModelUsage(ctx, modelUsage(responseModel, usage, hasUsage, target, serviceTier))
+		review.RecordModelUsage(
+			ctx,
+			modelUsage(responseModel, usage, hasUsage, target, serviceTier),
+		)
+
 		if hasUsage {
 			sdkUsage.Model = responseModel
 			report(usage, serviceTier, &sdkUsage)
 		}
 	}()
+
 	for stream.Next() {
 		event := stream.Current()
+
 		sdkUsage.ResponseID = cmp.Or(event.Response.ID, sdkUsage.ResponseID)
 		switch responseEventType(event.Type) {
 		case responseOutputTextDelta:
 			content.WriteString(event.Delta)
 		case responseCompleted, responseIncomplete, responseFailed:
+			logResponseOutputShape(ctx, target.id, schemaName, event.Response)
 			serviceTier = string(event.Response.ServiceTier)
-			if event.Response.Model != "" {
-				responseModel = event.Response.Model
-			}
+
+			responseModel = cmp.Or(event.Response.Model, responseModel)
 			if event.Response.JSON.Usage.Valid() {
 				usage = event.Response.Usage
 				hasUsage = true
 				sdkUsage.UsageJSON = event.Response.Usage.RawJSON()
 			}
+
 			switch responseTerminalEventType(event.Type) {
 			case terminalCompleted:
 				completed = true
+
 				if text := event.Response.OutputText(); text != "" {
 					content.Reset()
 					content.WriteString(text)
@@ -516,44 +758,82 @@ func completeWith(
 			case terminalIncomplete:
 				incompleteReason = event.Response.IncompleteDetails.Reason
 			case terminalFailed:
-				streamFailure = responseFailure(target.model, string(event.Response.Error.Code), event.Response.Error.Message)
+				streamFailure = responseFailure(
+					target.model,
+					string(event.Response.Error.Code),
+					event.Response.Error.Message,
+				)
 			}
 		case responseError:
 			streamFailure = responseFailure(target.model, event.Code, event.Message)
 		}
 	}
+
 	if streamFailure != nil {
 		return "", "", streamFailure
 	}
+
 	if err := stream.Err(); err != nil {
 		return "", "", modelProviderError(target.model, err)
 	}
-	if incompleteReason == "max_output_tokens" {
-		return "", "", &TruncatedError{Model: target.model}
-	}
-	if incompleteReason != "" {
-		return "", "", errors.New("openai response incomplete: " + incompleteReason)
-	}
-	if !completed {
-		return "", "", errors.New("openai response ended without a completion event")
-	}
-	result := strings.TrimSpace(content.String())
-	if result == "" {
-		return "", "", errors.New("openai response missing message content")
-	}
-	completionModel := target.model
-	if (target.model == config.AutoRouterModel || target.model == config.FreeRouterModel) && responseModel != "" {
-		completionModel = responseModel
-	}
-	return result, completionModel, nil
+
+	return responseCompletion(target, &content, responseModel, completed, incompleteReason)
 }
 
-func responseOptions(target provider) []option.RequestOption {
-	fields, enabled := responseRouting(target)
+func logResponseOutputShape(
+	ctx context.Context,
+	providerID string,
+	schemaName string,
+	response responses.Response,
+) {
+	messageItems := 0
+	functionItems := 0
+	otherItems := 0
+
+	for _, item := range response.Output {
+		switch responseOutputItemType(item.Type) {
+		case responseOutputMessage:
+			messageItems++
+		case responseOutputFunctionCall:
+			functionItems++
+		default:
+			otherItems++
+		}
+	}
+
+	logger := gklog.L(ctx)
+	logger.InfoContext(
+		ctx,
+		"The SDK received model output.",
+		"provider_id",
+		providerID,
+		"schema_name",
+		schemaName,
+		"response_id",
+		response.ID,
+		"native_output_present",
+		response.JSON.Output.Valid(),
+		"message_items",
+		messageItems,
+		"function_call_items",
+		functionItems,
+		"other_items",
+		otherItems,
+	)
+}
+
+func providerOptions(target provider) []option.RequestOption {
+	fields, enabled := providerRouting(target)
 	if !enabled {
 		return nil
 	}
-	return []option.RequestOption{option.WithJSONSet("plugins", fields.Plugins), option.WithJSONSet("provider", fields.Provider)}
+
+	options := []option.RequestOption{option.WithJSONSet("provider", fields.Provider)}
+	if len(fields.Plugins) > 0 {
+		options = append(options, option.WithJSONSet("plugins", fields.Plugins))
+	}
+
+	return options
 }
 
 func newResponseParams(
@@ -575,20 +855,25 @@ func newResponseParams(
 	if !target.omitMaxOutputTokens {
 		params.MaxOutputTokens = openaigo.Int(target.outputTokenLimit())
 	}
+
 	if !target.omitTextFormat {
 		format := &responses.ResponseFormatTextJSONSchemaConfigParam{
 			Name:   schemaName,
 			Strict: openaigo.Bool(true),
 		}
 		if err := json.Unmarshal(schema, &format.Schema); err != nil {
-			return responses.ResponseNewParams{}, errors.New("decode response schema: " + err.Error())
+			return responses.ResponseNewParams{}, errors.New(
+				"decode response schema: " + err.Error(),
+			)
 		}
+
 		params.Text = responses.ResponseTextConfigParam{
 			Format: responses.ResponseFormatTextConfigUnionParam{
 				OfJSONSchema: format,
 			},
 		}
 	}
+
 	return params, nil
 }
 
@@ -596,7 +881,9 @@ func budgetTokens(usage responses.ResponseUsage, tokenTypes []config.TokenType) 
 	if len(tokenTypes) == 0 {
 		return usage.TotalTokens
 	}
+
 	var tokens int64
+
 	for _, tokenType := range tokenTypes {
 		switch tokenType {
 		case config.InputTokens:
@@ -605,26 +892,44 @@ func budgetTokens(usage responses.ResponseUsage, tokenTypes []config.TokenType) 
 			tokens += usage.OutputTokens
 		}
 	}
+
 	return tokens
 }
 
-func modelUsage(model string, usage responses.ResponseUsage, usageReported bool, target provider, serviceTier string) review.ModelUsage {
+func modelUsage(
+	model string,
+	usage responses.ResponseUsage,
+	usageReported bool,
+	target provider,
+	serviceTier string,
+) review.ModelUsage {
 	reportedRequests := 0
 	if usageReported {
 		reportedRequests = 1
 	}
+
 	pricingModel := model
 	if pricingModel == "" {
 		pricingModel = target.model
 	}
+
 	pricing, pricingFound := config.FindModelPricing(target.pricingByModel, pricingModel)
 	writeTokens := usage.InputTokensDetails.CacheWriteTokens
-	cost, ratesKnown := pricing.Estimate(usage.InputTokens, usage.InputTokensDetails.CachedTokens, writeTokens, usage.OutputTokens, serviceTier)
+	cost, ratesKnown := pricing.Estimate(
+		usage.InputTokens,
+		usage.InputTokensDetails.CachedTokens,
+		writeTokens,
+		usage.OutputTokens,
+		serviceTier,
+	)
+
 	priced := usageReported && pricingFound && ratesKnown
 	if !priced {
 		var unknownCost config.TokenCost
+
 		cost = unknownCost
 	}
+
 	return review.ModelUsage{
 		ProviderID:                  target.id,
 		RequestedModel:              target.model,
@@ -656,6 +961,7 @@ func modelProviderError(model string, err error) error {
 	if errors.As(err, &sizeFailure) {
 		return sizeFailure
 	}
+
 	var apiError *openaigo.Error
 	if errors.As(err, &apiError) {
 		return &ProviderError{
@@ -666,12 +972,15 @@ func modelProviderError(model string, err error) error {
 			Message:    apiError.Message,
 		}
 	}
+
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errors.New("model provider request timed out: " + err.Error())
 	}
+
 	if errors.Is(err, context.Canceled) {
 		return errors.New("model provider request was cancelled: " + err.Error())
 	}
+
 	// Everything left arrived through the stream rather than as a status. The
 	// frame may still state a refusal, so it is parsed into the same structured
 	// error the status path produces. The underlying error is kept because it
@@ -683,6 +992,7 @@ func responseFailure(model string, code string, message string) error {
 	if message == "" {
 		message = "model provider reported a failed response"
 	}
+
 	providerError := &ProviderError{
 		StatusCode: 0,
 		Type:       "",
@@ -690,19 +1000,30 @@ func responseFailure(model string, code string, message string) error {
 		Param:      "",
 		Message:    message,
 	}
+
 	return &StreamError{Model: model, Cause: errors.New(message), Provider: providerError}
 }
 
-func structuredOutputPrompt(ctx context.Context, configuration reviewrules.Policy, policy string, schemaName string, schema json.RawMessage) (string, error) {
+func structuredOutputPrompt(
+	ctx context.Context,
+	configuration reviewrules.Policy,
+	policy string,
+	schemaName string,
+	schema json.RawMessage,
+) (string, error) {
 	var data reviewrules.PromptData
+
 	data.Input = policy
 	data.SchemaName = schemaName
 	data.Schema = string(schema)
+
 	output, err := configuration.Render("structured.output", data)
 	if err != nil {
 		logger := gklog.L(ctx)
 		logger.WarnContext(ctx, "Structured output template rendering failed")
+
 		return "", fmt.Errorf("render structured output template: %w", err)
 	}
+
 	return output, nil
 }

@@ -80,7 +80,18 @@ func clippedLiveSetup(t *testing.T) *clippedLiveFixture {
 	if pathErr != nil || normalizedPath != filePath || path.Ext(filePath) != ".md" {
 		t.Fatal("The fixture requires a canonical repository-relative Markdown path.")
 	}
-	fixture := &clippedLiveFixture{opts: opts, repo: repo, bot: cfg.GitHubBotLogin, filePath: filePath, client: githubapp.NewClient(cfg, &http.Client{Timeout: 30 * time.Second}, time.Now, slog.New(slog.NewTextHandler(io.Discard, nil)))}
+	fixture := &clippedLiveFixture{
+		opts:     opts,
+		repo:     repo,
+		bot:      cfg.GitHubBotLogin,
+		filePath: filePath,
+		client: githubapp.NewClient(
+			cfg,
+			&http.Client{Timeout: 30 * time.Second},
+			time.Now,
+			slog.New(slog.NewTextHandler(io.Discard, nil)),
+		),
+	}
 	fixture.original = fixture.pullRequest(t, t.Context())
 	fixture.head = fixture.original.Head.SHA
 	return fixture
@@ -89,9 +100,21 @@ func clippedLiveSetup(t *testing.T) *clippedLiveFixture {
 func (fixture *clippedLiveFixture) pullRequest(t *testing.T, ctx context.Context) clippedLivePR {
 	t.Helper()
 	var result clippedLivePR
-	clippedLiveAPI(t, ctx, http.MethodGet, fmt.Sprintf("repos/%s/pulls/%d", fixture.opts.repository, fixture.opts.pullRequest), nil, &result)
-	if result.State != "open" || result.Draft || !strings.Contains(result.Title, "PR-Agent prose fixture") || result.Head.Repo.FullName != fixture.opts.repository || result.Head.Ref == "" || result.Head.SHA == "" {
-		t.Fatal("The selected target must be an open, non-draft dedicated prose fixture in its own repository.")
+	clippedLiveAPI(
+		t,
+		ctx,
+		http.MethodGet,
+		fmt.Sprintf("repos/%s/pulls/%d", fixture.opts.repository, fixture.opts.pullRequest),
+		nil,
+		&result,
+	)
+	if result.State != "open" || result.Draft || !strings.Contains(
+		result.Title,
+		"PR-Agent prose fixture",
+	) || result.Head.Repo.FullName != fixture.opts.repository || result.Head.Ref == "" || result.Head.SHA == "" {
+		t.Fatal(
+			"The selected target must be an open, non-draft dedicated prose fixture in its own repository.",
+		)
 	}
 	return result
 }
@@ -99,7 +122,16 @@ func (fixture *clippedLiveFixture) pullRequest(t *testing.T, ctx context.Context
 func (fixture *clippedLiveFixture) file(t *testing.T, ctx context.Context) clippedLiveFile {
 	t.Helper()
 	var result clippedLiveFile
-	clippedLiveAPI(t, ctx, http.MethodGet, "repos/"+fixture.opts.repository+"/contents/"+fixture.filePath+"?ref="+url.QueryEscape(fixture.head), nil, &result)
+	clippedLiveAPI(
+		t,
+		ctx,
+		http.MethodGet,
+		"repos/"+fixture.opts.repository+"/contents/"+fixture.filePath+"?ref="+url.QueryEscape(
+			fixture.head,
+		),
+		nil,
+		&result,
+	)
 	return result
 }
 
@@ -124,7 +156,14 @@ func (fixture *clippedLiveFixture) write(t *testing.T, ctx context.Context, cont
 			} `json:"verification"`
 		} `json:"commit"`
 	}
-	clippedLiveAPI(t, ctx, http.MethodGet, "repos/"+fixture.opts.repository+"/commits/"+fixture.head, nil, &commit)
+	clippedLiveAPI(
+		t,
+		ctx,
+		http.MethodGet,
+		"repos/"+fixture.opts.repository+"/commits/"+fixture.head,
+		nil,
+		&commit,
+	)
 	if len(commit.Parents) != 1 || commit.Parents[0].SHA != previous {
 		t.Fatal("The fixture commit did not use the expected parent.")
 	}
@@ -145,7 +184,12 @@ func clippedLivePassage(t *testing.T, name string) string {
 	return strings.TrimSpace(string(data))
 }
 
-func clippedLiveAssertAnchors(t *testing.T, threads []githubapp.ReviewThread, document, passage string) {
+func clippedLiveAssertAnchors(
+	t *testing.T,
+	threads []githubapp.ReviewThread,
+	document string,
+	passage string,
+) {
 	t.Helper()
 	seen := make(map[int]bool)
 	for offset := 0; offset < len(document); {
@@ -219,7 +263,12 @@ func clippedLiveAPI(t *testing.T, ctx context.Context, method, endpoint string, 
 	command.Stdout = &output
 	command.Stderr = &diagnostic
 	if command.Run() != nil {
-		t.Fatalf("The authenticated GitHub CLI failed during %s %s: %.512s", method, endpoint, diagnostic.String())
+		t.Fatalf(
+			"The authenticated GitHub CLI failed during %s %s: %.512s",
+			method,
+			endpoint,
+			diagnostic.String(),
+		)
 	}
 	if json.Unmarshal(output.Bytes(), result) != nil {
 		t.Fatal("GitHub returned an invalid fixture response.")

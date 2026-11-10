@@ -5,19 +5,24 @@ import "testing"
 // A model answer carries findings and nothing else. It used to carry a coverage
 // boolean the model was required to fill in blind, and the run believed it.
 func TestReviewResultCarriesOnlyFindings(t *testing.T) {
-	result := ReviewResult{Findings: []Finding{{
-		Path:       "main.go",
-		StartLine:  1,
-		EndLine:    1,
-		Title:      "Blocker",
-		Body:       "The changed line breaks core behavior.",
-		Evidence:   "return err",
-		Suggestion: "",
-		Importance: 7,
-	}}}
+	result := ReviewResult{
+		Findings: []Finding{
+			{
+				Path:       "main.go",
+				StartLine:  1,
+				EndLine:    1,
+				Title:      "Blocker",
+				Body:       "The changed line breaks core behavior.",
+				Evidence:   "return err",
+				Suggestion: "",
+				Importance: 7,
+			},
+		},
+	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
+
 	if len(result.Findings) != 1 {
 		t.Fatalf("findings = %d, want 1", len(result.Findings))
 	}
@@ -30,6 +35,7 @@ func TestParseHeadSHAAcceptsSHA1AndSHA256(t *testing.T) {
 	if _, err := ParseHeadSHA(sha1); err != nil {
 		t.Fatalf("ParseHeadSHA(sha1): %v", err)
 	}
+
 	if _, err := ParseHeadSHA(sha256); err != nil {
 		t.Fatalf("ParseHeadSHA(sha256): %v", err)
 	}
@@ -62,6 +68,7 @@ func TestParseReviewDecisionAcceptsCommentEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseReviewDecision(COMMENT): %v", err)
 	}
+
 	if decision != ReviewDecisionComment {
 		t.Fatalf("decision = %q, want %q", decision, ReviewDecisionComment)
 	}
@@ -88,6 +95,7 @@ func TestFindingValidateRejectsEmptyFieldsInvalidLinesAndImportance(t *testing.T
 	}
 
 	invalidSuggestion := valid
+
 	invalidSuggestion.Suggestion = "```go\nunsafe()\n```"
 	if err := invalidSuggestion.Validate(); err == nil {
 		t.Fatal("fenced suggestion: want validation error")
@@ -124,7 +132,11 @@ func TestValidateThreadResolutionsRejectsDuplicatesAndInvalidValues(t *testing.T
 		t.Fatal("duplicate thread ids: want error")
 	}
 
-	invalid := ThreadResolution{ThreadNodeID: "thread-2", Resolution: Resolution("nope"), Reason: "x"}
+	invalid := ThreadResolution{
+		ThreadNodeID: "thread-2",
+		Resolution:   Resolution("nope"),
+		Reason:       "x",
+	}
 	if err := invalid.Validate(); err == nil {
 		t.Fatal("invalid resolution: want error")
 	}
@@ -139,6 +151,7 @@ func TestReviewResultValidateRejectsDuplicateFindings(t *testing.T) {
 		Body:       "Details",
 		Importance: 3,
 	}
+
 	result := ReviewResult{
 		Findings: []Finding{finding, finding},
 	}

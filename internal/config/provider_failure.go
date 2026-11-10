@@ -20,12 +20,14 @@ func ResolveProviderFailurePolicy(policy ProviderFailurePolicy) ProviderFailureP
 	if policy == "" {
 		return ProviderRecoverableFailure
 	}
+
 	return policy
 }
 
 // LoadProviderFailurePolicy rejects unknown policy values before provider requests.
 func LoadProviderFailurePolicy(lookup LookupEnv) (ProviderFailurePolicy, error) {
 	value, _ := lookup("PROVIDER_FAILURE_POLICY")
+
 	policy := ResolveProviderFailurePolicy(ProviderFailurePolicy(value))
 	switch policy {
 	case ProviderAnyFailure, ProviderRecoverableFailure:
@@ -39,9 +41,14 @@ func providerRequestTimeout(definition providerDefinition) (time.Duration, error
 	if definition.RequestTimeout == "" {
 		return 0, nil
 	}
+
 	timeout, err := time.ParseDuration(definition.RequestTimeout)
 	if err != nil || timeout <= 0 {
-		return 0, fmt.Errorf("provider %q request_timeout must be a positive duration", definition.ID)
+		return 0, fmt.Errorf(
+			"provider %q request_timeout must be a positive duration",
+			definition.ID,
+		)
 	}
+
 	return timeout, nil
 }

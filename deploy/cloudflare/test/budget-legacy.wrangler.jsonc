@@ -1,0 +1,14 @@
+{
+  "name": "pr-agent-budget-rows-test",
+  "main": "budget-legacy-fixture.js",
+  "compatibility_date": "2026-08-12",
+  "rules": [{ "type": "Text", "globs": ["**/*.sql"], "fallthrough": true }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PROVIDER_BUDGET", "class_name": "MeasuredProviderBudget" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["MeasuredProviderBudget"] }
+  ]
+}

@@ -19,9 +19,14 @@ func validateFindingDisplay(display FindingDisplay) error {
 	case FindingsExpanded, FindingsCollapsed, FindingsHidden:
 		return nil
 	case "":
-		return fmt.Errorf("prompt configuration requires metadata_findings_display; set expanded, collapsed, or hidden")
+		return fmt.Errorf(
+			"prompt configuration requires metadata_findings_display; set expanded, collapsed, or hidden",
+		)
 	default:
-		return fmt.Errorf("metadata_findings_display %q is invalid; set expanded, collapsed, or hidden", display)
+		return fmt.Errorf(
+			"metadata_findings_display %q is invalid; set expanded, collapsed, or hidden",
+			display,
+		)
 	}
 }
 

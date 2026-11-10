@@ -42,13 +42,16 @@ type Status struct {
 func (dispatcher *Dispatcher) Status() Status {
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+
 	return dispatcher.statusLocked()
 }
 
 func (dispatcher *Dispatcher) statusLocked() Status {
 	return Status{
-		AdmissionClosed: dispatcher.closed, Queued: dispatcher.queued,
-		Running: dispatcher.running, Outstanding: dispatcher.queued + dispatcher.running,
+		AdmissionClosed: dispatcher.closed,
+		Queued:          dispatcher.queued,
+		Running:         dispatcher.running,
+		Outstanding:     dispatcher.queued + dispatcher.running,
 	}
 }
 
@@ -56,6 +59,7 @@ func (dispatcher *Dispatcher) statusLocked() Status {
 func (dispatcher *Dispatcher) StopAdmission() Status {
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+
 	return dispatcher.stopAdmissionLocked()
 }
 
@@ -63,9 +67,11 @@ func (dispatcher *Dispatcher) StopAdmission() Status {
 func (dispatcher *Dispatcher) StopAdmissionIfIdle() Status {
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+
 	if dispatcher.queued+dispatcher.running != 0 {
 		return dispatcher.statusLocked()
 	}
+
 	return dispatcher.stopAdmissionLocked()
 }
 
@@ -74,6 +80,7 @@ func (dispatcher *Dispatcher) stopAdmissionLocked() Status {
 		dispatcher.closed = true
 		close(dispatcher.jobs)
 	}
+
 	return dispatcher.statusLocked()
 }
 
@@ -102,6 +109,7 @@ func (dispatcher *Dispatcher) Start(ctx context.Context) {
 		dispatcher.mu.Unlock()
 		return
 	}
+
 	dispatcher.started = true
 	dispatcher.wg.Go(func() {
 		dispatcher.schedule(ctx)
@@ -121,13 +129,16 @@ func (dispatcher *Dispatcher) schedule(ctx context.Context) {
 			if !ok {
 				break
 			}
+
 			pending = remaining
 			key := job.Key()
 			activeKeys[key] = struct{}{}
 			running++
+
 			dispatcher.markStarted()
 			dispatcher.wg.Go(func() {
 				dispatcher.runJob(ctx, job)
+
 				dispatcher.completed <- key
 			})
 		}
@@ -135,15 +146,18 @@ func (dispatcher *Dispatcher) schedule(ctx context.Context) {
 		if jobs == nil && running == 0 {
 			return
 		}
+
 		select {
 		case job, ok := <-jobs:
 			if !ok {
 				jobs = nil
 				continue
 			}
+
 			pending = append(pending, job)
 		case key := <-dispatcher.completed:
 			delete(activeKeys, key)
+
 			running--
 		}
 	}
@@ -157,10 +171,14 @@ func nextRunnableJob(
 		if _, active := activeKeys[job.Key()]; active {
 			continue
 		}
+
 		pending = append(pending[:index], pending[index+1:]...)
+
 		return job, pending, true
 	}
+
 	var empty domain.ReviewJob
+
 	return empty, pending, false
 }
 
@@ -176,6 +194,7 @@ func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) 
 		dispatcher.mu.Lock()
 		dispatcher.running--
 		dispatcher.mu.Unlock()
+
 		if recovered := recover(); recovered != nil {
 			dispatcher.logger.ErrorContext(
 				ctx,
@@ -185,6 +204,7 @@ func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) 
 			)
 		}
 	}()
+
 	if err := dispatcher.runner.Run(ctx, job); err != nil {
 		dispatcher.logger.ErrorContext(
 			ctx,
@@ -199,6 +219,7 @@ func (dispatcher *Dispatcher) runJob(ctx context.Context, job domain.ReviewJob) 
 func (dispatcher *Dispatcher) Enqueue(job domain.ReviewJob) bool {
 	dispatcher.mu.Lock()
 	defer dispatcher.mu.Unlock()
+
 	if dispatcher.closed || dispatcher.queued >= dispatcher.capacity {
 		return false
 	}
@@ -217,6 +238,7 @@ func (dispatcher *Dispatcher) Shutdown(ctx context.Context) error {
 	dispatcher.StopAdmission()
 
 	done := make(chan struct{})
+
 	go func() {
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -228,6 +250,7 @@ func (dispatcher *Dispatcher) Shutdown(ctx context.Context) error {
 				)
 			}
 		}()
+
 		dispatcher.wg.Wait()
 		close(done)
 	}()

@@ -26,6 +26,7 @@ type assessmentSnapshot struct {
 
 func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	metadata, recorded, err := decodeMetadataRecord(body)
+
 	snapshot := assessmentSnapshot{
 		fileAssessments:   decodeFileAssessments(body),
 		metadata:          metadata,
@@ -35,22 +36,28 @@ func parseAssessmentSnapshot(body string) assessmentSnapshot {
 		omissionsAccepted: false,
 		decisionReason:    decodeDecisionReasonMarker(body),
 		approvalWithheld:  strings.Contains(body, approvalWithheldMarker),
-		legacyWholeHead:   !strings.Contains(body, unreviewedHeadReason),
+		legacyWholeHead: strings.TrimSpace(body) != "" &&
+			!strings.Contains(body, unreviewedHeadReason),
 	}
 	if accepted, found := decodeOmissionDecisionMarker(body); found {
 		snapshot.omissionsAccepted = accepted
 	}
+
 	for _, path := range assessmentPaths(structuralShortfall{Hunks: snapshot.omissions}) {
 		covered := false
+
 		for _, assessment := range snapshot.fileAssessments {
-			if assessment.Path == path && (assessment.PermitsContentExclusion() || assessment.Action == domain.FileActionReview && assessment.Reviewed) {
+			if assessment.Path == path &&
+				(assessment.PermitsContentExclusion() || assessment.Action == domain.FileActionReview && assessment.Reviewed) {
 				covered = true
 			}
 		}
+
 		if !covered {
 			snapshot.omissionsAccepted = false
 		}
 	}
+
 	return snapshot
 }
 
@@ -60,22 +67,41 @@ func (service *Service) completedSummaryAssessment(
 	job domain.ReviewJob,
 ) (assessmentSnapshot, bool, error) {
 	logger := gklog.L(ctx)
+
 	var empty assessmentSnapshot
-	comments, err := service.github.ListIssueComments(ctx, job.InstallationID, job.Repository, job.Number)
+
+	comments, err := service.github.ListIssueComments(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.Number,
+	)
 	if err != nil {
-		logger.ErrorContext(ctx, "read completed summary assessment", slog.String("err", err.Error()))
+		logger.ErrorContext(
+			ctx,
+			"read completed summary assessment",
+			slog.String("err", err.Error()),
+		)
+
 		return empty, false, fmt.Errorf("read completed summary assessment: %w", err)
 	}
+
 	comment, found := findSummaryComment(comments, service.botLogin)
+
 	head, marked := marker.FindReview(comment.Body)
 	if !found || !marked || head != job.Head {
 		return empty, false, nil
 	}
+
 	state, hasState := marker.DecodeState(comment.Body)
-	completed := hasState && state.Status == marker.StateDone && state.LastReviewed == job.Head && len(state.Pending) == 0
+	completed := hasState &&
+		(state.Status == marker.StateDone || state.Status == marker.StateFailed) &&
+		completedHeadState(state, job.Head)
+
 	snapshot := parseAssessmentSnapshot(comment.Body)
 	if !completed && !snapshot.approvalWithheld {
 		return empty, false, nil
 	}
+
 	return snapshot, true, nil
 }

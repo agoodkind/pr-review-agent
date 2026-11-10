@@ -2,6 +2,8 @@ package review
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -19,10 +21,12 @@ func formatFindingImportances(findings []domain.Finding) string {
 	if len(findings) == 0 {
 		return "none"
 	}
+
 	values := make([]string, 0, len(findings))
 	for _, finding := range findings {
 		values = append(values, fmt.Sprintf("`%d`", finding.Importance))
 	}
+
 	return strings.Join(values, ", ")
 }
 
@@ -31,10 +35,12 @@ func formatReviewTraceIDs(reviews []reviewTrace) string {
 	if len(reviews) == 0 {
 		return "none"
 	}
+
 	ids := make([]string, 0, len(reviews))
 	for _, item := range reviews {
 		ids = append(ids, fmt.Sprintf("`%d`", item.ID))
 	}
+
 	return strings.Join(ids, ", ")
 }
 
@@ -43,10 +49,12 @@ func formatThreadTraceIDs(threads []threadTrace) string {
 	if len(threads) == 0 {
 		return "none"
 	}
+
 	ids := make([]string, 0, len(threads))
 	for _, item := range threads {
 		ids = append(ids, "`"+item.NodeID+"`")
 	}
+
 	return strings.Join(ids, ", ")
 }
 
@@ -58,20 +66,24 @@ func countOpenThreadTraces(threads []threadTrace) int {
 // countResolvedThreadTraces counts the bot threads already resolved.
 func countResolvedThreadTraces(threads []threadTrace) int {
 	count := 0
+
 	for _, item := range threads {
 		if item.Resolved {
 			count++
 		}
 	}
+
 	return count
 }
 
 type findingTrace struct {
-	ID         string `json:"id"`
-	Path       string `json:"path"`
-	StartLine  int    `json:"start_line"`
-	EndLine    int    `json:"end_line"`
-	Importance int    `json:"importance"`
+	ID         string                `json:"id"`
+	Surface    domain.FindingSurface `json:"surface"`
+	CommitSHA  domain.HeadSHA        `json:"commit_sha,omitempty"`
+	Path       string                `json:"path,omitempty"`
+	StartLine  int                   `json:"start_line"`
+	EndLine    int                   `json:"end_line"`
+	Importance int                   `json:"importance"`
 }
 
 type reviewTrace struct {
@@ -94,48 +106,77 @@ type threadTrace struct {
 
 func traceFindings(ctx context.Context, findings []domain.Finding) ([]findingTrace, error) {
 	logger := gklog.L(ctx)
+
 	traces := make([]findingTrace, 0, len(findings))
 	for _, finding := range findings {
-		findingID, err := marker.FindingID(finding)
+		var (
+			findingID string
+			err       error
+		)
+		if finding.EffectiveSurface() == domain.FindingFile {
+			findingID, err = marker.FindingID(finding)
+		} else {
+			err = finding.Validate()
+			if err == nil {
+				sum := sha256.Sum256([]byte(metadataFindingKey(finding)))
+				findingID = hex.EncodeToString(sum[:])
+			}
+		}
+
 		if err != nil {
 			logger.ErrorContext(ctx, "identify finding for trace", slog.String("err", err.Error()))
 			return nil, fmt.Errorf("identify finding for trace: %w", err)
 		}
-		traces = append(traces, findingTrace{
-			ID:         findingID,
-			Path:       finding.Path,
-			StartLine:  finding.StartLine,
-			EndLine:    finding.EndLine,
-			Importance: finding.Importance,
-		})
+
+		traces = append(
+			traces,
+			findingTrace{
+				ID:         findingID,
+				Surface:    finding.EffectiveSurface(),
+				CommitSHA:  finding.CommitSHA,
+				Path:       finding.Path,
+				StartLine:  finding.StartLine,
+				EndLine:    finding.EndLine,
+				Importance: finding.Importance,
+			},
+		)
 	}
+
 	return traces, nil
 }
 
 func traceReviews(reviews []githubapp.Review, botLogin string) []reviewTrace {
 	traces := make([]reviewTrace, 0)
+
 	for _, item := range reviews {
 		if item.Author != botLogin {
 			continue
 		}
+
 		_, hasReviewMarker := marker.FindReview(item.Body)
-		traces = append(traces, reviewTrace{
-			ID:              item.ID,
-			CommitID:        string(item.CommitID),
-			State:           item.State,
-			HasReviewMarker: hasReviewMarker,
-			HasSummary:      marker.HasSummary(item.Body),
-		})
+		traces = append(
+			traces,
+			reviewTrace{
+				ID:              item.ID,
+				CommitID:        string(item.CommitID),
+				State:           item.State,
+				HasReviewMarker: hasReviewMarker,
+				HasSummary:      marker.HasSummary(item.Body),
+			},
+		)
 	}
+
 	return traces
 }
 
 func traceThreads(threads []githubapp.ReviewThread, botLogin string) []threadTrace {
 	traces := make([]threadTrace, 0)
+
 	for _, thread := range threads {
 		if thread.RootComment.Author != botLogin {
 			continue
 		}
+
 		trace := threadTrace{
 			NodeID:      thread.NodeID,
 			CommentID:   thread.RootComment.DatabaseID,
@@ -145,16 +186,23 @@ func traceThreads(threads []githubapp.ReviewThread, botLogin string) []threadTra
 			FindingHead: "",
 			Importance:  0,
 		}
+
 		findingMarker, ok := marker.FindFinding(thread.RootComment.Body)
 		if ok {
 			trace.FindingID = findingMarker.ID
 			trace.FindingHead = string(findingMarker.Head)
 			trace.Importance = findingMarker.Importance
 		}
+
 		traces = append(traces, trace)
 	}
-	sort.Slice(traces, func(left, right int) bool {
-		return traces[left].NodeID < traces[right].NodeID
-	})
+
+	sort.Slice(
+		traces,
+		func(left, right int) bool {
+			return traces[left].NodeID < traces[right].NodeID
+		},
+	)
+
 	return traces
 }

@@ -16,6 +16,7 @@ type scopeFailureState struct {
 func (pass *chunkPass) recordAssessmentFailure(err error) {
 	pass.mu.Lock()
 	defer pass.mu.Unlock()
+
 	pass.assessmentErr = err
 	pass.coverage = false
 }
@@ -25,14 +26,18 @@ func (pass *chunkPass) scopeFailures(ctx context.Context) scopeFailureState {
 	pass.mu.Lock()
 	assessmentErr := pass.assessmentErr
 	pass.mu.Unlock()
+
 	state := scopeFailureState{
 		cause:    errors.Join(joinedChunkFailures(ctx, failures), assessmentErr),
-		statuses: providerStatuses(failures), classes: nil,
+		statuses: providerStatuses(failures),
+		classes:  nil,
 	}
 	collectProviderStatuses(assessmentErr, &state.statuses)
+
 	if state.cause != nil {
 		state.classes = failureClassesOf(state.cause)
 	}
+
 	return state
 }
 
@@ -41,5 +46,6 @@ func (state scopeFailureState) classNames() []string {
 	for _, class := range state.classes {
 		names = append(names, string(class))
 	}
+
 	return names
 }

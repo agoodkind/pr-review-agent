@@ -41,7 +41,10 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 	original := liveReviewBodyCapture(t, ctx, client, opts, repo)
-	if !original.PullRequest.Draft || !strings.Contains(strings.ToLower(original.PullRequest.Title), "fixture") || len(original.Threads) != 0 {
+	if !original.PullRequest.Draft || !strings.Contains(
+		strings.ToLower(original.PullRequest.Title),
+		"fixture",
+	) || len(original.Threads) != 0 {
 		t.Fatal("The live regression requires a draft fixture without inline threads.")
 	}
 	directory, err := os.MkdirTemp("", "pragent-native-review-link-")
@@ -59,7 +62,15 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cleanupCancel()
-		liveNativeRestoreOversized(t, cleanupCtx, cfg.ReviewPolicy, client, opts, repo, cfg.GitHubBotLogin)
+		liveNativeRestoreOversized(
+			t,
+			cleanupCtx,
+			cfg.ReviewPolicy,
+			client,
+			opts,
+			repo,
+			cfg.GitHubBotLogin,
+		)
 	})
 	logPath := filepath.Join(directory, "service.ndjson")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -80,11 +91,17 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	summary.OmissionsAccepted = true
 	summary.MinimumImportance = cfg.MinimumImportance
 	summary.MetadataRevision = diff.PullRequestRevision(original.PullRequest)
-	summary.Metadata = []domain.Finding{{
-		Surface: domain.FindingPullRequestTitle, RuleID: "pr_title", StartLine: 1, EndLine: 1,
-		Title: "Verify the fixture title", Body: "The fixture title does not identify the changed behavior. The detailed finding retains this second sentence.",
-		Importance: 10,
-	}}
+	summary.Metadata = []domain.Finding{
+		{
+			Surface:    domain.FindingPullRequestTitle,
+			RuleID:     "pr_title",
+			StartLine:  1,
+			EndLine:    1,
+			Title:      "Verify the fixture title",
+			Body:       "The fixture title does not identify the changed behavior. The detailed finding retains this second sentence.",
+			Importance: 10,
+		},
+	}
 	var state marker.State
 	state.LastReviewed, state.Status, state.RunID = summary.Head, marker.StateDone, "native-link-seed-"+rand.Text()
 	var comment githubapp.IssueComment
@@ -98,16 +115,34 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	}
 	seedBody := review.RenderBody(summary) + "\n" + marker.EncodeState(state)
 	if comment.ID == 0 {
-		comment, err = client.CreateIssueComment(ctx, opts.installationID, repo, opts.pullRequest, seedBody)
+		comment, err = client.CreateIssueComment(
+			ctx,
+			opts.installationID,
+			repo,
+			opts.pullRequest,
+			seedBody,
+		)
 	} else {
-		comment, err = client.UpdateIssueComment(ctx, opts.installationID, repo, comment.ID, seedBody)
+		comment, err = client.UpdateIssueComment(
+			ctx,
+			opts.installationID,
+			repo,
+			comment.ID,
+			seedBody,
+		)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	var reference domain.PullRequestRef
 	reference.Repository, reference.InstallationID, reference.Number, reference.Head = repo, opts.installationID, opts.pullRequest, summary.Head
-	if _, err := client.SubmitReview(ctx, opts.installationID, repo, opts.pullRequest, githubapp.SubmitReviewRequest{CommitID: summary.Head, Event: domain.ReviewDecisionApprove}); err != nil {
+	if _, err := client.SubmitReview(
+		ctx,
+		opts.installationID,
+		repo,
+		opts.pullRequest,
+		githubapp.SubmitReviewRequest{CommitID: summary.Head, Event: domain.ReviewDecisionApprove},
+	); err != nil {
 		t.Fatal(err)
 	}
 	before := liveApprovalReviews(t, ctx, client, reference)
@@ -120,31 +155,73 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 		t.Fatal("The refresh did not create exactly one native rejection.")
 	}
 	rejection := after[len(after)-1]
-	visible, err := cfg.ReviewPolicy.Render("native.request_changes", reviewrules.PromptData{Input: "The fixture title does not identify the changed behavior."})
-	if err != nil || rejection.State != "CHANGES_REQUESTED" || rejection.Body != visible+"\n\n"+review.RenderVerdictBody(summary) || !strings.Contains(visible, "The fixture title does not identify the changed behavior.") {
-		t.Fatal("The native rejection must explain the actual metadata finding in one sentence and retain its recovery metadata.")
+	visible, _, _ := strings.Cut(rejection.Body, "<!--")
+	if rejection.State != "CHANGES_REQUESTED" || !strings.Contains(
+		visible,
+		summary.Metadata[0].Title,
+	) || !strings.Contains(
+		visible,
+		summary.Metadata[0].Body,
+	) || !strings.Contains(rejection.Body, review.RenderVerdictBody(summary)) {
+		t.Fatal(
+			"The native rejection must contain the complete metadata finding and retain its recovery metadata.",
+		)
 	}
 	if _, _, err := liveApprovalRun(t, ctx, service, reference, nil); err != nil {
 		t.Fatal(err)
 	}
-	if repeated := liveApprovalReviews(t, ctx, client, reference); !reflect.DeepEqual(repeated, after) {
+	if repeated := liveApprovalReviews(
+		t,
+		ctx,
+		client,
+		reference,
+	); !reflect.DeepEqual(repeated, after) {
 		t.Fatal("A repeated rejection refresh changed native reviews.")
 	}
 	legacyBody := review.RenderVerdictBody(summary)
-	legacy, err := client.UpdateReview(ctx, opts.installationID, repo, opts.pullRequest, rejection.ID, legacyBody)
+	legacy, err := client.UpdateReview(
+		ctx,
+		opts.installationID,
+		repo,
+		opts.pullRequest,
+		rejection.ID,
+		legacyBody,
+	)
 	if err != nil || legacy.ID != rejection.ID || legacy.State != rejection.State {
-		t.Fatal("The historical hidden-only fixture could not preserve its native identity and state.")
+		t.Fatal(
+			"The historical hidden-only fixture could not preserve its native identity and state.",
+		)
 	}
 	beforeRepair := liveReviewBodyCapture(t, ctx, client, opts, repo)
 	backupPath := filepath.Join(directory, "repair-backup.json")
-	args := []string{"review-bodies", "--runtime", opts.runtime, "--repository", opts.repository,
-		"--pull-request", strconv.Itoa(opts.pullRequest), "--installation-id", strconv.FormatInt(opts.installationID, 10),
-		"--app-private-key-file", opts.privateKeyFile, "--review-id", strconv.FormatInt(rejection.ID, 10),
-		"--link-summary", "--backup-file", backupPath}
+	args := []string{
+		"review-bodies",
+		"--runtime",
+		opts.runtime,
+		"--repository",
+		opts.repository,
+		"--pull-request",
+		strconv.Itoa(opts.pullRequest),
+		"--installation-id",
+		strconv.FormatInt(opts.installationID, 10),
+		"--app-private-key-file",
+		opts.privateKeyFile,
+		"--review-id",
+		strconv.FormatInt(rejection.ID, 10),
+		"--link-summary",
+		"--backup-file",
+		backupPath,
+	}
 	if err := run(ctx, args, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if current := liveReviewBodyCapture(t, ctx, client, opts, repo); !liveReviewBodySnapshotsEqual(beforeRepair, current) {
+	if current := liveReviewBodyCapture(
+		t,
+		ctx,
+		client,
+		opts,
+		repo,
+	); !liveReviewBodySnapshotsEqual(beforeRepair, current) {
 		t.Fatal("The dry run changed the fixture.")
 	}
 	applyArgs := append(slices.Clone(args), "--apply")
@@ -153,21 +230,44 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	}
 	repaired := liveReviewBodyCapture(t, ctx, client, opts, repo)
 	expectedReview := legacy
-	expectedReview.Body, err = review.NativeReviewSummaryLink(cfg.ReviewPolicy, repo, opts.pullRequest, comment.ID, review.RenderVerdictBody(summary))
+	expectedReview.Body, err = review.NativeReviewSummaryLink(
+		cfg.ReviewPolicy,
+		repo,
+		opts.pullRequest,
+		comment.ID,
+		review.RenderVerdictBody(summary),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyReviewBodySnapshot(ctx, client, beforeRepair, []githubapp.Review{expectedReview}); err != nil {
+	if err := verifyReviewBodySnapshot(
+		ctx,
+		client,
+		beforeRepair,
+		[]githubapp.Review{expectedReview},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := run(ctx, applyArgs, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	if current := liveReviewBodyCapture(t, ctx, client, opts, repo); !liveReviewBodySnapshotsEqual(repaired, current) {
+	if current := liveReviewBodyCapture(
+		t,
+		ctx,
+		client,
+		opts,
+		repo,
+	); !liveReviewBodySnapshotsEqual(repaired, current) {
 		t.Fatal("A repeated repair changed the fixture.")
 	}
 	summary.Decision, summary.Metadata = domain.ReviewDecisionApprove, nil
-	if _, err := client.UpdateIssueComment(ctx, opts.installationID, repo, comment.ID, review.RenderBody(summary)+"\n"+marker.EncodeState(state)); err != nil {
+	if _, err := client.UpdateIssueComment(
+		ctx,
+		opts.installationID,
+		repo,
+		comment.ID,
+		review.RenderBody(summary)+"\n"+marker.EncodeState(state),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := liveApprovalRun(t, ctx, service, reference, nil); err != nil {
@@ -181,13 +281,32 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 	if _, _, err := liveApprovalRun(t, ctx, service, reference, nil); err != nil {
 		t.Fatal(err)
 	}
-	if repeated := liveApprovalReviews(t, ctx, client, reference); !reflect.DeepEqual(repeated, approved) {
+	if repeated := liveApprovalReviews(
+		t,
+		ctx,
+		client,
+		reference,
+	); !reflect.DeepEqual(repeated, approved) {
 		t.Fatal("The default approval policy published another native review.")
 	}
-	liveNativeMissingSummaryFailure(t, ctx, cfg.ReviewPolicy, client, opts, reference, summary, comment.ID, directory, logger)
+	liveNativeMissingSummaryFailure(
+		t,
+		ctx,
+		cfg.ReviewPolicy,
+		client,
+		opts,
+		reference,
+		summary,
+		comment.ID,
+		directory,
+		logger,
+	)
 	final := liveReviewBodyCapture(t, ctx, client, opts, repo)
 	liveApprovalAssertProtectedReviews(t, original.Reviews, final.Reviews)
-	if !reflect.DeepEqual(final.PullRequest, original.PullRequest) || !reflect.DeepEqual(final.Threads, original.Threads) {
+	if !reflect.DeepEqual(
+		final.PullRequest,
+		original.PullRequest,
+	) || !reflect.DeepEqual(final.Threads, original.Threads) {
 		t.Fatal("The regression changed source metadata or inline threads.")
 	}
 	if err := writeReviewBodyBackup(filepath.Join(directory, "after.json"), final); err != nil {
@@ -197,10 +316,22 @@ func TestLiveNativeReviewSummaryLinksAndHistoricalRepair(t *testing.T) {
 		t.Fatal(err)
 	}
 	liveApprovalAssertNoProviderRequests(t, logPath)
-	t.Logf("Summary %d and native rejection %d retained their identities. The production refresh, repair command, and repeated approval checks passed.", comment.ID, rejection.ID)
+	t.Logf(
+		"Summary %d and native rejection %d retained their identities. The production refresh, repair command, and repeated approval checks passed.",
+		comment.ID,
+		rejection.ID,
+	)
 }
 
-func liveNativeRestoreOversized(t *testing.T, ctx context.Context, policy reviewrules.Policy, client *githubapp.Client, opts reviewBodyOptions, repo domain.Repository, bot string) {
+func liveNativeRestoreOversized(
+	t *testing.T,
+	ctx context.Context,
+	policy reviewrules.Policy,
+	client *githubapp.Client,
+	opts reviewBodyOptions,
+	repo domain.Repository,
+	bot string,
+) {
 	t.Helper()
 	var reference domain.PullRequestRef
 	reference.Repository, reference.Number, reference.InstallationID = repo, opts.pullRequest, opts.installationID
@@ -210,37 +341,100 @@ func liveNativeRestoreOversized(t *testing.T, ctx context.Context, policy review
 		t.Fatal(err)
 	}
 	for _, item := range reviews {
-		if item.Author != bot || len(item.Body) <= 10000 || !strings.Contains(item.Body, "The fixture exercises publication rejection. ") {
+		if item.Author != bot || len(item.Body) <= 10000 || !strings.Contains(
+			item.Body,
+			"The fixture exercises publication rejection. ",
+		) {
 			continue
 		}
 		start := strings.Index(item.Body, "\n\n<!-- pr-review-agent:review:v1 ")
 		if start < 0 {
 			t.Fatal("The oversized fixture body lost its recovery checkpoint.")
 		}
-		body, err := review.NativeReviewSummaryLink(policy, repo, opts.pullRequest, summary.ID, item.Body[start+2:])
+		body, err := review.NativeReviewSummaryLink(
+			policy,
+			repo,
+			opts.pullRequest,
+			summary.ID,
+			item.Body[start+2:],
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		updated, err := client.UpdateReview(ctx, opts.installationID, repo, opts.pullRequest, item.ID, body)
+		updated, err := client.UpdateReview(
+			ctx,
+			opts.installationID,
+			repo,
+			opts.pullRequest,
+			item.ID,
+			body,
+		)
 		expected := item
 		expected.Body = body
 		if err != nil || updated != expected {
-			t.Fatal("The oversized fixture body could not be restored without changing its native decision.")
+			t.Fatal(
+				"The oversized fixture body could not be restored without changing its native decision.",
+			)
 		}
-		t.Logf("Native review %d retains state %s after restoring its small summary link.", item.ID, item.State)
+		t.Logf(
+			"Native review %d retains state %s after restoring its small summary link.",
+			item.ID,
+			item.State,
+		)
 	}
 }
 
-func liveNativeMissingSummaryFailure(t *testing.T, ctx context.Context, policy reviewrules.Policy, client *githubapp.Client, opts reviewBodyOptions, reference domain.PullRequestRef, summary review.Summary, summaryID int64, directory string, logger *slog.Logger) {
+func liveNativeMissingSummaryFailure(
+	t *testing.T,
+	ctx context.Context,
+	policy reviewrules.Policy,
+	client *githubapp.Client,
+	opts reviewBodyOptions,
+	reference domain.PullRequestRef,
+	summary review.Summary,
+	summaryID int64,
+	directory string,
+	logger *slog.Logger,
+) {
 	t.Helper()
 	summary.Decision, summary.ApprovalWithheld = domain.ReviewDecisionComment, true
-	summary.Metadata = []domain.Finding{{Surface: domain.FindingPullRequestTitle, RuleID: "pr_title", StartLine: 1, EndLine: 1, Title: "Verify the fixture title", Body: "The fixture title exercises native review publication.", Importance: 10}}
-	legacy, err := client.SubmitReview(ctx, opts.installationID, reference.Repository, reference.Number, githubapp.SubmitReviewRequest{CommitID: summary.Head, Event: domain.ReviewDecisionComment, Body: review.RenderVerdictBody(summary)})
+	summary.Metadata = []domain.Finding{
+		{
+			Surface:    domain.FindingPullRequestTitle,
+			RuleID:     "pr_title",
+			StartLine:  1,
+			EndLine:    1,
+			Title:      "Verify the fixture title",
+			Body:       "The fixture title exercises native review publication.",
+			Importance: 10,
+		},
+	}
+	legacy, err := client.SubmitReview(
+		ctx,
+		opts.installationID,
+		reference.Repository,
+		reference.Number,
+		githubapp.SubmitReviewRequest{
+			CommitID: summary.Head,
+			Event:    domain.ReviewDecisionComment,
+			Body:     review.RenderVerdictBody(summary),
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deletePath := "repos/" + opts.repository + "/issues/comments/" + strconv.FormatInt(summaryID, 10)
-	if output, err := exec.CommandContext(ctx, "gh", "api", "--method", "DELETE", deletePath).CombinedOutput(); err != nil {
+	deletePath := "repos/" + opts.repository + "/issues/comments/" + strconv.FormatInt(
+		summaryID,
+		10,
+	)
+	if output, err := exec.CommandContext(
+		ctx,
+		"gh",
+		"api",
+		"--method",
+		"DELETE",
+		deletePath,
+	).CombinedOutput(); err != nil {
 		t.Fatalf("The dedicated fixture summary could not be deleted: %v: %s.", err, output)
 	}
 	cfg, _ := liveFailureConfig(t)
@@ -258,8 +452,14 @@ func liveNativeMissingSummaryFailure(t *testing.T, ctx context.Context, policy r
 		t.Fatal(err)
 	}
 	// The configured body exceeds GitHub's accepted review size.
-	templates["native.summary_link"] += "\n\n" + strings.Repeat("The fixture exercises publication rejection. ", 50000)
-	templates["native.request_changes"] += "\n\n" + strings.Repeat("The fixture exercises publication rejection. ", 50000)
+	templates["native.summary_link"] += "\n\n" + strings.Repeat(
+		"The fixture exercises publication rejection. ",
+		50000,
+	)
+	templates["native.request_changes"] += "\n\n" + strings.Repeat(
+		"The fixture exercises publication rejection. ",
+		50000,
+	)
 	prompts["templates"], err = json.Marshal(templates)
 	if err != nil {
 		t.Fatal(err)
@@ -272,14 +472,20 @@ func liveNativeMissingSummaryFailure(t *testing.T, ctx context.Context, policy r
 	if err := os.WriteFile(invalidPrompts, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg.ReviewPolicy, err = reviewrules.LoadPolicy(filepath.Join("..", "..", "config", "review-rules.json"), invalidPrompts)
+	cfg.ReviewPolicy, err = reviewrules.LoadPolicy(
+		filepath.Join("..", "..", "config", "review-rules.json"),
+		invalidPrompts,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	service, _ := liveFailureService(cfg, logger)
 	_, outcome, failure := liveApprovalRun(t, ctx, service, reference, nil)
 	var apiError githubapp.APIError
-	if failure == nil || !errors.As(failure, &apiError) || (apiError.StatusCode != 422 && apiError.StatusCode != 413) || outcome.Disposition != domain.AssessmentFailed {
+	if failure == nil || !errors.As(
+		failure,
+		&apiError,
+	) || (apiError.StatusCode != 422 && apiError.StatusCode != 413) || outcome.Disposition != domain.AssessmentFailed {
 		t.Fatal("The missing-summary recovery did not retain the real GitHub publication refusal.")
 	}
 	reviews := liveApprovalReviews(t, ctx, client, reference)
@@ -288,18 +494,38 @@ func liveNativeMissingSummaryFailure(t *testing.T, ctx context.Context, policy r
 	}
 	recovered := liveApprovalSummary(t, ctx, client, reference, cfg.GitHubBotLogin)
 	state, valid := marker.DecodeState(recovered.Body)
-	if recovered.ID == summaryID || !valid || state.Status != marker.StateFailed || state.LastReviewed != reference.Head || !review.MetadataMatches(recovered.Body, reference.Head, summary.MetadataRevision) {
-		t.Fatal("The refused native publication did not retain a failed summary and its recovered assessment.")
+	if recovered.ID == summaryID || !valid || state.Status != marker.StateFailed || state.LastReviewed != reference.Head || !review.MetadataMatches(
+		recovered.Body,
+		reference.Head,
+		summary.MetadataRevision,
+	) {
+		t.Fatal(
+			"The refused native publication did not retain a failed summary and its recovered assessment.",
+		)
 	}
 	cfg.ReviewPolicy = policy
 	service, _ = liveFailureService(cfg, logger)
-	if _, outcome, err := liveApprovalRun(t, ctx, service, reference, nil); err != nil || outcome.Disposition != domain.AssessmentCompleted {
-		t.Fatalf("The recovered assessment could not publish after restoring the configured link: %v.", err)
+	if _, outcome, err := liveApprovalRun(
+		t,
+		ctx,
+		service,
+		reference,
+		nil,
+	); err != nil || outcome.Disposition != domain.AssessmentCompleted {
+		t.Fatalf(
+			"The recovered assessment could not publish after restoring the configured link: %v.",
+			err,
+		)
 	}
 	current := liveApprovalSummary(t, ctx, client, reference, cfg.GitHubBotLogin)
 	state, valid = marker.DecodeState(current.Body)
 	if current.ID != recovered.ID || !valid || state.Status != marker.StateDone {
 		t.Fatal("The successful retry did not reuse and complete the recovered summary.")
 	}
-	t.Logf("Native review %d retained COMMENTED after GitHub HTTP%d. Recovered summary %d retained assessment metadata and completed after retry.", legacy.ID, apiError.StatusCode, recovered.ID)
+	t.Logf(
+		"Native review %d retained COMMENTED after GitHub HTTP%d. Recovered summary %d retained assessment metadata and completed after retry.",
+		legacy.ID,
+		apiError.StatusCode,
+		recovered.ID,
+	)
 }

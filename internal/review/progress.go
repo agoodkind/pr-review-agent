@@ -1,11 +1,147 @@
 package review
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
+	"slices"
 	"time"
 
+	"goodkind.io/gklog"
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
+	"goodkind.io/pr-review-agent/internal/marker"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
+
+// checkpoint saves a completed chunk after GitHub accepts its findings.
+// A lock serializes updates to the shared summary comment.
+func (service *Service) checkpoint(
+	ctx context.Context,
+	job domain.ReviewJob,
+	head domain.HeadSHA,
+	id string,
+	tracker *pendingTracker,
+	pass *chunkPass,
+) error {
+	logger := gklog.L(ctx)
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	tracker.unfinished = removeChunkID(tracker.unfinished, id)
+	tracker.completed = append(tracker.completed, id)
+	tracker.unread = removeChunkID(tracker.unread, id)
+	tracker.state.Pending = append([]string{}, tracker.unfinished...)
+	tracker.state.Completed = append([]string{}, tracker.completed...)
+	tracker.state.Unread = append([]string{}, tracker.unread...)
+	tracker.state.RunID = job.DeliveryID
+	tracker.state.Status = marker.StateReviewing
+	summary := service.progressSummary(ctx, job, pass, tracker.completed)
+
+	ctx, cancel := service.publicationContext(ctx)
+	defer cancel()
+
+	err := service.upsertSummaryComment(
+		ctx,
+		job,
+		summaryCommentContent{
+			Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
+				RenderDetails(summary) + "\n\n" +
+				renderSummaryFindings(summary) + "\n" +
+				encodeFileAssessments(
+					summary.FileAssessments,
+					summary.FileAssessmentMaximumBytes,
+				) + "\n" + renderFindingCheckpoints(summary),
+			State: tracker.state,
+		},
+	)
+	if err != nil {
+		logger.ErrorContext(ctx, "advance checkpoint", slog.String("err", err.Error()))
+		return fmt.Errorf("advance checkpoint: %w", err)
+	}
+
+	logger.InfoContext(
+		ctx,
+		"review checkpoint advanced",
+		slog.Int("pending", len(tracker.unfinished)),
+	)
+
+	return nil
+}
+
+func (service *Service) progressSummary(
+	ctx context.Context,
+	job domain.ReviewJob,
+	pass *chunkPass,
+	completed []string,
+) Summary {
+	pass.mu.Lock()
+
+	var summary Summary
+
+	summary.InProgress = true
+	summary.Head = job.Head
+	summary.Forced = job.Forced
+	summary.Duration = service.now().Sub(pass.startedAt)
+	summary.MinimumImportance = pass.settings.minimumImportance
+
+	summary.Models = slices.Clone(pass.work.AssessmentModels)
+	for _, model := range pass.models.names {
+		if !slices.Contains(summary.Models, model) {
+			summary.Models = append(summary.Models, model)
+		}
+	}
+
+	summary.Observed = slices.Clone(pass.collector.observed)
+	summary.Eligible = slices.Clone(pass.collector.anchored)
+	summary.Published = slices.Clone(pass.published)
+	summary.Chunks = len(completed)
+	pass.mu.Unlock()
+
+	for _, file := range pass.work.Files {
+		if completedFileReview(file, pass.work.Chunks, completed) {
+			summary.FilesReviewed++
+		}
+	}
+
+	summary.Usage = UsageFromContext(ctx)
+	summary.FileAssessments = pass.fileAssessments()
+	summary.FileAssessmentsDisplay = service.reviewPolicy.FileAssessmentsDisplay()
+	summary.FileAssessmentMaximumBytes = service.reviewPolicy.FileAssessmentMaximumBytes()
+	summary.Metadata, summary.metadataCheckpoint = pass.metadataSnapshot()
+	summary.MetadataRevision = diff.PullRequestRevision(pass.work.PullRequest)
+	summary.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
+	summary.Omissions = metadataOmissions(pass.structuralShortfall().Hunks)
+	summary.OmissionsAccepted = pass.acceptsOmissions()
+	summary.DecisionReason = pass.decisionReason()
+	summary.Fallback, summary.fallbackCheckpoint = pass.fallbackSnapshot()
+	service.enrichProviderPeriodUsage(ctx, &summary)
+
+	return summary
+}
+
+func completedFileReview(file diff.FileContext, chunks []diff.Chunk, completed []string) bool {
+	if !file.CoverageComplete {
+		return false
+	}
+
+	found := false
+
+	for _, chunk := range chunks {
+		if chunk.RelationshipReview || !slices.Contains(chunk.Paths, file.Path) {
+			continue
+		}
+
+		found = true
+
+		if !chunk.CoverageComplete || !slices.Contains(completed, chunkID(chunk)) {
+			return false
+		}
+	}
+
+	return found
+}
 
 // reviewProgress records what one review has learned so far. A review that
 // stops early reports this, so the reader sees which model answered, how much
@@ -25,6 +161,9 @@ type reviewProgress struct {
 	eligible                   []domain.Finding
 	published                  []domain.Finding
 	metadata                   []domain.Finding
+	metadataCheckpoint         *findingCheckpoint
+	fallback                   []domain.Finding
+	fallbackCheckpoint         *findingCheckpoint
 	metadataRevision           string
 	metadataFindingsDisplay    reviewrules.FindingDisplay
 	priorReviews               []reviewTrace
@@ -57,6 +196,9 @@ func newReviewProgress(
 		eligible:                   nil,
 		published:                  nil,
 		metadata:                   nil,
+		metadataCheckpoint:         nil,
+		fallback:                   nil,
+		fallbackCheckpoint:         nil,
 		metadataRevision:           "",
 		metadataFindingsDisplay:    metadataFindingsDisplay,
 		priorReviews:               nil,
@@ -116,8 +258,10 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		// comments on the page. Reporting none here would contradict what the
 		// reader sees on the same pull request.
 		Published:                  progress.published,
-		Fallback:                   nil,
+		Fallback:                   progress.fallback,
+		fallbackCheckpoint:         progress.fallbackCheckpoint,
 		Metadata:                   progress.metadata,
+		metadataCheckpoint:         progress.metadataCheckpoint,
 		MetadataRevision:           progress.metadataRevision,
 		MetadataFindingsDisplay:    progress.metadataFindingsDisplay,
 		Omissions:                  nil,
@@ -125,6 +269,7 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		Threads:                    progress.threads,
 		Reached:                    progress.stage,
 		Failed:                     true,
+		InProgress:                 false,
 		Forced:                     progress.forced,
 		FileAssessments:            progress.fileAssessments,
 		FileAssessmentsDisplay:     progress.fileAssessmentsDisplay,

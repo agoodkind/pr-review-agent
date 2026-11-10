@@ -18,28 +18,48 @@ func (target provider) outputTokenLimit() int64 {
 	if target.omitMaxOutputTokens {
 		return 0
 	}
+
 	if target.maxOutputTokens != 0 {
 		return target.maxOutputTokens
 	}
+
 	return config.MaximumOutputTokens
 }
 
-func (client *Client) recordProviderAttempt(ctx context.Context, target provider, budget budgetSnapshot, err error, fallback bool) {
+func (client *Client) recordProviderAttempt(
+	ctx context.Context,
+	target provider,
+	budget budgetSnapshot,
+	err error,
+	fallback bool,
+) {
 	failure := &providerAttemptError{provider: target, budget: budget, cause: err}
+
 	status := failure.ProviderStatus()
 	if err == nil {
 		status.Cause = review.ProviderSucceeded
 	}
+
 	attempt := review.ProviderAttempt{
-		Status: status, API: target.api, ReasoningEffort: target.reasoningEffort,
-		MaxOutputTokens: target.outputTokenLimit(), OutputCapOmitted: target.omitMaxOutputTokens,
-		Completed: err == nil, Fallback: fallback, HTTPStatus: 0, ErrorCode: "", Count: 1, Sequence: 0,
+		Status:           status,
+		API:              target.api,
+		ReasoningEffort:  target.reasoningEffort,
+		MaxOutputTokens:  target.outputTokenLimit(),
+		OutputCapOmitted: target.omitMaxOutputTokens,
+		Completed:        err == nil,
+		Fallback:         fallback,
+		HTTPStatus:       0,
+		ErrorCode:        "",
+		Count:            1,
+		Sequence:         0,
 	}
+
 	var providerError *ProviderError
 	if errors.As(err, &providerError) {
 		attempt.HTTPStatus = providerError.StatusCode
 		attempt.ErrorCode = providerError.Code
 	}
+
 	review.RecordProviderAttempt(ctx, attempt, client.reviewPolicy.ProviderDetails())
 }
 
@@ -56,6 +76,7 @@ func (attempt *providerAttemptError) ProviderFailureDetails() (int, string) {
 	if errors.As(attempt.cause, &providerError) {
 		return providerError.StatusCode, providerError.Code
 	}
+
 	return 0, ""
 }
 
@@ -71,6 +92,7 @@ func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 		TokenWindow:   attempt.budget.window,
 		QuotaSnapshot: attempt.budget.accounting,
 	}
+
 	var admission *budgetAdmissionError
 	if errors.As(attempt.cause, &admission) {
 		status.Used = admission.snapshot.used
@@ -78,14 +100,17 @@ func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 		status.Remaining = admission.snapshot.remaining
 		status.QuotaKnown = admission.snapshot.known
 		status.TokenWindow = admission.snapshot.window
+
 		status.QuotaSnapshot = admission.snapshot.accounting
 		if admission.DailyBudgetExhausted() {
 			status.Cause = review.ProviderAppBudgetDenied
 		} else {
 			status.Cause = review.ProviderAppBudgetUnavailable
 		}
+
 		return status
 	}
+
 	var providerError *ProviderError
 	if errors.As(attempt.cause, &providerError) {
 		switch {
@@ -95,5 +120,6 @@ func (attempt *providerAttemptError) ProviderStatus() review.ProviderStatus {
 			status.Cause = review.ProviderUsageExhausted
 		}
 	}
+
 	return status
 }

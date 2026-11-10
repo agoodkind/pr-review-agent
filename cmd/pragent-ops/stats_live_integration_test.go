@@ -32,7 +32,17 @@ func TestLiveStatsReportsStandingGitHubReviews(t *testing.T) {
 	if retained := os.Getenv("PR_AGENT_STATS_OUTPUT_DIR"); retained != "" {
 		directory = retained
 	}
-	args := []string{"run", ".", "stats", "--runtime", "../../runtime.json", "--wrangler", "../../deploy/cloudflare/wrangler.jsonc", "--output-dir", directory}
+	args := []string{
+		"run",
+		".",
+		"stats",
+		"--runtime",
+		"../../runtime.json",
+		"--wrangler",
+		"../../deploy/cloudflare/wrangler.jsonc",
+		"--output-dir",
+		directory,
+	}
 	if input != "" {
 		args = append(args, "--input", input)
 	} else {
@@ -63,7 +73,9 @@ func TestLiveStatsReportsStandingGitHubReviews(t *testing.T) {
 		t.Fatal("The public command did not capture complete live GitHub evidence.")
 	}
 	for _, pr := range report.GitHub {
-		if len(pr.Reviews.Nodes) != pr.Reviews.TotalCount || len(pr.ReviewThreads.Nodes) != pr.ReviewThreads.TotalCount {
+		if len(
+			pr.Reviews.Nodes,
+		) != pr.Reviews.TotalCount || len(pr.ReviewThreads.Nodes) != pr.ReviewThreads.TotalCount {
 			t.Fatal("The public command truncated GitHub review or thread pages.")
 		}
 		for _, thread := range pr.ReviewThreads.Nodes {
@@ -80,7 +92,20 @@ func TestLiveStatsReportsStandingGitHubReviews(t *testing.T) {
 			continue
 		}
 		parts := strings.SplitN(summary.Target.Repository, "/", 2)
-		data, err = exec.CommandContext(t.Context(), "gh", "api", "graphql", "-f", "query="+statsVerificationQuery, "-f", "owner="+parts[0], "-f", "name="+parts[1], "-F", "number="+strconv.FormatInt(summary.Target.Number, 10)).Output()
+		data, err = exec.CommandContext(
+			t.Context(),
+			"gh",
+			"api",
+			"graphql",
+			"-f",
+			"query="+statsVerificationQuery,
+			"-f",
+			"owner="+parts[0],
+			"-f",
+			"name="+parts[1],
+			"-F",
+			"number="+strconv.FormatInt(summary.Target.Number, 10),
+		).Output()
 		if err != nil {
 			t.Fatalf("Independent live GitHub read failed: %v", err)
 		}
@@ -104,12 +129,22 @@ func TestLiveStatsReportsStandingGitHubReviews(t *testing.T) {
 		}
 		standing := 0
 		for _, review := range pr.LatestOpinionatedReviews.Nodes {
-			if review.Author != nil && strings.TrimSuffix(review.Author.Login, "[bot]") == strings.TrimSuffix(report.BotLogin, "[bot]") && review.State == "CHANGES_REQUESTED" {
+			if review.Author != nil && strings.TrimSuffix(
+				review.Author.Login,
+				"[bot]",
+			) == strings.TrimSuffix(
+				report.BotLogin,
+				"[bot]",
+			) && review.State == "CHANGES_REQUESTED" {
 				standing++
 			}
 		}
 		if summary.StandingBotRejections != standing {
-			t.Fatalf("Public report counts %d standing rejections; live GitHub reports %d.", summary.StandingBotRejections, standing)
+			t.Fatalf(
+				"Public report counts %d standing rejections; live GitHub reports %d.",
+				summary.StandingBotRejections,
+				standing,
+			)
 		}
 	}
 	info, err := os.Stat(filepath.Join(directory, "stats.json"))
@@ -131,12 +166,24 @@ func statsVerificationTargets(report opsstats.Report) map[string]bool {
 		}
 		historical, standing := false, false
 		for _, review := range pr.Reviews.Nodes {
-			if review.Author != nil && strings.TrimSuffix(review.Author.Login, "[bot]") == strings.TrimSuffix(report.BotLogin, "[bot]") && review.State == "CHANGES_REQUESTED" {
+			if review.Author != nil && strings.TrimSuffix(
+				review.Author.Login,
+				"[bot]",
+			) == strings.TrimSuffix(
+				report.BotLogin,
+				"[bot]",
+			) && review.State == "CHANGES_REQUESTED" {
 				historical = true
 			}
 		}
 		for _, review := range pr.LatestOpinionatedReviews.Nodes {
-			if review.Author != nil && strings.TrimSuffix(review.Author.Login, "[bot]") == strings.TrimSuffix(report.BotLogin, "[bot]") && review.State == "CHANGES_REQUESTED" {
+			if review.Author != nil && strings.TrimSuffix(
+				review.Author.Login,
+				"[bot]",
+			) == strings.TrimSuffix(
+				report.BotLogin,
+				"[bot]",
+			) && review.State == "CHANGES_REQUESTED" {
 				standing = true
 			}
 		}

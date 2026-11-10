@@ -20,6 +20,8 @@ const (
 	ProviderCostColumn ProviderDetailColumn = "cost"
 	// ProviderQuotaColumn displays the app quota before the last request.
 	ProviderQuotaColumn ProviderDetailColumn = "quota"
+	// ProviderPeriodUsageColumn displays recorded totals for existing quota windows.
+	ProviderPeriodUsageColumn ProviderDetailColumn = "period_usage"
 	// ProviderResultColumn displays typed outcomes and fallback counts.
 	ProviderResultColumn ProviderDetailColumn = "result"
 )
@@ -28,18 +30,29 @@ func validateProviderColumns(columns []ProviderDetailColumn) error {
 	if len(columns) == 0 {
 		return fmt.Errorf("provider_details requires at least one diagnostic column")
 	}
+
 	seen := make(map[ProviderDetailColumn]struct{}, len(columns))
 	for _, column := range columns {
 		switch column {
-		case ProviderIdentityColumn, ProviderModelsColumn, ProviderSettingsColumn, ProviderRequestsColumn,
-			ProviderTokensColumn, ProviderCostColumn, ProviderQuotaColumn, ProviderResultColumn:
+		case ProviderIdentityColumn,
+			ProviderModelsColumn,
+			ProviderSettingsColumn,
+			ProviderRequestsColumn,
+			ProviderTokensColumn,
+			ProviderCostColumn,
+			ProviderQuotaColumn,
+			ProviderPeriodUsageColumn,
+			ProviderResultColumn:
 		default:
 			return fmt.Errorf("unknown provider_details column %q", column)
 		}
+
 		if _, duplicate := seen[column]; duplicate {
 			return fmt.Errorf("duplicate provider_details column %q", column)
 		}
+
 		seen[column] = struct{}{}
 	}
+
 	return nil
 }

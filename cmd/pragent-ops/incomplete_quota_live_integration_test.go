@@ -94,10 +94,27 @@ func TestLiveIncompleteQuotaPresentation(t *testing.T) {
 		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), time.Minute)
 		defer cancelCleanup()
 		if labelCreated {
-			if _, err := incompleteQuotaCommand(cleanupCtx, "pr", "edit", target.number, "--repo", target.repository, "--remove-label", label); err != nil {
+			if _, err := incompleteQuotaCommand(
+				cleanupCtx,
+				"pr",
+				"edit",
+				target.number,
+				"--repo",
+				target.repository,
+				"--remove-label",
+				label,
+			); err != nil {
 				t.Errorf("The test label could not be removed from the pull request: %v.", err)
 			}
-			if _, err := incompleteQuotaCommand(cleanupCtx, "label", "delete", label, "--repo", target.repository, "--yes"); err != nil {
+			if _, err := incompleteQuotaCommand(
+				cleanupCtx,
+				"label",
+				"delete",
+				label,
+				"--repo",
+				target.repository,
+				"--yes",
+			); err != nil {
 				t.Errorf("The uniquely created repository label could not be deleted: %v.", err)
 			}
 		}
@@ -105,20 +122,52 @@ func TestLiveIncompleteQuotaPresentation(t *testing.T) {
 		if !reflect.DeepEqual(current, original) {
 			t.Error("The original head, metadata, or labels changed during the live test.")
 		}
-		incompleteQuotaNoNewVerdict(t, original.Head.SHA, target.botLogin, previousReviews, incompleteQuotaReviews(t, cleanupCtx, target))
+		incompleteQuotaNoNewVerdict(
+			t,
+			original.Head.SHA,
+			target.botLogin,
+			previousReviews,
+			incompleteQuotaReviews(t, cleanupCtx, target),
+		)
 	})
-	if _, err := incompleteQuotaCommand(ctx, "label", "create", label, "--repo", target.repository, "--description", "Live regression for quota presentation with unread hunks."); err != nil {
+	if _, err := incompleteQuotaCommand(
+		ctx,
+		"label",
+		"create",
+		label,
+		"--repo",
+		target.repository,
+		"--description",
+		"Live regression for quota presentation with unread hunks.",
+	); err != nil {
 		t.Fatalf("The uniquely named test label could not be created: %v.", err)
 	}
 	labelCreated = true
-	if _, err := incompleteQuotaCommand(ctx, "pr", "edit", target.number, "--repo", target.repository, "--add-label", label); err != nil {
+	if _, err := incompleteQuotaCommand(
+		ctx,
+		"pr",
+		"edit",
+		target.number,
+		"--repo",
+		target.repository,
+		"--add-label",
+		label,
+	); err != nil {
 		t.Fatalf("The test label could not trigger the real GitHub webhook: %v.", err)
 	}
 	check := incompleteQuotaAwaitCheck(t, ctx, target, original.Head.SHA, previous)
 	body, state := incompleteQuotaSummary(t, ctx, target, check.ExternalID)
 	_, details, _ := strings.Cut(body, "<details>")
-	quotaRefused := strings.Contains(details, "Provider reported no remaining usage") || strings.Contains(details, "App denied request; API not called")
-	for _, otherOutcome := range []string{"API completed the response", "Provider request failed", "Provider rate limited the request", "App quota check failed"} {
+	quotaRefused := strings.Contains(
+		details,
+		"Provider reported no remaining usage",
+	) || strings.Contains(details, "App denied request; API not called")
+	for _, otherOutcome := range []string{
+		"API completed the response",
+		"Provider request failed",
+		"Provider rate limited the request",
+		"App quota check failed",
+	} {
 		if strings.Contains(details, otherOutcome) {
 			quotaRefused = false
 		}
@@ -127,16 +176,30 @@ func TestLiveIncompleteQuotaPresentation(t *testing.T) {
 		strings.Contains(body, "has not decided whether these unread changes are necessary") &&
 		strings.Contains(body, "larger than one model request allows") && len(state.Pending) > 0
 	if !quotaRefused || !omissionsUndecided {
-		t.Skipf("Check %d completed, but the selected fixture no longer establishes quota exhaustion with undecided oversized hunks.", check.ID)
+		t.Skipf(
+			"Check %d completed, but the selected fixture no longer establishes quota exhaustion with undecided oversized hunks.",
+			check.ID,
+		)
 	}
 	if check.Conclusion != "success" {
-		t.Fatalf("Check %d concluded %s; quota presentation with undecided omissions must conclude success.", check.ID, check.Conclusion)
+		t.Fatalf(
+			"Check %d concluded %s; quota presentation with undecided omissions must conclude success.",
+			check.ID,
+			check.Conclusion,
+		)
 	}
-	if !strings.Contains(check.Output.Summary, "has not decided whether these unread changes are necessary") ||
+	if !strings.Contains(
+		check.Output.Summary,
+		"has not decided whether these unread changes are necessary",
+	) ||
 		!strings.Contains(body, "The review submitted no verdict.") {
 		t.Fatal("The completed check or summary omitted the undecided review notice.")
 	}
-	t.Logf("Check %d succeeded with undecided oversized hunks, quota-refusal diagnostics, and %d pending chunks.", check.ID, len(state.Pending))
+	t.Logf(
+		"Check %d succeeded with undecided oversized hunks, quota-refusal diagnostics, and %d pending chunks.",
+		check.ID,
+		len(state.Pending),
+	)
 }
 
 func incompleteQuotaLoadTarget(t *testing.T) incompleteQuotaTarget {
@@ -162,7 +225,12 @@ func incompleteQuotaLoadTarget(t *testing.T) incompleteQuotaTarget {
 	if err != nil || appID < 1 || identity.BotLogin == "" {
 		t.Fatal("The runtime configuration must identify the review app and bot.")
 	}
-	return incompleteQuotaTarget{repository: repository, number: number, botLogin: identity.BotLogin, appID: appID}
+	return incompleteQuotaTarget{
+		repository: repository,
+		number:     number,
+		botLogin:   identity.BotLogin,
+		appID:      appID,
+	}
 }
 
 func incompleteQuotaCommand(ctx context.Context, args ...string) ([]byte, error) {
@@ -195,22 +263,50 @@ func incompleteQuotaJSON[T any](t *testing.T, ctx context.Context, args ...strin
 
 func incompleteQuotaReadPR(t *testing.T, ctx context.Context, target incompleteQuotaTarget) incompleteQuotaPullRequest {
 	t.Helper()
-	pr := incompleteQuotaJSON[incompleteQuotaPullRequest](t, ctx, "api", fmt.Sprintf("repos/%s/pulls/%s", target.repository, target.number))
-	slices.SortFunc(pr.Labels, func(left, right struct {
-		Name string `json:"name"`
-	}) int {
-		return strings.Compare(left.Name, right.Name)
-	})
+	pr := incompleteQuotaJSON[incompleteQuotaPullRequest](
+		t,
+		ctx,
+		"api",
+		fmt.Sprintf("repos/%s/pulls/%s", target.repository, target.number),
+	)
+	slices.SortFunc(
+		pr.Labels,
+		func(
+			left struct {
+				Name string `json:"name"`
+			},
+			right struct {
+				Name string `json:"name"`
+			},
+		) int {
+			return strings.Compare(left.Name, right.Name)
+		},
+	)
 	return pr
 }
 
-func incompleteQuotaChecks(t *testing.T, ctx context.Context, target incompleteQuotaTarget, head string) []incompleteQuotaCheck {
+func incompleteQuotaChecks(
+	t *testing.T,
+	ctx context.Context,
+	target incompleteQuotaTarget,
+	head string,
+) []incompleteQuotaCheck {
 	t.Helper()
 	type page struct {
 		CheckRuns []incompleteQuotaCheck `json:"check_runs"`
 	}
-	pages := incompleteQuotaJSON[[]page](t, ctx, "api", "--paginate", "--slurp",
-		fmt.Sprintf("repos/%s/commits/%s/check-runs?filter=all&per_page=100", target.repository, head))
+	pages := incompleteQuotaJSON[[]page](
+		t,
+		ctx,
+		"api",
+		"--paginate",
+		"--slurp",
+		fmt.Sprintf(
+			"repos/%s/commits/%s/check-runs?filter=all&per_page=100",
+			target.repository,
+			head,
+		),
+	)
 	var checks []incompleteQuotaCheck
 	for _, page := range pages {
 		for _, check := range page.CheckRuns {
@@ -222,7 +318,13 @@ func incompleteQuotaChecks(t *testing.T, ctx context.Context, target incompleteQ
 	return checks
 }
 
-func incompleteQuotaAwaitCheck(t *testing.T, ctx context.Context, target incompleteQuotaTarget, head string, previous []incompleteQuotaCheck) incompleteQuotaCheck {
+func incompleteQuotaAwaitCheck(
+	t *testing.T,
+	ctx context.Context,
+	target incompleteQuotaTarget,
+	head string,
+	previous []incompleteQuotaCheck,
+) incompleteQuotaCheck {
 	t.Helper()
 	var admitted int64
 	ticker := time.NewTicker(5 * time.Second)
@@ -231,7 +333,10 @@ func incompleteQuotaAwaitCheck(t *testing.T, ctx context.Context, target incompl
 		if admitted == 0 {
 			var candidates []incompleteQuotaCheck
 			for _, check := range incompleteQuotaChecks(t, ctx, target, head) {
-				if !slices.ContainsFunc(previous, func(old incompleteQuotaCheck) bool { return old.ID == check.ID }) {
+				if !slices.ContainsFunc(
+					previous,
+					func(old incompleteQuotaCheck) bool { return old.ID == check.ID },
+				) {
 					candidates = append(candidates, check)
 				}
 			}
@@ -243,8 +348,12 @@ func incompleteQuotaAwaitCheck(t *testing.T, ctx context.Context, target incompl
 			}
 		}
 		if admitted != 0 {
-			check := incompleteQuotaJSON[incompleteQuotaCheck](t, ctx, "api",
-				fmt.Sprintf("repos/%s/check-runs/%d", target.repository, admitted))
+			check := incompleteQuotaJSON[incompleteQuotaCheck](
+				t,
+				ctx,
+				"api",
+				fmt.Sprintf("repos/%s/check-runs/%d", target.repository, admitted),
+			)
 			if check.Status == "completed" {
 				return check
 			}
@@ -257,7 +366,12 @@ func incompleteQuotaAwaitCheck(t *testing.T, ctx context.Context, target incompl
 	}
 }
 
-func incompleteQuotaSummary(t *testing.T, ctx context.Context, target incompleteQuotaTarget, delivery string) (string, marker.State) {
+func incompleteQuotaSummary(
+	t *testing.T,
+	ctx context.Context,
+	target incompleteQuotaTarget,
+	delivery string,
+) (string, marker.State) {
 	t.Helper()
 	type comment struct {
 		Body string `json:"body"`
@@ -265,12 +379,21 @@ func incompleteQuotaSummary(t *testing.T, ctx context.Context, target incomplete
 			Login string `json:"login"`
 		} `json:"user"`
 	}
-	pages := incompleteQuotaJSON[[][]comment](t, ctx, "api", "--paginate", "--slurp",
-		fmt.Sprintf("repos/%s/issues/%s/comments?per_page=100", target.repository, target.number))
+	pages := incompleteQuotaJSON[[][]comment](
+		t,
+		ctx,
+		"api",
+		"--paginate",
+		"--slurp",
+		fmt.Sprintf("repos/%s/issues/%s/comments?per_page=100", target.repository, target.number),
+	)
 	for _, page := range pages {
 		for _, comment := range page {
 			state, found := marker.DecodeState(comment.Body)
-			if found && delivery != "" && state.RunID == delivery && comment.User.Login == target.botLogin && strings.Contains(comment.Body, marker.Summary()) {
+			if found && delivery != "" && state.RunID == delivery && comment.User.Login == target.botLogin && strings.Contains(
+				comment.Body,
+				marker.Summary(),
+			) {
 				return comment.Body, state
 			}
 		}
@@ -281,8 +404,14 @@ func incompleteQuotaSummary(t *testing.T, ctx context.Context, target incomplete
 
 func incompleteQuotaReviews(t *testing.T, ctx context.Context, target incompleteQuotaTarget) []incompleteQuotaReview {
 	t.Helper()
-	pages := incompleteQuotaJSON[[][]incompleteQuotaReview](t, ctx, "api", "--paginate", "--slurp",
-		fmt.Sprintf("repos/%s/pulls/%s/reviews?per_page=100", target.repository, target.number))
+	pages := incompleteQuotaJSON[[][]incompleteQuotaReview](
+		t,
+		ctx,
+		"api",
+		"--paginate",
+		"--slurp",
+		fmt.Sprintf("repos/%s/pulls/%s/reviews?per_page=100", target.repository, target.number),
+	)
 	var reviews []incompleteQuotaReview
 	for _, page := range pages {
 		reviews = append(reviews, page...)
@@ -290,15 +419,24 @@ func incompleteQuotaReviews(t *testing.T, ctx context.Context, target incomplete
 	return reviews
 }
 
-func incompleteQuotaNoNewVerdict(t *testing.T, head, bot string, before, after []incompleteQuotaReview) {
+func incompleteQuotaNoNewVerdict(
+	t *testing.T,
+	head string,
+	bot string,
+	before []incompleteQuotaReview,
+	after []incompleteQuotaReview,
+) {
 	t.Helper()
 	for _, review := range after {
 		if review.User.Login != bot || review.CommitID != head || (review.State != "APPROVED" && review.State != "CHANGES_REQUESTED") {
 			continue
 		}
-		if !slices.ContainsFunc(before, func(previous incompleteQuotaReview) bool {
-			return previous.ID == review.ID && previous.State == review.State
-		}) {
+		if !slices.ContainsFunc(
+			before,
+			func(previous incompleteQuotaReview) bool {
+				return previous.ID == review.ID && previous.State == review.State
+			},
+		) {
 			t.Error("The untouched head received a new bot approval or changes-requested verdict.")
 		}
 	}
