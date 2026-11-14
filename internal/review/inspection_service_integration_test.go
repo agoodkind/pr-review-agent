@@ -103,9 +103,8 @@ func TestServiceInspectionLoadsUnchangedSourceWithoutAddingFindingAnchors(t *tes
 	body := failureSummaryComment(t, fixture)
 
 	for _, row := range []string{
-		"| Requests | `" + strconv.Itoa(capture.requests) + "` |",
-		"| Total tokens | `" + strconv.Itoa(capture.requests*16) + "` |",
-		"| All file content inspected | yes |",
+		"| `requests` | `" + strconv.Itoa(capture.requests) + "` |",
+		"| `total_tokens` | `" + strconv.Itoa(capture.requests*16) + "` |",
 	} {
 		if !strings.Contains(body, row) {
 			t.Fatalf("The completed review omitted its full request usage or coverage: %s", row)

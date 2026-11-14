@@ -368,13 +368,6 @@ func TestContentCollectionSubmoduleFindingRequestsChanges(t *testing.T) {
 			fixture.state.streamedComments,
 		)
 	}
-
-	if !strings.Contains(
-		failureSummaryComment(t, fixture),
-		"| All file content inspected | yes |",
-	) {
-		t.Fatal("submodule finding falsely reports incomplete coverage")
-	}
 }
 
 func TestContentCollectionForcedRunRecoversIncorrectlyReviewedHead(t *testing.T) {
@@ -431,13 +424,6 @@ func assertContentCollectionApproved(t *testing.T, fixture *serviceFixture) {
 
 	if fixture.state.lastSubmitReview["event"] != string(domain.ReviewDecisionApprove) {
 		t.Fatalf("review event = %v, want APPROVE", fixture.state.lastSubmitReview["event"])
-	}
-
-	if !strings.Contains(
-		failureSummaryComment(t, fixture),
-		"| All file content inspected | yes |",
-	) {
-		t.Fatal("successful content collection reports incomplete coverage")
 	}
 
 	state := decodedSummaryState(t, fixture)

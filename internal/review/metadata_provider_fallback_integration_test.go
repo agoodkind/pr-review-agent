@@ -383,11 +383,11 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 				}
 
 				for _, row := range []string{
-					"| Requests | `" + strconv.Itoa(requests) + "` |",
-					"| Requests reporting usage | `" + strconv.Itoa(requests) + "` |",
-					"| Input tokens | `" + strconv.Itoa(requests*11) + "` |",
-					"| Output tokens | `" + strconv.Itoa(requests*5) + "` |",
-					"| Total tokens | `" + strconv.Itoa(requests*16) + "` |",
+					"| `requests` | `" + strconv.Itoa(requests) + "` |",
+					"| `reported_requests` | `" + strconv.Itoa(requests) + "` |",
+					"| `input_tokens` | `" + strconv.Itoa(requests*11) + "` |",
+					"| `output_tokens` | `" + strconv.Itoa(requests*5) + "` |",
+					"| `total_tokens` | `" + strconv.Itoa(requests*16) + "` |",
 				} {
 					if !strings.Contains(usageBody, row) {
 						t.Fatalf(

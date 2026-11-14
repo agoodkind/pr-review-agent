@@ -94,12 +94,7 @@ func TestDisallowedExclusionPreservesRequiredSourceThroughReview(t *testing.T) {
 		FileAssessmentMaximumBytes: policy.FileAssessmentMaximumBytes(),
 		FileAssessmentsDisplay:     policy.FileAssessmentsDisplay(),
 	})
-	if !strings.Contains(body, "| Review scope assessed | yes |") ||
-		strings.Contains(body, "| source | exclude |") {
-		t.Fatal(
-			"Completed source review must not retain the invalid exclusion as an unresolved scope decision.",
-		)
-	}
+	assertSavedFileAssessments(t, body, decisions)
 }
 
 func TestDisallowedExclusionCannotHideSuppliedAssessmentEvidence(t *testing.T) {

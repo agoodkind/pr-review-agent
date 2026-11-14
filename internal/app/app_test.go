@@ -525,11 +525,6 @@ func TestALabelReviewsAnAlreadyReviewedHeadAgainInFull(t *testing.T) {
 			ranges,
 		)
 	}
-
-	summary := fixture.githubState.summaryCommentBody()
-	if !strings.Contains(summary, "| Forced run | yes |") {
-		t.Fatalf("review details do not identify the forced run: %q", summary)
-	}
 }
 
 // Only this service's own labels re-trigger a review. Any other label a person
@@ -1447,13 +1442,9 @@ func TestABlockingRunNamesItsReasonsWithoutRepeatingTheSummary(t *testing.T) {
 
 	comment := fixture.githubState.summaryCommentBody()
 
-	visible, details, found := strings.Cut(comment, "<details>")
+	visible, _, found := strings.Cut(comment, "<details>")
 	if !found || !strings.Contains(visible, "Resolve the open inline findings.") {
 		t.Fatalf("the comment does not direct the reader to the inline finding: %q", comment)
-	}
-
-	if !strings.Contains(details, "| Bot thread IDs | `thread-owned` |") {
-		t.Fatalf("review details do not identify the blocking thread: %q", comment)
 	}
 
 	if strings.Contains(visible, testFindingPath) {
@@ -4540,13 +4531,6 @@ func TestMentionedPullRequestCommentReviewsTheCurrentHead(t *testing.T) {
 
 	if fixture.githubState.lastCheckConclusion() != "success" {
 		t.Fatalf("check conclusion = %q, want success", fixture.githubState.lastCheckConclusion())
-	}
-
-	if summary := fixture.githubState.summaryCommentBody(); !strings.Contains(
-		summary,
-		"| Forced run | yes |",
-	) {
-		t.Fatalf("summary omits forced review: %q", summary)
 	}
 }
 

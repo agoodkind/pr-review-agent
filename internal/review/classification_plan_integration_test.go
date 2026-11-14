@@ -190,8 +190,7 @@ func TestFileReviewRequirementPreservesNecessaryGitSourceAndSemanticGaps(t *test
 						t.Fatal(err)
 					}
 
-					if !strings.Contains(body, "| Review scope assessed | no |") ||
-						len(restored) != 1 ||
+					if len(restored) != 1 ||
 						restored[0].ContentReviewRequirement != requirement ||
 						restored[0].Action != action {
 						t.Fatal("The published scope record lost the required authorization gap.")

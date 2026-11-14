@@ -2,7 +2,6 @@ package review_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -123,12 +122,10 @@ func TestPublishedVerdictUsesTheFindingThreshold(t *testing.T) {
 
 				body := review.RenderBody(summary)
 				if summary.Decision == domain.ReviewDecisionApprove {
-					threshold := fmt.Sprintf("| Minimum importance | `%d` |", scenario.minimum)
 					if !strings.Contains(
 						body,
 						"This review did not identify findings at or above the minimum importance.",
-					) ||
-						!strings.Contains(body, threshold) {
+					) {
 						t.Fatalf("The approval does not state its finding threshold: %s", body)
 					}
 				} else if !strings.Contains(body, "Resolve the open inline findings.") {

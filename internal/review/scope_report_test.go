@@ -1,6 +1,9 @@
 package review_test
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,28 +58,16 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 					t.Fatal("An accepted content exclusion appeared as an unfinished review.")
 				}
 
-				details := strings.Index(body, "<details>")
-				if strings.Index(body, note) < details ||
-					!strings.Contains(body, "| All file content inspected | no |") ||
-					!strings.Contains(body, "| Review scope assessed | yes |") {
-					t.Fatal(
-						"An accepted exclusion must report completed scope and its configured explanation inside review details.",
-					)
-				}
-
+				assertSavedFileAssessments(t, body, summary.FileAssessments)
 				assessmentPosition := strings.Index(body, "#### File assessments")
-				if display == reviewrules.FindingsCollapsed &&
-					(assessmentPosition < details || assessmentPosition < 0) {
-					t.Fatal("The collapsed file assessment did not appear inside review details.")
-				}
-
+				details := strings.Index(body, "<details>")
 				if display == reviewrules.FindingsExpanded &&
 					(assessmentPosition < 0 || assessmentPosition > details) {
-					t.Fatal("The expanded file assessment did not appear before review details.")
+					t.Fatal("The expanded assessment must appear before review details.")
 				}
 
-				if display == reviewrules.FindingsHidden && assessmentPosition >= 0 {
-					t.Fatal("The hidden file assessment appeared in the visible report.")
+				if display != reviewrules.FindingsExpanded && assessmentPosition >= 0 {
+					t.Fatal("Review details must omit file assessment diagnostics.")
 				}
 
 				summary.OmissionsAccepted = false
@@ -84,11 +75,9 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 				summary.FileAssessments[0].Action = domain.FileActionGap
 
 				pending := review.RenderBody(summary)
-				if strings.Contains(pending, note) ||
-					!strings.Contains(pending, "| Review scope assessed | no |") {
-					t.Fatal(
-						"A real assessment gap must not claim an accepted exclusion or completed scope.",
-					)
+				assertSavedFileAssessments(t, pending, summary.FileAssessments)
+				if !strings.Contains(pending, "<!-- pr-review-agent:approval-withheld -->") {
+					t.Fatal("An unresolved assessment must preserve withheld approval.")
 				}
 			},
 		)
@@ -130,5 +119,36 @@ func TestCheckpointPolicySurvivesStorageAndRejectsChangedContext(t *testing.T) {
 	changed = stored.WithPolicyRevision("changed-comparison")
 	if len(changed.Completed) != 0 || len(changed.Pending) != 0 {
 		t.Fatal("A changed comparison reused an incompatible checkpoint.")
+	}
+}
+
+func assertSavedFileAssessments(t *testing.T, body string, expected []domain.FileAssessment) {
+	t.Helper()
+	_, encoded, found := strings.Cut(body, "<!-- pr-review-agent:file-assessments:v1 ")
+	if len(expected) == 0 {
+		if found {
+			t.Fatal("The summary invented file assessments.")
+		}
+
+		return
+	}
+
+	if !found {
+		t.Fatal("The summary omitted its durable file assessments.")
+	}
+
+	encoded, _, _ = strings.Cut(encoded, " -->")
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var restored []domain.FileAssessment
+	if err := json.Unmarshal(payload, &restored); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(restored, expected) {
+		t.Fatalf("The summary changed file assessments: got %+v, want %+v", restored, expected)
 	}
 }

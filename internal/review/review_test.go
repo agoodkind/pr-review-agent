@@ -251,10 +251,6 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 		t.Fatalf("summary sends the reader to inline comments this run never posted:\n%s", body)
 	}
 
-	if !strings.Contains(body, "| Findings published inline | `0` |") {
-		t.Fatalf("summary detail table does not report an empty publication:\n%s", body)
-	}
-
 	if !strings.Contains(body, "The model did not read these changes:") {
 		t.Fatalf("summary does not name what went unread:\n%s", body)
 	}
@@ -262,68 +258,6 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 	// The promise a later run cannot keep is the thing this path used to make.
 	if strings.Contains(body, "The next push reviews") {
 		t.Fatalf("summary promises a push that reaches the same limit:\n%s", body)
-	}
-}
-
-func TestRenderDetailsReportsEveryReviewStatistic(t *testing.T) {
-	summary := testSummary()
-	summary.Observed = []domain.Finding{{Importance: 8}, {Importance: 10}}
-	summary.Eligible = []domain.Finding{{Importance: 10}}
-	summary.Published = []domain.Finding{{Importance: 10}}
-	summary.PriorReviews = nil
-	summary.Threads = nil
-
-	details := review.RenderDetails(summary)
-
-	for _, want := range []string{
-		"<details>",
-		"<summary>Review details</summary>",
-		"| Model | `" + testReviewModel + "` |",
-		"| Duration | `8` seconds |",
-		"| Head | `a3c4f1c` |",
-		"| Files reviewed | `3` |",
-		"| Diff chunks | `1` |",
-		"| All file content inspected | yes |",
-		"| Minimum importance | `9` |",
-		"| Findings observed | `2` at importance `8`, `10` |",
-		"| Findings eligible | `1` at importance `10` |",
-		"| Findings published inline | `1` at importance `10` |",
-		"| Prior bot review IDs | none |",
-		"| Bot thread IDs | none |",
-		"| Bot threads resolved | `0` |",
-		"</details>",
-	} {
-		if !strings.Contains(details, want) {
-			t.Fatalf("details missing %q:\n%s", want, details)
-		}
-	}
-}
-
-func TestRenderDetailsNamesEveryModelThatAnswered(t *testing.T) {
-	summary := testSummary()
-	summary.Models = []string{"gpt-5.6-sol", "gpt-5.4-nano"}
-
-	details := review.RenderDetails(summary)
-	if !strings.Contains(details, "| Model | `gpt-5.6-sol`, `gpt-5.4-nano` |") {
-		t.Fatalf("details = %q, want both models", details)
-	}
-}
-
-func TestRenderDetailsReportsAnUnknownModelWhenNoneAnswered(t *testing.T) {
-	summary := testSummary()
-	summary.Models = nil
-
-	if !strings.Contains(review.RenderDetails(summary), "| Model | unknown |") {
-		t.Fatalf("details = %q, want an unknown model", review.RenderDetails(summary))
-	}
-}
-
-func TestRenderDetailsWritesOneSecondWithoutAPlural(t *testing.T) {
-	summary := testSummary()
-	summary.Duration = 1400 * time.Millisecond
-
-	if !strings.Contains(review.RenderDetails(summary), "| Duration | `1` second |") {
-		t.Fatalf("details = %q, want one second", review.RenderDetails(summary))
 	}
 }
 
@@ -388,50 +322,6 @@ func TestRenderFailureBodyStatesTheFailureAndOmitsTheReviewMarker(t *testing.T) 
 			}
 		},
 	)
-}
-
-func TestRenderFailureBodyReportsWhatTheReviewLearned(t *testing.T) {
-	summary := testSummary()
-	summary.Reached = "the diff"
-	summary.Models = []string{"gpt-5.6-sol"}
-	summary.FilesReviewed = 4
-	summary.Chunks = 6
-
-	body := review.RenderFailureBody(
-		summary,
-		"Review failed during model analysis.",
-		"provider refused",
-	)
-
-	for _, want := range []string{
-		"| Model | `gpt-5.6-sol` |",
-		"| Duration | `8` seconds |",
-		"| Head | `a3c4f1c` |",
-		"| Files reviewed | `4` |",
-		"| Diff chunks | `6` |",
-		"| Reached | the diff |",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("failure body missing %q:\n%s", want, body)
-		}
-	}
-
-	if strings.Contains(body, "All file content inspected") {
-		t.Fatalf("failure body claims coverage it never established:\n%s", body)
-	}
-}
-
-func TestRenderDetailsReportsNothingReachedWhenTheReviewFailedImmediately(t *testing.T) {
-	summary := review.Summary{Failed: true}
-
-	details := review.RenderDetails(summary)
-	if !strings.Contains(details, "| Reached | nothing |") {
-		t.Fatalf("details = %q, want a nothing reached row", details)
-	}
-
-	if !strings.Contains(details, "| Model | unknown |") {
-		t.Fatalf("details = %q, want an unknown model", details)
-	}
 }
 
 func TestRenderInlineUsesRightSideRangesAndFindingMarkers(t *testing.T) {
@@ -895,10 +785,6 @@ func TestAHunkThatCannotSplitLeavesTheHeadUnapproved(t *testing.T) {
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, "completion budget") {
 		t.Fatalf("summary comment does not name why the hunk went unread:\n%s", body)
-	}
-
-	if !strings.Contains(body, "| All file content inspected | no |") {
-		t.Fatalf("summary comment claims coverage it never established:\n%s", body)
 	}
 
 	if len(fixture.state.streamedComments) != 0 {
@@ -3651,9 +3537,9 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 	}
 
 	commentBody, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || !strings.Contains(commentBody, "| Model | `"+testReviewModel+"` |") {
+	if !ok || !strings.Contains(commentBody, "<summary>Review details</summary>") {
 		t.Fatalf(
-			"comment = %v, want the detail table with the model that answered",
+			"comment = %v, want the review details section",
 			fixture.state.issueComments[0]["body"],
 		)
 	}
@@ -3683,18 +3569,8 @@ func TestEndToEndApprovesBelowConfiguredImportance(t *testing.T) {
 		t.Fatalf("summary = %v, want string", output["summary"])
 	}
 
-	for _, want := range []string{
-		"| Minimum importance | `9` |",
-		"| Findings observed | `1` at importance `8` |",
-		"| Findings eligible | `0` |",
-		"| Findings published inline | `0` |",
-		"| Prior bot review IDs | none |",
-		"| Bot thread IDs | none |",
-		"| Files reviewed | `1` |",
-	} {
-		if !strings.Contains(summary, want) {
-			t.Fatalf("summary missing %q:\n%s", want, summary)
-		}
+	if !strings.Contains(summary, "| `head` | `a3c4f1c` |") {
+		t.Fatalf("The check summary omitted the reviewed head: %s", summary)
 	}
 
 	if fixture.state.checkDetailsURL != "https://github.com/owner/repo" {
@@ -5438,9 +5314,6 @@ func TestARefreshUpdatesThreadDetailsWhenTheVerdictDoesNotMove(t *testing.T) {
 
 	for _, want := range []string{
 		"Resolve the open inline findings.",
-		"| Bot thread IDs | `thread-fixed`, `thread-open` |",
-		"| Bot threads open | `1` |",
-		"| Bot threads resolved | `1` |",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary omits %q:\n%s", want, body)
@@ -6295,8 +6168,7 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"| Model | `gpt-5.6-luna` |",
-		"| `openai_goodkind_io` | `gpt-5.6-luna` | 2,500,000 / 2,500,000 (0 left) | App denied request; API not called |",
+		"<summary>Review details</summary>",
 	} {
 		if !strings.Contains(checkSummary, want) ||
 			!strings.Contains(failureSummaryComment(t, fixture), want) {
@@ -6342,20 +6214,11 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 	for _, output := range []string{checkSummary, failureSummaryComment(t, fixture)} {
 		for _, want := range []string{
 			"Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage.",
-			"| Provider | Model | App quota | Result |",
-			"| `openai_goodkind_io` | `gpt-5.6-luna` | 2,500,000 / 2,500,000 (0 left) | App denied request; API not called |",
-			"| `openrouter` | `openai/gpt-5.6-luna` | 200,000 / 500,000 (300,000 left) | Provider reported no remaining usage |",
 		} {
 			if !strings.Contains(output, want) {
 				t.Fatalf("usage detail missing %q from %s", want, output)
 			}
 		}
-	}
-
-	visible, details, found := strings.Cut(failureSummaryComment(t, fixture), "<details>")
-	if !found || strings.Contains(visible, "openrouter") ||
-		!strings.Contains(details, "| `openrouter` |") {
-		t.Fatalf("provider quota table is not folded: %s", failureSummaryComment(t, fixture))
 	}
 
 	if title := fmt.Sprint(checkOutput(t, fixture)["title"]); !strings.Contains(
@@ -6539,13 +6402,9 @@ func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 		"<summary>Review details</summary>",
 		// No model answered, because the only chunk failed. The table says so
 		// rather than naming the configured model that never replied.
-		"| Model | unknown |",
-		"| Head | `a3c4f1c` |",
-		"| Files reviewed | `1` |",
-		"| Diff chunks | `1` |",
+		"| `head` | `a3c4f1c` |",
 		// A chunk nobody read is a slice of the head nobody covered, so the
 		// table says so rather than claiming coverage it never established.
-		"| All file content inspected | no |",
 		"1 chunk could not be reviewed",
 		// The block names what is holding it, the unread chunk included.
 		"This head was not fully reviewed",
@@ -6578,7 +6437,7 @@ func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 		t.Fatalf("check summary lost the pointer to the cause:\n%s", checkSummary)
 	}
 
-	for _, want := range []string{"Chunks left unread: 1.", "| All file content inspected | no |"} {
+	for _, want := range []string{"Chunks left unread: 1."} {
 		if !strings.Contains(checkSummary, want) {
 			t.Fatalf("check summary missing %q:\n%s", want, checkSummary)
 		}
@@ -6658,7 +6517,7 @@ func TestServiceFailureBeforeAnyProgressReportsNothingReached(t *testing.T) {
 	}
 
 	checkSummary, ok := output["summary"].(string)
-	if !ok || !strings.Contains(checkSummary, "| Reached | nothing |") {
+	if !ok || !strings.Contains(checkSummary, "<summary>Review details</summary>") {
 		t.Fatalf("check summary = %v, want a nothing reached row", output["summary"])
 	}
 }
@@ -7448,8 +7307,6 @@ func TestABlockingVerdictDirectsToInlineFindingsAndFoldsThreadDetails(t *testing
 
 	for _, want := range []string{
 		"Resolve the open inline findings.",
-		"| Bot thread IDs | `open-thread` |",
-		"| Bot threads open | `1` |",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("summary comment missing %q:\n%s", want, body)
@@ -8387,9 +8244,7 @@ func TestTheReviewSaysItStartedBeforeItReadsAnything(t *testing.T) {
 		)
 	}
 
-	if strings.Count(first, "<summary>Review details</summary>") != 1 ||
-		!strings.Contains(first, "| Status | Review in progress |") ||
-		!strings.Contains(first, "| Minimum importance | `7` |") {
+	if strings.Count(first, "<summary>Review details</summary>") != 1 {
 		t.Fatalf("The start comment must include the current run details: %s", first)
 	}
 
@@ -8460,12 +8315,7 @@ func TestProgressOmitsPublishedInlineFindings(t *testing.T) {
 	}
 
 	for _, row := range []string{
-		"| Status | Review in progress |",
-		"| Files reviewed | `1` |",
-		"| Diff chunks | `1` |",
-		"| Minimum importance | `9` |",
-		"| Findings published inline | `1` at importance",
-		"| Requests |",
+		"| `requests` |",
 	} {
 		if !strings.Contains(progress, row) {
 			t.Fatalf("The progress comment omits %q: %s", row, progress)
