@@ -4261,7 +4261,7 @@ func (state *clydeServerState) handle(writer http.ResponseWriter, request *http.
 	// a status has no responses to index.
 	if !failed {
 		if isReport {
-			content = `{"summary":"This pull request updates the reviewed behavior.","walkthrough":["The change updates the current implementation."],"verdict_reason":"The current pull request has no open actionable findings."}`
+			content = `{"summary":"This pull request updates the reviewed behavior.","verdict_reason":"The current pull request has no open actionable findings."}`
 		} else if isReconcile {
 			if len(state.reconcileResponses) == 0 {
 				content = reconcileResolvedContent("thread-owned")

@@ -138,7 +138,7 @@ func (service *Service) generateReport(
 	pullRequest githubapp.PullRequest,
 	pass *chunkPass,
 ) (Report, bool) {
-	fallback := SanitizeReport(fallbackReport(pass.overviews()), service.reviewPolicy.Limits())
+	fallback := SanitizeReport(fallbackReport(), service.reviewPolicy.Limits())
 
 	reporter, ok := service.model.(Reporter)
 	if !ok {
@@ -228,23 +228,8 @@ func BuildReportPrompt(
 	)
 }
 
-func fallbackReport(overviews []string) Report {
-	walkthrough := make([]string, 0, len(overviews))
-	for _, overview := range overviews {
-		if value := sanitizeReportText(overview); value != "" {
-			walkthrough = append(walkthrough, value)
-		}
-	}
-
-	if len(walkthrough) == 0 {
-		walkthrough = append(
-			walkthrough,
-			"The review examined the changed files and their current diff.",
-		)
-	}
-
+func fallbackReport() Report {
 	return Report{
-		Summary:     "This review checked the current pull request against its stated purpose and current changes.",
-		Walkthrough: walkthrough,
+		Summary: "This review checked the current pull request against its stated purpose and current changes.",
 	}
 }

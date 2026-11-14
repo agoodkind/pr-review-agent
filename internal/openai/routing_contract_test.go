@@ -55,7 +55,7 @@ func TestRouterRequestsRequireCapabilitiesAcrossProviderAPIs(t *testing.T) {
 				},
 				{
 					name:    "report",
-					content: `{"summary":"The change validates requests.","walkthrough":["The handler checks account identifiers."]}`,
+					content: `{"summary":"The change validates requests."}`,
 					call: func(t *testing.T, client *openai.Client) error {
 						_, err := client.Report(t.Context(), "Summarize the supplied change.")
 						return err
