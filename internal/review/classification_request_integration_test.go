@@ -432,7 +432,7 @@ func TestClassificationTaskRequiresRuntimeConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var templates map[string]string
+	var templates map[string][]string
 	if err := json.Unmarshal(configuration["templates"], &templates); err != nil {
 		t.Fatal(err)
 	}

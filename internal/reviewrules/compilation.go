@@ -20,7 +20,8 @@ func compilePolicyTemplates(
 	prompts promptsFile,
 ) (map[string]*template.Template, error) {
 	compiled := make(map[string]*template.Template, len(prompts.Templates))
-	for name, body := range prompts.Templates {
+	for name, parts := range prompts.Templates {
+		body := parts.text()
 		if strings.TrimSpace(name) == "" || strings.TrimSpace(body) == "" {
 			return nil, errPromptTemplateIncomplete
 		}
@@ -36,7 +37,7 @@ func compilePolicyTemplates(
 	for _, entry := range rules.Rules {
 		name := "rule." + string(entry.ID)
 
-		parsed, err := compileTemplate(name, entry.Instructions)
+		parsed, err := compileTemplate(name, entry.Instructions.text())
 		if err != nil {
 			return nil, err
 		}

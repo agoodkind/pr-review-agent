@@ -447,18 +447,20 @@ func liveNativeMissingSummaryFailure(
 	if err := json.Unmarshal(data, &prompts); err != nil {
 		t.Fatal(err)
 	}
-	var templates map[string]string
+	var templates map[string][]string
 	if err := json.Unmarshal(prompts["templates"], &templates); err != nil {
 		t.Fatal(err)
 	}
 	// The configured body exceeds GitHub's accepted review size.
-	templates["native.summary_link"] += "\n\n" + strings.Repeat(
-		"The fixture exercises publication rejection. ",
-		50000,
+	templates["native.summary_link"] = append(
+		templates["native.summary_link"],
+		"",
+		strings.Repeat("The fixture exercises publication rejection. ", 50000),
 	)
-	templates["native.request_changes"] += "\n\n" + strings.Repeat(
-		"The fixture exercises publication rejection. ",
-		50000,
+	templates["native.request_changes"] = append(
+		templates["native.request_changes"],
+		"",
+		strings.Repeat("The fixture exercises publication rejection. ", 50000),
 	)
 	prompts["templates"], err = json.Marshal(templates)
 	if err != nil {

@@ -41,12 +41,12 @@ type rule struct {
 	Deduplication Deduplication `json:"deduplication,omitempty"`
 	Category      string        `json:"category"`
 	Title         string        `json:"title"`
-	Instructions  string        `json:"instructions"`
+	Instructions  TextParts     `json:"instructions"`
 }
 
 type catalogFile struct {
-	Preamble         string                      `json:"preamble"`
-	OutputPreamble   string                      `json:"output_preamble"`
+	Preamble         TextParts                   `json:"preamble"`
+	OutputPreamble   TextParts                   `json:"output_preamble"`
 	CategorySettings map[string]categorySettings `json:"category_settings"`
 	Rules            []rule                      `json:"rules"`
 }
@@ -65,7 +65,7 @@ type promptsFile struct {
 	MetadataFindingsDisplay FindingDisplay           `json:"metadata_findings_display"`
 	UntrustedMarkers        untrustedMarkers         `json:"untrusted_markers"`
 	Limits                  FormattingLimits         `json:"limits"`
-	Templates               map[string]string        `json:"templates"`
+	Templates               map[string]TextParts     `json:"templates"`
 	ProviderDetails         []ProviderDetailColumn   `json:"provider_details"`
 	FailureCodes            []FailureCode            `json:"failure_codes"`
 }
@@ -341,8 +341,8 @@ func decodeFile[T catalogFile | promptsFile](path string) (T, error) {
 }
 
 func validateCatalog(catalog catalogFile) error {
-	if strings.TrimSpace(catalog.Preamble) == "" ||
-		strings.TrimSpace(catalog.OutputPreamble) == "" ||
+	if strings.TrimSpace(catalog.Preamble.text()) == "" ||
+		strings.TrimSpace(catalog.OutputPreamble.text()) == "" ||
 		len(catalog.Rules) == 0 ||
 		len(catalog.CategorySettings) == 0 {
 		return fmt.Errorf("rule catalog requires preambles, categories, and rules")
@@ -362,7 +362,8 @@ func validateCatalog(catalog catalogFile) error {
 			return fmt.Errorf("review rule %q deduplication must be defect or location", entry.ID)
 		}
 
-		if entry.ID == "" || entry.Title == "" || entry.Instructions == "" {
+		if entry.ID == "" || entry.Title == "" ||
+			strings.TrimSpace(entry.Instructions.text()) == "" {
 			return fmt.Errorf("review rule requires an ID, title, and instructions")
 		}
 
@@ -594,7 +595,7 @@ func (catalog Catalog) Prompt(overrides Importance) (string, error) {
 
 	var data PromptData
 
-	data.Input = catalog.configuration.Preamble
+	data.Input = catalog.configuration.Preamble.text()
 	data.Rules = rules
 
 	return render(catalog.templates, "catalog.review", data, catalog.limits)
@@ -616,7 +617,7 @@ func (catalog Catalog) OutputPolicy() (string, error) {
 
 	var data PromptData
 
-	data.Input = catalog.configuration.OutputPreamble
+	data.Input = catalog.configuration.OutputPreamble.text()
 	data.Rules = rules
 
 	return render(catalog.templates, "catalog.output", data, catalog.limits)
