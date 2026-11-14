@@ -1,0 +1,7 @@
+services:
+  runner:
+    build:
+      cache_from:
+        - type=gha,scope=pr-review-agent-service-runner,version=2
+      cache_to:
+        - type=gha,scope=pr-review-agent-service-runner,version=2,mode=max

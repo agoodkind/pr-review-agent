@@ -93,6 +93,8 @@ jobs:
           platforms: linux/amd64
           provenance: false
           tags: pr-review-agent:ci
+          cache-from: type=gha,scope=pr-review-agent,version=2
+          cache-to: type=gha,scope=pr-review-agent,version=2,mode=max
       - name: Verify container
         env:
           EXPECTED_VERSION: ${{ steps.release.outputs.version }}
@@ -113,8 +115,11 @@ jobs:
           cache-dependency-path: deploy/cloudflare/package-lock.json
       - run: npm ci
         working-directory: deploy/cloudflare
+      - name: Expose GitHub cache runtime
+        uses: crazy-max/ghaction-github-runtime@v4.0.0
       - name: Verify native review service bindings and drain control
         env:
+          PRAGENT_SERVICE_TEST_COMPOSE_OVERRIDE: test/compose.ci.yaml
           PRAGENT_SERVICE_TEST_BINARY: ${{ github.workspace }}/dist/pr-review-agent_linux_amd64/pr-review-agent
           PRAGENT_SERVICE_TEST_REVISION: ${{ github.sha }}
         run: make test-service
