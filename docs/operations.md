@@ -208,10 +208,12 @@ Run the same deployment command to resume an interrupted handoff. The command re
 
 ## Change review rules
 
-1. Edit the [rule catalog](../config/review-rules.json) or [prompt configuration](../config/review-prompts.json) to change agent instructions. Preserve each rule's `id` when changing its title or instructions. Edit [service settings](../config/review-service.json) to change detectors, exclusions, execution limits, presentation, or permitted `failure_codes`. Edit the Markdown files in the [output template directory](../config/templates) to change fixed review messages. The service reads these sources at startup and requires every configured source.
+1. Edit the [rule catalog](../config/review-rules.json) or [prompt configuration](../config/review-prompts.json) to change agent instructions. Preserve each rule's `id` when changing its title or instructions. The service requires both files at startup.
 
    Set a rule's `deduplication` to `location` when each source occurrence requires a separate correction. Use `defect` when one correction can resolve findings at several locations.
-2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
+2. Edit [service settings](../config/review-service.json) to change detectors, exclusions, execution limits, presentation, or permitted `failure_codes`. The service requires that file at startup.
+3. Edit the Markdown files in the [output template directory](../config/templates) to change fixed review messages. The service requires every configured template at startup.
+4. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:
 
    ```json
    "REVIEW_RULE_IMPORTANCE": {
@@ -220,9 +222,9 @@ Run the same deployment command to resume an interrupted handoff. The command re
    ```
 
    The catalog's category settings define fixed importance and which rules apply to generated review text. The shipped prose category requires importance `10`. A rule without fixed category importance or an override uses the model's score. `REVIEW_MIN_IMPORTANCE` controls publication after these scores are applied.
-3. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make build`. Verify findings and corrections with the live procedure in [acceptance.md](acceptance.md), then merge the change to deploy it.
+5. Run `go test ./internal/domain ./internal/review ./internal/openai ./internal/config` and `make build`. Verify findings and corrections with the live procedure in [acceptance.md](acceptance.md), then merge the change to deploy it.
 
-4. Confirm that the Release workflow completed successfully. Use the [release deployment procedure](#deploy-a-release) for manual deployment.
+6. Confirm that the Release workflow completed successfully. Use the [release deployment procedure](#deploy-a-release) for manual deployment.
 
 ## Clear hidden review bodies
 
