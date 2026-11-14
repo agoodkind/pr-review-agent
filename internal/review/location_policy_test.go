@@ -140,6 +140,8 @@ func loadLocationPolicy(t *testing.T) (reviewrules.Policy, reviewrules.ID) {
 	policy, err := reviewrules.LoadPolicy(
 		path,
 		filepath.Join("..", "..", "config", "review-prompts.json"),
+		filepath.Join("..", "..", "config", "review-service.json"),
+		filepath.Join("..", "..", "config", "templates"),
 	)
 	if err != nil {
 		t.Fatal(err)

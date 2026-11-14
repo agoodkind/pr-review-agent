@@ -26,16 +26,20 @@ func Load(tb testing.TB) reviewrules.Policy {
 		data, readErr := os.ReadFile(runtimePath)
 		if readErr == nil {
 			var paths struct {
-				Rules   string `json:"REVIEW_RULES_FILE"`
-				Prompts string `json:"REVIEW_PROMPTS_FILE"`
+				Rules     string `json:"REVIEW_RULES_FILE"`
+				Prompts   string `json:"REVIEW_PROMPTS_FILE"`
+				Service   string `json:"REVIEW_SERVICE_FILE"`
+				Templates string `json:"REVIEW_TEMPLATES_DIR"`
 			}
 			if err := json.Unmarshal(data, &paths); err != nil {
 				tb.Fatal(err)
 			}
 
 			values := map[string]string{
-				"REVIEW_RULES_FILE":   paths.Rules,
-				"REVIEW_PROMPTS_FILE": paths.Prompts,
+				"REVIEW_RULES_FILE":    paths.Rules,
+				"REVIEW_PROMPTS_FILE":  paths.Prompts,
+				"REVIEW_SERVICE_FILE":  paths.Service,
+				"REVIEW_TEMPLATES_DIR": paths.Templates,
 			}
 
 			policy, err := config.LoadReviewPolicy(func(name string) (string, bool) {

@@ -432,7 +432,7 @@ func TestClassificationTaskRequiresRuntimeConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var templates map[string]string
+	var templates map[string][]string
 	if err := json.Unmarshal(configuration["templates"], &templates); err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +454,12 @@ func TestClassificationTaskRequiresRuntimeConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = reviewrules.LoadPolicy(filepath.Join(directory, "review-rules.json"), file)
+	_, err = reviewrules.LoadPolicy(
+		filepath.Join(directory, "review-rules.json"),
+		file,
+		filepath.Join(directory, "review-service.json"),
+		filepath.Join(directory, "templates"),
+	)
 	if err == nil || !strings.Contains(err.Error(), "classification.system") {
 		t.Fatalf("Policy loading must identify the missing classification task: %v", err)
 	}

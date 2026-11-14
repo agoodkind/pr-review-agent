@@ -96,96 +96,17 @@ func (summary Summary) Title() string {
 	return "Approved"
 }
 
-// RenderDetails renders the collapsed review detail table. A failed review
-// reports how far it got, so the same table explains both outcomes.
+// RenderDetails renders the latest review's raw usage table.
 func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
-	rows := [][2]string{
-		{"Model", formatModels(summary.Models)},
-		{"Duration", formatDuration(summary.Duration)},
-		{"Head", "`" + shortHead(summary.Head) + "`"},
-		{"Files reviewed", fmt.Sprintf("`%d`", summary.FilesReviewed)},
-		{"Diff chunks", fmt.Sprintf("`%d`", summary.Chunks)},
-	}
-	switch {
-	case summary.InProgress:
-		rows = append(rows, [2]string{"Status", "Review in progress"})
-	case summary.Failed:
-		rows = append(rows, [2]string{"Reached", formatReached(summary.Reached)})
-	default:
-		rows = append(
-			rows,
-			[2]string{"All file content inspected", formatYesNo(summary.CoverageComplete)},
-		)
-		rows = append(
-			rows,
-			[2]string{"Review scope assessed", formatYesNo(reviewScopeAssessed(summary))},
-		)
-	}
-
-	rows = append(
-		rows,
-		[2]string{"Forced run", formatYesNo(summary.Forced)},
-		[2]string{"Minimum importance", fmt.Sprintf("`%d`", summary.MinimumImportance)},
-		[2]string{"Findings observed", formatCountAndImportances(summary.Observed)},
-		[2]string{"Findings eligible", formatCountAndImportances(summary.Eligible)},
-		[2]string{"Findings published inline", formatCountAndImportances(summary.Published)},
-		[2]string{"Prior bot review IDs", formatReviewTraceIDs(summary.PriorReviews)},
-		[2]string{"Bot thread IDs", formatThreadTraceIDs(summary.Threads)},
-		[2]string{"Bot threads open", fmt.Sprintf("`%d`", countOpenThreadTraces(summary.Threads))},
-		[2]string{
-			"Bot threads resolved",
-			fmt.Sprintf("`%d`", countResolvedThreadTraces(summary.Threads)),
-		},
-	)
-
-	var builder strings.Builder
-	builder.WriteString("<details>\n<summary>Review details</summary>\n\n")
-
-	if acceptedFileScope(summary) && summary.FileAssessmentNote != "" {
-		builder.WriteString(summary.FileAssessmentNote + "\n\n")
-	}
-
-	if reason := scopeDecisionReason(
-		summary.DecisionReason,
-		summary.Omissions,
-		summary.FileAssessments,
-	); reason != "" {
-		builder.WriteString("#### Review scope\n\n" + reason + "\n\n")
-	}
-
-	if summary.FileAssessmentsDisplay == reviewrules.FindingsCollapsed {
-		builder.WriteString(
-			renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes),
-		)
-	}
-
-	builder.WriteString("| | |\n| --- | --- |\n")
-
-	for _, row := range rows {
-		fmt.Fprintf(&builder, "| %s | %s |\n", row[0], row[1])
-	}
-
-	if providerDetails := renderProviderDetails(summary.Usage); providerDetails != "" {
-		builder.WriteString(providerDetails)
-	} else if providerAttempts := renderProviderStatuses(statuses); providerAttempts != "" {
-		builder.WriteString("\n" + providerAttempts + "\n")
-	}
-
-	builder.WriteString(renderUsageDetails(summary.Usage))
-	builder.WriteString("\n</details>")
-
-	return builder.String()
-}
-
-func reviewScopeAssessed(summary Summary) bool {
-	for _, assessment := range summary.FileAssessments {
-		if assessment.Action == domain.FileActionGap ||
-			assessment.Action == domain.FileActionInspectRelated {
-			return false
+	if len(summary.Usage.ProviderAttempts) == 0 {
+		for _, status := range statuses {
+			var attempt ProviderAttempt
+			attempt.Status = status
+			summary.Usage.ProviderAttempts = append(summary.Usage.ProviderAttempts, attempt)
 		}
 	}
 
-	return summary.CoverageComplete || summary.OmissionsAccepted
+	return renderRawDetails(summary)
 }
 
 func acceptedFileScope(summary Summary) bool {
@@ -541,12 +462,12 @@ func renderBlocking(reasons []string) string {
 	return strings.Join(lines, "\n")
 }
 
-func formatReached(reached string) string {
-	if strings.TrimSpace(reached) == "" {
-		return "nothing"
+func formatYesNo(value bool) string {
+	if value {
+		return "yes"
 	}
 
-	return reached
+	return "no"
 }
 
 func shortHead(head domain.HeadSHA) string {
@@ -556,46 +477,6 @@ func shortHead(head domain.HeadSHA) string {
 	}
 
 	return value[:shortHeadLength]
-}
-
-func formatModels(models []string) string {
-	if len(models) == 0 {
-		return "unknown"
-	}
-
-	quoted := make([]string, 0, len(models))
-	for _, model := range models {
-		quoted = append(quoted, "`"+model+"`")
-	}
-
-	return strings.Join(quoted, ", ")
-}
-
-// formatDuration reports whole seconds, because finer precision tells a reader
-// nothing about a review that takes seconds to minutes.
-func formatDuration(duration time.Duration) string {
-	seconds := max(int(duration.Round(time.Second)/time.Second), 0)
-	if seconds == 1 {
-		return "`1` second"
-	}
-
-	return fmt.Sprintf("`%d` seconds", seconds)
-}
-
-func formatYesNo(value bool) string {
-	if value {
-		return "yes"
-	}
-
-	return "no"
-}
-
-func formatCountAndImportances(findings []domain.Finding) string {
-	if len(findings) == 0 {
-		return "`0`"
-	}
-
-	return fmt.Sprintf("`%d` at importance %s", len(findings), formatFindingImportances(findings))
 }
 
 // RenderStartedBody renders the comment a run posts before it reads anything.

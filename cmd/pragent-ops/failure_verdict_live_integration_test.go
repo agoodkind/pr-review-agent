@@ -326,7 +326,12 @@ func liveFailureConfig(t *testing.T) (config.Config, string) {
 		t.Fatal("The public runtime configuration could not be decoded.")
 	}
 	liveFailureProvider(t, runtime, providerID)
-	for _, name := range []string{"REVIEW_RULES_FILE", "REVIEW_PROMPTS_FILE"} {
+	for _, name := range []string{
+		"REVIEW_RULES_FILE",
+		"REVIEW_PROMPTS_FILE",
+		"REVIEW_SERVICE_FILE",
+		"REVIEW_TEMPLATES_DIR",
+	} {
 		var reference string
 		if json.Unmarshal(runtime[name], &reference) != nil || reference == "" {
 			t.Fatal("The runtime policy references are incomplete.")

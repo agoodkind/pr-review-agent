@@ -421,31 +421,12 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					t.Fatal("The current check did not publish its summary.")
 				}
 
-				if scenario.moveHead || scenario.publicationFailure != "" {
-					for _, coverage := range []string{
-						"| All file content inspected | yes |",
-						"| Review scope assessed | yes |",
-					} {
-						if !strings.Contains(checkSummary, coverage) {
-							t.Fatalf(
-								"The current check must retain the completed assessment: %s.",
-								coverage,
-							)
-						}
-					}
-				}
-
 				if scenario.publicationFailure == "head-read" {
 					if !strings.Contains(err.Error(), "refresh verdict head check") {
 						t.Fatalf(
 							"The refresh must report its final publication read error: %v.",
 							err,
 						)
-					}
-
-					if !strings.Contains(checkSummary, "| Bot threads open | `1` |") ||
-						!strings.Contains(checkSummary, "standing-file-finding") {
-						t.Fatal("The failed check must retain its computed open file finding.")
 					}
 
 					reviews, err = fixture.github.ListReviews(
@@ -479,28 +460,6 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 				} else {
 					assertMetadataRefreshUsage(t, checkSummary, expectedRequests)
 
-					if !strings.Contains(
-						checkSummary,
-						"| Model | `lifecycle`, `inspection-service-model` |",
-					) {
-						t.Fatal(
-							"The current check must identify the requested and reported models.",
-						)
-					}
-
-					if scenario.publicationFailure != "" &&
-						!strings.Contains(
-							checkSummary,
-							"The source review inspected the changed behavior.",
-						) {
-						t.Fatal("The failed check must retain the computed file assessment.")
-					}
-
-					if scenario.success && !scenario.moveHead &&
-						!strings.Contains(checkSummary, "| Bot threads open | `1` |") {
-						t.Fatal("The current check must reuse the computed file-thread assessment.")
-					}
-
 					if scenario.success && !scenario.moveHead &&
 						scenario.publicationFailure == "" &&
 						output["title"] != "Review refreshed" {
@@ -512,22 +471,6 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					if scenario.moveHead && !strings.Contains(checkSummary, string(job.Head)[:7]) {
 						t.Fatal("The cancelled check must identify the attempted head.")
 					}
-				}
-
-				if scenario.modelDelay > 0 {
-					_, duration, found := strings.Cut(checkSummary, "| Duration | `")
-					secondsText, _, complete := strings.Cut(duration, "` seconds |")
-
-					seconds, parseErr := strconv.Atoi(secondsText)
-					if !found || !complete || parseErr != nil ||
-						time.Duration(seconds)*time.Second < scenario.modelDelay {
-						t.Fatalf(
-							"The current check must report the measured model delay: %s.",
-							secondsText,
-						)
-					}
-
-					t.Logf("The current check reports a duration of %d seconds.", seconds)
 				}
 
 				assertMetadataRefreshUsage(t, body, initialRequests)
@@ -558,11 +501,11 @@ func assertMetadataRefreshUsage(t *testing.T, body string, requests int32) {
 	t.Helper()
 
 	for _, row := range []string{
-		"| Requests | `" + strconv.Itoa(int(requests)) + "` |",
-		"| Requests reporting usage | `" + strconv.Itoa(int(requests)) + "` |",
-		"| Input tokens | `" + strconv.Itoa(int(requests)*11) + "` |",
-		"| Output tokens | `" + strconv.Itoa(int(requests)*5) + "` |",
-		"| Total tokens | `" + strconv.Itoa(int(requests)*16) + "` |",
+		"| `requests` | `" + strconv.Itoa(int(requests)) + "` |",
+		"| `reported_requests` | `" + strconv.Itoa(int(requests)) + "` |",
+		"| `input_tokens` | `" + strconv.Itoa(int(requests)*11) + "` |",
+		"| `output_tokens` | `" + strconv.Itoa(int(requests)*5) + "` |",
+		"| `total_tokens` | `" + strconv.Itoa(int(requests)*16) + "` |",
 	} {
 		if !strings.Contains(body, row) {
 			t.Fatalf("The refresh lost recorded usage: %s.\n%s", row, body)

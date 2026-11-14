@@ -117,8 +117,6 @@ func TestInlineVerdictSummaryFallbackStillBlocksForExistingActionableThread(t *t
 		"GitHub could not place the finding inline",
 		"Severe defect",
 		"Resolve the open inline findings.",
-		"| Bot thread IDs | `existing-actionable-thread` |",
-		"| Bot threads open | `1` |",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("summary omitted %q:\n%s", expected, body)

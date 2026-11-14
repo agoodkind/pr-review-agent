@@ -166,7 +166,7 @@ func assessmentBoundPolicy(t *testing.T, reasonBytes, evidenceReferences int) re
 
 	configuration := filepath.Join("..", "..", "config")
 
-	contents, err := os.ReadFile(filepath.Join(configuration, "review-prompts.json"))
+	contents, err := os.ReadFile(filepath.Join(configuration, "review-service.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,13 +176,20 @@ func assessmentBoundPolicy(t *testing.T, reasonBytes, evidenceReferences int) re
 		t.Fatal(err)
 	}
 
-	var classification reviewrules.FileClassificationPolicy
+	var classification map[string]json.RawMessage
 	if err := json.Unmarshal(prompts["file_classification"], &classification); err != nil {
 		t.Fatal(err)
 	}
 
-	classification.MaximumReasonBytes = reasonBytes
-	classification.MaximumEvidenceReferences = evidenceReferences
+	classification["maximum_reason_bytes"], err = json.Marshal(reasonBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	classification["maximum_evidence_references"], err = json.Marshal(evidenceReferences)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	prompts["file_classification"], err = json.Marshal(classification)
 	if err != nil {
@@ -194,12 +201,17 @@ func assessmentBoundPolicy(t *testing.T, reasonBytes, evidenceReferences int) re
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), "review-prompts.json")
+	path := filepath.Join(t.TempDir(), "review-service.json")
 	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, err := reviewrules.LoadPolicy(filepath.Join(configuration, "review-rules.json"), path)
+	policy, err := reviewrules.LoadPolicy(
+		filepath.Join(configuration, "review-rules.json"),
+		filepath.Join(configuration, "review-prompts.json"),
+		path,
+		filepath.Join(configuration, "templates"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

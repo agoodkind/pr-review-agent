@@ -35,21 +35,21 @@ const (
 
 // FileClassificationPolicy controls which contextual content exclusions are permitted.
 type FileClassificationPolicy struct {
-	TrustedDetectors          []FileDetector    `json:"trusted_detectors"`
-	PathExclusions            []FilePathRule    `json:"path_exclusions"`
-	ReviewOverrides           []string          `json:"review_overrides"`
-	MaximumEvidenceBytes      int               `json:"maximum_evidence_bytes"`
-	MaximumPreviewBytes       int               `json:"maximum_preview_bytes"`
-	MaximumDirectReviewBytes  int               `json:"maximum_direct_review_bytes"`
-	UncertainContentPrefixes  []string          `json:"uncertain_content_prefixes"`
-	HeaderPatterns            []string          `json:"header_patterns"`
-	MaximumHeaderBytes        int               `json:"maximum_header_bytes"`
-	MaximumPersistedBytes     int               `json:"maximum_persisted_bytes"`
-	MaximumReasonBytes        int               `json:"maximum_reason_bytes"`
-	MaximumEvidenceReferences int               `json:"maximum_evidence_references"`
-	AllowedExclusions         []ContentKind     `json:"allowed_exclusions"`
-	Instructions              string            `json:"instructions"`
-	PathInstructions          map[string]string `json:"path_instructions"`
+	TrustedDetectors          []FileDetector       `json:"trusted_detectors"`
+	PathExclusions            []FilePathRule       `json:"path_exclusions"`
+	ReviewOverrides           []string             `json:"review_overrides"`
+	MaximumEvidenceBytes      int                  `json:"maximum_evidence_bytes"`
+	MaximumPreviewBytes       int                  `json:"maximum_preview_bytes"`
+	MaximumDirectReviewBytes  int                  `json:"maximum_direct_review_bytes"`
+	UncertainContentPrefixes  []string             `json:"uncertain_content_prefixes"`
+	HeaderPatterns            []string             `json:"header_patterns"`
+	MaximumHeaderBytes        int                  `json:"maximum_header_bytes"`
+	MaximumPersistedBytes     int                  `json:"maximum_persisted_bytes"`
+	MaximumReasonBytes        int                  `json:"maximum_reason_bytes"`
+	MaximumEvidenceReferences int                  `json:"maximum_evidence_references"`
+	AllowedExclusions         []ContentKind        `json:"allowed_exclusions"`
+	Instructions              TextParts            `json:"instructions"`
+	PathInstructions          map[string]TextParts `json:"path_instructions"`
 }
 
 // FileDetector selects a maintained detector and its configured exclusion reason.
@@ -129,7 +129,7 @@ func (policy FileClassificationPolicy) Validate() error {
 		}
 	}
 
-	if strings.TrimSpace(policy.Instructions) == "" {
+	if strings.TrimSpace(policy.Instructions.text()) == "" {
 		return fmt.Errorf("file classification requires review instructions")
 	}
 
@@ -162,7 +162,7 @@ func (policy FileClassificationPolicy) Validate() error {
 			return fmt.Errorf("file classification pattern %q is invalid: %w", pattern, err)
 		}
 
-		if strings.TrimSpace(instruction) == "" {
+		if strings.TrimSpace(instruction.text()) == "" {
 			return fmt.Errorf("file classification instruction for %q is empty", pattern)
 		}
 	}
@@ -229,8 +229,14 @@ func (policy Policy) MatchesFileClassificationHeader(content string) bool {
 // FileClassification returns a separate copy of the configured preflight rules.
 func (policy Policy) FileClassification() FileClassificationPolicy {
 	settings := policy.fileClassification
+	settings.Instructions = slices.Clone(settings.Instructions)
 	settings.AllowedExclusions = slices.Clone(settings.AllowedExclusions)
 	settings.PathInstructions = maps.Clone(settings.PathInstructions)
+
+	for pattern, instructions := range settings.PathInstructions {
+		settings.PathInstructions[pattern] = slices.Clone(instructions)
+	}
+
 	settings.TrustedDetectors = slices.Clone(settings.TrustedDetectors)
 	settings.PathExclusions = slices.Clone(settings.PathExclusions)
 	settings.ReviewOverrides = slices.Clone(settings.ReviewOverrides)
@@ -277,7 +283,9 @@ func (policy Policy) AllowsContentExclusion(kind ContentKind) bool {
 }
 
 // FileReviewInstructions returns trusted scope instructions for ordinary review requests.
-func (policy Policy) FileReviewInstructions() string { return policy.fileClassification.Instructions }
+func (policy Policy) FileReviewInstructions() string {
+	return policy.fileClassification.Instructions.text()
+}
 
 // FileClassificationPathInstructions returns trusted instructions for matching changed paths.
 func (policy Policy) FileClassificationPathInstructions(filePath string) string {
@@ -293,7 +301,7 @@ func (policy Policy) FileClassificationPathInstructions(filePath string) string 
 	for _, pattern := range patterns {
 		if matches, _ := path.Match(pattern, filePath); matches {
 			output.WriteString("\n")
-			output.WriteString(policy.fileClassification.PathInstructions[pattern])
+			output.WriteString(policy.fileClassification.PathInstructions[pattern].text())
 		}
 	}
 

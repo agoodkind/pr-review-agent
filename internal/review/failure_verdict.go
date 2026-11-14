@@ -30,6 +30,8 @@ type (
 
 const checkFailurePanic = "Review failed after an internal panic."
 
+const unreportedFailureField = "not reported"
+
 func (service *Service) finalizeFailure(
 	ctx context.Context,
 	job domain.ReviewJob,
@@ -392,7 +394,7 @@ func (service *Service) terminalFailureLead(ctx context.Context, cause error) st
 	var data reviewrules.PromptData
 
 	data.FailureClass = string(failureClassOf(terminal))
-	data.FailureStatus = "not reported"
+	data.FailureStatus = unreportedFailureField
 
 	var githubFailure githubapp.APIError
 	if errors.As(terminal, &githubFailure) {
@@ -425,12 +427,12 @@ func (service *Service) terminalFailureData(
 	data.Model = usageModelCell(failure.status.Model)
 	data.FailureClass = string(failure.class)
 
-	data.FailureStatus = "not reported"
+	data.FailureStatus = unreportedFailureField
 	if failure.httpStatus >= 100 && failure.httpStatus <= 599 {
 		data.FailureStatus = fmt.Sprintf("HTTP %d", failure.httpStatus)
 	}
 
-	data.FailureCode = "not reported"
+	data.FailureCode = unreportedFailureField
 	if service.reviewPolicy.RecognizesFailureCode(failure.code) {
 		data.FailureCode = failure.code
 	}

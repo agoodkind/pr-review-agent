@@ -49,11 +49,8 @@ func TestUnreadChangesRetainProviderDiagnosticsInsideDetails(t *testing.T) {
 	}
 
 	for _, expected := range []string{
-		"primary-model",
-		"secondary-model",
-		"101 / 100 (0 left)",
-		"App denied request; API not called",
-		"Provider request failed",
+		"`primary`: `" + string(review.ProviderAppBudgetDenied) + "`",
+		"`secondary`: `" + string(review.ProviderRequestFailed) + "`",
 	} {
 		if !strings.Contains(details, expected) {
 			t.Fatalf("collapsed diagnostics omit %q", expected)

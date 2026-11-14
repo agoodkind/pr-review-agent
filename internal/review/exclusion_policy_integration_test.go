@@ -94,12 +94,7 @@ func TestDisallowedExclusionPreservesRequiredSourceThroughReview(t *testing.T) {
 		FileAssessmentMaximumBytes: policy.FileAssessmentMaximumBytes(),
 		FileAssessmentsDisplay:     policy.FileAssessmentsDisplay(),
 	})
-	if !strings.Contains(body, "| Review scope assessed | yes |") ||
-		strings.Contains(body, "| source | exclude |") {
-		t.Fatal(
-			"Completed source review must not retain the invalid exclusion as an unresolved scope decision.",
-		)
-	}
+	assertSavedFileAssessments(t, body, decisions)
 }
 
 func TestDisallowedExclusionCannotHideSuppliedAssessmentEvidence(t *testing.T) {
@@ -201,7 +196,7 @@ func TestConfiguredExclusionPermissionsControlPlanningAndEvidence(t *testing.T) 
 func exclusionPolicy(t *testing.T, allowSource bool) reviewrules.Policy {
 	t.Helper()
 
-	content, err := os.ReadFile(filepath.Join("..", "..", "config", "review-prompts.json"))
+	content, err := os.ReadFile(filepath.Join("..", "..", "config", "review-service.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,12 +206,26 @@ func exclusionPolicy(t *testing.T, allowSource bool) reviewrules.Policy {
 		t.Fatal(err)
 	}
 
-	settings := policytest.Load(t).FileClassification()
-	if allowSource {
-		settings.AllowedExclusions = append(settings.AllowedExclusions, reviewrules.ContentSource)
+	var classification map[string]json.RawMessage
+	if err := json.Unmarshal(prompts["file_classification"], &classification); err != nil {
+		t.Fatal(err)
 	}
 
-	prompts["file_classification"], err = json.Marshal(settings)
+	var exclusions []reviewrules.ContentKind
+	if err := json.Unmarshal(classification["allowed_exclusions"], &exclusions); err != nil {
+		t.Fatal(err)
+	}
+
+	if allowSource {
+		exclusions = append(exclusions, reviewrules.ContentSource)
+	}
+
+	classification["allowed_exclusions"], err = json.Marshal(exclusions)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompts["file_classification"], err = json.Marshal(classification)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,14 +235,16 @@ func exclusionPolicy(t *testing.T, allowSource bool) reviewrules.Policy {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), "review-prompts.json")
+	path := filepath.Join(t.TempDir(), "review-service.json")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	policy, err := reviewrules.LoadPolicy(
 		filepath.Join("..", "..", "config", "review-rules.json"),
+		filepath.Join("..", "..", "config", "review-prompts.json"),
 		path,
+		filepath.Join("..", "..", "config", "templates"),
 	)
 	if err != nil {
 		t.Fatal(err)

@@ -10,38 +10,22 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/cloudflareops"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/openai"
+	"goodkind.io/pr-review-agent/internal/opsruntime"
 	"goodkind.io/pr-review-agent/internal/review"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const probeErrorBodyLimit = 32 * 1024
-
-type probeRuntime struct {
-	Providers     []json.RawMessage              `json:"PROVIDERS"`
-	FailurePolicy config.ProviderFailurePolicy   `json:"PROVIDER_FAILURE_POLICY"`
-	Minimum       string                         `json:"REVIEW_MIN_IMPORTANCE"`
-	Importance    reviewrules.Importance         `json:"REVIEW_RULE_IMPORTANCE"`
-	Pricing       map[string]config.ModelPricing `json:"REVIEW_MODEL_PRICING"`
-	BudgetURL     string                         `json:"PROVIDER_BUDGET_URL"`
-	Timeout       string                         `json:"REVIEW_CHUNK_TIMEOUT"`
-	Concurrency   *string                        `json:"REVIEW_CHUNK_CONCURRENCY"`
-	PromptBytes   *string                        `json:"REVIEW_MAX_PROMPT_BYTES"`
-	RulesFile     string                         `json:"REVIEW_RULES_FILE"`
-	PromptsFile   string                         `json:"REVIEW_PROMPTS_FILE"`
-}
 
 type probeHTTPError struct {
 	Status    int    `json:"status"`
@@ -94,133 +78,16 @@ func (transport *probeTransport) RoundTrip(request *http.Request) (*http.Respons
 	return response, nil
 }
 
-func probeConfig(runtime probeRuntime, providerID string, credential string, signingKeyPath string) (
+func probeConfig(
+	runtime opsruntime.ProbeRuntime,
+	providerID string,
+	credential string,
+	signingKeyPath string,
+) (
 	config.Config,
 	error,
 ) {
-	var (
-		cfg      config.Config
-		selected json.RawMessage
-	)
-
-	for _, definition := range runtime.Providers {
-		var identity struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(definition, &identity); err != nil {
-			return cfg, errors.New("runtime provider definition is invalid")
-		}
-
-		if identity.ID == providerID {
-			if selected != nil {
-				return cfg, errors.New("runtime provider selection is duplicated")
-			}
-
-			selected = definition
-		}
-	}
-
-	if selected == nil {
-		return cfg, errors.New("provider ID does not match a configured provider")
-	}
-
-	definitions, err := json.Marshal([]json.RawMessage{selected})
-	if err != nil {
-		return cfg, err
-	}
-
-	priority, err := json.Marshal([]string{providerID})
-	if err != nil {
-		return cfg, err
-	}
-
-	providers, err := config.LoadProviders(func(name string) (string, bool) {
-		switch name {
-		case "PROVIDERS":
-			return string(definitions), true
-		case "PROVIDER_PRIORITY":
-			return string(priority), true
-		case "PROVIDER_" + strings.ToUpper(providerID) + "_API_KEY":
-			return credential, true
-		default:
-			return os.LookupEnv(name)
-		}
-	})
-	if err != nil {
-		return cfg, err
-	}
-
-	cfg.Providers = providers
-
-	cfg.ProviderFailurePolicy, err = config.LoadProviderFailurePolicy(
-		func(name string) (string, bool) {
-			return string(runtime.FailurePolicy), name == "PROVIDER_FAILURE_POLICY"
-		},
-	)
-	if err != nil {
-		return cfg, err
-	}
-
-	reviewLimitValues := make(map[string]string)
-	if runtime.Concurrency != nil {
-		reviewLimitValues["REVIEW_CHUNK_CONCURRENCY"] = *runtime.Concurrency
-	}
-
-	if runtime.PromptBytes != nil {
-		reviewLimitValues["REVIEW_MAX_PROMPT_BYTES"] = *runtime.PromptBytes
-	}
-
-	if err = config.LoadReviewLimits(
-		func(name string) (string, bool) {
-			value, configured := reviewLimitValues[name]
-			return value, configured
-		},
-		&cfg,
-	); err != nil {
-		return cfg, err
-	}
-
-	cfg.ReviewPolicy, err = reviewrules.LoadPolicy(runtime.RulesFile, runtime.PromptsFile)
-	if err != nil {
-		return cfg, err
-	}
-
-	cfg.MinimumImportance, err = strconv.Atoi(runtime.Minimum)
-	if err != nil || cfg.MinimumImportance < reviewrules.MinimumImportance || cfg.MinimumImportance > reviewrules.MaximumImportance {
-		return cfg, errors.New("runtime REVIEW_MIN_IMPORTANCE must be an integer in 1..10")
-	}
-
-	if err = cfg.ReviewPolicy.Catalog().ValidateImportance(runtime.Importance); err != nil {
-		return cfg, err
-	}
-
-	cfg.RuleImportance = runtime.Importance
-	cfg.ReviewModelPricing = runtime.Pricing
-
-	cfg.ReviewChunkTimeout, err = time.ParseDuration(runtime.Timeout)
-	if err != nil || cfg.ReviewChunkTimeout <= 0 {
-		return cfg, errors.New("runtime REVIEW_CHUNK_TIMEOUT must be a positive duration")
-	}
-
-	if providers[0].HasTokenLimit() {
-		if signingKeyPath == "" {
-			return cfg, errors.New(
-				"capped provider probe requires --signing-key-file; configured limits are not bypassed",
-			)
-		}
-
-		cfg.ProviderBudgetURL, err = url.Parse(runtime.BudgetURL)
-		if err != nil || cfg.ProviderBudgetURL.Scheme != "https" || cfg.ProviderBudgetURL.Host == "" {
-			return cfg, errors.New("capped provider requires an HTTPS PROVIDER_BUDGET_URL")
-		}
-
-		cfg.GitHubWebhookSecret, err = cloudflareops.ReadCredential(signingKeyPath)
-		if err != nil {
-			return cfg, err
-		}
-	}
-
-	return cfg, nil
+	return opsruntime.ProbeConfig(runtime, providerID, credential, signingKeyPath)
 }
 
 func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) error {
@@ -403,22 +270,6 @@ func probe(ctx context.Context, args []string, stdout io.Writer, stderr io.Write
 	return nil
 }
 
-func ReadProbeRuntime(path string) (probeRuntime, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return probeRuntime{}, err
-	}
-
-	var runtime probeRuntime
-	if err = json.Unmarshal(data, &runtime); err != nil {
-		return runtime, errors.New("runtime configuration is invalid")
-	}
-
-	for _, reference := range []*string{&runtime.RulesFile, &runtime.PromptsFile} {
-		if *reference != "" && !filepath.IsAbs(*reference) {
-			*reference = filepath.Join(filepath.Dir(path), *reference)
-		}
-	}
-
-	return runtime, nil
+func ReadProbeRuntime(path string) (opsruntime.ProbeRuntime, error) {
+	return opsruntime.ReadProbeRuntime(path)
 }

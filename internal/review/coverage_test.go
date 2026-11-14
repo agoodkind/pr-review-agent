@@ -238,10 +238,6 @@ func TestACleanRunApprovesWhateverTheModelSaysAboutCoverage(t *testing.T) {
 		t.Fatalf("summary blocks a head with nothing unread:\n%s", body)
 	}
 
-	if !strings.Contains(body, "| All file content inspected | yes |") {
-		t.Fatalf("summary reports incomplete coverage on a run that read everything:\n%s", body)
-	}
-
 	state := decodedSummaryState(t, fixture)
 	if state.LastReviewed != domain.HeadSHA(testHeadSHA) {
 		t.Fatalf("last reviewed = %q, want the head this run read whole", state.LastReviewed)

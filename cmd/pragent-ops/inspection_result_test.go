@@ -193,6 +193,8 @@ func diagnosticInspectionRuntime(t *testing.T, root, directory, endpoint string)
 	for key, path := range map[string]string{
 		"REVIEW_RULES_FILE":   "config/review-rules.json",
 		"REVIEW_PROMPTS_FILE": "config/review-prompts.json",
+		"REVIEW_SERVICE_FILE": "config/review-service.json",
+		"REVIEW_TEMPLATES_DIR": "config/templates",
 	} {
 		runtime[key], err = json.Marshal(filepath.Join(root, path))
 		if err != nil {

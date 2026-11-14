@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -438,43 +437,35 @@ func liveNativeMissingSummaryFailure(
 		t.Fatalf("The dedicated fixture summary could not be deleted: %v: %s.", err, output)
 	}
 	cfg, _ := liveFailureConfig(t)
-	promptsPath := filepath.Join("..", "..", "config", "review-prompts.json")
-	data, err := os.ReadFile(promptsPath)
-	if err != nil {
+	configuration := filepath.Join("..", "..", "config")
+	templatesDirectory := filepath.Join(directory, "oversized-review-templates")
+	if err := os.CopyFS(
+		templatesDirectory,
+		os.DirFS(filepath.Join(configuration, "templates")),
+	); err != nil {
 		t.Fatal(err)
 	}
-	var prompts map[string]json.RawMessage
-	if err := json.Unmarshal(data, &prompts); err != nil {
-		t.Fatal(err)
-	}
-	var templates map[string]string
-	if err := json.Unmarshal(prompts["templates"], &templates); err != nil {
-		t.Fatal(err)
-	}
-	// The configured body exceeds GitHub's accepted review size.
-	templates["native.summary_link"] += "\n\n" + strings.Repeat(
-		"The fixture exercises publication rejection. ",
-		50000,
-	)
-	templates["native.request_changes"] += "\n\n" + strings.Repeat(
-		"The fixture exercises publication rejection. ",
-		50000,
-	)
-	prompts["templates"], err = json.Marshal(templates)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err = json.Marshal(prompts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	invalidPrompts := filepath.Join(directory, "oversized-review-prompts.json")
-	if err := os.WriteFile(invalidPrompts, data, 0o600); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"native.summary_link", "native.request_changes"} {
+		path := filepath.Join(templatesDirectory, name+".md.tmpl")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(
+			data,
+			[]byte(
+				"\n\n"+strings.Repeat("The fixture exercises publication rejection. ", 50000),
+			)...,
+		)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cfg.ReviewPolicy, err = reviewrules.LoadPolicy(
-		filepath.Join("..", "..", "config", "review-rules.json"),
-		invalidPrompts,
+		filepath.Join(configuration, "review-rules.json"),
+		filepath.Join(configuration, "review-prompts.json"),
+		filepath.Join(configuration, "review-service.json"),
+		templatesDirectory,
 	)
 	if err != nil {
 		t.Fatal(err)

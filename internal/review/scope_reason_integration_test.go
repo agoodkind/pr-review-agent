@@ -29,32 +29,27 @@ func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
 		name        string
 		action      domain.FileReviewAction
 		requirement domain.ContentReviewRequirement
-		scope       string
 	}{
-		{name: "ordinary technical findings", scope: "yes"},
+		{name: "ordinary technical findings"},
 		{
 			name:        "ordinary content review",
 			action:      domain.FileActionReview,
 			requirement: domain.ContentReviewRequired,
-			scope:       "yes",
 		},
 		{
 			name:        "necessary semantic gap",
 			action:      domain.FileActionGap,
 			requirement: domain.ContentReviewRequired,
-			scope:       "no",
 		},
 		{
 			name:        "necessary related evidence",
 			action:      domain.FileActionInspectRelated,
 			requirement: domain.ContentReviewRequired,
-			scope:       "no",
 		},
 		{
 			name:        "accepted exclusion",
 			action:      domain.FileActionExclude,
 			requirement: domain.ContentReviewUnnecessary,
-			scope:       "yes",
 		},
 	} {
 		t.Run(
@@ -103,22 +98,7 @@ func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
 				summary.MetadataRevision = diff.PullRequestRevision(pr)
 
 				body := review.RenderBody(summary)
-				if !strings.Contains(body, "| Review scope assessed | "+scenario.scope+" |") {
-					t.Fatal(
-						"The scope row must distinguish inspected content from unresolved semantic requirements.",
-					)
-				}
-
-				content := "yes"
-				if excluded {
-					content = "no"
-				}
-
-				if !strings.Contains(body, "| All file content inspected | "+content+" |") {
-					t.Fatal(
-						"The content inspection row must preserve the actual planned source coverage.",
-					)
-				}
+				assertSavedFileAssessments(t, body, assessments)
 
 				head, found := marker.FindReview(body)
 				if !found || head != pr.Head ||
@@ -226,13 +206,12 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 				summary.MetadataRevision = diff.PullRequestRevision(pullRequest)
 
 				body := review.RenderBody(summary)
-				if strings.Contains(body, "#### Review scope\n\n"+reason) != scenario.wantReason ||
-					strings.Contains(
-						body,
-						"<!-- pr-review-agent:decision-reason:v1 ",
-					) != scenario.wantReason {
+				if strings.Contains(
+					body,
+					"<!-- pr-review-agent:decision-reason:v1 ",
+				) != scenario.wantReason {
 					t.Fatal(
-						"The visible and saved scope reason must agree with the actual omissions or contextual assessment.",
+						"The saved scope reason must match the omissions or contextual assessment.",
 					)
 				}
 

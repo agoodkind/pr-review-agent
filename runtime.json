@@ -120,6 +120,8 @@
   },
   "REVIEW_RULES_FILE": "config/review-rules.json",
   "REVIEW_PROMPTS_FILE": "config/review-prompts.json",
+  "REVIEW_SERVICE_FILE": "config/review-service.json",
+  "REVIEW_TEMPLATES_DIR": "config/templates",
   "REVIEW_MODEL_PRICING": {
     "gemini-3.8-flash": {
       "input_per_million_tokens": 0.75,

@@ -184,9 +184,11 @@ func loadUncappedRuntime(
 		t.Fatal(err)
 	}
 	for name, value := range map[string]string{
-		"PROVIDER_BUDGET_URL": endpoint,
-		"REVIEW_RULES_FILE":   filepath.Join(root, "config", "review-rules.json"),
-		"REVIEW_PROMPTS_FILE": filepath.Join(root, "config", "review-prompts.json"),
+		"PROVIDER_BUDGET_URL":  endpoint,
+		"REVIEW_RULES_FILE":    filepath.Join(root, "config", "review-rules.json"),
+		"REVIEW_PROMPTS_FILE":  filepath.Join(root, "config", "review-prompts.json"),
+		"REVIEW_SERVICE_FILE":  filepath.Join(root, "config", "review-service.json"),
+		"REVIEW_TEMPLATES_DIR": filepath.Join(root, "config", "templates"),
 	} {
 		runtime[name], err = json.Marshal(value)
 		if err != nil {

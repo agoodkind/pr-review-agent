@@ -37,10 +37,10 @@ func TestUsageDetailsPreserveCacheWritesAndActualServiceTiers(t *testing.T) {
 	body := review.RenderDetails(review.Summary{Usage: summary})
 
 	for _, expected := range []string{
-		"| Cache write tokens | `400000` |",
-		"| Reported service tiers | `default`, `flex` |",
-		"| Estimated cache write cost | $0.10000000 |",
-		"| Estimated total cost | $0.51600000 |",
+		"| `cache_write_tokens` | `400000` |",
+		"| `service_tiers` | `default`, `flex` |",
+		"| `estimated_cache_write_cost_usd` | `0.10000000` |",
+		"| `estimated_cost_usd` | `0.51600000` |",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("review diagnostics omitted %q", expected)
@@ -56,19 +56,19 @@ func TestUsageDetailsDoNotPriceUnpricedCacheWritesAsZero(t *testing.T) {
 		pricedWriteCost float64
 		expected        string
 	}{
-		{name: "only unpriced writes", unpricedWrites: 200_000, expected: "unknown"},
+		{name: "only unpriced writes", unpricedWrites: 200_000, expected: "null"},
 		{
 			name:            "partial write estimate",
 			unpricedWrites:  200_000,
 			pricedWrites:    200_000,
 			pricedWriteCost: 0.05,
-			expected:        "unknown",
+			expected:        "null",
 		},
 		{
 			name:            "unpriced request without writes",
 			pricedWrites:    200_000,
 			pricedWriteCost: 0.05,
-			expected:        "$0.05000000",
+			expected:        "0.05000000",
 		},
 	} {
 		t.Run(
@@ -106,7 +106,7 @@ func TestUsageDetailsDoNotPriceUnpricedCacheWritesAsZero(t *testing.T) {
 				body := review.RenderDetails(review.Summary{Usage: recorder.Summary()})
 				if !strings.Contains(
 					body,
-					"| Estimated cache write cost | "+scenario.expected+" |",
+					"| `estimated_cache_write_cost_usd` | `"+scenario.expected+"` |",
 				) {
 					t.Fatalf("review diagnostics misstated cache write cost: %s", body)
 				}
