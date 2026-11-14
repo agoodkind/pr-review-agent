@@ -65,15 +65,6 @@ func (model *conciseReportModel) Report(
 		Model: "unpriced-report-model",
 		Report: review.Report{
 			Summary: "The change rejects invalid input. Callers receive a clear error. A third sentence should not be published.",
-			Walkthrough: []string{
-				"The change rejects invalid input.",
-				"Validation checks the boundary.",
-				"Validation checks the boundary.",
-				"Errors include the invalid value.",
-				"Existing valid values retain their behavior.",
-				"Tests exercise the rejected values.",
-				"A fifth distinct item should not be published.",
-			},
 		},
 	}, nil
 }
@@ -95,7 +86,7 @@ func TestCompletedReviewKeepsProseConciseAndFoldsActualUsage(t *testing.T) {
 
 	for _, unwanted := range []string{
 		"third sentence",
-		"fifth distinct",
+		"### Changes",
 		"### Omissions",
 		"Coverage",
 		"tokens",
@@ -107,10 +98,8 @@ func TestCompletedReviewKeepsProseConciseAndFoldsActualUsage(t *testing.T) {
 		}
 	}
 
-	if strings.Count(visible, "The change rejects invalid input.") != 1 ||
-		strings.Count(visible, "Validation checks the boundary.") != 1 ||
-		strings.Count(visible, "\n- ") != 4 {
-		t.Fatalf("summary or changes repeat or exceed their limit: %s", visible)
+	if strings.Count(visible, "The change rejects invalid input.") != 1 {
+		t.Fatalf("summary repeats: %s", visible)
 	}
 
 	for _, want := range []string{

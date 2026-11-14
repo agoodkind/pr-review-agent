@@ -105,7 +105,6 @@ func TestServicePresentsRequiredMetadataInTheNativeReview(t *testing.T) {
 		for _, content := range []string{
 			"### Verdict",
 			"\n### Summary\n",
-			"\n### Changes\n",
 			"<summary>Review details</summary>",
 		} {
 			position := strings.Index(body, content)

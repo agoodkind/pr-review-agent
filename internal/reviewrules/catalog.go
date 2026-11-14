@@ -73,7 +73,6 @@ type promptsFile struct {
 // FormattingLimits bounds generated reports and supporting evidence.
 type FormattingLimits struct {
 	SummarySentences   int `json:"summary_sentences"`
-	WalkthroughItems   int `json:"walkthrough_items"`
 	InspectionRequests int `json:"inspection_requests"`
 	InspectionBytes    int `json:"inspection_bytes"`
 }
@@ -105,7 +104,6 @@ type PromptData struct {
 	Schema            string
 	Anchors           string
 	SummarySentences  int
-	WalkthroughItems  int
 }
 
 // Catalog uses immutable configuration shared by concurrent reviews.
@@ -279,7 +277,7 @@ func validatePromptSettings(prompts promptsFile) error {
 		return fmt.Errorf("prompt configuration requires all input markers")
 	}
 
-	if prompts.Limits.SummarySentences <= 0 || prompts.Limits.WalkthroughItems <= 0 {
+	if prompts.Limits.SummarySentences <= 0 {
 		return fmt.Errorf("prompt formatting limits must be positive")
 	}
 
@@ -409,7 +407,6 @@ func render(
 	limits FormattingLimits,
 ) (string, error) {
 	data.SummarySentences = limits.SummarySentences
-	data.WalkthroughItems = limits.WalkthroughItems
 
 	selected, exists := templates[name]
 	if !exists {

@@ -157,9 +157,6 @@ func TestMetadataProviderFallbackPreservesUsageAndTheStandingDecision(t *testing
 						case metadataFallbackReport:
 							response, err = json.Marshal(review.Report{
 								Summary: metadataFallbackDescription,
-								Walkthrough: []string{
-									"The service updates the original summary comment during reassessment.",
-								},
 							})
 						case metadataFallbackConsolidate:
 							response = []byte(`{"groups":[]}`)

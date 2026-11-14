@@ -492,8 +492,7 @@ func inspectionServiceProvider(
 				)
 			case "review_report":
 				content, err = json.Marshal(review.Report{
-					Summary:     "The change renames the upstream bridge.",
-					Walkthrough: []string{"The host activation uses the renamed bridge."},
+					Summary: "The change renames the upstream bridge.",
 				})
 			case "finding_consolidation":
 				content = []byte(

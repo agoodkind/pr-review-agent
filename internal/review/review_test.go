@@ -186,7 +186,6 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 				for _, section := range []string{
 					"### Verdict",
 					"### Summary",
-					"### Changes",
 					"<summary>Review details</summary>",
 				} {
 					index := strings.Index(body, section)

@@ -159,7 +159,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 						case metadataFallbackReport:
 							writeInspectionServiceCompletion(
 								writer,
-								`{"summary":"The service preserves unresolved findings.","walkthrough":[]}`,
+								`{"summary":"The service preserves unresolved findings."}`,
 								requestIndex,
 							)
 						default:
