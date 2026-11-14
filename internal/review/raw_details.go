@@ -41,7 +41,7 @@ func renderRawDetails(summary Summary) string {
 	if len(usage.ServiceTiers) > 0 {
 		cells := make([]string, 0, len(usage.ServiceTiers))
 		for _, tier := range usage.ServiceTiers {
-			cells = append(cells, usageModelCell(tier))
+			cells = append(cells, rawTableCell(tier))
 		}
 
 		fmt.Fprintf(&builder, "| `service_tiers` | %s |\n", strings.Join(cells, ", "))
@@ -77,7 +77,7 @@ func renderRawDetails(summary Summary) string {
 }
 
 func writeRawDetail(builder *strings.Builder, key, value string) {
-	fmt.Fprintf(builder, "| %s | %s |\n", usageModelCell(key), usageModelCell(value))
+	fmt.Fprintf(builder, "| %s | %s |\n", rawTableCell(key), rawTableCell(value))
 }
 
 func rawProviderUsage(usage UsageSummary) string {
@@ -123,11 +123,11 @@ func rawProviderUsage(usage UsageSummary) string {
 			value = string(attempt.Status.Cause)
 		}
 
-		cells = append(cells, usageModelCell(provider)+": "+usageModelCell(value))
+		cells = append(cells, rawTableCell(provider)+": "+rawTableCell(value))
 	}
 
 	if len(cells) == 0 {
-		return usageModelCell(rawNull)
+		return rawTableCell(rawNull)
 	}
 
 	return strings.Join(cells, "<br>")
@@ -145,4 +145,24 @@ func hasUnpricedCacheWrites(usage UsageSummary) bool {
 
 func usageModelCell(model string) string {
 	return strings.ReplaceAll(codeSpan(model), "|", "&#124;")
+}
+
+func rawTableCell(value string) string {
+	value = strings.ReplaceAll(replyLineBreaks.Replace(value), "\n", " ")
+	value = strings.ReplaceAll(value, "|", "\\|")
+
+	delimiter := "`"
+	for strings.Contains(value, delimiter) {
+		delimiter += "`"
+	}
+
+	if strings.HasPrefix(value, "`") || strings.HasSuffix(value, "`") ||
+		(strings.HasPrefix(
+			value,
+			" ",
+		) && strings.HasSuffix(value, " ") && strings.TrimSpace(value) != "") {
+		value = " " + value + " "
+	}
+
+	return delimiter + value + delimiter
 }

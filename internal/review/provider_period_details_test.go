@@ -60,7 +60,7 @@ func TestRenderDetailsShowsRecordedRequestsWithoutCumulativeUsage(t *testing.T) 
 	body := review.RenderDetails(review.Summary{Usage: usage})
 
 	for _, expected := range []string{
-		"| `providers` | `z-first&#124;provider`: `rateˋlimited&#124;raw`<br>`a-second`: `36` |",
+		"| `providers` | `z-first\\|provider`: ``rate`limited\\|raw``<br>`a-second`: `36` |",
 		"| `requests` | `3` |",
 		"| `reported_requests` | `2` |",
 		"| `input_tokens` | `22` |",

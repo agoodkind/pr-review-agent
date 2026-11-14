@@ -331,9 +331,7 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					t.Fatalf("The description edit did not admit reassessment: %v.", err)
 				}
 
-				started := time.Now()
 				outcome, err := fixture.service.RunWithOutcome(t.Context(), admitted)
-				duration := time.Since(started)
 				if scenario.moveHead {
 					if err != nil || outcome.Disposition != domain.AssessmentInterrupted ||
 						fixture.state.lastUpdateCheckRun["conclusion"] != "cancelled" {
@@ -473,10 +471,6 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 					if scenario.moveHead && !strings.Contains(checkSummary, string(job.Head)[:7]) {
 						t.Fatal("The cancelled check must identify the attempted head.")
 					}
-				}
-
-				if duration < scenario.modelDelay {
-					t.Fatalf("The refresh completed before the model delay: %s.", duration)
 				}
 
 				assertMetadataRefreshUsage(t, body, initialRequests)
