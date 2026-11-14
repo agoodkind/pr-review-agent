@@ -350,13 +350,12 @@ func (request InspectionRequest) Validate() error {
 // Report is the model-written explanation of one completed review.
 // Deterministic service state still owns findings, coverage, omissions, and the verdict.
 type Report struct {
-	Summary     string   `json:"summary"`
-	Walkthrough []string `json:"walkthrough"`
+	Summary string `json:"summary"`
 }
 
 // Validate rejects incomplete review report prose.
 //
-// The report requires complete sentences in its summary and walkthrough.
+// The report requires a complete sentence in its summary.
 //
 // For example:
 //
@@ -366,23 +365,12 @@ func (report Report) Validate() error {
 		return err
 	}
 
-	if len(report.Walkthrough) == 0 {
-		return fmt.Errorf("report walkthrough is required")
-	}
-
-	for _, item := range report.Walkthrough {
-		if err := validateFullSentence("report walkthrough item", item); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
 // SanitizeReport prepares report prose for a review comment.
 //
-// The function removes unsafe content, limits summary sentences, and removes
-// repeated walkthrough items.
+// The function removes unsafe content and limits summary sentences.
 //
 // For example:
 //
@@ -392,26 +380,6 @@ func SanitizeReport(report Report, limits reviewrules.FormattingLimits) Report {
 		sanitizeReportProse(report.Summary),
 		limits.SummarySentences,
 	)
-	walkthrough := make([]string, 0, min(len(report.Walkthrough), limits.WalkthroughItems))
-	seen := make(map[string]bool)
-
-	for _, item := range report.Walkthrough {
-		item = sanitizeReportProse(item)
-
-		key := strings.ToLower(item)
-		if item == "" || seen[key] || strings.Contains(strings.ToLower(report.Summary), key) {
-			continue
-		}
-
-		seen[key] = true
-
-		walkthrough = append(walkthrough, item)
-		if len(walkthrough) == limits.WalkthroughItems {
-			break
-		}
-	}
-
-	report.Walkthrough = walkthrough
 
 	return report
 }

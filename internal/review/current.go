@@ -136,8 +136,7 @@ func (service *Service) refreshedSummary(
 		DecisionReason:             refreshed.decisionReason,
 		ApprovalWithheld:           refreshed.approvalWithheld,
 		Report: Report{
-			Summary:     "",
-			Walkthrough: nil,
+			Summary: "",
 		},
 		Blocking: blockingReasons(
 			refreshed.threads,

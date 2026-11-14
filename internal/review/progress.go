@@ -238,8 +238,7 @@ func (progress *reviewProgress) summary(now time.Time) Summary {
 		DecisionReason:     "",
 		ApprovalWithheld:   true,
 		Report: Report{
-			Summary:     "",
-			Walkthrough: nil,
+			Summary: "",
 		},
 		OmissionsAccepted: false,
 		// A failed run carries no verdict, so there is nothing for it to be

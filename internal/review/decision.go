@@ -106,8 +106,7 @@ func (service *Service) decidePublication(
 		DecisionReason:     pass.decisionReason(),
 		ApprovalWithheld:   !approvalAllowed,
 		Report: Report{
-			Summary:     "",
-			Walkthrough: nil,
+			Summary: "",
 		},
 		Blocking:                   blocking,
 		Models:                     inputs.analysis.Models,

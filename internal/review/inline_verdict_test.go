@@ -147,8 +147,7 @@ func (model *resolveInlineDuringReportModel) Report(
 	return review.ReportCompletion{
 		Model: testReviewModel,
 		Report: review.Report{
-			Summary:     "The review examined the current change.",
-			Walkthrough: []string{"The changed line preserves the expected behavior."},
+			Summary: "The review examined the current change.",
 		},
 	}, nil
 }

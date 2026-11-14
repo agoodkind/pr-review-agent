@@ -245,7 +245,6 @@ func renderReportSection(report Report) string {
 		[]string{
 			reportSectionStart,
 			"### Summary\n\n" + renderReportSummary(report),
-			"### Changes\n\n" + renderWalkthrough(report),
 			reportSectionEnd,
 		},
 		"\n\n",
@@ -259,21 +258,6 @@ func renderReportSummary(report Report) string {
 	}
 
 	return "This review checked the current pull request against its stated purpose and current changes."
-}
-
-func renderWalkthrough(report Report) string {
-	lines := make([]string, 0, len(report.Walkthrough))
-	for _, item := range report.Walkthrough {
-		if value := sanitizeReportText(item); value != "" {
-			lines = append(lines, "- "+value)
-		}
-	}
-
-	if len(lines) == 0 {
-		return "The review examined the changed files and their current diff."
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 func renderOmissions(hunks []unreadHunk) string {
