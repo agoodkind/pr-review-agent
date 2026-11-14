@@ -59,13 +59,22 @@ type untrustedMarkers struct {
 }
 
 type promptsFile struct {
+	UntrustedMarkers   untrustedMarkers      `json:"untrusted_markers"`
+	Templates          map[string]TextParts  `json:"templates"`
+	FileClassification classificationPrompts `json:"file_classification"`
+}
+
+type classificationPrompts struct {
+	Instructions     TextParts            `json:"instructions"`
+	PathInstructions map[string]TextParts `json:"path_instructions"`
+}
+
+type settingsFile struct {
 	RelationshipReview      RelationshipReviewPolicy `json:"relationship_review"`
 	FileAssessmentsDisplay  FindingDisplay           `json:"file_assessments_display"`
-	FileClassification      FileClassificationPolicy `json:"file_classification"`
+	FileClassification      classificationSettings   `json:"file_classification"`
 	MetadataFindingsDisplay FindingDisplay           `json:"metadata_findings_display"`
-	UntrustedMarkers        untrustedMarkers         `json:"untrusted_markers"`
 	Limits                  FormattingLimits         `json:"limits"`
-	Templates               map[string]TextParts     `json:"templates"`
 	ProviderDetails         []ProviderDetailColumn   `json:"provider_details"`
 	FailureCodes            []FailureCode            `json:"failure_codes"`
 }
@@ -129,15 +138,12 @@ type Policy struct {
 	failureCodes              []FailureCode
 }
 
-// LoadPolicy loads and validates rule and prompt configuration.
-//
-// Both configuration files must exist, and every configured prompt template
-// must parse.
+// LoadPolicy validates rules, prompts, service settings, and output templates.
 //
 // For example:
 //
-//	policy, err := LoadPolicy(catalogPath, promptsPath)
-func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
+//	policy, err := LoadPolicy(rules, prompts, settings, templates)
+func LoadPolicy(catalogPath, promptsPath, settingsPath, templatesDirectory string) (Policy, error) {
 	rules, err := decodeFile[catalogFile](catalogPath)
 	if err != nil {
 		return Policy{}, err
@@ -152,16 +158,27 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		return Policy{}, err
 	}
 
-	if err := validatePromptSettings(prompts); err != nil {
-		return Policy{}, err
-	}
-
-	headerPatterns, err := compileClassificationHeaders(prompts.FileClassification.HeaderPatterns)
+	settings, err := decodeFile[settingsFile](settingsPath)
 	if err != nil {
 		return Policy{}, err
 	}
 
-	compiled, err := compilePolicyTemplates(rules, prompts)
+	classification := settings.FileClassification.policy(prompts.FileClassification)
+	if err := validatePromptSettings(prompts, settings, classification); err != nil {
+		return Policy{}, err
+	}
+
+	headerPatterns, err := compileClassificationHeaders(classification.HeaderPatterns)
+	if err != nil {
+		return Policy{}, err
+	}
+
+	outputTemplates, err := readOutputTemplates(templatesDirectory)
+	if err != nil {
+		return Policy{}, err
+	}
+
+	compiled, err := compilePolicyTemplates(rules, prompts, outputTemplates)
 	if err != nil {
 		return Policy{}, err
 	}
@@ -169,13 +186,8 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 	for _, name := range []string{
 		"metadata.reassess.system",
 		"metadata.reassess.input",
-		"native.summary_link",
-		"native.request_changes",
-		"failure.saved",
 		"schema.file_assessment.reason",
-		"coverage.classification_incomplete",
 		"classification.system",
-		"classification.required",
 		"classification.file_evidence",
 	} {
 		if _, exists := compiled[name]; !exists {
@@ -183,11 +195,11 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		}
 	}
 
-	if err := validateRelationshipTemplates(prompts.RelationshipReview, compiled); err != nil {
+	if err := validateRelationshipTemplates(settings.RelationshipReview, compiled); err != nil {
 		return Policy{}, err
 	}
 
-	if prompts.Limits.InspectionRequests > 0 {
+	if settings.Limits.InspectionRequests > 0 {
 		for _, name := range []string{"inspection.instructions", "inspection.input"} {
 			if _, exists := compiled[name]; !exists {
 				return Policy{}, fmt.Errorf("required prompt template %q is missing", name)
@@ -199,43 +211,61 @@ func LoadPolicy(catalogPath, promptsPath string) (Policy, error) {
 		return Policy{}, err
 	}
 
-	encoded, err := json.Marshal(
-		struct {
-			Rules   catalogFile `json:"rules"`
-			Prompts promptsFile `json:"prompts"`
-		}{
-			Rules:   rules,
-			Prompts: prompts,
-		},
-	)
+	fingerprint, err := policyFingerprint(rules, prompts, settings, outputTemplates)
 	if err != nil {
-		slog.Warn("Review policy identity encoding failed", "err", err)
-		return Policy{}, fmt.Errorf("encode review policy identity: %w", err)
+		return Policy{}, err
 	}
 
 	return Policy{
 		fileClassificationHeaders: headerPatterns,
-		relationshipReview:        prompts.RelationshipReview,
-		fingerprint:               fmt.Sprintf("%x", sha256.Sum256(encoded)),
-		fileAssessmentsDisplay:    prompts.FileAssessmentsDisplay,
-		fileClassification:        prompts.FileClassification,
-		metadataFindingsDisplay:   prompts.MetadataFindingsDisplay,
+		relationshipReview:        settings.RelationshipReview,
+		fingerprint:               fingerprint,
+		fileAssessmentsDisplay:    settings.FileAssessmentsDisplay,
+		fileClassification:        classification,
+		metadataFindingsDisplay:   settings.MetadataFindingsDisplay,
 		catalog: Catalog{
 			configuration: rules,
 			templates:     compiled,
-			limits:        prompts.Limits,
+			limits:        settings.Limits,
 		},
 		templates:        compiled,
 		untrustedMarkers: prompts.UntrustedMarkers,
-		limits:           prompts.Limits,
-		providerDetails:  prompts.ProviderDetails,
-		failureCodes:     prompts.FailureCodes,
+		limits:           settings.Limits,
+		providerDetails:  settings.ProviderDetails,
+		failureCodes:     settings.FailureCodes,
 	}, nil
+}
+
+func policyFingerprint(
+	rules catalogFile,
+	prompts promptsFile,
+	settings settingsFile,
+	outputTemplates map[string]string,
+) (string, error) {
+	encoded, err := json.Marshal(
+		struct {
+			Rules           catalogFile       `json:"rules"`
+			Prompts         promptsFile       `json:"prompts"`
+			Settings        settingsFile      `json:"settings"`
+			OutputTemplates map[string]string `json:"output_templates"`
+		}{
+			rules,
+			prompts,
+			settings,
+			outputTemplates,
+		},
+	)
+	if err != nil {
+		slog.Warn("Review policy identity encoding failed", "err", err)
+		return "", fmt.Errorf("encode review policy identity: %w", err)
+	}
+
+	return fmt.Sprintf("%x", sha256.Sum256(encoded)), nil
 }
 
 // Fingerprint returns the loaded configuration identity.
 //
-// The fingerprint includes both rule and prompt configuration.
+// The fingerprint includes all configuration and exact output template text.
 //
 // For example:
 //
@@ -252,22 +282,26 @@ func (policy Policy) Fingerprint() string { return policy.fingerprint }
 //	display := policy.FileAssessmentsDisplay()
 func (policy Policy) FileAssessmentsDisplay() FindingDisplay { return policy.fileAssessmentsDisplay }
 
-func validatePromptSettings(prompts promptsFile) error {
-	if err := validateFindingDisplay(prompts.MetadataFindingsDisplay); err != nil {
+func validatePromptSettings(
+	prompts promptsFile,
+	settings settingsFile,
+	classification FileClassificationPolicy,
+) error {
+	if err := validateFindingDisplay(settings.MetadataFindingsDisplay); err != nil {
 		return err
 	}
 
-	if prompts.FileAssessmentsDisplay != FindingsExpanded &&
-		prompts.FileAssessmentsDisplay != FindingsCollapsed &&
-		prompts.FileAssessmentsDisplay != FindingsHidden {
+	if settings.FileAssessmentsDisplay != FindingsExpanded &&
+		settings.FileAssessmentsDisplay != FindingsCollapsed &&
+		settings.FileAssessmentsDisplay != FindingsHidden {
 		return fmt.Errorf("file_assessments_display must be expanded, collapsed, or hidden")
 	}
 
-	if err := prompts.FileClassification.Validate(); err != nil {
+	if err := classification.Validate(); err != nil {
 		return err
 	}
 
-	if err := prompts.RelationshipReview.Validate(); err != nil {
+	if err := settings.RelationshipReview.Validate(); err != nil {
 		return err
 	}
 
@@ -277,18 +311,18 @@ func validatePromptSettings(prompts promptsFile) error {
 		return fmt.Errorf("prompt configuration requires all input markers")
 	}
 
-	if prompts.Limits.SummarySentences <= 0 {
+	if settings.Limits.SummarySentences <= 0 {
 		return fmt.Errorf("prompt formatting limits must be positive")
 	}
 
-	if prompts.Limits.InspectionRequests < 0 || prompts.Limits.InspectionBytes < 0 ||
-		(prompts.Limits.InspectionRequests == 0) != (prompts.Limits.InspectionBytes == 0) {
+	if settings.Limits.InspectionRequests < 0 || settings.Limits.InspectionBytes < 0 ||
+		(settings.Limits.InspectionRequests == 0) != (settings.Limits.InspectionBytes == 0) {
 		return fmt.Errorf(
 			"inspection request and byte limits must both be positive or both be zero",
 		)
 	}
 
-	if err := validateProviderColumns(prompts.ProviderDetails); err != nil {
+	if err := validateProviderColumns(settings.ProviderDetails); err != nil {
 		return err
 	}
 
@@ -315,7 +349,7 @@ func compileTemplate(name, body string) (*template.Template, error) {
 	return parsed, nil
 }
 
-func decodeFile[T catalogFile | promptsFile](path string) (T, error) {
+func decodeFile[T catalogFile | promptsFile | settingsFile](path string) (T, error) {
 	var target T
 
 	data, err := os.ReadFile(path)
@@ -445,8 +479,7 @@ func (policy Policy) ProviderDetails() []ProviderDetailColumn {
 
 // RecognizesFailureCode checks a configured failure code.
 //
-// The method compares the supplied code with the prompt configuration
-// entries.
+// The method compares the supplied code with the service configuration entries.
 //
 // For example:
 //

@@ -140,6 +140,8 @@ var runtimeConfigKeys = map[string]struct{}{
 	"REVIEW_RULE_IMPORTANCE":            {},
 	"REVIEW_RULES_FILE":                 {},
 	"REVIEW_PROMPTS_FILE":               {},
+	"REVIEW_SERVICE_FILE":               {},
+	"REVIEW_TEMPLATES_DIR":              {},
 	"REVIEW_MODEL":                      {},
 	"REVIEW_MODEL_PRICING":              {},
 	"REVIEW_WORKERS":                    {},

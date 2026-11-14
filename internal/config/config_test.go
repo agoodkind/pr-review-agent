@@ -556,6 +556,8 @@ func TestLoadRuntimeUsesFileSettingsAndEnvironmentSecrets(t *testing.T) {
 		"REVIEW_MODEL": "gpt-6-luna",
 		"REVIEW_RULES_FILE": "../../config/review-rules.json",
 		"REVIEW_PROMPTS_FILE": "../../config/review-prompts.json",
+		"REVIEW_SERVICE_FILE": "../../config/review-service.json",
+		"REVIEW_TEMPLATES_DIR": "../../config/templates",
 		"REVIEW_MODEL_PRICING": {
 			"gpt-6-luna": {
 				"input_per_million_tokens": 0.10,
@@ -720,8 +722,10 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 	}
 
 	var policyFiles struct {
-		RulesFile   string `json:"REVIEW_RULES_FILE"`
-		PromptsFile string `json:"REVIEW_PROMPTS_FILE"`
+		RulesFile          string `json:"REVIEW_RULES_FILE"`
+		PromptsFile        string `json:"REVIEW_PROMPTS_FILE"`
+		ServiceFile        string `json:"REVIEW_SERVICE_FILE"`
+		TemplatesDirectory string `json:"REVIEW_TEMPLATES_DIR"`
 	}
 	if err := json.Unmarshal(runtimeData, &policyFiles); err != nil {
 		return nil, err
@@ -734,6 +738,20 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 
 	promptsFile, err := filepath.Abs(
 		filepath.Join(filepath.Dir(runtimePath), policyFiles.PromptsFile),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	serviceFile, err := filepath.Abs(
+		filepath.Join(filepath.Dir(runtimePath), policyFiles.ServiceFile),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	templatesDirectory, err := filepath.Abs(
+		filepath.Join(filepath.Dir(runtimePath), policyFiles.TemplatesDirectory),
 	)
 	if err != nil {
 		return nil, err
@@ -753,6 +771,8 @@ func lookupWithOverrides(overrides map[string]string) (LookupEnv, error) {
 		"REVIEW_MODEL":            "fixture-primary-model",
 		"REVIEW_RULES_FILE":       rulesFile,
 		"REVIEW_PROMPTS_FILE":     promptsFile,
+		"REVIEW_SERVICE_FILE":     serviceFile,
+		"REVIEW_TEMPLATES_DIR":    templatesDirectory,
 	}
 
 	for key, value := range overrides {

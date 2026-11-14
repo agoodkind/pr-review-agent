@@ -10,20 +10,17 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
-	"goodkind.io/pr-review-agent/internal/cloudflareops"
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 	"goodkind.io/pr-review-agent/internal/marker"
-	"goodkind.io/pr-review-agent/internal/review"
-	"goodkind.io/pr-review-agent/internal/reviewrules"
+	"goodkind.io/pr-review-agent/internal/opsruntime"
 )
 
 const reviewBodyRequestTimeout = 30 * time.Second
@@ -63,13 +60,6 @@ type reviewBodyOptions struct {
 	backupFile     string
 	apply          bool
 	linkSummary    bool
-}
-
-type reviewBodyRuntime struct {
-	AppID       string `json:"GITHUB_APP_ID"`
-	BotLogin    string `json:"GITHUB_BOT_LOGIN"`
-	RulesFile   string `json:"REVIEW_RULES_FILE"`
-	PromptsFile string `json:"REVIEW_PROMPTS_FILE"`
 }
 
 type reviewBodySnapshot struct {
@@ -232,45 +222,12 @@ func reviewBodySummaryPrefix(opts reviewBodyOptions, snapshot reviewBodySnapshot
 	if !opts.linkSummary {
 		return "", nil
 	}
-
-	data, err := os.ReadFile(opts.runtime)
-	if err != nil {
-		return "", err
-	}
-
-	var runtime reviewBodyRuntime
-	if err := json.Unmarshal(data, &runtime); err != nil {
-		return "", err
-	}
-
-	if runtime.RulesFile == "" || runtime.PromptsFile == "" {
-		return "", errors.New(
-			"runtime configuration requires review rule and prompt files for summary links",
-		)
-	}
-
-	policy, err := reviewrules.LoadPolicy(
-		filepath.Join(filepath.Dir(opts.runtime), runtime.RulesFile),
-		filepath.Join(filepath.Dir(opts.runtime), runtime.PromptsFile),
-	)
-	if err != nil {
-		return "", err
-	}
-
-	var summaryID int64
-
-	for _, comment := range snapshot.Comments {
-		if comment.Author == bot && marker.HasState(comment.Body) {
-			summaryID = comment.ID
-		}
-	}
-
-	return review.NativeReviewSummaryLink(
-		policy,
+	return opsruntime.ReviewBodySummaryPrefix(
+		opts.runtime,
 		snapshot.Repository,
 		snapshot.Number,
-		summaryID,
-		"",
+		snapshot.Comments,
+		bot,
 	)
 }
 
@@ -374,39 +331,12 @@ func reviewBodyRepository(value string) (domain.Repository, error) {
 }
 
 func reviewBodyIdentity(opts reviewBodyOptions) (config.Config, error) {
-	var cfg config.Config
-
-	if opts.appID == "" || opts.botLogin == "" {
-		data, err := os.ReadFile(opts.runtime)
-		if err != nil {
-			return cfg, errors.New("public runtime configuration could not be read")
-		}
-
-		var runtime reviewBodyRuntime
-		if err := json.Unmarshal(data, &runtime); err != nil {
-			return cfg, errors.New("public runtime GitHub identity could not be decoded")
-		}
-
-		if opts.appID == "" {
-			opts.appID = runtime.AppID
-		}
-
-		if opts.botLogin == "" {
-			opts.botLogin = runtime.BotLogin
-		}
-	}
-
-	appID, err := strconv.ParseInt(opts.appID, 10, 64)
-	if err != nil || appID <= 0 {
-		return cfg, errors.New("GitHub app ID must be a positive integer")
-	}
-
-	key, err := cloudflareops.ReadCredential(opts.privateKeyFile)
-	if err != nil {
-		return cfg, errors.New("GitHub app private-key file could not be read")
-	}
-
-	return config.LoadGitHubIdentity(appID, opts.botLogin, key)
+	return opsruntime.ReviewBodyIdentity(
+		opts.runtime,
+		opts.appID,
+		opts.botLogin,
+		opts.privateKeyFile,
+	)
 }
 
 func captureReviewBodies(

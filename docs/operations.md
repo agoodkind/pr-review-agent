@@ -43,7 +43,7 @@ Each finding requires source evidence and a valid target. The loaded rule policy
 
 An open file thread or an actionable metadata finding requires `request_changes`. Approval requires current source coverage or an explicit decision that omitted content is unnecessary, plus no actionable findings. A discussion refresh reviews missing or changed metadata before approval. The service checks the head and metadata revision again before publishing a verdict.
 
-The service submits approvals without review bodies. Metadata rejection bodies contain the findings and corrections, a link to the editable summary, and hidden recovery data. The `native.summary_link` template in the prompt configuration controls that backlink and uses `SummaryURL` for its destination. When metadata findings follow an empty inline-backed rejection, the service submits one metadata rejection and updates that review on later same-head edits. Changed visible metadata on a later head requires a current-head rejection; unchanged metadata preserves the standing rejection. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Human dismissals and immediate inline publication retain their existing behavior.
+The service submits approvals without review bodies. Metadata rejection bodies contain the findings and corrections, a link to the editable summary, and hidden recovery data. The [summary link template](../config/templates/native.summary_link.md.tmpl) renders that backlink and uses `SummaryURL` for its destination. When metadata findings follow an empty inline-backed rejection, the service submits one metadata rejection and updates that review on later same-head edits. Changed visible metadata on a later head requires a current-head rejection; unchanged metadata preserves the standing rejection. After a new commit passes review, the service reuses its latest approval unless per-commit approval is enabled. Human dismissals and immediate inline publication retain their existing behavior.
 
 An unexpected terminal failure dismisses the latest bot decision when that decision requests changes. A newer approval or dismissal prevents withdrawal of an older rejection. Automatic reassessment can restore a rejection after a verified failure withdrawal. A human reviewer's dismissal prevents restoration of the rejection. Missing dismissal evidence defers reassessment.
 
@@ -79,6 +79,8 @@ Edit [runtime.json](../runtime.json) to set the models, publication threshold, r
 | `REVIEW_RULE_IMPORTANCE` | Fixed importance values indexed by stable rule ID |
 | `REVIEW_RULES_FILE` | Required path to the external rule catalog |
 | `REVIEW_PROMPTS_FILE` | Required path to the external stage prompt templates |
+| `REVIEW_SERVICE_FILE` | Required path to review execution and presentation settings |
+| `REVIEW_TEMPLATES_DIR` | Required directory of Markdown output templates |
 | `REVIEW_WORKERS` | Maximum reviews that can run at once |
 | `REVIEW_MAX_FILES`, `REVIEW_MAX_CHUNKS` | Admission limits for one review |
 | `REVIEW_CHUNK_TIMEOUT` | Timeout for one model request |
@@ -206,7 +208,7 @@ Run the same deployment command to resume an interrupted handoff. The command re
 
 ## Change review rules
 
-1. Edit the [rule catalog](../config/review-rules.json) or [prompt configuration](../config/review-prompts.json). Preserve each rule's `id` when changing its title or instructions. Set `failure_codes` in the prompt configuration to permit exact provider codes in public diagnostics. The service reads both files at startup. The binary contains no default rules or prompts.
+1. Edit the [rule catalog](../config/review-rules.json) or [prompt configuration](../config/review-prompts.json) to change agent instructions. Preserve each rule's `id` when changing its title or instructions. Edit [service settings](../config/review-service.json) to change detectors, exclusions, execution limits, presentation, or permitted `failure_codes`. Edit the Markdown files in the [output template directory](../config/templates) to change fixed review messages. The service reads these sources at startup and requires every configured source.
 
    Set a rule's `deduplication` to `location` when each source occurrence requires a separate correction. Use `defect` when one correction can resolve findings at several locations.
 2. Set `REVIEW_RULE_IMPORTANCE` in the public runtime configuration to override a technical rule's model score. For example:

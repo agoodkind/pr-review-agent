@@ -506,7 +506,7 @@ func relationshipPolicy(t *testing.T, enabled bool, maximumPairs int) reviewrule
 
 	configuration := filepath.Join("..", "..", "config")
 
-	data, err := os.ReadFile(filepath.Join(configuration, "review-prompts.json"))
+	data, err := os.ReadFile(filepath.Join(configuration, "review-service.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,12 +529,17 @@ func relationshipPolicy(t *testing.T, enabled bool, maximumPairs int) reviewrule
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), "review-prompts.json")
+	path := filepath.Join(t.TempDir(), "review-service.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, err := reviewrules.LoadPolicy(filepath.Join(configuration, "review-rules.json"), path)
+	policy, err := reviewrules.LoadPolicy(
+		filepath.Join(configuration, "review-rules.json"),
+		filepath.Join(configuration, "review-prompts.json"),
+		path,
+		filepath.Join(configuration, "templates"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

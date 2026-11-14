@@ -616,7 +616,7 @@ func TestPreflightRecognizesConfiguredGenerationHeadersInChangedAndRemovedFiles(
 func classificationReviewOverridePolicy(t *testing.T, pattern string) reviewrules.Policy {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join("..", "..", "config", "review-prompts.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "config", "review-service.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -626,10 +626,17 @@ func classificationReviewOverridePolicy(t *testing.T, pattern string) reviewrule
 		t.Fatal(err)
 	}
 
-	settings := policytest.Load(t).FileClassification()
-	settings.ReviewOverrides = []string{pattern}
+	var classification map[string]json.RawMessage
+	if err := json.Unmarshal(prompts["file_classification"], &classification); err != nil {
+		t.Fatal(err)
+	}
 
-	prompts["file_classification"], err = json.Marshal(settings)
+	classification["review_overrides"], err = json.Marshal([]string{pattern})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prompts["file_classification"], err = json.Marshal(classification)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,14 +646,16 @@ func classificationReviewOverridePolicy(t *testing.T, pattern string) reviewrule
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), "review-prompts.json")
+	path := filepath.Join(t.TempDir(), "review-service.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	policy, err := reviewrules.LoadPolicy(
 		filepath.Join("..", "..", "config", "review-rules.json"),
+		filepath.Join("..", "..", "config", "review-prompts.json"),
 		path,
+		filepath.Join("..", "..", "config", "templates"),
 	)
 	if err != nil {
 		t.Fatal(err)

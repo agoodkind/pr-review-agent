@@ -226,7 +226,7 @@ func loadFindingPolicy(t *testing.T, display reviewrules.FindingDisplay) reviewr
 	t.Helper()
 
 	catalogPath := filepath.Join("..", "..", "config", "review-rules.json")
-	promptsPath := filepath.Join("..", "..", "config", "review-prompts.json")
+	promptsPath := filepath.Join("..", "..", "config", "review-service.json")
 
 	data, err := os.ReadFile(promptsPath)
 	if err != nil {
@@ -250,12 +250,17 @@ func loadFindingPolicy(t *testing.T, display reviewrules.FindingDisplay) reviewr
 		t.Fatal(err)
 	}
 
-	configuredPath := filepath.Join(t.TempDir(), "review-prompts.json")
+	configuredPath := filepath.Join(t.TempDir(), "review-service.json")
 	if err := os.WriteFile(configuredPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	policy, err := reviewrules.LoadPolicy(catalogPath, configuredPath)
+	policy, err := reviewrules.LoadPolicy(
+		catalogPath,
+		filepath.Join("..", "..", "config", "review-prompts.json"),
+		configuredPath,
+		filepath.Join("..", "..", "config", "templates"),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -302,7 +302,7 @@ func TestStructuredAssessmentContractErrorsRetainTheirType(t *testing.T) {
 func assessmentPolicyStorageLimit(t *testing.T, maximum int) reviewrules.Policy {
 	t.Helper()
 
-	data, err := os.ReadFile(filepath.Join("..", "..", "config", "review-prompts.json"))
+	data, err := os.ReadFile(filepath.Join("..", "..", "config", "review-service.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,14 +312,17 @@ func assessmentPolicyStorageLimit(t *testing.T, maximum int) reviewrules.Policy 
 		t.Fatal(err)
 	}
 
-	var settings reviewrules.FileClassificationPolicy
-	if err := json.Unmarshal(prompts["file_classification"], &settings); err != nil {
+	var classification map[string]json.RawMessage
+	if err := json.Unmarshal(prompts["file_classification"], &classification); err != nil {
 		t.Fatal(err)
 	}
 
-	settings.MaximumPersistedBytes = maximum
+	classification["maximum_persisted_bytes"], err = json.Marshal(maximum)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	prompts["file_classification"], err = json.Marshal(settings)
+	prompts["file_classification"], err = json.Marshal(classification)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,14 +332,16 @@ func assessmentPolicyStorageLimit(t *testing.T, maximum int) reviewrules.Policy 
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), "review-prompts.json")
+	path := filepath.Join(t.TempDir(), "review-service.json")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	policy, err := reviewrules.LoadPolicy(
 		filepath.Join("..", "..", "config", "review-rules.json"),
+		filepath.Join("..", "..", "config", "review-prompts.json"),
 		path,
+		filepath.Join("..", "..", "config", "templates"),
 	)
 	if err != nil {
 		t.Fatal(err)

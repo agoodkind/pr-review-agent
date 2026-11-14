@@ -29,6 +29,8 @@ func TestRuntimeBudgetReportPolicy(t *testing.T) {
 		"REVIEW_MIN_IMPORTANCE": "7",
 		"REVIEW_RULES_FILE":     "config/review-rules.json",
 		"REVIEW_PROMPTS_FILE":   "config/review-prompts.json",
+		"REVIEW_SERVICE_FILE":   "config/review-service.json",
+		"REVIEW_TEMPLATES_DIR":  "config/templates",
 	} {
 		encoded, err := json.Marshal(value)
 		if err != nil {

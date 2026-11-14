@@ -61,7 +61,7 @@ func TestPolicyAssemblesOrderedTextParts(t *testing.T) {
 	prompts["file_classification"] = encodeTextPartValue(t, classification)
 
 	catalogPath, promptsPath := writeTextPartConfiguration(t, catalog, prompts)
-	policy, err := reviewrules.LoadPolicy(catalogPath, promptsPath)
+	policy, err := loadTextPartPolicy(catalogPath, promptsPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestPolicyRejectsInvalidTextParts(t *testing.T) {
 					catalog, prompts := readTextPartConfiguration(t)
 					setInvalidTextParts(t, catalog, prompts, field, json.RawMessage(invalid))
 					catalogPath, promptsPath := writeTextPartConfiguration(t, catalog, prompts)
-					if _, err := reviewrules.LoadPolicy(catalogPath, promptsPath); err == nil {
+					if _, err := loadTextPartPolicy(catalogPath, promptsPath); err == nil {
 						t.Fatalf("Policy loading accepted invalid %s: %s", field, invalid)
 					}
 				},
@@ -144,7 +144,7 @@ func TestPolicyRejectsMissingPartsAndInvalidAssembledTemplate(t *testing.T) {
 			catalog, prompts := readTextPartConfiguration(t)
 			delete(catalog, "preamble")
 			catalogPath, promptsPath := writeTextPartConfiguration(t, catalog, prompts)
-			if _, err := reviewrules.LoadPolicy(catalogPath, promptsPath); err == nil {
+			if _, err := loadTextPartPolicy(catalogPath, promptsPath); err == nil {
 				t.Fatal("Policy loading accepted a missing preamble.")
 			}
 		},
@@ -165,7 +165,7 @@ func TestPolicyRejectsMissingPartsAndInvalidAssembledTemplate(t *testing.T) {
 			)
 			prompts["templates"] = encodeTextPartValue(t, templates)
 			catalogPath, promptsPath := writeTextPartConfiguration(t, catalog, prompts)
-			if _, err := reviewrules.LoadPolicy(catalogPath, promptsPath); err == nil ||
+			if _, err := loadTextPartPolicy(catalogPath, promptsPath); err == nil ||
 				!strings.Contains(err.Error(), "review.system") {
 				t.Fatalf("Policy loading did not identify the invalid assembled template: %v", err)
 			}
@@ -264,6 +264,15 @@ func encodeTextPartValue[T any](t *testing.T, value T) json.RawMessage {
 	}
 
 	return data
+}
+
+func loadTextPartPolicy(catalogPath, promptsPath string) (reviewrules.Policy, error) {
+	return reviewrules.LoadPolicy(
+		catalogPath,
+		promptsPath,
+		filepath.Join("..", "..", "config", "review-service.json"),
+		filepath.Join("..", "..", "config", "templates"),
+	)
 }
 
 func decodeTextPartValue[T any](t *testing.T, data []byte, value *T) {
