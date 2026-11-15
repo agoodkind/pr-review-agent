@@ -17,6 +17,10 @@ const goVersion = module.match(/^go ([0-9.]+)$/m)?.[1];
 if (!goVersion) throw new Error("go.mod must declare a Go version");
 environment.PRAGENT_COMPOSE_GO_VERSION = goVersion;
 const compose = ["compose", "--project-name", project, "--file", path.join(directory, "test/compose.yaml")];
+const override = environment.PRAGENT_SERVICE_TEST_COMPOSE_OVERRIDE;
+if (override) {
+  compose.push("--file", path.resolve(directory, override));
+}
 let child;
 let interrupted;
 let interruptTimer;
