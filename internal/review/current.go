@@ -127,6 +127,7 @@ func (service *Service) refreshedSummary(
 	refreshed refreshedVerdict,
 ) Summary {
 	return Summary{
+		Result:                     "",
 		FileAssessmentNote:         "",
 		Head:                       job.Head,
 		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),

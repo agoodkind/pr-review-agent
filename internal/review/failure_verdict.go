@@ -329,6 +329,10 @@ func (service *Service) terminalFailureDetail(
 	job domain.ReviewJob,
 	cause error,
 ) string {
+	if _, validation := errors.AsType[*AssessmentValidationError](cause); validation {
+		return ""
+	}
+
 	detail := publicFailureDetail(job)
 	if cause == nil || !unexpectedFailure(cause) {
 		return detail

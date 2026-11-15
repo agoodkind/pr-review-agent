@@ -2,6 +2,7 @@ package review
 
 import (
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 )
@@ -15,6 +16,7 @@ func renderRawDetails(summary Summary) string {
 		"<details>\n<summary>Review details</summary>\n\n| key | value |\n| --- | --- |\n",
 	)
 	writeRawDetail(&builder, "head", shortHead(summary.Head))
+	fmt.Fprintf(&builder, "| `result` | %s |\n", rawResultCell(summary.Result))
 	fmt.Fprintf(&builder, "| `providers` | %s |\n", rawProviderUsage(usage))
 
 	rows := []struct {
@@ -78,6 +80,21 @@ func renderRawDetails(summary Summary) string {
 
 func writeRawDetail(builder *strings.Builder, key, value string) {
 	fmt.Fprintf(builder, "| %s | %s |\n", rawTableCell(key), rawTableCell(value))
+}
+
+func rawResultCell(result string) string {
+	if result == "" {
+		return rawTableCell(rawNull)
+	}
+
+	if !strings.ContainsAny(result, "\r\n") {
+		return rawTableCell(result)
+	}
+
+	escaped := html.EscapeString(result)
+	escaped = strings.NewReplacer("|", "&#124;", "\r", "&#13;", "\n", "&#10;").Replace(escaped)
+
+	return "<pre>" + escaped + "</pre>"
 }
 
 func rawProviderUsage(usage UsageSummary) string {

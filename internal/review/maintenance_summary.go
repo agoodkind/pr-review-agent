@@ -22,11 +22,39 @@ func completedHeadState(state marker.State, head domain.HeadSHA) bool {
 func preserveCheckpointSummary(state marker.State, body string) bool {
 	_, reviewed := marker.FindReview(body)
 
-	return reviewed || len(state.Completed) > 0 || strings.Contains(body, reviewDetailsStart) ||
+	return reviewed || len(state.Completed) > 0 || len(state.Pending) > 0 ||
 		strings.Contains(
 			body,
 			metadataRecordPrefix,
 		) || strings.Contains(body, fileAssessmentMarkerPrefix)
+}
+
+func refreshFailureResult(body, result string) string {
+	start := strings.Index(body, reviewDetailsStart)
+	if start < 0 {
+		return body
+	}
+
+	row := "| `result` | " + rawResultCell(result) + " |"
+
+	lines := strings.Split(body[start:], "\n")
+	for index, line := range lines {
+		if strings.HasPrefix(line, "| `result` |") {
+			lines[index] = row
+
+			return body[:start] + strings.Join(lines, "\n")
+		}
+	}
+
+	for index, line := range lines {
+		if strings.HasPrefix(line, "| --- |") {
+			lines[index] += "\n" + row
+
+			return body[:start] + strings.Join(lines, "\n")
+		}
+	}
+
+	return body
 }
 
 func renderMaintenanceFailure(body, title, detail string) string {

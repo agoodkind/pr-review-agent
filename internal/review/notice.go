@@ -58,6 +58,7 @@ func (service *Service) reportFailedCheck(
 ) error {
 	logger := gklog.L(ctx)
 	progress.Failed = true
+	progress.Result = cause.Error()
 	service.enrichProviderPeriodUsage(ctx, &progress)
 
 	var statuses []ProviderStatus
@@ -121,6 +122,10 @@ func (service *Service) reportFailedCheck(
 // A failed model call never reaches here. It leaves its chunk pending rather
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
+	if _, valid := errors.AsType[*AssessmentValidationError](cause); valid {
+		return "Review stopped during file assessment validation."
+	}
+
 	switch terminalFailureClass(cause) {
 	case config.FailureDailyBudget:
 		return checkFailureDailyBudget
@@ -399,7 +404,11 @@ func (service *Service) writeFailureSummary(
 					) + "\n\n" + detail
 				}
 
-				failureProse = renderMaintenanceFailure(existingBody, title, currentDetail)
+				failureProse = renderMaintenanceFailure(
+					refreshFailureResult(existingBody, progress.Result),
+					title,
+					currentDetail,
+				)
 				if !strings.Contains(existingBody, reviewDetailsStart) {
 					failureProse += "\n\n" + RenderDetails(progress)
 				}

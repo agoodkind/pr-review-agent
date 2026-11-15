@@ -100,6 +100,7 @@ func (service *Service) decidePublication(
 	blocking := blockingReasons(inputs.threads, service.botLogin, job.PullRequestRef)
 
 	summary := Summary{
+		Result:             "",
 		FileAssessmentNote: "",
 		Head:               head,
 		Decision:           decision,
