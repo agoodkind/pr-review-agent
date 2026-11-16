@@ -131,6 +131,7 @@ func readOutputTemplates(directory string) (map[string]string, error) {
 }
 
 var requiredOutputTemplates = []string{
+	"raw.result",
 	"native.summary_link",
 	"native.request_changes",
 	"inline.footer",

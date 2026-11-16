@@ -5,6 +5,8 @@ import (
 	"html"
 	"strconv"
 	"strings"
+
+	outputtemplates "goodkind.io/pr-review-agent/config/templates"
 )
 
 const rawNull = "null"
@@ -94,7 +96,11 @@ func rawResultCell(result string) string {
 	escaped := html.EscapeString(result)
 	escaped = strings.NewReplacer("|", "&#124;", "\r", "&#13;", "\n", "&#10;").Replace(escaped)
 
-	return "<pre>" + escaped + "</pre>"
+	return strings.ReplaceAll(
+		strings.TrimSuffix(outputtemplates.RawResult, "\n"),
+		"{{.Input}}",
+		escaped,
+	)
 }
 
 func rawProviderUsage(usage UsageSummary) string {
