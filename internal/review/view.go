@@ -9,13 +9,13 @@ import (
 	outputtemplates "goodkind.io/pr-review-agent/config/templates"
 )
 
-var errReviewOutputRender = errors.New("render review output")
+var errReviewOutputRender = errors.New("review service could not render review output")
 
 func renderOutputTemplate(name string, data reflect.Value) (string, error) {
 	text, err := outputtemplates.Render(name, data)
 	if err != nil {
 		slog.Warn(
-			"render review output",
+			"The review service could not render review output.",
 			slog.String("template", name),
 			slog.String("err", err.Error()),
 		)

@@ -15,7 +15,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
 
-var errMetadataRender = errors.New("render metadata output")
+var errMetadataRender = errors.New("review service could not render metadata output")
 
 // MetadataSource uses field line numbers without inventing repository paths.
 type MetadataSource struct {
@@ -184,7 +184,7 @@ func renderMetadataOutput(name string, data reflect.Value) (string, error) {
 	text, err := outputtemplates.Render(name, data)
 	if err != nil {
 		slog.Warn(
-			"render metadata output",
+			"The review service could not render metadata output.",
 			slog.String("template", name),
 			slog.String("err", err.Error()),
 		)

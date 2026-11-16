@@ -18,7 +18,7 @@ import (
 var Files embed.FS
 
 var (
-	errOutputRender = errors.New("render output template")
+	errOutputRender = errors.New("review service could not render output template")
 	loadTemplates   = sync.OnceValues(func() (*template.Template, error) {
 		return template.New("output").Option("missingkey=error").ParseFS(Files, "output.*.md.tmpl")
 	})
@@ -35,7 +35,10 @@ var (
 func Render(name string, data reflect.Value) (string, error) {
 	compiled, err := loadTemplates()
 	if err != nil {
-		slog.Warn("parse output templates", slog.String("err", err.Error()))
+		slog.Warn(
+			"The review service could not parse output templates.",
+			slog.String("err", err.Error()),
+		)
 
 		return "", fmt.Errorf("%w %q: %w", errOutputRender, name, err)
 	}
@@ -43,7 +46,7 @@ func Render(name string, data reflect.Value) (string, error) {
 	var rendered strings.Builder
 	if err := compiled.ExecuteTemplate(&rendered, name, data); err != nil {
 		slog.Warn(
-			"execute output template",
+			"The review service could not execute the output template.",
 			slog.String("template", name),
 			slog.String("err", err.Error()),
 		)

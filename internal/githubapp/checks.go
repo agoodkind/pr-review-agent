@@ -20,7 +20,7 @@ import (
 // holds the failure and the front holds setup.
 const MaximumCheckRunTextBytes = 65535
 
-var errCheckTextRender = errors.New("render check run text")
+var errCheckTextRender = errors.New("review service could not render check run text")
 
 // TruncateCheckRunText keeps the tail of a log within the check run text limit.
 func TruncateCheckRunText(text string) (string, error) {
@@ -55,7 +55,7 @@ func renderCheckText(name string, data reflect.Value) (string, error) {
 	text, err := outputtemplates.Render(name, data)
 	if err != nil {
 		slog.Warn(
-			"render check run text",
+			"The review service could not render check run text.",
 			slog.String("template", name),
 			slog.String("err", err.Error()),
 		)

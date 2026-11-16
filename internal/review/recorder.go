@@ -10,7 +10,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/runlog"
 )
 
-var errReviewRunLogRender = errors.New("render review run log")
+var errReviewRunLogRender = errors.New("review service could not render review run log")
 
 // recorderKey carries one review's log capture through the call chain, so every
 // path that completes a check run can publish the run's own log without
@@ -32,7 +32,11 @@ func renderRunLog(ctx context.Context) (string, error) {
 	text, err := recorder.Render()
 	if err != nil {
 		logger := gklog.L(ctx)
-		logger.WarnContext(ctx, "render review run log", slog.String("err", err.Error()))
+		logger.WarnContext(
+			ctx,
+			"The review service could not render the review run log.",
+			slog.String("err", err.Error()),
+		)
 
 		return "", fmt.Errorf("%w: %w", errReviewRunLogRender, err)
 	}

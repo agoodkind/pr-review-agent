@@ -52,9 +52,9 @@ func (hunk unreadHunk) sourceLabel() (string, error) {
 
 	label, err := source.Label()
 	if err != nil {
-		slog.Warn("Render unread source label failed", "err", err)
+		slog.Warn("The review service could not render the unread source label.", "err", err)
 
-		return "", fmt.Errorf("render unread source label: %w", err)
+		return "", fmt.Errorf("review service could not render unread source label: %w", err)
 	}
 
 	return label, nil

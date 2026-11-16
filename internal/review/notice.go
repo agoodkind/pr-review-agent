@@ -107,7 +107,7 @@ func (service *Service) reportFailedCheck(
 	}
 
 	if completeErr != nil {
-		completeErr = fmt.Errorf("complete check run: %w", completeErr)
+		completeErr = fmt.Errorf("review service could not complete check run: %w", completeErr)
 	}
 
 	result := errors.Join(cause, dismissErr, completeErr)
@@ -127,7 +127,10 @@ func (service *Service) reportFailedCheck(
 			title,
 			retrySummary,
 		); retryErr != nil {
-			result = errors.Join(result, fmt.Errorf("retry failed check completion: %w", retryErr))
+			result = errors.Join(
+				result,
+				fmt.Errorf("review service could not retry failed check completion: %w", retryErr),
+			)
 		}
 	}
 

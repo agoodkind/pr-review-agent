@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	errFindingBodyRender = errors.New("render finding body")
+	errFindingBodyRender = errors.New("review service could not render finding body")
 	// reviewPattern accepts a marker with or without the decision. A verdict
 	// body carries no prose any more, so the decision a dismissal erased from
 	// GitHub's own record survives only here; markers written before this field
@@ -337,7 +337,10 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 
 	text, err := outputtemplates.Render("output.inline_finding", reflect.ValueOf(data))
 	if err != nil {
-		slog.Warn("render finding body", slog.String("err", err.Error()))
+		slog.Warn(
+			"The review service could not render the finding body.",
+			slog.String("err", err.Error()),
+		)
 
 		return "", fmt.Errorf("%w: %w", errFindingBodyRender, err)
 	}

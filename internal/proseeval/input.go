@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	errInput        = errors.New("build evaluation input")
+	errInput        = errors.New("review service could not build evaluation input")
 	errSourceFields = errors.New(
 		"evaluation source files require path, status, patch, and current_content",
 	)
@@ -73,14 +73,14 @@ func BuildInput[FileInput ~File, MetadataInput ~Metadata](
 		}
 
 		if err := diff.ValidatePatchContent(file.Patch, file.CurrentContent); err != nil {
-			slog.Warn("Validate evaluation source failed", "err", err)
+			slog.Warn("The review service could not validate the evaluation source.", "err", err)
 
 			return input, hashes, fmt.Errorf("%w: %w", errInput, err)
 		}
 
 		lines, hunks, err := diff.ChangedRightLines(file.Patch)
 		if err != nil {
-			slog.Warn("Read evaluation patch failed", "err", err)
+			slog.Warn("The review service could not read the evaluation patch.", "err", err)
 
 			return input, hashes, fmt.Errorf("%w: %w", errInput, err)
 		}
@@ -118,7 +118,11 @@ func BuildInput[FileInput ~File, MetadataInput ~Metadata](
 		}
 		label, err := source.Label()
 		if err != nil {
-			slog.Warn("Render evaluation metadata label failed", "err", err)
+			slog.Warn(
+				"The review service could not render the evaluation metadata label.",
+				"err",
+				err,
+			)
 
 			return input, hashes, fmt.Errorf("%w: %w", errInput, err)
 		}

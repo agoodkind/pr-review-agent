@@ -16,7 +16,9 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-var errMetadataLabelRender = errors.New("render metadata reassessment label")
+var errMetadataLabelRender = errors.New(
+	"review service could not render metadata reassessment label",
+)
 
 // MetadataReassessor evaluates saved metadata findings independently of discovery.
 type MetadataReassessor interface {
@@ -248,7 +250,7 @@ func (service *Service) metadataReassessmentPrompt(
 	if err != nil {
 		logger.WarnContext(
 			ctx,
-			"render metadata reassessment label",
+			"The review service could not render the metadata reassessment label.",
 			slog.String("err", err.Error()),
 		)
 

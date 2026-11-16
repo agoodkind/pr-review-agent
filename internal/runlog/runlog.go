@@ -25,7 +25,7 @@ import (
 // keeps the newest lines, because the end of a run holds the failure.
 const MaximumRecords = 500
 
-var errLogRender = errors.New("render run log")
+var errLogRender = errors.New("review service could not render run log")
 
 // Entry is one captured log line.
 type Entry struct {
@@ -250,7 +250,11 @@ func (recorder *Recorder) Render() (string, error) {
 func renderLog(name string, data reflect.Value) (string, error) {
 	text, err := outputtemplates.Render(name, data)
 	if err != nil {
-		slog.Warn("render run log", slog.String("template", name), slog.String("err", err.Error()))
+		slog.Warn(
+			"The review service could not render the run log.",
+			slog.String("template", name),
+			slog.String("err", err.Error()),
+		)
 
 		return "", fmt.Errorf("%w: %w", errLogRender, err)
 	}
