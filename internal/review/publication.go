@@ -159,7 +159,6 @@ func threadCommentURL(thread githubapp.ReviewThread, ref domain.PullRequestRef) 
 	)
 }
 
-// unreviewedHeadReason also recognizes older reasons that continue this sentence.
 const (
 	unreviewedHeadReason = "output.unreviewed-head-reason"
 )

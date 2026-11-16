@@ -270,7 +270,11 @@ func (service *Service) failedRefreshCheck(
 		return service.cancelRefreshedCheck(ctx, job, checkProgress, cause)
 	}
 
-	gklog.L(ctx).ErrorContext(ctx, "refresh reviewed check", slog.String("err", cause.Error()))
+	gklog.L(ctx).ErrorContext(
+		ctx,
+		"The review service could not refresh the reviewed check.",
+		slog.String("err", cause.Error()),
+	)
 	var statuses []ProviderStatus
 	collectProviderStatuses(cause, &statuses)
 	recordAssessment(
@@ -290,7 +294,7 @@ func (service *Service) failedRefreshCheck(
 		logger := gklog.L(ctx)
 		logger.WarnContext(
 			ctx,
-			"render failed refresh check",
+			"The review service could not render the failed refresh check.",
 			slog.String("err", rendered.err.Error()),
 		)
 
@@ -331,7 +335,7 @@ func (service *Service) cancelRefreshedCheck(
 		logger := gklog.L(ctx)
 		logger.WarnContext(
 			ctx,
-			"render canceled refresh check",
+			"The review service could not render the canceled refresh check.",
 			slog.String("err", rendered.err.Error()),
 		)
 

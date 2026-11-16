@@ -615,8 +615,8 @@ func shortHead(head domain.HeadSHA) string {
 // posted as soon as the run knows it is reviewing this head, and every later
 // stage rewrites the same comment rather than adding another.
 //
-// It carries no review marker. Nothing has been reviewed yet, and a marker here
-// would tell the next run this head was done.
+// The comment does not include a review marker because the next attempt would
+// otherwise treat this unreviewed head as already reviewed.
 func RenderStartedBody(head domain.HeadSHA) (string, error) {
 	var rendering renderState
 
@@ -630,9 +630,8 @@ func RenderStartedBody(head domain.HeadSHA) (string, error) {
 // how far the review got, and it omits the review marker so the next attempt on
 // the same head is not suppressed as already reviewed.
 //
-// Both title and detail are wording this service wrote. The provider's own
-// message never reaches here, so neither is fenced or escaped: there is no
-// untrusted text in this body to contain.
+// title and detail contain service-written text rather than provider messages.
+// The renderer can include these trusted strings without fencing or escaping.
 func RenderFailureBody(summary Summary, title string, detail string) (string, error) {
 	var rendering renderState
 	summary.Failed = true
@@ -667,9 +666,9 @@ func RenderFailureBody(summary Summary, title string, detail string) (string, er
 	)
 }
 
-// RenderSkipBody renders the visible notice for a delta the admission gate
-// declined before any model call. It carries no review marker, because the
-// gate never touches a review object and the head it names was never reviewed.
+// RenderSkipBody renders the notice when admission declines a delta.
+// The notice omits the review marker because the admission gate declines the
+// delta before any model call and does not operate on review objects.
 func RenderSkipBody(reason string) (string, error) {
 	var rendering renderState
 
@@ -678,7 +677,7 @@ func RenderSkipBody(reason string) (string, error) {
 	)
 }
 
-// RenderProgressBody reports the current head and remaining chunks.
+// RenderProgressBody omits the review marker when remaining is zero.
 func RenderProgressBody(head domain.HeadSHA, remaining int) (string, error) {
 	var rendering renderState
 
