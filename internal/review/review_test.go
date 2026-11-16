@@ -6060,7 +6060,6 @@ func failureSummaryComment(t *testing.T, fixture *serviceFixture) string {
 	return body
 }
 
-// assertSanitizedFailureComment keeps the raw cause out of the failure prose.
 func assertSanitizedFailureComment(
 	t *testing.T,
 	fixture *serviceFixture,
@@ -7579,7 +7578,6 @@ func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 	}
 }
 
-// stubProviderFailure supplies provider error text for result and title checks.
 type stubProviderFailure struct {
 	reason string
 	usage  bool
