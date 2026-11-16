@@ -87,13 +87,15 @@ func TestDisallowedExclusionPreservesRequiredSourceThroughReview(t *testing.T) {
 
 	decisions[0].Reviewed = true
 
-	body := review.RenderBody(review.Summary{
-		Decision:                   domain.ReviewDecisionApprove,
-		CoverageComplete:           true,
-		FileAssessments:            decisions,
-		FileAssessmentMaximumBytes: policy.FileAssessmentMaximumBytes(),
-		FileAssessmentsDisplay:     policy.FileAssessmentsDisplay(),
-	})
+	body := rendered(t)(
+		review.RenderBody(review.Summary{
+			Decision:                   domain.ReviewDecisionApprove,
+			CoverageComplete:           true,
+			FileAssessments:            decisions,
+			FileAssessmentMaximumBytes: policy.FileAssessmentMaximumBytes(),
+			FileAssessmentsDisplay:     policy.FileAssessmentsDisplay(),
+		}),
+	)
 	assertSavedFileAssessments(t, body, decisions)
 }
 

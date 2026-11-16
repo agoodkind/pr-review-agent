@@ -391,19 +391,33 @@ func (service *Service) completeCheckRun(
 	)
 	defer cancel()
 
+	title, err := renderOutputText(title)
+	if err != nil {
+		return err
+	}
+
+	summary, err = renderOutputText(summary)
+	if err != nil {
+		return err
+	}
+
 	outcome, outcomeErr := persistAssessment(completionCtx, checkRunID)
 	if outcomeErr != nil {
 		return fmt.Errorf("persist assessment outcome: %w", outcomeErr)
 	}
 
-	text := renderRunLog(ctx)
+	text, err := renderRunLog(ctx)
+	if err != nil {
+		return err
+	}
+
 	if outcome.Disposition != "" {
 		text += "\n\n" + domain.EncodeAssessmentOutcome(outcome)
 	}
 
 	// The log is rendered before the completion call, so the published text is
 	// everything the run recorded up to the moment it finished.
-	err := service.github.CompleteCheckRun(
+	err = service.github.CompleteCheckRun(
 		completionCtx,
 		installationID,
 		repository,

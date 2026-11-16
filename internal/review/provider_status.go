@@ -1,10 +1,9 @@
 package review
 
 import (
-	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/quota"
@@ -109,110 +108,77 @@ func sameQuotaInterval(previous, current ProviderStatus) bool {
 	return previous.QuotaSnapshot.Bounds == current.QuotaSnapshot.Bounds
 }
 
-func renderProviderStatuses(statuses []ProviderStatus) string {
+func renderProviderStatuses(statuses []ProviderStatus) (string, error) {
+	var state renderState
+
 	if len(statuses) == 0 {
-		return ""
+		return state.finish("")
 	}
 
-	var builder strings.Builder
-	builder.WriteString(
-		"#### Provider attempts\n\n| Provider | Model | App quota | Result |\n| --- | --- | --- | --- |\n",
+	rows := make([]providerStatusOutput, 0, len(statuses))
+	for _, status := range statuses {
+		label := state.capture(
+			renderOutputTemplate("output.provider-window", reflect.ValueOf(status.TokenWindow)),
+		)
+		rows = append(
+			rows,
+			providerStatusOutput{
+				Status:    status,
+				Provider:  state.capture(usageModelCell(status.ProviderID)),
+				Model:     state.capture(usageModelCell(status.Model)),
+				Used:      tokenCountGroups(status.Used),
+				Limit:     tokenCountGroups(status.Limit),
+				Remaining: tokenCountGroups(status.Remaining),
+				Cause:     state.capture(providerCauseLabel(status.Cause)),
+				Window:    state.capture(usageModelCell(label)),
+				HistoryStart: time.UnixMilli(status.QuotaSnapshot.HistoryStartMS).UTC().Format(
+					time.RFC3339,
+				),
+				AvailableAt: time.UnixMilli(status.QuotaSnapshot.AvailableAtMS).UTC().Format(
+					time.RFC3339,
+				),
+			},
+		)
+	}
+
+	return state.finish(
+		state.capture(renderOutputTemplate("output.provider-statuses", reflect.ValueOf(rows))),
 	)
-
-	for _, status := range statuses {
-		quota := "No app limit"
-
-		switch {
-		case status.Limit == 0:
-		case status.QuotaKnown:
-			quota = fmt.Sprintf(
-				"%s / %s (%s left)",
-				formatTokenCount(status.Used),
-				formatTokenCount(status.Limit),
-				formatTokenCount(status.Remaining),
-			)
-		case status.Limit > 0:
-			quota = "Unknown / " + formatTokenCount(status.Limit)
-		}
-
-		fmt.Fprintf(
-			&builder,
-			"| %s | %s | %s | %s |\n",
-			usageModelCell(status.ProviderID),
-			usageModelCell(status.Model),
-			quota,
-			providerCauseLabel(status.Cause),
-		)
-	}
-
-	for _, status := range statuses {
-		if status.TokenWindow.Mode == "" {
-			continue
-		}
-
-		window := status.TokenWindow
-
-		label := string(window.Mode) + " " + window.Duration
-		if window.Mode == quota.Cron {
-			label = "cron " + window.Schedule + " (" + window.Timezone + ")"
-		}
-
-		fmt.Fprintf(
-			&builder,
-			"\nProvider %s uses %s.\n",
-			usageModelCell(status.ProviderID),
-			usageModelCell(label),
-		)
-
-		accounting := status.QuotaSnapshot
-		if accounting.HistoryStartMS > 0 {
-			fmt.Fprintf(
-				&builder,
-				"Measured usage starts at %s.\n",
-				time.UnixMilli(accounting.HistoryStartMS).UTC().Format(time.RFC3339),
-			)
-
-			if !accounting.HistoryComplete {
-				builder.WriteString("The requested window includes time before measured history.\n")
-			}
-		}
-
-		if accounting.AvailableAtMS > 0 {
-			fmt.Fprintf(
-				&builder,
-				"Admission becomes available at %s if no additional usage is reported.\n",
-				time.UnixMilli(accounting.AvailableAtMS).UTC().Format(time.RFC3339),
-			)
-		}
-	}
-
-	return strings.TrimSuffix(builder.String(), "\n")
 }
 
-func providerCauseLabel(cause ProviderFailureCause) string {
-	switch cause {
-	case ProviderSucceeded:
-		return "API completed the response"
-	case ProviderAppBudgetDenied:
-		return "App denied request; API not called"
-	case ProviderAppBudgetUnavailable:
-		return "App quota check failed; API not called"
-	case ProviderUsageExhausted:
-		return "Provider reported no remaining usage"
-	case ProviderRateLimited:
-		return "Provider rate limited the request"
-	case ProviderRequestFailed:
-		return "Provider request failed"
-	default:
-		return "Provider request failed"
-	}
+type providerStatusOutput struct {
+	Status       ProviderStatus
+	Provider     string
+	Model        string
+	Used         []string
+	Limit        []string
+	Remaining    []string
+	Cause        string
+	Window       string
+	HistoryStart string
+	AvailableAt  string
 }
 
-func formatTokenCount(count int64) string {
+func providerCauseLabel(cause ProviderFailureCause) (string, error) {
+	var state renderState
+
+	return state.finish(
+		state.capture(renderOutputTemplate("output.provider-cause", reflect.ValueOf(cause))),
+	)
+}
+
+func tokenCountGroups(count int64) []string {
 	digits := strconv.FormatInt(count, 10)
-	for index := len(digits) - 3; index > 0; index -= 3 {
-		digits = digits[:index] + "," + digits[index:]
+	var groups []string
+
+	for len(digits) > 3 {
+		index := len(digits) - 3
+		groups = append(groups, digits[index:])
+		digits = digits[:index]
 	}
 
-	return digits
+	groups = append(groups, digits)
+	slices.Reverse(groups)
+
+	return groups
 }

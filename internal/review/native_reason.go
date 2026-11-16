@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -49,7 +50,7 @@ func (service *Service) nativeRequestedChangesBody(
 		return "", errors.New("native.request_changes must include the finding label and permalink")
 	}
 
-	return body + "\n\n" + RenderVerdictBody(summary), nil
+	return renderOutputParts(body, RenderVerdictBody(summary))
 }
 
 func (service *Service) nativeMetadataRequestedChangesBody(
@@ -75,13 +76,18 @@ func (service *Service) nativeMetadataRequestedChangesBody(
 	}
 
 	parts := make([]string, 0, 2)
-	if findings := renderReviewMetadata(summary); findings != "" {
+	findings, err := renderReviewMetadata(summary)
+	if err != nil {
+		return "", err
+	}
+
+	if findings != "" {
 		parts = append(parts, findings)
 	}
 
 	parts = append(parts, backlink)
 
-	return strings.Join(parts, "\n\n"), nil
+	return renderOutputParts(parts...)
 }
 
 type nativeBlockingFinding struct {
@@ -131,23 +137,9 @@ func (service *Service) nativeBlockingReason(
 			continue
 		}
 
-		_, finding, decodeErr := marker.DecodeFindingBody(thread.RootComment)
-		if decodeErr != nil {
-			finding.Path = thread.RootComment.Path
-			finding.StartLine, finding.EndLine = thread.RootComment.StartLine, thread.RootComment.EndLine
-			finding.Body = nativeLegacyExplanation(thread.RootComment.Body, footer)
-
-			finding.Title = strings.TrimSpace(
-				strings.TrimLeft(nativeHeading.FindString(thread.RootComment.Body), "# \t"),
-			)
-			if finding.Title == "" {
-				finding.Title = fmt.Sprintf("%s:%d", finding.Path, finding.EndLine)
-			}
-
-			finding.Importance = domain.MinimumFindingImportance
-			if recorded, found := marker.FindFinding(thread.RootComment.Body); found {
-				finding.Importance = recorded.Importance
-			}
+		finding, err := nativeCommentFinding(thread.RootComment, footer)
+		if err != nil {
+			return empty, err
 		}
 
 		url := summaryURL
@@ -188,6 +180,36 @@ func (service *Service) nativeBlockingReason(
 	data.Input, data.SummaryURL = label, selected.url
 
 	return data, nil
+}
+
+func nativeCommentFinding(comment domain.ReviewComment, footer string) (domain.Finding, error) {
+	_, finding, err := marker.DecodeFindingBody(comment)
+	if err == nil {
+		return finding, nil
+	}
+
+	finding.Path = comment.Path
+	finding.StartLine, finding.EndLine = comment.StartLine, comment.EndLine
+	finding.Body = nativeLegacyExplanation(comment.Body, footer)
+	finding.Title = strings.TrimSpace(
+		strings.TrimLeft(nativeHeading.FindString(comment.Body), "# \t"),
+	)
+	if finding.Title == "" {
+		finding.Title, err = renderOutputTemplate(
+			"output.finding_location",
+			reflect.ValueOf(finding),
+		)
+		if err != nil {
+			return finding, err
+		}
+	}
+
+	finding.Importance = domain.MinimumFindingImportance
+	if recorded, found := marker.FindFinding(comment.Body); found {
+		finding.Importance = recorded.Importance
+	}
+
+	return finding, nil
 }
 
 func nativeLegacyExplanation(body, footer string) string {

@@ -1,6 +1,7 @@
 package review
 
 import (
+	"reflect"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -8,15 +9,17 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
-func renderSummaryFindings(summary Summary) string {
+func renderSummaryFindings(summary Summary) (string, error) {
+	var state renderState
+
 	var parts []string
-	if fallback := renderFallbackFindings(
-		unpublishedSummaryFindings(summary, summary.Fallback),
+	if fallback := state.capture(
+		renderFallbackFindings(unpublishedSummaryFindings(summary, summary.Fallback)),
 	); fallback != "" {
 		parts = append(parts, fallbackSectionStart+"\n"+fallback+"\n"+fallbackSectionEnd)
 	}
 
-	return strings.Join(parts, "\n\n")
+	return state.finish(strings.Join(parts, "\n\n"))
 }
 
 func renderFindingCheckpoints(summary Summary) string {
@@ -61,19 +64,34 @@ func unpublishedSummaryFindings(summary Summary, findings []domain.Finding) []do
 	return remaining
 }
 
-func renderReviewMetadata(summary Summary) string {
+func renderReviewMetadata(summary Summary) (string, error) {
+	var state renderState
+
 	if summary.MetadataFindingsDisplay == reviewrules.FindingsHidden {
-		return ""
+		return state.finish("")
 	}
 
-	body := renderMetadataFindings(unpublishedSummaryFindings(summary, summary.Metadata))
+	body := state.capture(
+		renderMetadataFindings(unpublishedSummaryFindings(summary, summary.Metadata)),
+	)
 	if body == "" {
-		return ""
+		return state.finish("")
 	}
 
-	if summary.MetadataFindingsDisplay == reviewrules.FindingsCollapsed {
-		return "<details>\n<summary>Prose findings</summary>\n\n" + body + "\n\n</details>"
-	}
-
-	return "#### Prose findings\n\n" + body
+	return state.finish(
+		state.capture(
+			renderOutputTemplate(
+				"output.metadata-findings",
+				reflect.ValueOf(
+					struct {
+						Collapsed bool
+						Body      string
+					}{
+						summary.MetadataFindingsDisplay == reviewrules.FindingsCollapsed,
+						body,
+					},
+				),
+			),
+		),
+	)
 }

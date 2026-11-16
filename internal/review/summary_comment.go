@@ -45,27 +45,32 @@ func (service *Service) upsertSummaryComment(
 
 // announceStart records the current run without moving its checkpoint.
 func (service *Service) announceStart(ctx context.Context, job domain.ReviewJob, summary Summary) {
-	err := service.upsertSummaryCommentFrom(
+	err := service.upsertSummaryCommentFromChecked(
 		ctx,
 		job,
-		func(state marker.State, existingBody string) summaryCommentContent {
+		func(state marker.State, existingBody string) (summaryCommentContent, error) {
+			var rendering renderState
 			state.RunID = job.DeliveryID
 			state.Status = marker.StateReviewing
 
-			prose := RenderStartedBody(summary.Head)
+			prose := rendering.capture(RenderStartedBody(summary.Head))
 			if preserveCheckpointSummary(state, existingBody) {
-				prose = renderCheckpointNotice(
-					existingBody,
-					strings.TrimPrefix(prose, "## Review\n\n"),
+				prose = rendering.capture(
+					renderCheckpointNotice(
+						existingBody,
+						strings.TrimPrefix(prose, "## Review\n\n"),
+					),
 				)
 			}
 
 			if !strings.Contains(prose, reviewDetailsStart) {
 				service.enrichProviderPeriodUsage(ctx, &summary)
-				prose += "\n\n" + RenderDetails(summary)
+				prose = rendering.capture(
+					renderOutputParts(prose, rendering.capture(RenderDetails(summary))),
+				)
 			}
 
-			return summaryCommentContent{Prose: prose, State: state}
+			return summaryCommentContent{Prose: prose, State: state}, rendering.err
 		},
 	)
 	if err != nil {

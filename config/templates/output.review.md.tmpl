@@ -1,0 +1,193 @@
+{{define "output.boolean"}}{{if .}}yes{{else}}no{{end}}
+{{end}}
+
+{{define "output.checkpoint"}}{{.Progress}}
+
+{{.Details}}
+
+{{.Findings}}
+{{.Assessments}}
+{{.Checkpoints}}
+{{end}}
+
+{{define "output.checkpoint_notice"}}{{.Body}}
+
+<!-- pr-review-agent:maintenance-failure:start -->
+
+{{.Notice}}
+
+<!-- pr-review-agent:maintenance-failure:end -->
+{{end}}
+
+{{define "output.chunk-budget-reason"}}the reviewable chunk count ({{index . 0}}) exceeds the {{index . 1}} chunk review budget
+{{end}}
+
+{{define "output.chunk_count"}}{{.}} {{if eq . 1}}chunk{{else}}chunks{{end}}
+{{end}}
+
+{{define "output.details"}}<details>
+<summary>Review details</summary>
+
+| key | value |
+| --- | --- |
+| `head` | {{.Head}} |
+| `result` | {{.Result}} |
+| `providers` | {{.Providers}} |
+| `requests` | `{{.Usage.Requests}}` |
+| `reported_requests` | `{{.Usage.ReportedRequests}}` |
+| `input_tokens` | `{{.Usage.InputTokens}}` |
+| `cached_input_tokens` | `{{.Usage.CachedInputTokens}}` |
+| `cache_write_tokens` | `{{.Usage.CacheWriteTokens}}` |
+| `audio_input_tokens` | `{{.Usage.AudioInputTokens}}` |
+| `output_tokens` | `{{.Usage.OutputTokens}}` |
+| `reasoning_tokens` | `{{.Usage.ReasoningTokens}}` |
+| `audio_output_tokens` | `{{.Usage.AudioOutputTokens}}` |
+| `accepted_prediction_tokens` | `{{.Usage.AcceptedPredictionTokens}}` |
+| `rejected_prediction_tokens` | `{{.Usage.RejectedPredictionTokens}}` |
+| `total_tokens` | `{{.Usage.TotalTokens}}` |
+{{if .ServiceTiers}}| `service_tiers` | {{range $index, $tier := .ServiceTiers}}{{if $index}}, {{end}}{{$tier}}{{end}} |
+{{end}}| `estimated_input_cost_usd` | `{{if gt .Usage.PricedRequests 0}}{{printf "%.8f" .Usage.EstimatedInputCostUSD}}{{else}}null{{end}}` |
+| `estimated_cached_input_cost_usd` | `{{if gt .Usage.PricedRequests 0}}{{printf "%.8f" .Usage.EstimatedCachedInputCostUSD}}{{else}}null{{end}}` |
+| `estimated_cache_write_cost_usd` | `{{if and (gt .Usage.PricedRequests 0) .CacheWriteCostKnown}}{{printf "%.8f" .Usage.EstimatedCacheWriteCostUSD}}{{else}}null{{end}}` |
+| `estimated_output_cost_usd` | `{{if gt .Usage.PricedRequests 0}}{{printf "%.8f" .Usage.EstimatedOutputCostUSD}}{{else}}null{{end}}` |
+| `estimated_cost_usd` | `{{if gt .Usage.PricedRequests 0}}{{printf "%.8f" .Usage.EstimatedCostUSD}}{{else}}null{{end}}` |
+| `priced_requests` | `{{.Usage.PricedRequests}}` |
+
+</details>
+{{end}}
+
+{{define "output.file-budget-reason"}}the changed file count ({{index . 0}}) exceeds the {{index . 1}} file review budget
+{{end}}
+
+{{define "output.incomplete-check-detail"}}{{if .Numbers}}Chunks left unread: {{.Numbers}}.
+
+{{end}}{{if .Reason}}{{.Reason}}
+
+{{end}}{{if .Statuses}}{{.Statuses}}
+
+{{end}}{{.Detail}}
+
+{{.Details}}
+{{end}}
+
+{{define "output.incomplete-check-title"}}{{.Chunks}} could not be reviewed{{if .Daily}}: app token limit exhausted.{{else if .Mixed}}: app and provider usage exhausted.{{else}}. Apply `{{.Label}}` to retry.{{end}}
+{{end}}
+
+{{define "output.incomplete_lead"}}{{.Chunks}} could not be reviewed on `{{.Head}}`.{{if .LegacyDaily}} The app's daily token limit resets at 00:00 UTC.{{end}}{{if .Retry}} Apply the `{{.Label}}` label to retry this head.{{end}}
+{{end}}
+
+{{define "output.legacy_details"}}<details>
+<summary>Review details</summary>
+
+The completed review statistics are unavailable.
+
+| | |
+| --- | --- |
+| Head | `{{.Head}}` |
+| All file content inspected | {{.Coverage}} |
+| Review scope assessed | {{.Scope}} |
+| Minimum importance | `{{.Importance}}` |
+| Bot thread IDs | {{.Threads}} |
+| Bot threads open | `{{.Open}}` |
+| Bot threads resolved | `{{.Resolved}}` |
+
+</details>
+{{end}}
+
+{{define "output.maintenance_notice"}}### {{.Title}}
+
+{{.Detail}}
+{{end}}
+
+{{define "output.progress"}}## Review
+
+Reviewing `{{.Head}}`. {{if .Remaining}}{{.Chunks}} still to read.{{else}}Every chunk has been read.{{end}}
+{{end}}
+
+{{define "output.reassessment-notice"}}
+
+<!-- pr-review-agent:reassessment:start -->
+The queue will reassess this pull request after `{{.RetryAt}}`. The reassessment identifier is `{{.Identifier}}`.
+<!-- pr-review-agent:reassessment:end -->
+{{end}}
+
+{{define "output.report_fallback"}}This review checked the current pull request against its stated purpose and current changes.
+{{end}}
+
+{{define "output.refresh_failure"}}Review refresh failed
+{{end}}
+
+{{define "output.refresh_attention"}}Review needs attention
+{{end}}
+
+{{define "output.refresh_title"}}Review refreshed
+{{end}}
+
+{{define "output.refresh_withheld"}}Approval remains withheld. The review summary explains what needs attention.{{.}}
+{{end}}
+
+{{define "output.refresh_summary"}}This run reassessed the standing review.{{.}}
+{{end}}
+
+{{define "output.already_reviewed"}}This head already has a PR-Agent review. This run did not publish a duplicate review.
+{{end}}
+
+{{define "output.report_section"}}<!-- pr-review-agent:report-section:start -->
+
+### Summary
+
+{{.}}
+
+<!-- pr-review-agent:report-section:end -->
+{{end}}
+
+{{define "output.report_wrapper"}}<!-- pr-review-agent:report-section:start -->
+
+{{.}}
+
+<!-- pr-review-agent:report-section:end -->
+{{end}}
+
+{{define "output.review_body"}}## Review
+{{range .}}
+{{.}}
+{{end -}}
+{{end}}
+
+{{define "output.review_heading"}}## Review
+{{end}}
+
+{{define "output.skipped"}}## Review
+
+The review skipped this pull request because {{.}}.
+{{end}}
+
+{{define "output.started"}}## Review
+
+Reviewing `{{.}}`. This comment is rewritten when the review finishes.
+{{end}}
+
+{{define "output.summary_checkpoint"}}<!-- pr-review-agent:summary:v1 -->
+{{.}}
+{{end}}
+
+{{define "output.unreviewed-head-reason"}}This head was not fully reviewed, so nothing here can approve it yet.
+{{end}}
+
+{{define "output.verdict_lead"}}{{if eq .Decision "COMMENT"}}This review neither approves nor requests changes.{{else if ne .Decision "REQUEST_CHANGES"}}This review did not identify findings at or above the minimum importance.{{else if .Metadata}}Resolve the findings in the rejection review.{{else}}Resolve the open inline findings.{{end}}
+{{end}}
+
+{{define "output.verdict_section"}}<!-- pr-review-agent:verdict-section:start -->
+
+### Verdict
+{{range .}}
+{{.}}
+{{end}}
+<!-- pr-review-agent:verdict-section:end -->
+{{end}}
+
+{{define "output.verdict_title"}}{{if eq . "COMMENT"}}Review needs attention{{else if eq . "REQUEST_CHANGES"}}Changes requested{{else}}Approved{{end}}
+{{end}}
+
+{{define "output.withdrawn_block"}}The blocking review on this commit was dismissed by hand. This service is not reinstating it. The findings above remain open. The next refresh can approve after those findings resolve.
+{{end}}

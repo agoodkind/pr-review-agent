@@ -44,11 +44,23 @@ func (service *Service) publishPendingScope(
 		return err
 	}
 
+	var rendering renderState
+	prose := body + rendering.capture(reassessmentNotice(ctx))
+	checkSummary := rendering.capture(
+		renderOutputParts(
+			publication.notice,
+			rendering.capture(RenderDetails(publication.summary, publication.statuses...)),
+		),
+	)
+	if rendering.err != nil {
+		return rendering.err
+	}
+
 	if err := service.upsertSummaryComment(
 		publicationCtx,
 		publication.job,
 		summaryCommentContent{
-			Prose: body + reassessmentNotice(ctx),
+			Prose: prose,
 			State: publication.state,
 		},
 	); err != nil {
@@ -69,7 +81,7 @@ func (service *Service) publishPendingScope(
 		publication.checkRunID,
 		publication.conclusion,
 		publication.title,
-		publication.notice+"\n\n"+RenderDetails(publication.summary, publication.statuses...),
+		checkSummary,
 	); err != nil {
 		gklog.L(ctx).WarnContext(
 			ctx,

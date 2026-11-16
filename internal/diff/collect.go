@@ -703,7 +703,11 @@ func ChunkInput(input ReviewInput, maxSize int) ([]Chunk, error) {
 	}
 
 	for _, metadata := range input.Metadata {
-		fragments := metadataPieces(metadata, maxSize)
+		fragments, err := metadataPieces(metadata, maxSize)
+		if err != nil {
+			return nil, err
+		}
+
 		pieces = append(pieces, fragments...)
 	}
 

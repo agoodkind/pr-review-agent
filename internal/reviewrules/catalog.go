@@ -340,6 +340,10 @@ func compileTemplate(name, body string) (*template.Template, error) {
 		return nil, fmt.Errorf("parse prompt template %q: %w", name, err)
 	}
 
+	if strings.HasPrefix(name, "output.") {
+		return parsed, nil
+	}
+
 	var data PromptData
 	if err := parsed.Execute(io.Discard, data); err != nil {
 		slog.Warn("Prompt template field validation failed", "template", name, "err", err)

@@ -93,7 +93,7 @@ func seedMetadataReassessment(
 		{
 			"id":   float64(2000),
 			"user": map[string]any{"login": testBotLogin},
-			"body": review.RenderBody(summary) + "\n" + marker.EncodeState(state),
+			"body": rendered(t)(review.RenderBody(summary)) + "\n" + marker.EncodeState(state),
 		},
 	}
 	if diff.PullRequestRevision(pullRequest) == summary.MetadataRevision {

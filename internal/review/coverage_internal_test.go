@@ -19,7 +19,7 @@ func configuredScopeNotice(t *testing.T, shortfall structuralShortfall, pending 
 
 	var data reviewrules.PromptData
 
-	data.Input = renderUnreadHunks(shortfall.Hunks)
+	data.Input = rendered(t)(renderUnreadHunks(shortfall.Hunks))
 	data.Index = len(shortfall.Hunks)
 	data.Total = pending
 
@@ -66,12 +66,14 @@ func TestAnUnreadHunkCannotInjectMarkdownThroughItsPath(t *testing.T) {
 
 // A long Unicode path remains valid UTF-8 after truncation.
 func TestUnreadHunkTruncationKeepsAWholeRune(t *testing.T) {
-	label := describeUnreadHunk(unreadHunk{
-		Path:   strings.Repeat("界", maximumUnreadHunkLabelBytes),
-		Header: "",
-		Reason: "",
-		Target: nil,
-	})
+	label := rendered(t)(
+		describeUnreadHunk(unreadHunk{
+			Path:   strings.Repeat("界", maximumUnreadHunkLabelBytes),
+			Header: "",
+			Reason: "",
+			Target: nil,
+		}),
+	)
 
 	if !utf8.ValidString(label) {
 		t.Fatalf("label contains a partial UTF-8 rune: %q", label)

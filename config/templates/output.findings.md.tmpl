@@ -1,0 +1,169 @@
+{{define "output.binary-file-reason"}}a binary file that does not provide a reviewable patch
+{{end}}
+
+{{define "output.blocking"}}Resolve these inline findings:{{range .}}
+- {{.}}{{end}}
+{{end}}
+
+{{define "output.content-missing-reason"}}GitHub will not serve this file's content at this commit
+{{end}}
+
+{{define "output.fallback_findings"}}GitHub could not place the {{if .Single}}finding{{else}}findings{{end}} inline. {{if .Single}}It appears{{else}}They appear{{end}} here.
+
+#### Findings{{range .Findings}}
+
+#### {{.Path}}:{{.Line}}: {{.Title}}
+
+{{.Body}}{{if .Suggestion}}
+
+```suggestion
+{{.Suggestion}}
+```{{end}}{{end}}
+{{end}}
+
+{{define "output.file-assessment-count"}}
+The summary displays {{index . 0}} of {{index . 1}} file assessments.
+
+{{end}}
+
+{{define "output.file-assessment-end"}}{{"\n"}}
+{{end}}
+
+{{define "output.file-assessment-header"}}#### File assessments
+
+The table records the assessment scope for each classified file.
+
+| File | Content | Assessment | Content review requirement | Reason | Evidence |
+| --- | --- | --- | --- | --- | --- |
+
+{{end}}
+
+{{define "output.file-assessment-row"}}| {{index . 0}} | {{index . 1}} | {{index . 2}} | {{index . 3}} | {{index . 4}} | {{index . 5}} |
+
+{{end}}
+
+{{define "output.inline_finding"}}### {{.Title}}
+
+{{.Body}}{{if .HasSuggestion}}
+
+```suggestion
+{{.Suggestion}}
+```{{end}}
+
+{{.Marker}}
+{{end}}
+
+{{define "output.metadata-finding"}}##### {{.Label}}, lines {{.Start}}-{{.End}}: {{.Title}}
+
+{{.Body}}{{if eq .Action "delete"}}
+
+Delete lines {{.Start}}-{{.End}}.{{else if eq .Action "replace"}}
+
+Replace those lines with:
+
+{{.Fence}}text
+{{.Suggestion}}
+{{.Fence}}{{end}}
+{{end}}
+
+{{define "output.metadata-findings"}}{{if .Collapsed}}<details>
+<summary>Prose findings</summary>
+
+{{.Body}}
+
+</details>{{else}}#### Prose findings
+
+{{.Body}}{{end}}
+{{end}}
+
+{{define "output.metadata-lines"}}lines {{index . 0}}-{{index . 1}}
+{{end}}
+
+{{define "output.metadata-source-commit"}}Commit message {{.}}
+{{end}}
+
+{{define "output.metadata-source-description"}}Pull request description
+{{end}}
+
+{{define "output.metadata-source-title"}}Pull request title
+{{end}}
+
+{{define "output.omissions"}}### Omissions
+
+{{.}}
+{{end}}
+
+{{define "output.omissions_empty"}}The review omitted no changed content.
+{{end}}
+
+{{define "output.open-thread"}}{{if .URL}}[{{end}}{{.Label}}{{if gt .Line 0}}:{{.Line}}{{end}}{{if .URL}}]({{.URL}}){{end}}
+{{end}}
+
+{{define "output.oversized-hunk-reason"}}larger than one model request allows
+{{end}}
+
+{{define "output.patch-absent-reason"}}GitHub supplied no patch for this file
+{{end}}
+
+{{define "output.patch-unreadable-reason"}}the patch GitHub supplied could not be read whole
+{{end}}
+
+{{define "output.thread-trace-ids"}}{{range $index, $thread := .}}{{if $index}}, {{end}}`{{$thread.NodeID}}`{{else}}none{{end}}
+{{end}}
+
+{{define "output.truncated-answer-reason"}}the model's answer ran past its completion budget, and a hunk cannot be split further
+{{end}}
+
+{{define "output.truncated-label"}}{{.}}...
+{{end}}
+
+{{define "output.unread-hunk-label"}}{{index . 0}}{{if index . 1}} {{index . 1}}{{end}}
+{{end}}
+
+{{define "output.unread-hunk-reason"}}{{index . 0}}{{if index . 1}} ({{index . 1}}){{end}}
+{{end}}
+
+{{define "output.unread-hunks"}}The model did not read these changes:
+```
+{{range .Lines}}{{.}}
+{{end}}```{{if .Omitted}}
+This list omits {{.Omitted}} more unread changes.{{end}}
+{{end}}
+
+{{define "output.unread-verdict-reason"}}The unread changes listed above need review before a verdict.
+{{end}}
+
+{{define "output.unread-approval-reason"}}The unread changes listed below need review before approval.
+{{end}}
+
+{{define "output.unreadable-body"}}## Review
+
+{{.VerdictStart}}
+
+### Verdict
+
+{{.Verdict}}{{if .Findings}}
+
+{{.Findings}}{{end}}
+
+{{.VerdictEnd}}
+
+{{.Report}}
+
+### Omissions
+
+{{.Notice}}
+
+{{.Details}}{{if .Checkpoints}}
+
+{{.Checkpoints}}{{end}}
+{{end}}
+
+{{define "output.unreadable-verdict"}}The review did not submit a verdict.
+{{end}}
+
+{{define "output.unsupported-inline-verdict-message"}}The current review has no actionable inline finding to support requested changes.
+{{end}}
+
+{{define "output.withheld-approval-message"}}The current review cannot approve this head. The review summary explains what remains unresolved.
+{{end}}

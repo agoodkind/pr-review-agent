@@ -97,7 +97,7 @@ func TestInspectedContentPreservesUnresolvedFileScope(t *testing.T) {
 				summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 				summary.MetadataRevision = diff.PullRequestRevision(pr)
 
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 				assertSavedFileAssessments(t, body, assessments)
 
 				head, found := marker.FindReview(body)
@@ -205,7 +205,7 @@ func TestScopeReasonsRequireActualOmissionsOrScopeAssessments(t *testing.T) {
 				summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 				summary.MetadataRevision = diff.PullRequestRevision(pullRequest)
 
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 				if strings.Contains(
 					body,
 					"<!-- pr-review-agent:decision-reason:v1 ",

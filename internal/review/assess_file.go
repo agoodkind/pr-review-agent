@@ -39,9 +39,7 @@ func BuildFileAssessmentPrompt(
 		return "", errors.New("file assessment requires a supplied changed file")
 	}
 
-	shortfall := structuralShortfall{
-		Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}},
-	}
+	shortfall := fileAssessmentShortfall(file)
 
 	var data reviewrules.PromptData
 
@@ -153,9 +151,7 @@ func AssessFileContent(
 
 	completion.Result.FileAssessments = decisions
 	file := BuildFileIndex(files)[path]
-	shortfall := structuralShortfall{
-		Hunks: []unreadHunk{{Path: path, Header: "", Reason: fileGapReason(file.Gap), Target: nil}},
-	}
+	shortfall := fileAssessmentShortfall(file)
 
 	validated, accepted, err := validateFileAssessmentsDetailed(
 		completion.Result,
@@ -175,6 +171,21 @@ func AssessFileContent(
 	completion.Result.OmissionsAcceptable = accepted
 
 	return completion, nil
+}
+
+func fileAssessmentShortfall(file diff.FileContext) structuralShortfall {
+	return structuralShortfall{
+		Hunks: []unreadHunk{
+			{
+				Path:           file.Path,
+				Header:         "",
+				Reason:         "",
+				ReasonTemplate: fileGapReason(file.Gap),
+				Target:         nil,
+				Omitted:        0,
+			},
+		},
+	}
 }
 
 func verifyFileAssessmentEvidence(prompt string, assessment domain.FileAssessment) error {

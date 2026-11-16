@@ -150,8 +150,8 @@ func TestAnEmptyMetadataCheckpointMustProveResolutionBeforeFailureDismissal(t *t
 					summary := testSummary()
 					summary.MetadataRevision = diff.PullRequestRevision(current)
 					state := decodedSummaryState(t, fixture)
-					fixture.state.issueComments[0]["body"] = review.RenderBody(
-						summary,
+					fixture.state.issueComments[0]["body"] = rendered(t)(
+						review.RenderBody(summary),
 					) + "\n" + marker.EncodeState(state)
 					fixture.reconciler.err = errors.New(
 						"thread reconciliation failed before metadata reassessment",

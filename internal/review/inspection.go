@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -234,6 +235,30 @@ func (inspector *repositoryInspector) readFile(
 	request InspectionRequest,
 ) (string, error) {
 	file, err := inspector.loadFile(ctx, request.Target)
+	if errors.Is(err, githubapp.ErrSnapshotFileNotFound) {
+		result, marshalErr := json.Marshal(
+			struct {
+				Status string         `json:"status"`
+				Path   string         `json:"path"`
+				Head   domain.HeadSHA `json:"head"`
+			}{
+				Status: "not_found",
+				Path:   request.Target,
+				Head:   inspector.ref.Head,
+			},
+		)
+		if marshalErr != nil {
+			slog.WarnContext(ctx, "Encode missing inspection source", "err", marshalErr)
+			return "", fmt.Errorf("encode missing inspection source: %w", marshalErr)
+		}
+
+		if len(result) > inspector.maximumBytes {
+			return "", errInspectionBytes
+		}
+
+		return string(result), nil
+	}
+
 	if err != nil {
 		return "", err
 	}
@@ -386,12 +411,8 @@ func (inspector *repositoryInspector) searchMatch(
 
 	file, err := inspector.loadFile(ctx, filePath)
 	if err != nil {
-		var apiError githubapp.APIError
 		if errors.Is(err, errInspectionExcluded) ||
-			(errors.As(
-				err,
-				&apiError,
-			) && (apiError.StatusCode == http.StatusNotFound || apiError.StatusCode == http.StatusGone)) {
+			errors.Is(err, githubapp.ErrSnapshotFileNotFound) {
 			return "", nil
 		}
 

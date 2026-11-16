@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"reflect"
 
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -89,7 +90,13 @@ func (service *Service) planRefreshedVerdict(
 	)
 	if len(omissions) > 0 && !omissionsAccepted {
 		if decisionReason == "" {
-			decisionReason = "The unread changes listed below need review before approval."
+			decisionReason, err = renderOutputTemplate(
+				"output.unread-approval-reason",
+				reflect.Value{},
+			)
+			if err != nil {
+				return empty, err
+			}
 		}
 	}
 
@@ -125,8 +132,16 @@ func (service *Service) refreshedSummary(
 	ctx context.Context,
 	job domain.ReviewJob,
 	refreshed refreshedVerdict,
-) Summary {
+) (Summary, error) {
+	blocking, err := blockingReasons(refreshed.threads, service.botLogin, job.PullRequestRef)
+	if err != nil {
+		var empty Summary
+
+		return empty, err
+	}
+
 	return Summary{
+		Result:                     "",
 		FileAssessmentNote:         "",
 		Head:                       job.Head,
 		FileAssessmentMaximumBytes: service.reviewPolicy.FileAssessmentMaximumBytes(),
@@ -138,11 +153,7 @@ func (service *Service) refreshedSummary(
 		Report: Report{
 			Summary: "",
 		},
-		Blocking: blockingReasons(
-			refreshed.threads,
-			service.botLogin,
-			job.PullRequestRef,
-		),
+		Blocking:                blocking,
 		Models:                  nil,
 		Usage:                   UsageFromContext(ctx),
 		Duration:                0,
@@ -169,5 +180,5 @@ func (service *Service) refreshedSummary(
 		// A refresh runs only at a head some earlier run already reviewed, which
 		// is a gate a forced run never reaches.
 		Forced: false,
-	}
+	}, nil
 }
