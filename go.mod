@@ -11,6 +11,7 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/openai/openai-go/v3 v3.88.0
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/yuin/goldmark v1.8.7
 	golang.org/x/net v0.61.0
 	goodkind.io/gklog v0.4.5
 	google.golang.org/genai v1.76.0

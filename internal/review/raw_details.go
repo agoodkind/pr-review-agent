@@ -2,7 +2,6 @@ package review
 
 import (
 	"fmt"
-	"html"
 	"strconv"
 	"strings"
 
@@ -93,13 +92,22 @@ func rawResultCell(result string) string {
 		return rawTableCell(result)
 	}
 
-	escaped := html.EscapeString(result)
-	escaped = strings.NewReplacer("|", "&#124;", "\r", "&#13;", "\n", "&#10;").Replace(escaped)
+	var escaped strings.Builder
+
+	for _, character := range result {
+		if strings.ContainsRune("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~\r\n", character) {
+			fmt.Fprintf(&escaped, "&#%d;", character)
+
+			continue
+		}
+
+		escaped.WriteRune(character)
+	}
 
 	return strings.ReplaceAll(
 		strings.TrimSuffix(outputtemplates.RawResult, "\n"),
 		"{{.Input}}",
-		escaped,
+		escaped.String(),
 	)
 }
 
