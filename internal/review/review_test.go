@@ -6037,6 +6037,7 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 		"Review failed while reconciling existing findings.",
 		"reconcile failed",
 	)
+	assertRawFailureResult(t, failureSummaryComment(t, fixture), err.Error())
 }
 
 // failureSummaryComment returns the body of the one top level comment a failed
@@ -6059,13 +6060,7 @@ func failureSummaryComment(t *testing.T, fixture *serviceFixture) string {
 	return body
 }
 
-// assertSanitizedFailureComment proves the comment says the review stopped and
-// where the cause is, and that the provider's own words are not in it.
-//
-// A model provider error can carry the request it failed on, an internal
-// endpoint, or a credential. A pull request comment is public and permanent,
-// so the cause goes to the service log and the comment carries the run
-// identifier that finds it.
+// assertSanitizedFailureComment keeps the raw cause out of the failure prose.
 func assertSanitizedFailureComment(
 	t *testing.T,
 	fixture *serviceFixture,
@@ -6083,8 +6078,29 @@ func assertSanitizedFailureComment(
 		t.Fatalf("summary comment = %q, want the run identifier that finds the cause", body)
 	}
 
-	if strings.Contains(body, rawCause) {
-		t.Fatalf("summary comment published the raw provider cause %q:\n%s", rawCause, body)
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "| `result` |") {
+			continue
+		}
+
+		if strings.Contains(line, rawCause) {
+			t.Fatalf("Failure prose includes the raw cause %q: %s", rawCause, line)
+		}
+	}
+}
+
+func assertRawFailureResult(t *testing.T, body, rawCause string) {
+	t.Helper()
+
+	const prefix = "| `result` | "
+	_, remaining, found := strings.Cut(body, prefix)
+	if !found || strings.Count(body, prefix) != 1 {
+		t.Fatalf("The review must contain one result row: %s", body)
+	}
+
+	row, _, _ := strings.Cut(remaining, "\n")
+	if row != "`"+rawCause+"` |" {
+		t.Fatalf("The result row must contain the exact returned error %q: %s", rawCause, row)
 	}
 }
 
@@ -6604,15 +6620,13 @@ func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 		t.Fatalf("Admit: %v", err)
 	}
 
-	if err := fixture.service.Reject(
-		context.Background(),
-		admitted,
-		errors.New("review queue is full"),
-	); err == nil {
+	err = fixture.service.Reject(context.Background(), admitted, errors.New("review queue is full"))
+	if err == nil {
 		t.Fatal("Reject: want the rejection cause")
 	}
 
 	assertSanitizedFailureComment(t, fixture, "Review failed.", "review queue is full")
+	assertRawFailureResult(t, failureSummaryComment(t, fixture), err.Error())
 
 	if fixture.state.lastSubmitReview != nil {
 		t.Fatalf("submitted review = %v, want none on a rejection", fixture.state.lastSubmitReview)
@@ -7470,16 +7484,8 @@ func TestServiceStreamsEachFindingAsItsChunkAnswers(t *testing.T) {
 	}
 }
 
-// The check title is the one line a reader sees before opening anything, so it
-// names the class of failure this service recognizes, and the stage when it
-// recognizes none. It never quotes the provider: a check run is as public and
-// as permanent as a comment, and a provider sentence can carry the request it
-// failed on, an internal endpoint, or a credential.
-//
-// The causes below are the ones production actually produced, driven here
-// through reconciliation, which is the stage that still fails a run outright
-// and still makes a model call of its own. The two that state only a provider
-// sentence fall back to the stage, and that sentence appears nowhere.
+// The check title reports the failure class or review stage.
+// Review details display the returned error in the result row.
 func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -7528,7 +7534,8 @@ func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 					},
 				)
 
-				if err := fixture.run(context.Background(), fixture.job()); err == nil {
+				runErr := fixture.run(context.Background(), fixture.job())
+				if runErr == nil {
 					t.Fatal("Run: want the reconciliation failure")
 				}
 
@@ -7539,9 +7546,7 @@ func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 
 				for _, surface := range []string{
 					fmt.Sprint(output["title"]),
-					fmt.Sprint(output["summary"]),
 					fmt.Sprint(output["text"]),
-					failureSummaryComment(t, fixture),
 				} {
 					if strings.Contains(surface, testCase.leaking) {
 						t.Fatalf(
@@ -7549,6 +7554,20 @@ func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 							testCase.leaking,
 							surface,
 						)
+					}
+				}
+
+				for _, surface := range []string{
+					fmt.Sprint(output["summary"]),
+					failureSummaryComment(t, fixture),
+				} {
+					assertRawFailureResult(t, surface, runErr.Error())
+
+					for _, line := range strings.Split(surface, "\n") {
+						if !strings.HasPrefix(line, "| `result` |") &&
+							strings.Contains(line, testCase.leaking) {
+							t.Fatalf("Failure prose includes provider error text: %s", line)
+						}
 					}
 				}
 
@@ -7560,9 +7579,7 @@ func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 	}
 }
 
-// stubProviderFailure states a cause the same way the model provider package
-// does, without the review package importing it. Its sentence is the text no
-// public surface may reprint.
+// stubProviderFailure supplies provider error text for result and title checks.
 type stubProviderFailure struct {
 	reason string
 	usage  bool
@@ -7648,9 +7665,9 @@ func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissI
 		t.Fatalf("ListReviews before Run: %v", err)
 	}
 
-	err = fixture.run(context.Background(), job)
-	if err == nil || !strings.Contains(err.Error(), "reconcile exploded") {
-		t.Fatalf("Run error = %v, want the failure surfaced", err)
+	runErr := fixture.run(context.Background(), job)
+	if runErr == nil || !strings.Contains(runErr.Error(), "reconcile exploded") {
+		t.Fatalf("Run error = %v, want the failure surfaced", runErr)
 	}
 
 	after, err := fixture.github.ListReviews(
@@ -7713,9 +7730,8 @@ func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissI
 		t.Fatalf("check summary = %v, want string", checkOutput(t, fixture)["summary"])
 	}
 
-	if strings.Contains(checkSummary, "reconcile exploded") {
-		t.Fatalf("check summary published the raw cause:\n%s", checkSummary)
-	}
+	assertRawFailureResult(t, failureSummaryComment(t, fixture), runErr.Error())
+	assertRawFailureResult(t, checkSummary, runErr.Error())
 
 	if !strings.Contains(checkSummary, "under run identifier `delivery-1`") {
 		t.Fatalf("check summary lost the pointer to the cause:\n%s", checkSummary)
