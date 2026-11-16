@@ -1,6 +1,8 @@
 package review_test
 
 import (
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -22,11 +24,12 @@ import (
 )
 
 type inspectionGitFixture struct {
-	source    *githubapp.Client
-	ref       domain.PullRequestRef
-	files     []diff.FileContext
-	mu        sync.Mutex
-	revisions []string
+	source              *githubapp.Client
+	ref                 domain.PullRequestRef
+	files               []diff.FileContext
+	mu                  sync.Mutex
+	revisions           []string
+	authorizationStatus int
 }
 
 func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
@@ -87,6 +90,12 @@ func newInspectionGitFixture(t *testing.T) *inspectionGitFixture {
 		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			switch {
 			case request.URL.Path == "/app/installations/99/access_tokens":
+				if fixture.authorizationStatus != 0 {
+					http.Error(writer, "installation access failed", fixture.authorizationStatus)
+
+					return
+				}
+
 				serviceWriteJSON(
 					writer,
 					http.StatusCreated,
@@ -250,16 +259,32 @@ func TestInspectorVerifiesRepositoryEvidenceAtTheReviewedGitHead(t *testing.T) {
 		}
 	}
 
-	if result, err := inspector.Inspect(
+	result, err = inspector.Inspect(
 		ctx,
 		review.InspectionRequest{
 			Operation: "read_file",
 			Target:    "missing.go",
 			Reason:    "Check a required source reference.",
 		},
-	); err == nil ||
-		result != "" {
-		t.Fatal("Required missing evidence did not fail explicitly.")
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var missing struct {
+		Status string `json:"status"`
+		Path   string `json:"path"`
+		Head   string `json:"head"`
+	}
+	if err := json.Unmarshal([]byte(result), &missing); err != nil {
+		t.Fatal(err)
+	}
+
+	if missing.Status != "not_found" || missing.Path != "missing.go" || missing.Head != head {
+		t.Fatalf(
+			"Missing source did not identify the requested path and reviewed commit: %s",
+			result,
+		)
 	}
 
 	fixture.mu.Lock()
@@ -279,4 +304,83 @@ func TestInspectorVerifiesRepositoryEvidenceAtTheReviewedGitHead(t *testing.T) {
 	}
 
 	t.Logf("Verified %d repository reads at pinned head %s.", len(fixture.revisions), head)
+}
+
+func TestInspectorPreservesSnapshotErrorsAndMissingSourceByteLimit(t *testing.T) {
+	for _, scenario := range []string{
+		"unavailable_commit",
+		"authentication_not_found",
+		"byte_limit",
+	} {
+		t.Run(
+			scenario,
+			func(t *testing.T) {
+				testInspectionSnapshotFailure(t, scenario)
+			},
+		)
+	}
+}
+
+func testInspectionSnapshotFailure(t *testing.T, scenario string) {
+	t.Helper()
+	fixture := newInspectionGitFixture(t)
+	maximumBytes := 8192
+	if scenario == "authentication_not_found" {
+		fixture.authorizationStatus = http.StatusNotFound
+	}
+
+	if scenario == "unavailable_commit" {
+		fixture.ref.Head = domain.HeadSHA(strings.Repeat("f", 40))
+	}
+
+	if scenario == "byte_limit" {
+		maximumBytes = 1
+	}
+
+	ctx, closeSnapshot, err := fixture.source.OpenRepositorySnapshot(
+		t.Context(),
+		fixture.ref.InstallationID,
+		fixture.ref.Repository,
+		fixture.ref.Head,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = closeSnapshot() })
+
+	inspector, err := review.NewInspector(
+		fixture.source,
+		fixture.ref,
+		nil,
+		policytest.Load(t),
+		maximumBytes,
+		6,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := inspector.Inspect(
+		ctx,
+		review.InspectionRequest{
+			Operation: "read_file",
+			Target:    "missing.go",
+			Reason:    "Inspect a source at an unavailable commit.",
+		},
+	)
+	if err == nil || result != "" {
+		t.Fatalf("Snapshot loading failure must remain an error: result=%q error=%v", result, err)
+	}
+
+	if scenario == "authentication_not_found" {
+		var apiError githubapp.APIError
+		if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusNotFound {
+			t.Fatalf("Inspection must preserve the authentication HTTP 404: %v", err)
+		}
+	}
+
+	if scenario == "byte_limit" && !strings.Contains(err.Error(), "configured byte limit") {
+		t.Fatalf("The missing result must respect the inspection byte limit: %v", err)
+	}
 }

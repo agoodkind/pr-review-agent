@@ -20,6 +20,9 @@ import (
 
 type repositorySnapshotKey struct{}
 
+// ErrSnapshotFileNotFound identifies a path absent from a loaded snapshot.
+var ErrSnapshotFileNotFound = errors.New("file does not exist in the pinned repository snapshot")
+
 type repositorySnapshotScope struct {
 	client         *Client
 	installationID int64
@@ -235,9 +238,9 @@ func (scope *repositorySnapshotScope) read(
 	}
 
 	if _, exists := slices.BinarySearch(snapshot.files, filePath); !exists {
-		return FileContent{}, newAPIError(
-			http.StatusNotFound,
-			"file does not exist in the pinned repository snapshot",
+		return FileContent{}, errors.Join(
+			ErrSnapshotFileNotFound,
+			newAPIError(http.StatusNotFound, ErrSnapshotFileNotFound.Error()),
 		)
 	}
 

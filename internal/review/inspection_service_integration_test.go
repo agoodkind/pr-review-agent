@@ -37,6 +37,7 @@ type inspectionServiceCapture struct {
 	forbiddenRequests  []string
 	beforeContinuation func()
 	snapshotDirectory  string
+	repeatInspections  bool
 }
 
 func TestServiceInspectionLoadsUnchangedSourceWithoutAddingFindingAnchors(t *testing.T) {
@@ -117,38 +118,75 @@ func TestServiceInspectionLoadsUnchangedSourceWithoutAddingFindingAnchors(t *tes
 	}
 }
 
-func TestServiceInspectionFailurePreservesFindingsAndPendingWork(t *testing.T) {
+func TestServiceInspectionContinuesWithCachedMissingSource(t *testing.T) {
 	fixture, job, capture := newInspectionServiceFixture(t, "missing")
-	_ = fixture.run(t.Context(), job)
+	if err := fixture.run(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+
 	assertInspectionSnapshotRemoved(t, capture)
 
 	if len(fixture.state.streamedComments) != 1 ||
 		fixture.state.streamedComments[0]["path"] != "network.tf" {
-		t.Fatal(
-			"The required evidence failure discarded a finding established before the inspection.",
-		)
+		t.Fatal("The missing source discarded a finding established before the inspection.")
 	}
 
-	for _, submitted := range fixture.state.submittedReviews {
-		if submitted["state"] == "APPROVED" {
-			t.Fatal("A required inspection failure published an approval.")
-		}
-	}
-
-	if fixture.state.lastUpdateCheckRun["conclusion"] == "success" {
-		t.Fatal("A required inspection failure satisfied the review check.")
+	if fixture.state.lastUpdateCheckRun["conclusion"] != "success" {
+		t.Fatal("The completed review did not satisfy the review check.")
 	}
 
 	state := decodedSummaryState(t, fixture)
-	if state.LastReviewed == job.Head || len(state.Pending) == 0 {
-		t.Fatal("A required inspection failure completed the unread source checkpoint.")
+	if state.LastReviewed != job.Head || len(state.Pending) != 0 {
+		t.Fatal("The completed review did not save the reviewed source checkpoint.")
 	}
 
 	capture.mu.Lock()
 	defer capture.mu.Unlock()
 
-	if len(capture.reviewRequests) != 1 {
-		t.Fatal("The service continued model analysis without the required inspection evidence.")
+	if len(capture.reviewRequests) != 3 {
+		t.Fatalf(
+			"The missing source and repeated request must each continue review: %d requests",
+			len(capture.reviewRequests),
+		)
+	}
+
+	for _, payload := range capture.reviewRequests[1:] {
+		if strings.Count(payload, "not_found") != 1 ||
+			!strings.Contains(payload, "network/activate.sh") ||
+			!strings.Contains(payload, string(job.Head)) {
+			t.Fatalf(
+				"The continuation must include one cached missing result with its path and commit: %s",
+				payload,
+			)
+		}
+	}
+}
+
+func TestServiceInspectionCountsCachedMissingRequestsAgainstTheLimit(t *testing.T) {
+	fixture, job, capture := newInspectionServiceFixture(t, "missing")
+	capture.repeatInspections = true
+	_ = fixture.run(t.Context(), job)
+	assertInspectionSnapshotRemoved(t, capture)
+
+	if fixture.state.lastUpdateCheckRun["conclusion"] == "success" {
+		t.Fatal("Repeated cached inspections must stop at the request limit.")
+	}
+
+	state := decodedSummaryState(t, fixture)
+	if state.LastReviewed == job.Head || len(state.Pending) == 0 {
+		t.Fatal("An inspection limit failure must preserve pending source work.")
+	}
+
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+
+	maximumRequests := policytest.Load(t).Limits().InspectionRequests
+	if len(capture.reviewRequests) != maximumRequests/2+1 {
+		t.Fatalf(
+			"Cached inspections did not consume the request limit: limit=%d model_requests=%d",
+			maximumRequests,
+			len(capture.reviewRequests),
+		)
 	}
 }
 
@@ -450,7 +488,8 @@ func inspectionServiceProvider(
 				result.OmissionsAcceptable = true
 
 				inspections := []review.InspectionRequest{}
-				if iteration == 1 {
+				if iteration == 1 ||
+					scenario == "missing" && (iteration == 2 || capture.repeatInspections) {
 					inspections = []review.InspectionRequest{
 						{
 							Operation: "search_repository",
