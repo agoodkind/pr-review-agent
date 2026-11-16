@@ -24,6 +24,9 @@ type assessmentSnapshot struct {
 	legacyWholeHead   bool
 }
 
+// Older review bodies recorded incomplete coverage with this sentence prefix.
+const legacyUnreviewedHeadReason = "This head was not fully reviewed"
+
 func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	metadata, recorded, err := decodeMetadataRecord(body)
 
@@ -37,7 +40,7 @@ func parseAssessmentSnapshot(body string) assessmentSnapshot {
 		decisionReason:    decodeDecisionReasonMarker(body),
 		approvalWithheld:  strings.Contains(body, approvalWithheldMarker),
 		legacyWholeHead: strings.TrimSpace(body) != "" &&
-			!strings.Contains(body, unreviewedHeadReason),
+			!strings.Contains(body, legacyUnreviewedHeadReason),
 	}
 	if accepted, found := decodeOmissionDecisionMarker(body); found {
 		snapshot.omissionsAccepted = accepted

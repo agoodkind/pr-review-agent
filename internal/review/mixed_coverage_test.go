@@ -23,13 +23,15 @@ func TestUnreadChangesRetainProviderDiagnosticsInsideDetails(t *testing.T) {
 		},
 		{ProviderID: "secondary", Model: "secondary-model", Cause: review.ProviderRequestFailed},
 	}
-	body := review.RenderUnreadableBody(
-		review.Summary{
-			Head:     domain.HeadSHA(testHeadSHA),
-			Decision: domain.ReviewDecisionComment,
-		},
-		notice,
-		statuses...,
+	body := rendered(t)(
+		review.RenderUnreadableBody(
+			review.Summary{
+				Head:     domain.HeadSHA(testHeadSHA),
+				Decision: domain.ReviewDecisionComment,
+			},
+			notice,
+			statuses...,
+		),
 	)
 
 	visible, details, found := strings.Cut(body, "<details>")

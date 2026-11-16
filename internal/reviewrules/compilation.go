@@ -131,7 +131,6 @@ func readOutputTemplates(directory string) (map[string]string, error) {
 }
 
 var requiredOutputTemplates = []string{
-	"raw.result",
 	"native.summary_link",
 	"native.request_changes",
 	"inline.footer",
@@ -156,6 +155,11 @@ var requiredOutputTemplates = []string{
 	"coverage.verdict_pending",
 	"coverage.persistence_limit",
 	"classification.required",
+	"output.cells",
+	"output.checks",
+	"output.findings",
+	"output.status",
+	"output.review",
 }
 
 func requirePolicyTemplates(compiled map[string]*template.Template) error {

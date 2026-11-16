@@ -19,6 +19,16 @@ func captured(t *testing.T, write func(logger *slog.Logger)) *runlog.Recorder {
 	return recorder
 }
 
+func renderedLog(t *testing.T, recorder *runlog.Recorder) string {
+	t.Helper()
+	text, err := recorder.Render()
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	return text
+}
+
 // The rendered log goes onto a check run, which is as public and as permanent
 // as a pull request comment. A model provider error can carry the request it
 // failed on, an internal endpoint, or a credential, so the value never reaches
@@ -48,7 +58,7 @@ func TestRenderWithholdsTheValueOfEveryCauseField(t *testing.T) {
 		},
 	)
 
-	rendered := recorder.Render()
+	rendered := renderedLog(t, recorder)
 
 	if strings.Contains(rendered, "secret-token-abc123") {
 		t.Fatalf("render published text this service never wrote:\n%s", rendered)
@@ -92,7 +102,7 @@ func TestRenderWithholdsTheValueOfEveryFieldNotListed(t *testing.T) {
 		},
 	)
 
-	rendered := recorder.Render()
+	rendered := renderedLog(t, recorder)
 
 	if strings.Contains(rendered, "secret-token-abc123") {
 		t.Fatalf("render published a field nobody vouched for:\n%s", rendered)
@@ -152,7 +162,7 @@ func TestRenderKeepsFieldsThisServiceWrote(t *testing.T) {
 		},
 	)
 
-	rendered := recorder.Render()
+	rendered := renderedLog(t, recorder)
 
 	for _, want := range []string{
 		"reason=173 diff chunks, over the 60 chunk review budget",
@@ -165,7 +175,7 @@ func TestRenderKeepsFieldsThisServiceWrote(t *testing.T) {
 }
 
 func TestRenderReturnsNothingForARunThatLoggedNothing(t *testing.T) {
-	if rendered := runlog.NewRecorder().Render(); rendered != "" {
+	if rendered := renderedLog(t, runlog.NewRecorder()); rendered != "" {
 		t.Fatalf("render = %q, want the empty string so the caller omits the section", rendered)
 	}
 }
@@ -199,7 +209,7 @@ func TestRenderKeepsAPublishedValueOnItsOwnLine(t *testing.T) {
 	logger := slog.New(recorder)
 	logger.Info("finding published", slog.String("path", "a.go\n```\n## injected heading"))
 
-	rendered := recorder.Render()
+	rendered := renderedLog(t, recorder)
 	for _, line := range strings.Split(rendered, "\n") {
 		if strings.HasPrefix(line, "## injected") {
 			t.Fatalf("a field value reached the start of a line:\n%s", rendered)

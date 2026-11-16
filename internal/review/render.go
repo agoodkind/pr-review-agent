@@ -3,6 +3,7 @@ package review
 import (
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -68,37 +69,41 @@ type Summary struct {
 }
 
 // Verdict states the outcome without presenting withheld approval as rejection.
-func (summary Summary) Verdict() string {
-	if summary.Decision == domain.ReviewDecisionComment {
-		return "This review neither approves nor requests changes."
-	}
+func (summary Summary) Verdict() (string, error) {
+	var rendering renderState
 
-	if summary.Decision != domain.ReviewDecisionRequestChanges {
-		return "This review did not identify findings at or above the minimum importance."
-	}
-
-	if len(unpublishedSummaryFindings(summary, summary.Metadata)) > 0 {
-		return "Resolve the findings in the rejection review."
-	}
-
-	return "Resolve the open inline findings."
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.verdict_lead",
+				reflect.ValueOf(
+					struct {
+						Decision domain.ReviewDecision
+						Metadata bool
+					}{
+						Decision: summary.Decision,
+						Metadata: len(unpublishedSummaryFindings(summary, summary.Metadata)) > 0,
+					},
+				),
+			),
+		),
+	)
 }
 
 // Title names the outcome for the check run.
-func (summary Summary) Title() string {
-	if summary.Decision == domain.ReviewDecisionComment {
-		return "Review needs attention"
-	}
+func (summary Summary) Title() (string, error) {
+	var rendering renderState
 
-	if summary.Decision == domain.ReviewDecisionRequestChanges {
-		return "Changes requested"
-	}
-
-	return "Approved"
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate("output.verdict_title", reflect.ValueOf(summary.Decision)),
+		),
+	)
 }
 
 // RenderDetails renders the latest review's raw usage table.
-func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
+func RenderDetails(summary Summary, statuses ...ProviderStatus) (string, error) {
+	var rendering renderState
 	if len(summary.Usage.ProviderAttempts) == 0 {
 		for _, status := range statuses {
 			var attempt ProviderAttempt
@@ -107,7 +112,7 @@ func RenderDetails(summary Summary, statuses ...ProviderStatus) string {
 		}
 	}
 
-	return renderRawDetails(summary)
+	return rendering.finish(rendering.capture(renderRawDetails(summary)))
 }
 
 func acceptedFileScope(summary Summary) bool {
@@ -140,54 +145,83 @@ func acceptedFileScope(summary Summary) bool {
 }
 
 // RenderBody renders the single visible GitHub review summary.
-func RenderBody(summary Summary) string {
+func RenderBody(summary Summary) (string, error) {
+	var rendering renderState
 	parts := []string{
-		"## Review",
-		renderVerdictSection(summary, false),
-		renderReportSection(summary.Report),
+		rendering.capture(renderVerdictSection(summary, false)),
+		rendering.capture(renderReportSection(summary.Report)),
 	}
 	if summary.FileAssessmentsDisplay == reviewrules.FindingsExpanded {
 		parts = append(
 			parts,
-			renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes),
+			rendering.capture(
+				renderFileAssessments(summary.FileAssessments, summary.FileAssessmentMaximumBytes),
+			),
 		)
 	}
 
 	if len(summary.Omissions) > 0 && !summary.OmissionsAccepted {
-		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
+		parts = append(
+			parts,
+			rendering.capture(
+				renderOutputTemplate(
+					"output.omissions",
+					reflect.ValueOf(rendering.capture(renderOmissions(summary.Omissions))),
+				),
+			),
+		)
 	}
 
-	parts = append(parts, RenderDetails(summary), marker.Summary()+"\n"+RenderVerdictBody(summary))
+	parts = append(
+		parts,
+		rendering.capture(RenderDetails(summary)),
+		rendering.capture(
+			renderOutputTemplate(
+				"output.summary_checkpoint",
+				reflect.ValueOf(RenderVerdictBody(summary)),
+			),
+		),
+	)
 
-	return strings.Join(parts, "\n\n")
-}
-
-func renderReportSection(report Report) string {
-	return strings.Join(
-		[]string{
-			reportSectionStart,
-			"### Summary\n\n" + renderReportSummary(report),
-			reportSectionEnd,
-		},
-		"\n\n",
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.review_body", reflect.ValueOf(parts))),
 	)
 }
 
-func renderReportSummary(report Report) string {
-	value := sanitizeReportText(report.Summary)
-	if value != "" {
-		return value
-	}
+func renderReportSection(report Report) (string, error) {
+	var rendering renderState
 
-	return "This review checked the current pull request against its stated purpose and current changes."
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.report_section",
+				reflect.ValueOf(rendering.capture(renderReportSummary(report))),
+			),
+		),
+	)
 }
 
-func renderOmissions(hunks []unreadHunk) string {
-	if len(hunks) == 0 {
-		return "The review omitted no changed content."
+func renderReportSummary(report Report) (string, error) {
+	var rendering renderState
+	value := sanitizeReportText(report.Summary)
+	if value != "" {
+		return rendering.finish(value)
 	}
 
-	return renderUnreadHunks(hunks)
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.report_fallback", reflect.ValueOf(nil))),
+	)
+}
+
+func renderOmissions(hunks []unreadHunk) (string, error) {
+	var rendering renderState
+	if len(hunks) == 0 {
+		return rendering.finish(
+			rendering.capture(renderOutputTemplate("output.omissions_empty", reflect.ValueOf(nil))),
+		)
+	}
+
+	return rendering.finish(rendering.capture(renderUnreadHunks(hunks)))
 }
 
 const (
@@ -197,19 +231,20 @@ const (
 	reportSectionEnd    = "<!-- pr-review-agent:report-section:end -->"
 )
 
-func renderVerdictSection(summary Summary, blockWithdrawn bool) string {
-	parts := []string{verdictSectionStart, "### Verdict", verdictLead(summary)}
-	if findings := renderSummaryFindings(summary); findings != "" {
+func renderVerdictSection(summary Summary, blockWithdrawn bool) (string, error) {
+	var rendering renderState
+	parts := []string{rendering.capture(verdictLead(summary))}
+	if findings := rendering.capture(renderSummaryFindings(summary)); findings != "" {
 		parts = append(parts, findings)
 	}
 
 	if blockWithdrawn && summary.Decision == domain.ReviewDecisionRequestChanges {
-		parts = append(parts, withdrawnBlockNote)
+		parts = append(parts, rendering.capture(withdrawnBlockNote()))
 	}
 
-	parts = append(parts, verdictSectionEnd)
-
-	return strings.Join(parts, "\n\n")
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.verdict_section", reflect.ValueOf(parts))),
+	)
 }
 
 func sanitizeReportText(value string) string {
@@ -219,25 +254,27 @@ func sanitizeReportText(value string) string {
 	return strings.ReplaceAll(value, "-->", "--&gt;")
 }
 
-func verdictLead(summary Summary) string {
+func verdictLead(summary Summary) (string, error) {
 	return summary.Verdict()
 }
 
-func renderFallbackFindings(findings []domain.Finding) string {
+func renderFallbackFindings(findings []domain.Finding) (string, error) {
+	var rendering renderState
 	if len(findings) == 0 {
-		return ""
+		return rendering.finish("")
 	}
 
 	sorted := append([]domain.Finding{}, findings...)
 	sortFindings(sorted)
-
-	explanation := "GitHub could not place the finding inline, so it appears here."
-	if len(sorted) != 1 {
-		explanation = "GitHub could not place the findings inline, so they appear here."
+	type fallbackDisplay struct {
+		Path       string
+		Line       int
+		Title      string
+		Body       string
+		Suggestion string
 	}
 
-	sections := []string{explanation, "#### Findings"}
-
+	sections := make([]fallbackDisplay, 0, len(sorted))
 	for _, finding := range sorted {
 		normalizedPath, err := marker.NormalizePath(finding.Path)
 		if err != nil {
@@ -245,19 +282,34 @@ func renderFallbackFindings(findings []domain.Finding) string {
 		}
 
 		finding = sanitizeFinding(finding)
-
-		parts := []string{
-			fmt.Sprintf("#### %s:%d: %s", codeSpan(normalizedPath), finding.EndLine, finding.Title),
-			finding.Body,
-		}
-		if finding.Suggestion != "" {
-			parts = append(parts, "```suggestion\n"+finding.Suggestion+"\n```")
-		}
-
-		sections = append(sections, strings.Join(parts, "\n\n"))
+		sections = append(
+			sections,
+			fallbackDisplay{
+				Path:       rendering.capture(codeSpan(normalizedPath)),
+				Line:       finding.EndLine,
+				Title:      finding.Title,
+				Body:       finding.Body,
+				Suggestion: finding.Suggestion,
+			},
+		)
 	}
 
-	return strings.Join(sections, "\n\n")
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.fallback_findings",
+				reflect.ValueOf(
+					struct {
+						Single   bool
+						Findings []fallbackDisplay
+					}{
+						Single:   len(sorted) == 1,
+						Findings: sections,
+					},
+				),
+			),
+		),
+	)
 }
 
 // RenderVerdictBody serializes assessment checkpoints for the editable summary
@@ -311,9 +363,13 @@ const (
 // pull request that reads as unblocked, and a reader has no way to tell whether
 // the service failed to block or somebody cleared the block by hand. Naming the
 // dismissal is also what tells them how to get a verdict back.
-const withdrawnBlockNote = "The blocking review on this commit was dismissed by hand, so this service " +
-	"is not reinstating it. The findings above are still open, and resolving them lets the next " +
-	"refresh approve."
+func withdrawnBlockNote() (string, error) {
+	var rendering renderState
+
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.withdrawn_block", reflect.ValueOf(nil))),
+	)
+}
 
 // renderVerdictRefreshProse is the summary comment prose for a verdict
 // refreshed from thread state alone. It reports no run statistics because no
@@ -327,20 +383,50 @@ func renderVerdictRefreshProse(
 	blockWithdrawn bool,
 	details string,
 	reportPrefix string,
-) string {
+) (string, error) {
+	var rendering renderState
 	parts := []string{
-		renderVerdictBeforeReport(reportPrefix, renderVerdictSection(summary, blockWithdrawn)),
+		rendering.capture(
+			renderVerdictBeforeReport(
+				reportPrefix,
+				rendering.capture(renderVerdictSection(summary, blockWithdrawn)),
+			),
+		),
 	}
 	if len(summary.Omissions) > 0 && !summary.OmissionsAccepted {
-		parts = append(parts, "### Omissions\n\n"+renderOmissions(summary.Omissions))
+		parts = append(
+			parts,
+			rendering.capture(
+				renderOutputTemplate(
+					"output.omissions",
+					reflect.ValueOf(rendering.capture(renderOmissions(summary.Omissions))),
+				),
+			),
+		)
 	}
 
-	parts = append(parts, details, marker.Summary()+"\n"+RenderVerdictBody(summary))
+	parts = append(
+		parts,
+		details,
+		rendering.capture(
+			renderOutputTemplate(
+				"output.summary_checkpoint",
+				reflect.ValueOf(RenderVerdictBody(summary)),
+			),
+		),
+	)
 
-	return strings.Join(parts, "\n\n")
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.paragraphs", reflect.ValueOf(parts))),
+	)
 }
 
-func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bool) string {
+func refreshVerdictProse(
+	existingBody string,
+	summary Summary,
+	blockWithdrawn bool,
+) (string, error) {
+	var rendering renderState
 	if len(summary.FileAssessments) == 0 {
 		summary.FileAssessments = decodeFileAssessments(existingBody)
 	}
@@ -354,27 +440,35 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 
 	start := strings.Index(prose, verdictSectionStart)
 	if start < 0 {
-		return renderVerdictRefreshProse(
-			summary,
-			blockWithdrawn,
-			preservedReviewDetails(prose, summary),
-			preservedReportPrefix(prose),
+		return rendering.finish(
+			rendering.capture(
+				renderVerdictRefreshProse(
+					summary,
+					blockWithdrawn,
+					rendering.capture(preservedReviewDetails(prose, summary)),
+					rendering.capture(preservedReportPrefix(prose)),
+				),
+			),
 		)
 	}
 
 	endOffset := strings.Index(prose[start:], verdictSectionEnd)
 	if endOffset < 0 {
-		return renderVerdictRefreshProse(
-			summary,
-			blockWithdrawn,
-			preservedReviewDetails(prose, summary),
-			preservedReportPrefix(prose),
+		return rendering.finish(
+			rendering.capture(
+				renderVerdictRefreshProse(
+					summary,
+					blockWithdrawn,
+					rendering.capture(preservedReviewDetails(prose, summary)),
+					rendering.capture(preservedReportPrefix(prose)),
+				),
+			),
 		)
 	}
 
 	end := start + endOffset + len(verdictSectionEnd)
 
-	verdict := renderVerdictSection(summary, blockWithdrawn)
+	verdict := rendering.capture(renderVerdictSection(summary, blockWithdrawn))
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && !recordedFallback {
 		if fallbackStart := strings.Index(
 			prose[start:end],
@@ -386,37 +480,53 @@ func refreshVerdictProse(existingBody string, summary Summary, blockWithdrawn bo
 				verdict = strings.Replace(
 					verdict,
 					verdictSectionEnd,
-					retained+"\n\n"+verdictSectionEnd,
+					rendering.capture(renderOutputParts(retained, verdictSectionEnd)),
 					1,
 				)
 			}
 		}
 	}
 
-	updated := renderVerdictBeforeReport(strings.TrimSpace(prose[:start]), verdict) + prose[end:]
+	updated := rendering.capture(
+		renderVerdictBeforeReport(strings.TrimSpace(prose[:start]), verdict),
+	) + prose[end:]
 
-	updated = refreshThreadDetails(updated, summary)
+	updated = rendering.capture(refreshThreadDetails(updated, summary))
 	if markerStart := strings.LastIndex(updated, marker.Summary()); markerStart >= 0 {
-		updated = strings.TrimSpace(updated[:markerStart]) + "\n\n" + marker.Summary() + "\n" +
-			RenderVerdictBody(summary)
+		updated = rendering.capture(
+			renderOutputParts(
+				strings.TrimSpace(updated[:markerStart]),
+				rendering.capture(
+					renderOutputTemplate(
+						"output.summary_checkpoint",
+						reflect.ValueOf(RenderVerdictBody(summary)),
+					),
+				),
+			),
+		)
 	}
 
-	return updated
+	return rendering.finish(updated)
 }
 
-func renderVerdictBeforeReport(reportPrefix, verdict string) string {
+func renderVerdictBeforeReport(reportPrefix, verdict string) (string, error) {
+	var rendering renderState
 	heading, report, _ := strings.Cut(reportPrefix, "\n\n")
 	parts := []string{heading, verdict}
 
 	if report != "" {
 		if !strings.HasPrefix(report, reportSectionStart) {
-			report = reportSectionStart + "\n\n" + report + "\n\n" + reportSectionEnd
+			report = rendering.capture(
+				renderOutputTemplate("output.report_wrapper", reflect.ValueOf(report)),
+			)
 		}
 
 		parts = append(parts, report)
 	}
 
-	return strings.Join(parts, "\n\n")
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.paragraphs", reflect.ValueOf(parts))),
+	)
 }
 
 func stripDurableStateMarker(body string) string {
@@ -428,47 +538,64 @@ func stripDurableStateMarker(body string) string {
 	return strings.TrimSpace(body)
 }
 
-func refreshThreadDetails(body string, summary Summary) string {
+func refreshThreadDetails(body string, summary Summary) (string, error) {
+	var rendering renderState
 	rows := map[string]string{
-		"Bot thread IDs":       formatThreadTraceIDs(summary.Threads),
-		"Bot threads open":     fmt.Sprintf("`%d`", countOpenThreadTraces(summary.Threads)),
-		"Bot threads resolved": fmt.Sprintf("`%d`", countResolvedThreadTraces(summary.Threads)),
+		"Bot thread IDs": rendering.capture(
+			renderOutputTemplate(
+				"output.thread_ids_row",
+				reflect.ValueOf(rendering.capture(formatThreadTraceIDs(summary.Threads))),
+			),
+		),
+		"Bot threads open": rendering.capture(
+			renderOutputTemplate(
+				"output.threads_open_row",
+				reflect.ValueOf(countOpenThreadTraces(summary.Threads)),
+			),
+		),
+		"Bot threads resolved": rendering.capture(
+			renderOutputTemplate(
+				"output.threads_resolved_row",
+				reflect.ValueOf(countResolvedThreadTraces(summary.Threads)),
+			),
+		),
 	}
 
 	lines := strings.Split(body, "\n")
 	for index, line := range lines {
-		for label, value := range rows {
+		for label, row := range rows {
 			if strings.HasPrefix(line, "| "+label+" |") {
-				lines[index] = "| " + label + " | " + value + " |"
+				lines[index] = row
 			}
 		}
 	}
 
-	return strings.Join(lines, "\n")
+	return rendering.finish(strings.Join(lines, "\n"))
 }
 
 // renderBlocking links the inline findings that a reader must resolve.
-func renderBlocking(reasons []string) string {
+func renderBlocking(reasons []string) (string, error) {
+	var rendering renderState
 	if len(reasons) == 0 {
-		return ""
+		return rendering.finish("")
 	}
 
-	lines := make([]string, 0, len(reasons)+1)
-	lines = append(lines, "Resolve these inline findings:")
-
+	resolved := make([]string, 0, len(reasons))
 	for _, reason := range reasons {
-		lines = append(lines, "- "+reason)
+		resolved = append(resolved, rendering.capture(renderOutputText(reason)))
 	}
 
-	return strings.Join(lines, "\n")
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.blocking", reflect.ValueOf(resolved))),
+	)
 }
 
-func formatYesNo(value bool) string {
-	if value {
-		return "yes"
-	}
+func formatYesNo(value bool) (string, error) {
+	var rendering renderState
 
-	return "no"
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.boolean", reflect.ValueOf(value))),
+	)
 }
 
 func shortHead(head domain.HeadSHA) string {
@@ -490,15 +617,11 @@ func shortHead(head domain.HeadSHA) string {
 //
 // It carries no review marker. Nothing has been reviewed yet, and a marker here
 // would tell the next run this head was done.
-func RenderStartedBody(head domain.HeadSHA) string {
-	return strings.Join(
-		[]string{
-			"## Review",
-			"Reviewing `" + shortHead(
-				head,
-			) + "`. This comment is rewritten when the review finishes.",
-		},
-		"\n\n",
+func RenderStartedBody(head domain.HeadSHA) (string, error) {
+	var rendering renderState
+
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.started", reflect.ValueOf(shortHead(head)))),
 	)
 }
 
@@ -510,10 +633,11 @@ func RenderStartedBody(head domain.HeadSHA) string {
 // Both title and detail are wording this service wrote. The provider's own
 // message never reaches here, so neither is fenced or escaped: there is no
 // untrusted text in this body to contain.
-func RenderFailureBody(summary Summary, title string, detail string) string {
+func RenderFailureBody(summary Summary, title string, detail string) (string, error) {
+	var rendering renderState
 	summary.Failed = true
 
-	parts := []string{"## Review", strings.TrimSpace(title)}
+	parts := []string{strings.TrimSpace(rendering.capture(renderOutputText(title)))}
 	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
 		parts = append(parts, trimmedDetail)
 	}
@@ -521,8 +645,12 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 	hasVerdict := summary.ApprovalWithheld && summary.Decision != ""
 	if hasVerdict {
 		summary.Decision = domain.ReviewDecisionComment
-		parts = append(parts, renderVerdictSection(summary, false), RenderVerdictBody(summary))
-	} else if findings := renderSummaryFindings(summary); findings != "" {
+		parts = append(
+			parts,
+			rendering.capture(renderVerdictSection(summary, false)),
+			RenderVerdictBody(summary),
+		)
+	} else if findings := rendering.capture(renderSummaryFindings(summary)); findings != "" {
 		parts = append(parts, findings)
 	}
 
@@ -532,38 +660,46 @@ func RenderFailureBody(summary Summary, title string, detail string) string {
 		}
 	}
 
-	parts = append(parts, RenderDetails(summary), marker.Summary())
+	parts = append(parts, rendering.capture(RenderDetails(summary)), marker.Summary())
 
-	return strings.Join(parts, "\n\n")
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.review_body", reflect.ValueOf(parts))),
+	)
 }
 
 // RenderSkipBody renders the visible notice for a delta the admission gate
 // declined before any model call. It carries no review marker, because the
 // gate never touches a review object and the head it names was never reviewed.
-func RenderSkipBody(reason string) string {
-	return strings.Join(
-		[]string{
-			"## Review",
-			"The review skipped this pull request because " + reason + ".",
-		},
-		"\n\n",
+func RenderSkipBody(reason string) (string, error) {
+	var rendering renderState
+
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.skipped", reflect.ValueOf(reason))),
 	)
 }
 
 // RenderProgressBody reports the current head and remaining chunks.
-func RenderProgressBody(head domain.HeadSHA, remaining int) string {
-	progress := fmt.Sprintf(
-		"Reviewing `%s`. %s still to read.",
-		shortHead(head),
-		chunkCount(remaining),
+func RenderProgressBody(head domain.HeadSHA, remaining int) (string, error) {
+	var rendering renderState
+
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.progress",
+				reflect.ValueOf(
+					struct {
+						Head      string
+						Remaining int
+						Chunks    string
+					}{
+						Head:      shortHead(head),
+						Remaining: remaining,
+						Chunks:    rendering.capture(chunkCount(remaining)),
+					},
+				),
+			),
+		),
 	)
-	if remaining == 0 {
-		progress = "Reviewing `" + shortHead(head) + "`. Every chunk has been read."
-	}
-
-	parts := []string{"## Review", progress}
-
-	return strings.Join(parts, "\n\n")
 }
 
 // codeSpan renders repository-controlled text as an inline code span that the
@@ -574,14 +710,26 @@ func RenderProgressBody(head domain.HeadSHA, remaining int) string {
 // rest render as Markdown, and a line break would end the list item and let the
 // remainder pose as the service's own prose, which is how a crafted filename
 // puts a mention or a false verdict in a comment nobody would doubt.
-func codeSpan(text string) string {
-	// Every shape of line break becomes one, and that one becomes a space, so
-	// the span stays on the line the service put it on. The reply formatter
-	// already enumerates those shapes, and a second list of them would drift.
+func codeSpan(text string) (string, error) {
+	var rendering renderState
 	flattened := strings.ReplaceAll(replyLineBreaks.Replace(text), "\n", " ")
-	// A backtick inside a span closes it. The modifier letter at U+02CB renders
-	// like one and closes nothing.
-	return "`" + strings.ReplaceAll(flattened, "`", string(rune(0x2CB))) + "`"
+
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.code_span",
+				reflect.ValueOf(
+					struct {
+						Delimiter string
+						Value     string
+					}{
+						Delimiter: "`",
+						Value:     strings.ReplaceAll(flattened, "`", string(rune(0x2CB))),
+					},
+				),
+			),
+		),
+	)
 }
 
 // RenderIncompleteBody renders the visible comment for a pass that could not
@@ -601,44 +749,54 @@ func RenderIncompleteBody(
 	reason string,
 	detail string,
 	statuses ...ProviderStatus,
-) string {
-	lead := fmt.Sprintf(
-		"%s could not be reviewed on `%s`.",
-		chunkCount(pending),
-		shortHead(summary.Head),
-	)
-
-	if reason == checkFailureDailyBudget || reason == checkFailureMixedUsage {
-		legacyDaily := false
-
+) (string, error) {
+	var rendering renderState
+	legacyDaily := false
+	budgetFailure := reason == checkFailureDailyBudget || reason == checkFailureMixedUsage
+	if budgetFailure {
 		for _, status := range statuses {
 			if status.Cause == ProviderAppBudgetDenied && status.TokenWindow.Mode == "" {
 				legacyDaily = true
 				break
 			}
 		}
-
-		if legacyDaily {
-			lead += " The app's daily token limit resets at 00:00 UTC."
-		}
-	} else {
-		lead += fmt.Sprintf(" Apply the `%s` label to retry this head.", domain.RerunReviewLabel)
 	}
 
+	lead := rendering.capture(
+		renderOutputTemplate(
+			"output.incomplete_lead",
+			reflect.ValueOf(
+				struct {
+					Chunks      string
+					Head        string
+					LegacyDaily bool
+					Retry       bool
+					Label       string
+				}{
+					Chunks:      rendering.capture(chunkCount(pending)),
+					Head:        shortHead(summary.Head),
+					LegacyDaily: legacyDaily,
+					Retry:       !budgetFailure,
+					Label:       domain.RerunReviewLabel,
+				},
+			),
+		),
+	)
 	blocking := removeBlockingReasons(summary.Blocking, unreviewedHeadReason)
-	coverageReason := unreviewedHeadReason
-	parts := []string{
-		"## Review",
-		lead,
-	}
+	parts := []string{lead}
 
-	for _, note := range []string{reason, coverageReason, renderBlocking(blocking), detail} {
-		if trimmed := strings.TrimSpace(note); trimmed != "" {
+	for _, note := range []string{
+		reason,
+		unreviewedHeadReason,
+		rendering.capture(renderBlocking(blocking)),
+		detail,
+	} {
+		if trimmed := strings.TrimSpace(rendering.capture(renderOutputText(note))); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
 
-	if findings := renderSummaryFindings(summary); findings != "" {
+	if findings := rendering.capture(renderSummaryFindings(summary)); findings != "" {
 		parts = append(parts, findings)
 	}
 
@@ -646,9 +804,11 @@ func RenderIncompleteBody(
 		parts = append(parts, checkpoints)
 	}
 
-	parts = append(parts, RenderDetails(summary, statuses...))
+	parts = append(parts, rendering.capture(RenderDetails(summary, statuses...)))
 
-	return strings.Join(parts, "\n\n")
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.review_body", reflect.ValueOf(parts))),
+	)
 }
 
 func removeBlockingReasons(reasons []string, removed ...string) []string {
@@ -675,12 +835,12 @@ func replaceBlockingReason(reasons []string, oldReason string, newReason string)
 
 // chunkCount names a number of chunks without the plural mismatch a bare
 // count leaves in a sentence a person reads.
-func chunkCount(count int) string {
-	if count == 1 {
-		return "1 chunk"
-	}
+func chunkCount(count int) (string, error) {
+	var rendering renderState
 
-	return fmt.Sprintf("%d chunks", count)
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.chunk_count", reflect.ValueOf(count))),
+	)
 }
 
 // RenderInline renders anchored findings as GitHub inline review comments.

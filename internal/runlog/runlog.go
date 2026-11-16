@@ -9,17 +9,23 @@ package runlog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	outputtemplates "goodkind.io/pr-review-agent/config/templates"
 )
 
 // MaximumRecords bounds what one run retains. A review that logs more than this
 // keeps the newest lines, because the end of a run holds the failure.
 const MaximumRecords = 500
+
+var errLogRender = errors.New("render run log")
 
 // Entry is one captured log line.
 type Entry struct {
@@ -218,44 +224,57 @@ var publishedFields = map[string]struct{}{
 	"bot_threads":          {},
 }
 
-// withheldValue stands in for a dropped value and says where the real one is.
-const withheldValue = "[redacted: see this service's log for this run]"
-
 // Render returns the run's log as a markdown block for a check run body, with
 // the value of every field this service has not vouched for withheld. It
 // returns the empty string when the run logged nothing, so a caller can omit
 // the section rather than publish an empty heading.
-func (recorder *Recorder) Render() string {
+func (recorder *Recorder) Render() (string, error) {
 	entries := recorder.Entries()
 	if len(entries) == 0 {
-		return ""
+		return "", nil
 	}
 
-	var builder strings.Builder
-	builder.WriteString("## Run log\n\n```\n")
+	withheld, err := renderLog("output.runlog_withheld", reflect.Value{})
+	if err != nil {
+		return "", err
+	}
 
+	lines := make([]publishedEntry, 0, len(entries))
 	for _, entry := range entries {
-		builder.WriteString(formatEntry(entry))
-		builder.WriteString("\n")
+		lines = append(lines, prepareEntry(entry, withheld))
 	}
 
-	builder.WriteString("```\n")
-
-	return builder.String()
+	return renderLog("output.runlog", reflect.ValueOf(lines))
 }
 
-func formatEntry(entry Entry) string {
-	stamp := entry.Time.UTC().Format("15:04:05.000")
+func renderLog(name string, data reflect.Value) (string, error) {
+	text, err := outputtemplates.Render(name, data)
+	if err != nil {
+		slog.Warn("render run log", slog.String("template", name), slog.String("err", err.Error()))
 
-	line := fmt.Sprintf("%s %-5s %s", stamp, entry.Level.String(), entry.Message)
-	if len(entry.Fields) == 0 {
-		return line
+		return "", fmt.Errorf("%w: %w", errLogRender, err)
 	}
 
-	return line + " " + formatFields(entry.Fields)
+	return text, nil
 }
 
-func formatFields(fields map[string]string) string {
+type publishedEntry struct {
+	Stamp   string
+	Level   string
+	Message string
+	Fields  []publishedField
+}
+
+func prepareEntry(entry Entry, withheld string) publishedEntry {
+	return publishedEntry{
+		Stamp:   entry.Time.UTC().Format("15:04:05.000"),
+		Level:   entry.Level.String(),
+		Message: entry.Message,
+		Fields:  prepareFields(entry.Fields, withheld),
+	}
+}
+
+func prepareFields(fields map[string]string, withheld string) []publishedField {
 	keys := make([]string, 0, len(fields))
 	for key := range fields {
 		keys = append(keys, key)
@@ -263,12 +282,20 @@ func formatFields(fields map[string]string) string {
 
 	sort.Strings(keys)
 
-	parts := make([]string, 0, len(keys))
+	parts := make([]publishedField, 0, len(keys))
 	for _, key := range keys {
-		parts = append(parts, key+"="+publishedValue(key, fields[key]))
+		parts = append(
+			parts,
+			publishedField{Key: key, Value: publishedValue(key, fields[key], withheld)},
+		)
 	}
 
-	return strings.Join(parts, " ")
+	return parts
+}
+
+type publishedField struct {
+	Key   string
+	Value string
 }
 
 // lineBreakEscaper keeps a published value on its own line.
@@ -292,12 +319,12 @@ func EscapeLineBreaks(value string) string {
 }
 
 // publishedValue returns what one field may say on a public surface.
-func publishedValue(key string, value string) string {
+func publishedValue(key string, value string, withheld string) string {
 	if _, published := publishedFields[key]; published {
 		return EscapeLineBreaks(value)
 	}
 
-	return withheldValue
+	return withheld
 }
 
 // Tee returns a handler that writes to every handler given. It lets one review

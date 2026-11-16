@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -28,9 +29,11 @@ type (
 	providerFailureDetails interface{ ProviderFailureDetails() (int, string) }
 )
 
-const checkFailurePanic = "Review failed after an internal panic."
+const checkFailurePanic = "output.failure_panic"
 
 const unreportedFailureField = "not reported"
+
+var errFailureTemplateRender = errors.New("render failure details")
 
 func (service *Service) finalizeFailure(
 	ctx context.Context,
@@ -172,9 +175,27 @@ func (service *Service) dismissFailureVerdict(
 		return nil
 	}
 
+	return service.publishFailureDismissal(ctx, job, latest, comment, found, cause)
+}
+
+func (service *Service) publishFailureDismissal(
+	ctx context.Context,
+	job domain.ReviewJob,
+	latest githubapp.Review,
+	comment githubapp.IssueComment,
+	found bool,
+	cause error,
+) error {
+	logger := gklog.L(ctx)
 	var data reviewrules.PromptData
 
-	data.Input = service.terminalFailureLead(ctx, cause)
+	lead, err := service.terminalFailureLead(ctx, cause)
+	if err != nil {
+		return err
+	}
+
+	data.Input = lead
+
 	if found && comment.ID > 0 {
 		data.SummaryURL = nativeSummaryURL(job.Repository, job.Number, comment.ID)
 	} else {
@@ -187,7 +208,10 @@ func (service *Service) dismissFailureVerdict(
 		return fmt.Errorf("render failure dismissal: %w", err)
 	}
 
-	message += "\n\n" + marker.FailureDismissal(latest.ID)
+	message, err = renderOutputParts(message, marker.FailureDismissal(latest.ID))
+	if err != nil {
+		return err
+	}
 
 	dismissCtx, cancelDismiss := service.publicationContext(ctx)
 	defer cancelDismiss()
@@ -328,36 +352,46 @@ func (service *Service) terminalFailureDetail(
 	ctx context.Context,
 	job domain.ReviewJob,
 	cause error,
-) string {
+) (string, error) {
 	if _, validation := errors.AsType[*AssessmentValidationError](cause); validation {
-		return ""
+		return "", nil
 	}
 
-	detail := publicFailureDetail(job)
+	var rendering renderState
+	detail := rendering.capture(publicFailureDetail(job))
 	if cause == nil || !unexpectedFailure(cause) {
-		return detail
+		return rendering.finish(detail)
 	}
 
 	var failures []terminalProviderFailure
 	collectTerminalProviderFailures(cause, &failures)
-	visible := service.terminalFailureLead(ctx, cause)
+	visible := rendering.capture(service.terminalFailureLead(ctx, cause))
 
 	var rows strings.Builder
 
 	for _, failure := range failures {
-		row := service.terminalFailureData(failure)
-		row.FailureClass = service.failureClassLabel(ctx, row.FailureClass)
-		rows.WriteString(service.renderFailureTemplate(ctx, "failure.row", row))
+		row, err := service.terminalFailureData(failure)
+		if err != nil {
+			return "", err
+		}
+
+		row.FailureClass = rendering.capture(service.failureClassLabel(ctx, row.FailureClass))
+		rows.WriteString(rendering.capture(service.renderFailureTemplate(ctx, "failure.row", row)))
 	}
 
 	if rows.Len() > 0 {
 		var data reviewrules.PromptData
 
 		data.Input = rows.String()
-		visible += "\n\n" + service.renderFailureTemplate(ctx, "failure.details", data)
+		visible = rendering.capture(
+			renderOutputParts(
+				visible,
+				rendering.capture(service.renderFailureTemplate(ctx, "failure.details", data)),
+			),
+		)
 	}
 
-	return visible + "\n\n" + detail
+	return rendering.finish(rendering.capture(renderOutputParts(visible, detail)))
 }
 
 func terminalFailureClass(cause error) config.FailureClass {
@@ -389,7 +423,8 @@ func terminalFailureCause(cause error) error {
 	return cause
 }
 
-func (service *Service) terminalFailureLead(ctx context.Context, cause error) string {
+func (service *Service) terminalFailureLead(ctx context.Context, cause error) (string, error) {
+	var rendering renderState
 	terminal := terminalFailureCause(cause)
 
 	var failures []terminalProviderFailure
@@ -402,38 +437,48 @@ func (service *Service) terminalFailureLead(ctx context.Context, cause error) st
 
 	var githubFailure githubapp.APIError
 	if errors.As(terminal, &githubFailure) {
-		data.FailureStatus = fmt.Sprintf("HTTP %d", githubFailure.StatusCode)
+		data.FailureStatus = rendering.capture(
+			renderOutputTemplate("output.http_status", reflect.ValueOf(githubFailure.StatusCode)),
+		)
 	}
 
 	template := "failure.service"
 
 	if len(failures) > 0 {
-		data = service.terminalFailureData(failures[len(failures)-1])
+		var err error
+		data, err = service.terminalFailureData(failures[len(failures)-1])
+		if err != nil {
+			return "", err
+		}
+
 		template = "failure.provider"
 	}
 
-	data.FailureClass = service.failureClassLabel(ctx, data.FailureClass)
+	data.FailureClass = rendering.capture(service.failureClassLabel(ctx, data.FailureClass))
 
-	return service.renderFailureTemplate(ctx, template, data)
+	return rendering.finish(rendering.capture(service.renderFailureTemplate(ctx, template, data)))
 }
 
-func (service *Service) failureClassLabel(ctx context.Context, class string) string {
+func (service *Service) failureClassLabel(ctx context.Context, class string) (string, error) {
 	var data reviewrules.PromptData
 	return service.renderFailureTemplate(ctx, "failure.class."+class, data)
 }
 
 func (service *Service) terminalFailureData(
 	failure terminalProviderFailure,
-) reviewrules.PromptData {
+) (reviewrules.PromptData, error) {
 	var data reviewrules.PromptData
+	var rendering renderState
 
-	data.Provider = usageModelCell(failure.status.ProviderID)
-	data.Model = usageModelCell(failure.status.Model)
+	data.Provider = rendering.capture(usageModelCell(failure.status.ProviderID))
+	data.Model = rendering.capture(usageModelCell(failure.status.Model))
 	data.FailureClass = string(failure.class)
 
 	data.FailureStatus = unreportedFailureField
 	if failure.httpStatus >= 100 && failure.httpStatus <= 599 {
-		data.FailureStatus = fmt.Sprintf("HTTP %d", failure.httpStatus)
+		data.FailureStatus = rendering.capture(
+			renderOutputTemplate("output.http_status", reflect.ValueOf(failure.httpStatus)),
+		)
 	}
 
 	data.FailureCode = unreportedFailureField
@@ -441,23 +486,26 @@ func (service *Service) terminalFailureData(
 		data.FailureCode = failure.code
 	}
 
-	return data
+	return data, rendering.err
 }
 
 func (service *Service) renderFailureTemplate(
 	ctx context.Context,
 	name string,
 	data reviewrules.PromptData,
-) string {
+) (string, error) {
 	text, err := service.reviewPolicy.Render(name, data)
 	if err != nil {
-		gklog.L(ctx).WarnContext(
+		logger := gklog.L(ctx)
+		logger.WarnContext(
 			ctx,
 			"render failure details",
 			slog.String("template", name),
 			slog.String("err", err.Error()),
 		)
+
+		return "", fmt.Errorf("%w: %w", errFailureTemplateRender, err)
 	}
 
-	return text
+	return text, nil
 }

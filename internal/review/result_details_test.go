@@ -22,7 +22,7 @@ func TestReviewDetailsRenderReturnedResult(t *testing.T) {
 	for _, result := range []string{"", failure} {
 		var summary review.Summary
 		summary.Result = result
-		body := review.RenderDetails(summary)
+		body := rendered(t)(review.RenderDetails(summary))
 		expected := result
 		if expected == "" {
 			expected = "null"
@@ -38,7 +38,7 @@ func TestReviewDetailsPreserveMultilineErrorText(t *testing.T) {
 	const failure = "first\terror: `value` | <input>\r\nsecond error: &details *stars* **bold** _under_ [label](https://example.invalid) \\*escaped* ~~deleted~~ https://example.invalid test@example.invalid www.example.invalid"
 	var summary review.Summary
 	summary.Result = failure
-	body := review.RenderDetails(summary)
+	body := rendered(t)(review.RenderDetails(summary))
 	_, encoded, found := strings.Cut(body, "| `result` | <pre>")
 	if !found {
 		t.Fatalf("Review details omitted the multiline error: %s", body)

@@ -180,7 +180,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 				summary.Published = test.published
 				summary.Blocking = test.blocking
 
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 				previous := -1
 
 				for _, section := range []string{
@@ -263,7 +263,7 @@ func TestAnUnreadHeadBlocksWithoutPromisingInlineFindings(t *testing.T) {
 // A finding marker inside the summary body would be read back by
 // collectPublicationState and would silence that finding forever.
 func TestRenderBodyCarriesTheRequiredMarkersAndNoFindingMarker(t *testing.T) {
-	body := review.RenderBody(testSummary())
+	body := rendered(t)(review.RenderBody(testSummary()))
 
 	if !marker.HasSummary(body) {
 		t.Fatalf("body = %q, want the summary marker", body)
@@ -285,11 +285,11 @@ func TestRenderFailureBodyStatesTheFailureAndOmitsTheReviewMarker(t *testing.T) 
 		func(t *testing.T) {
 			summary := testSummary()
 			detail := "The cause is recorded in this service's log."
-			body := review.RenderFailureBody(summary, "Review failed.", detail)
+			body := rendered(t)(review.RenderFailureBody(summary, "Review failed.", detail))
 			summary.Failed = true
 
 			want := "## Review\n\nReview failed.\n\n" + detail + "\n\n" +
-				review.RenderDetails(summary) + "\n\n" + marker.Summary()
+				rendered(t)(review.RenderDetails(summary)) + "\n\n" + marker.Summary()
 			if body != want {
 				t.Fatalf("body = %q, want %q", body, want)
 			}
@@ -300,11 +300,11 @@ func TestRenderFailureBodyStatesTheFailureAndOmitsTheReviewMarker(t *testing.T) 
 		"no detail",
 		func(t *testing.T) {
 			summary := testSummary()
-			body := review.RenderFailureBody(summary, "Review failed.", "   ")
+			body := rendered(t)(review.RenderFailureBody(summary, "Review failed.", "   "))
 			summary.Failed = true
 
-			want := "## Review\n\nReview failed.\n\n" + review.RenderDetails(
-				summary,
+			want := "## Review\n\nReview failed.\n\n" + rendered(t)(
+				review.RenderDetails(summary),
 			) + "\n\n" + marker.Summary()
 			if body != want {
 				t.Fatalf("body = %q, want %q", body, want)
@@ -315,7 +315,9 @@ func TestRenderFailureBodyStatesTheFailureAndOmitsTheReviewMarker(t *testing.T) 
 	t.Run(
 		"never carries a review marker",
 		func(t *testing.T) {
-			body := review.RenderFailureBody(testSummary(), "Review failed.", "provider refused")
+			body := rendered(t)(
+				review.RenderFailureBody(testSummary(), "Review failed.", "provider refused"),
+			)
 			if _, found := marker.FindReview(body); found {
 				t.Fatalf("body = %q, want no review marker", body)
 			}
@@ -416,7 +418,7 @@ func TestRenderedProseHasNoTypographicDashes(t *testing.T) {
 		},
 	}
 
-	body := review.RenderBody(testSummary())
+	body := rendered(t)(review.RenderBody(testSummary()))
 	if containsTypographicDash(body) {
 		t.Fatalf("review body still contains typographic dash: %q", body)
 	}

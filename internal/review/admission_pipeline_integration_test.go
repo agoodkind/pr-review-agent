@@ -57,7 +57,7 @@ func TestReviewBudgetPreservesRelationshipWorkOutsideTheContentCap(t *testing.T)
 		t.Fatalf("The real source did not retain its required relationship assessments: %v", err)
 	}
 
-	decision := review.CheckReviewBudget(1, prepared, 100, len(bounded))
+	decision := admitted(t)(review.CheckReviewBudget(1, prepared, 100, len(bounded)))
 	if decision.Skip || decision.ReviewableChunks != len(bounded) {
 		t.Fatalf(
 			"Derived relationship work rejected content within its configured cap: %+v; source=%d total=%d",
@@ -67,11 +67,11 @@ func TestReviewBudgetPreservesRelationshipWorkOutsideTheContentCap(t *testing.T)
 		)
 	}
 
-	if !review.CheckReviewBudget(1, prepared, 100, len(bounded)-1).Skip {
+	if !admitted(t)(review.CheckReviewBudget(1, prepared, 100, len(bounded)-1)).Skip {
 		t.Fatal("The content cap did not reject ordinary requests above its boundary.")
 	}
 
-	if !review.CheckReviewBudget(301, prepared, 1000, 60).Skip {
+	if !admitted(t)(review.CheckReviewBudget(301, prepared, 1000, 60)).Skip {
 		t.Fatal("The public budget check changed the existing GitHub file limit.")
 	}
 
@@ -87,7 +87,7 @@ func TestReviewBudgetPreservesRelationshipWorkOutsideTheContentCap(t *testing.T)
 		t.Fatalf("The actual oversized prose did not produce an explicit scope gap: %v", err)
 	}
 
-	if result := review.CheckReviewBudget(1, gap, 100, 1); result.Skip ||
+	if result := admitted(t)(review.CheckReviewBudget(1, gap, 100, 1)); result.Skip ||
 		result.ReviewableChunks != 0 {
 		t.Fatalf("A placeholder consumed the ordinary content cap: %+v", result)
 	}
@@ -100,7 +100,7 @@ func TestReviewBudgetPreservesRelationshipWorkOutsideTheContentCap(t *testing.T)
 		t.Fatalf("The source and oversized prose did not retain their mixed assessment: %v", err)
 	}
 
-	if result := review.CheckReviewBudget(1, mixed, 100, 1); result.Skip ||
+	if result := admitted(t)(review.CheckReviewBudget(1, mixed, 100, 1)); result.Skip ||
 		result.ReviewableChunks != 1 {
 		t.Fatalf("A mixed gap concealed required ordinary source from the content cap: %+v", result)
 	}
@@ -237,7 +237,7 @@ func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequest
 		}
 	}
 
-	decision := review.CheckReviewBudget(len(planned.Files), chunks, 100, 60)
+	decision := admitted(t)(review.CheckReviewBudget(len(planned.Files), chunks, 100, 60))
 	if decision.Skip || decision.ReviewableChunks != sourceFiles {
 		t.Fatalf("Generated changes consumed the ordinary content budget: %+v", decision)
 	}
@@ -249,11 +249,13 @@ func TestReviewBudgetExcludesFiveThousandGeneratedHunksBeforeThirtySourceRequest
 		t.Fatal(err)
 	}
 
-	if !review.CheckReviewBudget(
-		len(planned.Files),
-		append(chunks, metadataChunks...),
-		100,
-		sourceFiles,
+	if !admitted(t)(
+		review.CheckReviewBudget(
+			len(planned.Files),
+			append(chunks, metadataChunks...),
+			100,
+			sourceFiles,
+		),
 	).Skip {
 		t.Fatal("Required metadata requests did not count toward the ordinary content cap.")
 	}

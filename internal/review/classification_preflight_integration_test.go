@@ -62,7 +62,7 @@ func TestPreflightPreservesOneHundredCompletedAssessmentsWithinTheCommentLimit(t
 		Decision:                   domain.ReviewDecisionApprove,
 	}
 
-	body := review.RenderBody(summary)
+	body := rendered(t)(review.RenderBody(summary))
 	if len(body) > 65536 {
 		t.Fatalf(
 			"The complete summary requires %d bytes and exceeds the GitHub comment limit.",
@@ -507,7 +507,7 @@ func TestPreflightPreservesOneHundredExcludedAssessmentsWithinTheCommentLimit(t 
 					Decision:                   domain.ReviewDecisionApprove,
 				}
 
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 				if len(body) > 65536 {
 					t.Fatalf(
 						"The complete exclusion summary exceeds the GitHub limit at %d bytes.",

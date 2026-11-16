@@ -57,7 +57,7 @@ func TestRenderDetailsShowsRecordedRequestsWithoutCumulativeUsage(t *testing.T) 
 			CostComplete:     true,
 		},
 	}
-	body := review.RenderDetails(review.Summary{Usage: usage})
+	body := rendered(t)(review.RenderDetails(review.Summary{Usage: usage}))
 
 	for _, expected := range []string{
 		"| `providers` | `z-first\\|provider`: ``rate`limited\\|raw``<br>`a-second`: `36` |",

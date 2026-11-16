@@ -1,0 +1,29 @@
+{{define "output.check_truncated"}}{{.Notice}}{{.Tail}}
+{{end}}
+
+{{define "output.check_truncation_notice"}}_Earlier lines omitted; this log was truncated to fit the check run._
+
+
+{{end}}
+
+{{define "output.metadata-check-superseded-detail"}}The service admitted another check for the newest title and description.
+{{end}}
+
+{{define "output.metadata-check-superseded-title"}}Review superseded
+{{end}}
+
+{{define "output.runlog"}}## Run log
+
+```
+{{range .}}{{template "output.runlog_entry" .}}
+{{end}}```
+
+{{end}}
+
+{{define "output.runlog_entry"}}{{.Stamp}} {{printf "%-5s" .Level}} {{.Message}}{{range .Fields}} {{.Key}}={{.Value}}{{end}}{{end}}
+
+{{define "output.runlog_fields"}}{{range $index, $field := .}}{{if $index}} {{end}}{{$field.Key}}={{$field.Value}}{{end}}
+{{end}}
+
+{{define "output.runlog_withheld"}}[redacted: see this service's log for this run]
+{{end}}

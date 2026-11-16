@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"goodkind.io/gklog"
@@ -86,7 +87,7 @@ func blockingReasons(
 	threads []githubapp.ReviewThread,
 	botLogin string,
 	ref domain.PullRequestRef,
-) []string {
+) ([]string, error) {
 	reasons := make([]string, 0)
 
 	for _, thread := range threads {
@@ -94,34 +95,57 @@ func blockingReasons(
 			continue
 		}
 
-		reasons = append(reasons, describeOpenThread(thread, ref))
+		reason, err := describeOpenThread(thread, ref)
+		if err != nil {
+			return nil, err
+		}
+
+		reasons = append(reasons, reason)
 	}
 
-	return reasons
+	return reasons, nil
 }
-
-// unreviewedHeadReason also recognizes older reasons that continue this sentence.
-const unreviewedHeadReason = "This head was not fully reviewed, so nothing here can approve it yet."
 
 // describeOpenThread names one open thread the way a reader can act on it: the
 // place in the code it objects to, linked to the comment itself.
-func describeOpenThread(thread githubapp.ReviewThread, ref domain.PullRequestRef) string {
+func describeOpenThread(thread githubapp.ReviewThread, ref domain.PullRequestRef) (string, error) {
+	var state renderState
+
 	// The path is whatever the pull request named a file, so it is rendered as a
 	// code span for the same reason it is in the progress prose: a bracket, a
 	// backtick or a line break in it would otherwise end the link text and let
 	// the rest render as the service's own words.
-	label := codeSpan(strings.TrimSpace(thread.RootComment.Path))
+	label := state.capture(codeSpan(strings.TrimSpace(thread.RootComment.Path)))
+	line := 0
 	if strings.TrimSpace(thread.RootComment.Path) == "" {
-		label = codeSpan(thread.NodeID)
+		label = state.capture(codeSpan(thread.NodeID))
 	} else if thread.RootComment.EndLine > 0 {
-		label = fmt.Sprintf("%s:%d", label, thread.RootComment.EndLine)
+		line = thread.RootComment.EndLine
 	}
 
-	if thread.RootComment.DatabaseID == 0 {
-		return label
+	link := ""
+	if thread.RootComment.DatabaseID != 0 {
+		link = threadCommentURL(thread, ref)
 	}
 
-	return fmt.Sprintf("[%s](%s)", label, threadCommentURL(thread, ref))
+	return state.finish(
+		state.capture(
+			renderOutputTemplate(
+				"output.open-thread",
+				reflect.ValueOf(
+					struct {
+						Label string
+						Line  int
+						URL   string
+					}{
+						label,
+						line,
+						link,
+					},
+				),
+			),
+		),
+	)
 }
 
 // threadCommentURL builds the permalink GitHub gives one review comment.
@@ -134,6 +158,11 @@ func threadCommentURL(thread githubapp.ReviewThread, ref domain.PullRequestRef) 
 		thread.RootComment.DatabaseID,
 	)
 }
+
+// unreviewedHeadReason also recognizes older reasons that continue this sentence.
+const (
+	unreviewedHeadReason = "output.unreviewed-head-reason"
+)
 
 // GitHub reports review states, not the events that produced them: the event
 // REQUEST_CHANGES reads back as CHANGES_REQUESTED and APPROVE as APPROVED.

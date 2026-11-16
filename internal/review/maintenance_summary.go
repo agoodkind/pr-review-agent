@@ -2,6 +2,7 @@ package review
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -29,20 +30,26 @@ func preserveCheckpointSummary(state marker.State, body string) bool {
 		) || strings.Contains(body, fileAssessmentMarkerPrefix)
 }
 
-func refreshFailureResult(body, result string) string {
+func refreshFailureResult(body, result string) (string, error) {
+	var rendering renderState
 	start := strings.Index(body, reviewDetailsStart)
 	if start < 0 {
-		return body
+		return rendering.finish(body)
 	}
 
-	row := "| `result` | " + rawResultCell(result) + " |"
+	row := rendering.capture(
+		renderOutputTemplate(
+			"output.result_row",
+			reflect.ValueOf(rendering.capture(rawResultCell(result))),
+		),
+	)
 
 	lines := strings.Split(body[start:], "\n")
 	for index, line := range lines {
 		if strings.HasPrefix(line, "| `result` |") {
 			lines[index] = row
 
-			return body[:start] + strings.Join(lines, "\n")
+			return rendering.finish(body[:start] + strings.Join(lines, "\n"))
 		}
 	}
 
@@ -50,45 +57,75 @@ func refreshFailureResult(body, result string) string {
 		if strings.HasPrefix(line, "| --- |") {
 			lines[index] += "\n" + row
 
-			return body[:start] + strings.Join(lines, "\n")
+			return rendering.finish(body[:start] + strings.Join(lines, "\n"))
 		}
 	}
 
-	return body
+	return rendering.finish(body)
 }
 
-func renderMaintenanceFailure(body, title, detail string) string {
-	return renderCheckpointNotice(stripActiveReviewProgress(body), "### "+title+"\n\n"+detail)
+func renderMaintenanceFailure(body, title, detail string) (string, error) {
+	var rendering renderState
+	notice := rendering.capture(
+		renderOutputTemplate(
+			"output.maintenance_notice",
+			reflect.ValueOf(
+				struct {
+					Title  string
+					Detail string
+				}{
+					Title:  rendering.capture(renderOutputText(title)),
+					Detail: detail,
+				},
+			),
+		),
+	)
+
+	return rendering.finish(
+		rendering.capture(
+			renderCheckpointNotice(rendering.capture(stripActiveReviewProgress(body)), notice),
+		),
+	)
 }
 
-func stripActiveReviewProgress(body string) string {
+func stripActiveReviewProgress(body string) (string, error) {
+	var rendering renderState
 	prefix, remaining, found := strings.Cut(body, "\n\n")
 	if !found || strings.TrimSpace(prefix) != "## Review" {
-		return body
+		return rendering.finish(body)
 	}
 
 	progress, remaining, found := strings.Cut(remaining, "\n\n")
 	if !strings.HasPrefix(progress, "Reviewing `") || strings.Contains(progress, "\n") {
-		return body
+		return rendering.finish(body)
 	}
 
 	if !found {
-		return prefix
+		return rendering.finish(prefix)
 	}
 
-	return prefix + "\n\n" + remaining
+	return rendering.finish(rendering.capture(renderOutputParts(prefix, remaining)))
 }
 
-func renderCheckpointNotice(body, notice string) string {
+func renderCheckpointNotice(body, notice string) (string, error) {
+	var rendering renderState
 	body = stripMaintenanceFailure(stripReassessmentNotice(stripDurableStateMarker(body)))
 
-	return body + "\n\n" + strings.Join(
-		[]string{
-			maintenanceFailureStart,
-			notice,
-			maintenanceFailureEnd,
-		},
-		"\n\n",
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.checkpoint_notice",
+				reflect.ValueOf(
+					struct {
+						Body   string
+						Notice string
+					}{
+						Body:   body,
+						Notice: notice,
+					},
+				),
+			),
+		),
 	)
 }
 
@@ -111,29 +148,57 @@ func ClearUpdateFailure(body string) string {
 	return stripReassessmentNotice(stripMaintenanceFailure(body))
 }
 
-func preservedReviewDetails(body string, summary Summary) string {
+func preservedReviewDetails(body string, summary Summary) (string, error) {
+	var rendering renderState
 	start, end, err := reviewDetailsRange(body, "completed review summary")
 	if err == nil {
-		return refreshThreadDetails(body[start:end], summary)
+		return rendering.finish(rendering.capture(refreshThreadDetails(body[start:end], summary)))
 	}
 
-	return fmt.Sprintf(
-		"%s\n\nThe completed review statistics are unavailable.\n\n| | |\n| --- | --- |\n| Head | `%s` |\n| All file content inspected | %s |\n| Review scope assessed | %s |\n| Minimum importance | `%d` |\n| Bot thread IDs | %s |\n| Bot threads open | `%d` |\n| Bot threads resolved | `%d` |\n\n</details>",
-		reviewDetailsStart,
-		shortHead(summary.Head),
-		formatYesNo(summary.CoverageComplete),
-		formatYesNo(summary.CoverageComplete || summary.OmissionsAccepted),
-		summary.MinimumImportance,
-		formatThreadTraceIDs(summary.Threads),
-		countOpenThreadTraces(summary.Threads),
-		countResolvedThreadTraces(summary.Threads),
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.legacy_details",
+				reflect.ValueOf(
+					struct {
+						Head       string
+						Coverage   string
+						Scope      string
+						Importance int
+						Threads    string
+						Open       int
+						Resolved   int
+					}{
+						Head:     shortHead(summary.Head),
+						Coverage: rendering.capture(formatYesNo(summary.CoverageComplete)),
+						Scope: rendering.capture(
+							formatYesNo(summary.CoverageComplete || summary.OmissionsAccepted),
+						),
+						Importance: summary.MinimumImportance,
+						Threads:    rendering.capture(formatThreadTraceIDs(summary.Threads)),
+						Open:       countOpenThreadTraces(summary.Threads),
+						Resolved:   countResolvedThreadTraces(summary.Threads),
+					},
+				),
+			),
+		),
 	)
 }
 
-func preservedReportPrefix(body string) string {
+func preservedReportPrefix(body string) (string, error) {
+	var rendering renderState
 	if start := strings.Index(body, reportSectionStart); start >= 0 {
 		if end := strings.Index(body[start:], reportSectionEnd); end >= 0 {
-			return "## Review\n\n" + body[start:start+end+len(reportSectionEnd)]
+			return rendering.finish(
+				rendering.capture(
+					renderOutputParts(
+						rendering.capture(
+							renderOutputTemplate("output.review_heading", reflect.ValueOf(nil)),
+						),
+						body[start:start+end+len(reportSectionEnd)],
+					),
+				),
+			)
 		}
 	}
 
@@ -157,11 +222,13 @@ func preservedReportPrefix(body string) string {
 
 		prefix = strings.TrimSpace(prefix)
 		if strings.Contains(prefix, "### Summary") || strings.Contains(prefix, "### Changes") {
-			return prefix
+			return rendering.finish(prefix)
 		}
 	}
 
-	return "## Review"
+	return rendering.finish(
+		rendering.capture(renderOutputTemplate("output.review_heading", reflect.ValueOf(nil))),
+	)
 }
 
 // MetadataMatches checks the revision because title and description edits can keep the commit unchanged.
@@ -177,6 +244,7 @@ func RestoreReviewDetails(
 	threads []githubapp.ReviewThread,
 	botLogin string,
 ) (string, error) {
+	var rendering renderState
 	start, end, err := reviewDetailsRange(existingBody, "existing summary")
 	if err != nil {
 		return "", err
@@ -191,12 +259,14 @@ func RestoreReviewDetails(
 
 	summary.Threads = traceThreads(threads, botLogin)
 
-	details := refreshThreadDetails(sourceDetails[sourceStart:sourceEnd], summary)
+	details := rendering.capture(
+		refreshThreadDetails(sourceDetails[sourceStart:sourceEnd], summary),
+	)
 	if existingBody[start:end] == details {
-		return existingBody, nil
+		return rendering.finish(existingBody)
 	}
 
-	return existingBody[:start] + details + existingBody[end:], nil
+	return rendering.finish(existingBody[:start] + details + existingBody[end:])
 }
 
 func reviewDetailsRange(body, source string) (int, int, error) {

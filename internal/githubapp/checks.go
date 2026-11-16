@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 
+	outputtemplates "goodkind.io/pr-review-agent/config/templates"
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
@@ -18,22 +20,50 @@ import (
 // holds the failure and the front holds setup.
 const MaximumCheckRunTextBytes = 65535
 
-const checkRunTextTruncationNotice = "_Earlier lines omitted; this log was truncated to fit the check run._\n\n"
+var errCheckTextRender = errors.New("render check run text")
 
 // TruncateCheckRunText keeps the tail of a log within the check run text limit.
-func TruncateCheckRunText(text string) string {
+func TruncateCheckRunText(text string) (string, error) {
 	if len(text) <= MaximumCheckRunTextBytes {
-		return text
+		return text, nil
 	}
 
-	budget := MaximumCheckRunTextBytes - len(checkRunTextTruncationNotice)
+	notice, err := renderCheckText("output.check_truncation_notice", reflect.Value{})
+	if err != nil {
+		return "", err
+	}
+
+	budget := MaximumCheckRunTextBytes - len(notice)
 
 	tail := text[len(text)-budget:]
 	if newline := strings.IndexByte(tail, '\n'); newline >= 0 && newline+1 < len(tail) {
 		tail = tail[newline+1:]
 	}
 
-	return checkRunTextTruncationNotice + tail
+	data := struct {
+		Notice string
+		Tail   string
+	}{
+		Notice: notice,
+		Tail:   tail,
+	}
+
+	return renderCheckText("output.check_truncated", reflect.ValueOf(data))
+}
+
+func renderCheckText(name string, data reflect.Value) (string, error) {
+	text, err := outputtemplates.Render(name, data)
+	if err != nil {
+		slog.Warn(
+			"render check run text",
+			slog.String("template", name),
+			slog.String("err", err.Error()),
+		)
+
+		return "", fmt.Errorf("%w: %w", errCheckTextRender, err)
+	}
+
+	return text, nil
 }
 
 type checkRunResponse struct {
@@ -345,6 +375,11 @@ func (client *Client) CompleteCheckRun(
 	text string,
 ) error {
 	path := client.repoPath(repo, fmt.Sprintf("/check-runs/%d", checkRunID))
+	checkText, err := TruncateCheckRunText(text)
+	if err != nil {
+		return err
+	}
+
 	payload := updateCheckRunBody{
 		Status:     "completed",
 		Conclusion: conclusion,
@@ -352,7 +387,7 @@ func (client *Client) CompleteCheckRun(
 		Output: &checkRunOutput{
 			Title:   title,
 			Summary: summary,
-			Text:    TruncateCheckRunText(text),
+			Text:    checkText,
 		},
 	}
 

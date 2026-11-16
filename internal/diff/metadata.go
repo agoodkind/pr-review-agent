@@ -3,13 +3,19 @@ package diff
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 
+	outputtemplates "goodkind.io/pr-review-agent/config/templates"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
+
+var errMetadataRender = errors.New("render metadata output")
 
 // MetadataSource uses field line numbers without inventing repository paths.
 type MetadataSource struct {
@@ -26,18 +32,21 @@ func (source MetadataSource) Target() domain.FindingTarget {
 }
 
 // Label renders metadata independently of file coordinates.
-func (source MetadataSource) Label() string {
+func (source MetadataSource) Label() (string, error) {
 	switch source.Surface {
 	case domain.FindingPullRequestTitle:
-		return "Pull request title"
+		return renderMetadataOutput("output.metadata-source-title", reflect.Value{})
 	case domain.FindingPullRequestDescription:
-		return "Pull request description"
+		return renderMetadataOutput("output.metadata-source-description", reflect.Value{})
 	case domain.FindingCommitMessage:
-		return "Commit message " + string(source.CommitSHA)
+		return renderMetadataOutput(
+			"output.metadata-source-commit",
+			reflect.ValueOf(source.CommitSHA),
+		)
 	case domain.FindingFile:
-		return ""
+		return "", nil
 	default:
-		return ""
+		return "", nil
 	}
 }
 
@@ -119,7 +128,7 @@ func PullRequestRevision(pullRequest githubapp.PullRequest) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func metadataPieces(source MetadataSource, maximumBytes int) []Piece {
+func metadataPieces(source MetadataSource, maximumBytes int) ([]Piece, error) {
 	lines := strings.Split(source.Text, "\n")
 
 	var pieces []Piece
@@ -144,13 +153,21 @@ func metadataPieces(source MetadataSource, maximumBytes int) []Piece {
 			text = formatOversizedMetadataSource(fragment, maximumBytes)
 		}
 
+		header, err := renderMetadataOutput(
+			"output.metadata-lines",
+			reflect.ValueOf([]int{fragment.StartLine, fragment.EndLine}),
+		)
+		if err != nil {
+			return nil, err
+		}
+
 		pieces = append(
 			pieces,
 			Piece{
 				Patch:            "",
 				Path:             "",
 				Text:             text,
-				Header:           fmt.Sprintf("lines %d-%d", fragment.StartLine, fragment.EndLine),
+				Header:           header,
 				CoverageComplete: !oversized,
 				Oversized:        oversized,
 				Metadata:         &fragment,
@@ -160,7 +177,22 @@ func metadataPieces(source MetadataSource, maximumBytes int) []Piece {
 		start = end
 	}
 
-	return pieces
+	return pieces, nil
+}
+
+func renderMetadataOutput(name string, data reflect.Value) (string, error) {
+	text, err := outputtemplates.Render(name, data)
+	if err != nil {
+		slog.Warn(
+			"render metadata output",
+			slog.String("template", name),
+			slog.String("err", err.Error()),
+		)
+
+		return "", fmt.Errorf("%w: %w", errMetadataRender, err)
+	}
+
+	return text, nil
 }
 
 func formatMetadataSource(source MetadataSource) string {

@@ -79,7 +79,7 @@ func TestFailureUpdatesTheResultWithoutErasingSavedReviewDetails(t *testing.T) {
 				summary := findingDetailsSummary()
 				summary.Result = "previous failure result"
 				summary.Usage.InputTokens = 4321
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 				if legacy {
 					body = strings.ReplaceAll(
 						body,

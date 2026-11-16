@@ -16,6 +16,8 @@ import (
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
+var errMetadataLabelRender = errors.New("render metadata reassessment label")
+
 // MetadataReassessor evaluates saved metadata findings independently of discovery.
 type MetadataReassessor interface {
 	ReassessMetadata(
@@ -242,6 +244,17 @@ func (service *Service) metadataReassessmentPrompt(
 		mode = reviewrules.DeduplicateDefect
 	}
 
+	label, err := source.Label()
+	if err != nil {
+		logger.WarnContext(
+			ctx,
+			"render metadata reassessment label",
+			slog.String("err", err.Error()),
+		)
+
+		return "", fmt.Errorf("%w: %w", errMetadataLabelRender, err)
+	}
+
 	body := fmt.Sprintf(
 		"Finding ID: %s\nCurrent head: %s\nCurrent revision: %s\nDeduplication mode: %s\n"+
 			"Saved finding (historical assessment):\n%s\nComplete current field %s, lines 1-%d:\n%s",
@@ -250,7 +263,7 @@ func (service *Service) metadataReassessmentPrompt(
 		diff.PullRequestRevision(pullRequest),
 		mode,
 		encoded,
-		source.Label(),
+		label,
 		len(strings.Split(source.Text, "\n")),
 		source.Text,
 	)

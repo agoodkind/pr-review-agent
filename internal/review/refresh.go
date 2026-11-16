@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"goodkind.io/gklog"
@@ -165,7 +166,6 @@ func (service *Service) refreshReviewedCheck(
 	settings reviewSettings,
 ) error {
 	startedAt := service.now()
-	logger := gklog.L(ctx)
 	withheld, summary, err := service.reconcileReplyAndRefreshVerdict(ctx, job, reviews, settings)
 
 	usage := UsageFromContext(ctx)
@@ -178,72 +178,41 @@ func (service *Service) refreshReviewedCheck(
 	}
 
 	if err != nil {
-		now := service.now()
-		progress := service.newProgress(job, settings, startedAt).summary(now)
-
-		checkProgress := progress
-		if summary.Head != "" {
-			checkProgress = summary
-		}
-
-		checkProgress = service.measuredRefreshSummary(ctx, checkProgress, startedAt)
-
-		progress.Usage = checkProgress.Usage
-		if errors.Is(err, errHeadMoved) {
-			recordAssessment(ctx, domain.AssessmentInterrupted, &checkProgress, nil, 0)
-
-			return service.completeCheckRun(
-				ctx,
-				job.InstallationID,
-				job.Repository,
-				job.CheckRunID,
-				checkConclusionCancelled,
-				checkSummaryCancelled,
-				checkSummaryCancelled+"\n\n"+RenderDetails(checkProgress),
-			)
-		}
-
-		logger.ErrorContext(ctx, "refresh reviewed check", slog.String("err", err.Error()))
-
-		var statuses []ProviderStatus
-		collectProviderStatuses(err, &statuses)
-		recordAssessment(
-			ctx,
-			domain.AssessmentFailed,
-			&checkProgress,
-			failureNames(err),
-			quotaRecovery(statuses),
-		)
-		detail := service.terminalFailureDetail(ctx, job, err)
-		completionErr := service.completeCheckRun(
-			ctx,
-			job.InstallationID,
-			job.Repository,
-			job.CheckRunID,
-			"failure",
-			"Review refresh failed",
-			detail+"\n\n"+RenderDetails(checkProgress),
-		)
-		service.writeFailureSummary(ctx, job, progress, "Review refresh failed", detail)
-
-		dismissErr := service.dismissFailureVerdict(ctx, job, err)
-		if completionErr == nil {
-			return &reportedFailureError{cause: errors.Join(err, dismissErr)}
-		}
-
-		return errors.Join(err, completionErr, dismissErr)
+		return service.failedRefreshCheck(ctx, job, summary, settings, startedAt, err)
 	}
+
+	return service.completeRefreshedCheck(ctx, job, summary, withheld, startedAt)
+}
+
+func (service *Service) completeRefreshedCheck(
+	ctx context.Context,
+	job domain.ReviewJob,
+	summary Summary,
+	withheld bool,
+	startedAt time.Time,
+) error {
+	var rendered renderState
+	usage := UsageFromContext(ctx)
 
 	details := ""
 
 	if usage.Requests > 0 {
 		summary = service.measuredRefreshSummary(ctx, summary, startedAt)
 
-		details = "\n\n" + RenderDetails(summary)
+		details = rendered.capture(renderOutputParts("", rendered.capture(RenderDetails(summary))))
 	}
 
 	if withheld {
 		recordAssessment(ctx, domain.AssessmentDeclined, nil, nil, 0)
+		title := rendered.capture(
+			renderOutputTemplate("output.refresh_attention", reflect.ValueOf(nil)),
+		)
+		checkSummary := rendered.capture(
+			renderOutputTemplate("output.refresh_withheld", reflect.ValueOf(details)),
+		)
+		if rendered.err != nil {
+			return rendered.err
+		}
 
 		return service.completeCheckRun(
 			ctx,
@@ -251,19 +220,23 @@ func (service *Service) refreshReviewedCheck(
 			job.Repository,
 			job.CheckRunID,
 			checkConclusionDeclined,
-			"Review needs attention",
-			"Approval remains withheld. The review summary explains what needs attention."+details,
+			title,
+			checkSummary,
 		)
 	}
 
 	if usage.Requests > 0 {
-		return service.succeed(
-			ctx,
-			job,
-			job.CheckRunID,
-			"Review refreshed",
-			"This run reassessed the standing review."+details,
+		title := rendered.capture(
+			renderOutputTemplate("output.refresh_title", reflect.ValueOf(nil)),
 		)
+		checkSummary := rendered.capture(
+			renderOutputTemplate("output.refresh_summary", reflect.ValueOf(details)),
+		)
+		if rendered.err != nil {
+			return rendered.err
+		}
+
+		return service.succeed(ctx, job, job.CheckRunID, title, checkSummary)
 	}
 
 	return service.succeed(
@@ -271,7 +244,108 @@ func (service *Service) refreshReviewedCheck(
 		job,
 		job.CheckRunID,
 		checkTitleAlreadyReviewed,
-		"This head already has a PR-Agent review. No duplicate review was published.",
+		"output.already_reviewed",
+	)
+}
+
+func (service *Service) failedRefreshCheck(
+	ctx context.Context,
+	job domain.ReviewJob,
+	summary Summary,
+	settings reviewSettings,
+	startedAt time.Time,
+	cause error,
+) error {
+	progress := service.newProgress(job, settings, startedAt).summary(service.now())
+	checkProgress := progress
+	if summary.Head != "" {
+		checkProgress = summary
+	}
+
+	checkProgress = service.measuredRefreshSummary(ctx, checkProgress, startedAt)
+	progress.Usage = checkProgress.Usage
+	progress.Result = cause.Error()
+	checkProgress.Result = cause.Error()
+	if errors.Is(cause, errHeadMoved) {
+		return service.cancelRefreshedCheck(ctx, job, checkProgress, cause)
+	}
+
+	gklog.L(ctx).ErrorContext(ctx, "refresh reviewed check", slog.String("err", cause.Error()))
+	var statuses []ProviderStatus
+	collectProviderStatuses(cause, &statuses)
+	recordAssessment(
+		ctx,
+		domain.AssessmentFailed,
+		&checkProgress,
+		failureNames(cause),
+		quotaRecovery(statuses),
+	)
+	var rendered renderState
+	title := rendered.capture(renderOutputTemplate("output.refresh_failure", reflect.ValueOf(nil)))
+	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
+	checkSummary := rendered.capture(
+		renderOutputParts(detail, rendered.capture(RenderDetails(checkProgress))),
+	)
+	if rendered.err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(
+			ctx,
+			"render failed refresh check",
+			slog.String("err", rendered.err.Error()),
+		)
+
+		return errors.Join(cause, rendered.err)
+	}
+
+	completionErr := service.completeCheckRun(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.CheckRunID,
+		"failure",
+		title,
+		checkSummary,
+	)
+	summaryErr := service.writeFailureSummary(ctx, job, progress, title, detail)
+	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
+	if completionErr == nil {
+		return &reportedFailureError{cause: errors.Join(cause, summaryErr, dismissErr)}
+	}
+
+	return errors.Join(cause, completionErr, summaryErr, dismissErr)
+}
+
+func (service *Service) cancelRefreshedCheck(
+	ctx context.Context,
+	job domain.ReviewJob,
+	summary Summary,
+	cause error,
+) error {
+	recordAssessment(ctx, domain.AssessmentInterrupted, &summary, nil, 0)
+	var rendered renderState
+	cancelled := rendered.capture(renderOutputText(checkSummaryCancelled))
+	checkSummary := rendered.capture(
+		renderOutputParts(cancelled, rendered.capture(RenderDetails(summary))),
+	)
+	if rendered.err != nil {
+		logger := gklog.L(ctx)
+		logger.WarnContext(
+			ctx,
+			"render canceled refresh check",
+			slog.String("err", rendered.err.Error()),
+		)
+
+		return errors.Join(cause, rendered.err)
+	}
+
+	return service.completeCheckRun(
+		ctx,
+		job.InstallationID,
+		job.Repository,
+		job.CheckRunID,
+		checkConclusionCancelled,
+		checkSummaryCancelled,
+		checkSummary,
 	)
 }
 
@@ -545,7 +619,10 @@ func (service *Service) applyRefreshedVerdict(
 	job domain.ReviewJob,
 	refreshed refreshedVerdict,
 ) (Summary, error) {
-	summary := service.refreshedSummary(ctx, job, refreshed)
+	summary, err := service.refreshedSummary(ctx, job, refreshed)
+	if err != nil {
+		return summary, err
+	}
 
 	logger := gklog.L(ctx)
 	// A verdict written at a moved head would judge a commit nobody is looking
@@ -624,32 +701,39 @@ func (service *Service) saveRefreshedSummary(
 	summary Summary,
 ) error {
 	logger := gklog.L(ctx)
-	if err := service.upsertSummaryCommentFrom(
+	if err := service.upsertSummaryCommentFromChecked(
 		ctx,
 		job,
 		func(
 			state marker.State,
 			existingBody string,
-		) summaryCommentContent {
+		) (summaryCommentContent, error) {
 			if state.Status == marker.StateReviewing {
 				return summaryCommentContent{
 					Prose: stripDurableStateMarker(existingBody),
 					State: state,
-				}
+				}, nil
 			}
 
 			if state.Status == marker.StateFailed && completedHeadState(state, job.Head) {
 				state.Status = marker.StateDone
 			}
 
-			return summaryCommentContent{
-				Prose: refreshVerdictProse(
-					stripReassessmentNotice(existingBody),
-					summary,
-					refreshed.blockWithdrawn,
-				),
-				State: state,
+			prose, err := refreshVerdictProse(
+				stripReassessmentNotice(existingBody),
+				summary,
+				refreshed.blockWithdrawn,
+			)
+			if err != nil {
+				return summaryCommentContent{}, err
 			}
+
+			prose, err = refreshFailureResult(prose, summary.Result)
+			if err != nil {
+				return summaryCommentContent{}, err
+			}
+
+			return summaryCommentContent{Prose: prose, State: state}, nil
 		},
 	); err != nil {
 		logger.ErrorContext(

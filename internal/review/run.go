@@ -935,7 +935,10 @@ func (service *Service) postChunkFindings(
 	)
 
 	for _, post := range posts {
-		post.comment.Body += "\n\n" + footer
+		post.comment.Body, err = renderOutputParts(post.comment.Body, footer)
+		if err != nil {
+			return err
+		}
 
 		err := service.postInlineFinding(ctx, job, head, post.comment, pass)
 		if err != nil {

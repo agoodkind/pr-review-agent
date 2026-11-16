@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -36,10 +35,12 @@ import (
 // unreadHunk names one piece of the head nobody read, in the terms a reader can
 // go and look at: the file, the hunk inside it, and why it was not read.
 type unreadHunk struct {
-	Path   string                `json:"path"`
-	Header string                `json:"header"`
-	Reason string                `json:"reason"`
-	Target *domain.FindingTarget `json:"target,omitempty"`
+	Path           string                `json:"path"`
+	Header         string                `json:"header"`
+	Reason         string                `json:"reason"`
+	Target         *domain.FindingTarget `json:"target,omitempty"`
+	ReasonTemplate string                `json:"reason_template,omitempty"`
+	Omitted        int                   `json:"omitted,omitempty"`
 }
 
 const omissionMarkerPrefix = "<!-- pr-review-agent:omissions:v1 "
@@ -205,7 +206,7 @@ func (shortfall structuralShortfall) present() bool {
 func (shortfall structuralShortfall) paths() []string {
 	paths := make([]string, 0, len(shortfall.Hunks))
 	for _, hunk := range shortfall.Hunks {
-		paths = append(paths, hunk.sourceLabel())
+		paths = append(paths, hunk.sourceKey())
 	}
 
 	return paths
@@ -215,16 +216,16 @@ func (shortfall structuralShortfall) paths() []string {
 // one is published on the pull request, so none of them quotes anything this
 // service did not write.
 const (
-	oversizedHunkReason   = "larger than one model request allows"
-	binaryFileReason      = "a binary file, which carries no reviewable patch"
-	patchAbsentReason     = "GitHub supplied no patch for this file"
-	patchUnreadableReason = "the patch GitHub supplied could not be read whole"
-	contentMissingReason  = "GitHub will not serve this file's content at this commit"
+	oversizedHunkReason   = "output.oversized-hunk-reason"
+	binaryFileReason      = "output.binary-file-reason"
+	patchAbsentReason     = "output.patch-absent-reason"
+	patchUnreadableReason = "output.patch-unreadable-reason"
+	contentMissingReason  = "output.content-missing-reason"
 	// truncatedAnswerReason names a hunk the model began answering and never
 	// finished. A chunk whose answer runs past the completion budget is normally
 	// halved and each half asked separately, so this is reached only by a chunk
 	// already down to one hunk, which is the smallest unit a chunk is cut into.
-	truncatedAnswerReason = "the model's answer ran past its completion budget, and a hunk cannot be split further"
+	truncatedAnswerReason = "output.truncated-answer-reason"
 )
 
 // sortedUnreadHunks orders unread hunks by path and then by hunk. Chunks answer
@@ -235,8 +236,10 @@ func sortedUnreadHunks(hunks []unreadHunk) []unreadHunk {
 	sort.Slice(
 		ordered,
 		func(left, right int) bool {
-			if ordered[left].sourceLabel() != ordered[right].sourceLabel() {
-				return ordered[left].sourceLabel() < ordered[right].sourceLabel()
+			leftLabel := ordered[left].sourceKey()
+			rightLabel := ordered[right].sourceKey()
+			if leftLabel != rightLabel {
+				return leftLabel < rightLabel
 			}
 
 			return ordered[left].Header < ordered[right].Header
@@ -263,10 +266,12 @@ func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 			hunks = append(
 				hunks,
 				unreadHunk{
-					Path:   assessment.Path,
-					Header: "",
-					Reason: sanitizeDecisionReason(assessment.Reason),
-					Target: nil,
+					Path:           assessment.Path,
+					Header:         "",
+					Reason:         sanitizeDecisionReason(assessment.Reason),
+					ReasonTemplate: "",
+					Omitted:        0,
+					Target:         nil,
 				},
 			)
 		}
@@ -280,10 +285,12 @@ func classifyStructuralShortfall(work deltaWork) structuralShortfall {
 		hunks = append(
 			hunks,
 			unreadHunk{
-				Path:   file.Path,
-				Header: "",
-				Reason: fileGapReason(file.Gap),
-				Target: nil,
+				Path:           file.Path,
+				Header:         "",
+				Reason:         "",
+				ReasonTemplate: fileGapReason(file.Gap),
+				Omitted:        0,
+				Target:         nil,
 			},
 		)
 	}
@@ -334,11 +341,21 @@ func omissionPrompt(
 	listed := 0
 
 	for _, hunk := range hunks {
+		label, err := hunk.sourceLabel()
+		if err != nil {
+			return "", err
+		}
+
+		reason, err := hunk.displayReason()
+		if err != nil {
+			return "", err
+		}
+
 		row := fmt.Sprintf(
 			"Source: %s\nRange: %s\nReason: %s\n\n",
-			escapeOmissionPromptText(hunk.sourceLabel(), policy),
+			escapeOmissionPromptText(label, policy),
 			escapeOmissionPromptText(hunk.Header, policy),
-			escapeOmissionPromptText(hunk.Reason, policy),
+			escapeOmissionPromptText(reason, policy),
 		)
 		if file, found := BuildFileIndex(files)[hunk.Path]; found {
 			evidence, err := assessmentPromptRow(file, policy)
@@ -681,7 +698,8 @@ func encodeOmissionMarker(hunks []unreadHunk) string {
 		return ""
 	}
 
-	payload, err := json.Marshal(boundedOmissionMarkerHunks(hunks))
+	bounded := boundedOmissionMarkerHunks(hunks)
+	payload, err := json.Marshal(bounded)
 	if err != nil {
 		return ""
 	}
@@ -697,10 +715,12 @@ func boundedOmissionMarkerHunks(hunks []unreadHunk) []unreadHunk {
 		bounded = append(
 			bounded[:retained],
 			unreadHunk{
-				Path:   "Additional omissions",
-				Header: "",
-				Reason: fmt.Sprintf("%d more not listed here", omitted),
-				Target: nil,
+				Path:           "",
+				Header:         "",
+				Reason:         "",
+				Omitted:        omitted,
+				ReasonTemplate: "",
+				Target:         nil,
 			},
 		)
 	}
@@ -831,14 +851,16 @@ func (service *Service) concludeStructurallyIncomplete(
 	pass *chunkPass,
 ) error {
 	logger := gklog.L(ctx)
-	summary.Decision = domain.ReviewDecisionComment
-	summary.Omissions = shortfall.Hunks
-	summary.Blocking = replaceBlockingReason(
-		summary.Blocking,
-		unreviewedHeadReason,
-		"The unread changes listed above need review before a verdict.",
-	)
-	report, reportCalled := service.generateReport(ctx, pullRequest, pass)
+	summary, err := prepareUnreadSummary(summary, shortfall)
+	if err != nil {
+		return err
+	}
+
+	report, reportCalled, err := service.generateReport(ctx, pullRequest, pass)
+	if err != nil {
+		return err
+	}
+
 	summary.Report = report
 	summary.Models = pass.analysis().Models
 	summary.Usage = UsageFromContext(ctx)
@@ -910,133 +932,4 @@ func (service *Service) concludeStructurallyIncomplete(
 		dismissErr,
 		logger,
 	)
-}
-
-func renderPendingScopeBody(
-	summary Summary,
-	notice string,
-	policy reviewrules.Policy,
-	statuses ...ProviderStatus,
-) (string, error) {
-	var data reviewrules.PromptData
-
-	verdict, err := renderPrompt(policy, "coverage.verdict_pending", data)
-	if err != nil {
-		return "", err
-	}
-
-	return renderUnreadableBody(summary, notice, verdict, statuses...), nil
-}
-
-// maximumListedUnreadHunks bounds the list a notice prints.
-//
-// A check run output is capped by size, and one line per unread hunk over a
-// pull request touching hundreds of files runs past that cap, which leaves the
-// check unfinished and reports nothing at all. The count in the sentence above
-// stays exact; only the list is cut.
-const maximumListedUnreadHunks = 40
-
-// maximumUnreadHunkLabelBytes bounds one line of that list, because a single
-// repository path can be long enough to crowd out the rest on its own.
-const maximumUnreadHunkLabelBytes = 220
-
-// renderUnreadHunks lists each unread hunk as inert code text.
-func renderUnreadHunks(hunks []unreadHunk) string {
-	listed := hunks
-
-	omitted := 0
-	if len(listed) > maximumListedUnreadHunks {
-		omitted = len(listed) - maximumListedUnreadHunks
-		listed = listed[:maximumListedUnreadHunks]
-	}
-
-	lines := make([]string, 0, len(listed)+4)
-	lines = append(lines, "The model did not read these changes:", "```")
-
-	for _, hunk := range listed {
-		lines = append(lines, describeUnreadHunk(hunk))
-	}
-
-	lines = append(lines, "```")
-	if omitted > 0 {
-		lines = append(lines, fmt.Sprintf("This list omits %d more unread changes.", omitted))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-// describeUnreadHunk names one unread piece the way a reader can go and find it.
-func describeUnreadHunk(hunk unreadHunk) string {
-	label := escapeUnreadHunkText(hunk.sourceLabel())
-	if hunk.Header != "" {
-		label += " " + escapeUnreadHunkText(hunk.Header)
-	}
-
-	if len(label) > maximumUnreadHunkLabelBytes {
-		label = truncateUTF8(label, maximumUnreadHunkLabelBytes) + "..."
-	}
-
-	if hunk.Reason == "" {
-		return label
-	}
-
-	return label + " (" + hunk.Reason + ")"
-}
-
-// truncateUTF8 keeps the byte limit without splitting a rune.
-func truncateUTF8(text string, maximumBytes int) string {
-	end := min(len(text), maximumBytes)
-	for end > 0 && !utf8.ValidString(text[:end]) {
-		end--
-	}
-
-	return text[:end]
-}
-
-// escapeUnreadHunkText prevents repository text from closing the code fence.
-func escapeUnreadHunkText(text string) string {
-	withoutLines := runlog.EscapeLineBreaks(text)
-	return strings.ReplaceAll(withoutLines, "`", string(rune(0x2CB)))
-}
-
-// RenderUnreadableBody renders a comment for an incomplete source read.
-//
-// The comment omits the review marker because the service did not review the
-// complete head.
-//
-// For example:
-//
-//	body := RenderUnreadableBody(summary, notice, statuses...)
-func RenderUnreadableBody(summary Summary, notice string, statuses ...ProviderStatus) string {
-	return renderUnreadableBody(summary, notice, "The review submitted no verdict.", statuses...)
-}
-
-func renderUnreadableBody(
-	summary Summary,
-	notice string,
-	verdict string,
-	statuses ...ProviderStatus,
-) string {
-	parts := []string{
-		"## Review",
-		verdictSectionStart,
-		"### Verdict",
-		verdict,
-	}
-	if findings := renderSummaryFindings(summary); findings != "" {
-		parts = append(parts, findings)
-	}
-
-	parts = append(
-		parts,
-		verdictSectionEnd,
-		renderReportSection(summary.Report),
-		"### Omissions\n\n"+notice,
-		RenderDetails(summary, statuses...),
-	)
-	if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
-		parts = append(parts, checkpoints)
-	}
-
-	return strings.Join(parts, "\n\n")
 }

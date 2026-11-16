@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	unsupportedInlineVerdictMessage = "The current review has no actionable inline finding to support requested changes."
-	withheldApprovalMessage         = "The current review cannot approve this head. The review summary explains what remains unresolved."
+	unsupportedInlineVerdictMessage = "output.unsupported-inline-verdict-message"
+	withheldApprovalMessage         = "output.withheld-approval-message"
 )
 
 // validateInlineVerdict checks live thread state before changing a verdict.
@@ -99,6 +99,11 @@ func (service *Service) withdrawUnsupportedVerdicts(
 		message = withheldApprovalMessage
 	} else if latest.State != reviewStateChangesRequested {
 		return nil
+	}
+
+	message, err = renderOutputText(message)
+	if err != nil {
+		return err
 	}
 
 	if _, err := service.github.DismissReview(

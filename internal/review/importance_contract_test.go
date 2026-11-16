@@ -120,7 +120,7 @@ func TestPublishedVerdictUsesTheFindingThreshold(t *testing.T) {
 					)
 				}
 
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 				if summary.Decision == domain.ReviewDecisionApprove {
 					if !strings.Contains(
 						body,

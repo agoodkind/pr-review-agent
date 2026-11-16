@@ -1,17 +1,19 @@
 package review
 
 import (
-	"fmt"
 	"html"
+	"reflect"
 	"slices"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/domain"
 )
 
-func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int) string {
+func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int) (string, error) {
+	var state renderState
+
 	if len(assessments) == 0 || maximumBytes <= 0 {
-		return ""
+		return state.finish("")
 	}
 
 	ordered := slices.Clone(assessments)
@@ -24,10 +26,7 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 
 	var builder strings.Builder
 	builder.WriteString(
-		"#### File assessments\n\n" +
-			"The table records the assessment scope for each classified file.\n\n" +
-			"| File | Content | Assessment | Content review requirement | Reason | Evidence |\n" +
-			"| --- | --- | --- | --- | --- | --- |\n",
+		state.capture(renderOutputTemplate("output.file-assessment-header", reflect.ValueOf(nil))),
 	)
 
 	listed := 0
@@ -35,14 +34,25 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 	const noticeAllowance = 256
 
 	for _, assessment := range ordered[:min(len(ordered), maximumListedUnreadHunks)] {
-		row := fmt.Sprintf(
-			"| %s | %s | %s | %s | %s | %s |\n",
-			assessmentTableCell(assessment.Path),
-			assessmentTableCell(string(assessment.ContentKind)),
-			assessmentTableCell(string(assessment.Action)),
-			assessmentTableCell(string(assessment.ContentReviewRequirement)),
-			assessmentTableCell(assessment.Reason),
-			assessmentTableCell(strings.Join(assessment.Evidence, ", ")),
+		row := state.capture(
+			renderOutputTemplate(
+				"output.file-assessment-row",
+				reflect.ValueOf([]string{
+					assessmentTableCell(assessment.Path),
+					assessmentTableCell(string(assessment.ContentKind)),
+					assessmentTableCell(string(assessment.Action)),
+					assessmentTableCell(string(assessment.ContentReviewRequirement)),
+					assessmentTableCell(assessment.Reason),
+					assessmentTableCell(
+						state.capture(
+							renderOutputTemplate(
+								"output.comma_list",
+								reflect.ValueOf(assessment.Evidence),
+							),
+						),
+					),
+				}),
+			),
 		)
 		if builder.Len()+len(row)+noticeAllowance > maximumBytes {
 			break
@@ -54,21 +64,25 @@ func renderFileAssessments(assessments []domain.FileAssessment, maximumBytes int
 	}
 
 	if len(ordered) > listed {
-		fmt.Fprintf(
-			&builder,
-			"\nThe summary displays %d of %d file assessments.\n",
-			listed,
-			len(ordered),
+		builder.WriteString(
+			state.capture(
+				renderOutputTemplate(
+					"output.file-assessment-count",
+					reflect.ValueOf([]int{listed, len(ordered)}),
+				),
+			),
 		)
 	}
 
-	builder.WriteString("\n")
+	builder.WriteString(
+		state.capture(renderOutputTemplate("output.file-assessment-end", reflect.ValueOf(nil))),
+	)
 
 	if builder.Len() > maximumBytes {
-		return ""
+		return state.finish("")
 	}
 
-	return builder.String()
+	return state.finish(builder.String())
 }
 
 func assessmentTableCell(value string) string {

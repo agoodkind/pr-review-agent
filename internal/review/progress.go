@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"time"
 
@@ -42,17 +43,31 @@ func (service *Service) checkpoint(
 	ctx, cancel := service.publicationContext(ctx)
 	defer cancel()
 
+	var rendering renderState
+	prose := rendering.capture(
+		renderOutputTemplate(
+			"output.checkpoint",
+			reflect.ValueOf(map[string]string{
+				"Progress": rendering.capture(RenderProgressBody(head, len(tracker.unfinished))),
+				"Details":  rendering.capture(RenderDetails(summary)),
+				"Findings": rendering.capture(renderSummaryFindings(summary)),
+				"Assessments": encodeFileAssessments(
+					summary.FileAssessments,
+					summary.FileAssessmentMaximumBytes,
+				),
+				"Checkpoints": renderFindingCheckpoints(summary),
+			}),
+		),
+	)
+	if rendering.err != nil {
+		return rendering.err
+	}
+
 	err := service.upsertSummaryComment(
 		ctx,
 		job,
 		summaryCommentContent{
-			Prose: RenderProgressBody(head, len(tracker.unfinished)) + "\n\n" +
-				RenderDetails(summary) + "\n\n" +
-				renderSummaryFindings(summary) + "\n" +
-				encodeFileAssessments(
-					summary.FileAssessments,
-					summary.FileAssessmentMaximumBytes,
-				) + "\n" + renderFindingCheckpoints(summary),
+			Prose: prose,
 			State: tracker.state,
 		},
 	)

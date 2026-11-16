@@ -52,7 +52,7 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 				summary.FileAssessmentsDisplay = display
 				summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 				if strings.Contains(body, "### Omissions") ||
 					strings.Contains(body, "could not be reviewed") {
 					t.Fatal("An accepted content exclusion appeared as an unfinished review.")
@@ -74,7 +74,7 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 				summary.ApprovalWithheld = true
 				summary.FileAssessments[0].Action = domain.FileActionGap
 
-				pending := review.RenderBody(summary)
+				pending := rendered(t)(review.RenderBody(summary))
 				assertSavedFileAssessments(t, pending, summary.FileAssessments)
 				if !strings.Contains(pending, "<!-- pr-review-agent:approval-withheld -->") {
 					t.Fatal("An unresolved assessment must preserve withheld approval.")

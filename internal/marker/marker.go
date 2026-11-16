@@ -7,11 +7,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 
+	outputtemplates "goodkind.io/pr-review-agent/config/templates"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
@@ -26,6 +29,7 @@ const (
 )
 
 var (
+	errFindingBodyRender = errors.New("render finding body")
 	// reviewPattern accepts a marker with or without the decision. A verdict
 	// body carries no prose any more, so the decision a dismissal erased from
 	// GitHub's own record survives only here; markers written before this field
@@ -316,17 +320,29 @@ func EncodeFindingBody(head domain.HeadSHA, finding domain.Finding) (string, err
 	title := strings.TrimSpace(finding.Title)
 	body := strings.TrimSpace(finding.Body)
 
-	parts := []string{
-		"### " + title,
-		body,
-	}
-	if finding.Suggestion != "" || finding.CorrectionAction == domain.CorrectionDelete {
-		parts = append(parts, suggestionPrefix+finding.Suggestion+suggestionSuffix)
+	data := struct {
+		Title         string
+		Body          string
+		Suggestion    string
+		HasSuggestion bool
+		Marker        string
+	}{
+		Title:      title,
+		Body:       body,
+		Suggestion: finding.Suggestion,
+		HasSuggestion: finding.Suggestion != "" ||
+			finding.CorrectionAction == domain.CorrectionDelete,
+		Marker: markerText,
 	}
 
-	parts = append(parts, markerText)
+	text, err := outputtemplates.Render("output.inline_finding", reflect.ValueOf(data))
+	if err != nil {
+		slog.Warn("render finding body", slog.String("err", err.Error()))
 
-	return strings.Join(parts, "\n\n"), nil
+		return "", fmt.Errorf("%w: %w", errFindingBodyRender, err)
+	}
+
+	return text, nil
 }
 
 // DecodeFindingBody parses a finding from a GitHub root review comment body.

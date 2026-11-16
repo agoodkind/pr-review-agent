@@ -62,10 +62,15 @@ func (service *Service) checkpointCompletedPublication(
 	pendingPublication := state
 
 	pendingPublication.Status = marker.StateFailed
+	prose, err := RenderBody(summary)
+	if err != nil {
+		return err
+	}
+
 	if err := service.upsertSummaryComment(
 		ctx,
 		job,
-		summaryCommentContent{Prose: RenderBody(summary), State: pendingPublication},
+		summaryCommentContent{Prose: prose, State: pendingPublication},
 	); err != nil {
 		return service.failCheck(ctx, job, checkRunID, summary, checkFailureSummary, err)
 	}

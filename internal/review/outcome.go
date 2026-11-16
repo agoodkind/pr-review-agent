@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -122,20 +123,30 @@ func persistAssessment(ctx context.Context, checkID int64) (domain.AssessmentOut
 	return recorder.outcome, nil
 }
 
-func reassessmentNotice(ctx context.Context) string {
+func reassessmentNotice(ctx context.Context) (string, error) {
+	var state renderState
+
 	recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder)
 	if !ok || recorder.outcome.ReassessmentID == "" {
-		return ""
+		return state.finish("")
 	}
 
-	return "\n\n<!-- pr-review-agent:reassessment:start -->\n" +
-		"The queue will reassess this pull request after `" + time.UnixMilli(
-		recorder.outcome.RetryAtMS,
-	).UTC().Format(
-		time.RFC3339,
-	) + "`. The reassessment identifier is `" +
-		recorder.outcome.ReassessmentID +
-		"`.\n<!-- pr-review-agent:reassessment:end -->"
+	return state.finish(
+		state.capture(
+			renderOutputTemplate(
+				"output.reassessment-notice",
+				reflect.ValueOf(
+					struct {
+						RetryAt    string
+						Identifier string
+					}{
+						time.UnixMilli(recorder.outcome.RetryAtMS).UTC().Format(time.RFC3339),
+						recorder.outcome.ReassessmentID,
+					},
+				),
+			),
+		),
+	)
 }
 
 func stripReassessmentNotice(body string) string {

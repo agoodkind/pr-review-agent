@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"goodkind.io/gklog"
@@ -46,7 +47,7 @@ func CheckReviewBudget(
 	chunks []diff.Chunk,
 	maxFiles int,
 	maxChunks int,
-) AdmissionVerdict {
+) (AdmissionVerdict, error) {
 	reviewable := 0
 
 	for _, chunk := range chunks {
@@ -71,36 +72,49 @@ func CheckReviewBudget(
 // range comes back short with nothing saying so, and reviewing it would report
 // complete coverage over files nobody listed, which is the one thing this
 // service must never do.
-func admitDelta(fileCount int, chunkCount int, maxFiles int, maxChunks int) AdmissionVerdict {
+func admitDelta(
+	fileCount int,
+	chunkCount int,
+	maxFiles int,
+	maxChunks int,
+) (AdmissionVerdict, error) {
 	if maxFiles > compareFileCap {
 		maxFiles = compareFileCap
 	}
 
 	if fileCount > maxFiles {
+		reason, err := renderOutputTemplate(
+			"output.file-budget-reason",
+			reflect.ValueOf([]int{fileCount, maxFiles}),
+		)
+		if err != nil {
+			return AdmissionVerdict{}, err
+		}
+
 		return AdmissionVerdict{
 			Skip:             true,
 			ReviewableChunks: chunkCount,
-			Reason: fmt.Sprintf(
-				"the changed file count (%d) exceeds the %d file review budget",
-				fileCount,
-				maxFiles,
-			),
-		}
+			Reason:           reason,
+		}, nil
 	}
 
 	if chunkCount > maxChunks {
+		reason, err := renderOutputTemplate(
+			"output.chunk-budget-reason",
+			reflect.ValueOf([]int{chunkCount, maxChunks}),
+		)
+		if err != nil {
+			return AdmissionVerdict{}, err
+		}
+
 		return AdmissionVerdict{
 			Skip:             true,
 			ReviewableChunks: chunkCount,
-			Reason: fmt.Sprintf(
-				"the reviewable chunk count (%d) exceeds the %d chunk review budget",
-				chunkCount,
-				maxChunks,
-			),
-		}
+			Reason:           reason,
+		}, nil
 	}
 
-	return AdmissionVerdict{Skip: false, Reason: "", ReviewableChunks: chunkCount}
+	return AdmissionVerdict{Skip: false, Reason: "", ReviewableChunks: chunkCount}, nil
 }
 
 // deltaWork records the files and assessment requests for one run.
@@ -174,12 +188,23 @@ func (service *Service) collectAndAdmit(
 
 	chunks := work.Chunks
 
-	verdict := CheckReviewBudget(
+	verdict, err := CheckReviewBudget(
 		len(plan.contentInput.Files),
 		chunks,
 		settings.maxFiles,
 		settings.maxChunks,
 	)
+	if err != nil {
+		return empty, true, service.failCheck(
+			ctx,
+			job,
+			checkRun.ID,
+			progress.summary(service.now()),
+			checkFailureAnalysis,
+			err,
+		)
+	}
+
 	if !verdict.Skip {
 		return work, false, nil
 	}
@@ -217,7 +242,8 @@ func (service *Service) admitFileInput(
 	settings reviewSettings,
 ) (AdmissionVerdict, []domain.FileAssessment, []diff.FileContext, error) {
 	if len(input.Files) > compareFileCap {
-		return admitDelta(len(input.Files), 0, compareFileCap, settings.maxChunks), nil, nil, nil
+		verdict, err := admitDelta(len(input.Files), 0, compareFileCap, settings.maxChunks)
+		return verdict, nil, nil, err
 	}
 
 	var empty AdmissionVerdict
@@ -236,12 +262,9 @@ func (service *Service) admitFileInput(
 		}
 	}
 
-	return admitDelta(
-		reviewableFiles,
-		0,
-		settings.maxFiles,
-		settings.maxChunks,
-	), deterministic, unresolved, nil
+	verdict, err := admitDelta(reviewableFiles, 0, settings.maxFiles, settings.maxChunks)
+
+	return verdict, deterministic, unresolved, err
 }
 
 // declineReview leaves a delta the admission gate refused exactly as it found
@@ -267,16 +290,23 @@ func (service *Service) declineReview(
 	// The state is read and written in one call, so nothing this run keeps has
 	// to be carried in from an earlier read that a concurrent edit could have
 	// overtaken. It is the same reason the failure notice is written this way.
-	if err := service.upsertSummaryCommentFrom(
+	if err := service.upsertSummaryCommentFromChecked(
 		ctx,
 		job,
-		func(existing marker.State, existingBody string) summaryCommentContent {
-			prose := RenderSkipBody(verdict.Reason)
+		func(existing marker.State, existingBody string) (summaryCommentContent, error) {
+			var rendered renderState
+			prose := rendered.capture(RenderSkipBody(verdict.Reason))
 			if preserveCheckpointSummary(existing, existingBody) {
-				prose = renderCheckpointNotice(
-					existingBody,
-					strings.TrimPrefix(prose, "## Review\n\n"),
+				prose = rendered.capture(
+					renderCheckpointNotice(
+						existingBody,
+						strings.TrimPrefix(prose, "## Review\n\n"),
+					),
 				)
+			}
+
+			if rendered.err != nil {
+				return summaryCommentContent{}, rendered.err
 			}
 
 			return summaryCommentContent{
@@ -310,7 +340,7 @@ func (service *Service) declineReview(
 					// cannot have cleared a hunk an earlier run could not read.
 					Unread: existing.Unread,
 				},
-			}
+			}, nil
 		},
 	); err != nil {
 		logger.ErrorContext(ctx, "upsert skip notice", slog.String("err", err.Error()))
