@@ -503,10 +503,10 @@ func inspectionServiceProvider(
 						},
 					}
 
-					if scenario == "missing" {
+					if scenario == "missing" && iteration == 1 {
 						result.Findings = []domain.Finding{finding}
 					}
-				} else {
+				} else if scenario != "missing" {
 					if capture.beforeContinuation != nil {
 						capture.beforeContinuation()
 					}
