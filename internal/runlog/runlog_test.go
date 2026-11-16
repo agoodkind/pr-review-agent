@@ -23,7 +23,7 @@ func renderedLog(t *testing.T, recorder *runlog.Recorder) string {
 	t.Helper()
 	text, err := recorder.Render()
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("Run log rendering failed: %v", err)
 	}
 
 	return text
