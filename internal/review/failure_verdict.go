@@ -33,7 +33,7 @@ const checkFailurePanic = "output.failure_panic"
 
 const unreportedFailureField = "not reported"
 
-var errFailureTemplateRender = errors.New("render failure details")
+var errFailureTemplateRender = errors.New("review service could not render failure details")
 
 func (service *Service) finalizeFailure(
 	ctx context.Context,
