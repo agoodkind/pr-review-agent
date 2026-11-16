@@ -366,11 +366,15 @@ func testInspectionSnapshotFailure(t *testing.T, scenario string) {
 		review.InspectionRequest{
 			Operation: "read_file",
 			Target:    "missing.go",
-			Reason:    "Inspect a source at an unavailable commit.",
+			Reason:    "Verify inspection error handling.",
 		},
 	)
 	if err == nil || result != "" {
-		t.Fatalf("Snapshot loading failure must remain an error: result=%q error=%v", result, err)
+		t.Fatalf(
+			"Inspection must fail without returning a result.\n\n- Result: %q\n- Error: %v",
+			result,
+			err,
+		)
 	}
 
 	if scenario == "authentication_not_found" {
