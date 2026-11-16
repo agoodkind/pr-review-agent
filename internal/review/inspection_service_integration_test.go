@@ -183,7 +183,9 @@ func TestServiceInspectionCountsCachedMissingRequestsAgainstTheLimit(t *testing.
 	maximumRequests := policytest.Load(t).Limits().InspectionRequests
 	if len(capture.reviewRequests) != maximumRequests/2+1 {
 		t.Fatalf(
-			"Cached inspections did not consume the request limit: limit=%d model_requests=%d",
+			"Cached inspections did not consume the request limit.\n\n"+
+				"- Inspection request limit: %d\n"+
+				"- Model requests: %d",
 			maximumRequests,
 			len(capture.reviewRequests),
 		)
