@@ -735,7 +735,7 @@ func TestCompleteCheckRunTruncatesAnOversizeLog(t *testing.T) {
 
 	truncated, err := githubapp.TruncateCheckRunText(oversize)
 	if err != nil {
-		t.Fatalf("TruncateCheckRunText: %v", err)
+		t.Fatalf("The check run text truncation failed: %v", err)
 	}
 
 	if len(truncated) > githubapp.MaximumCheckRunTextBytes {

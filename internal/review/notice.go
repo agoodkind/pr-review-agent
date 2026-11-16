@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	checkFailureMixedUsage     = "output.check-failure-mixed-usage"
-	checkFailureRateLimited    = "output.check-failure-rate-limited"
-	checkFailureMixedRateLimit = "output.check-failure-mixed-rate-limit"
+	checkFailureMixedUsage      = "output.check-failure-mixed-usage"
+	checkFailureRateLimited     = "output.check-failure-rate-limited"
+	checkFailureMixedRateLimit  = "output.check-failure-mixed-rate-limit"
+	checkCompletionRetryFailure = "review service could not retry failed check completion"
 )
 
 func (service *Service) failCheck(
@@ -127,10 +128,8 @@ func (service *Service) reportFailedCheck(
 			title,
 			retrySummary,
 		); retryErr != nil {
-			result = errors.Join(
-				result,
-				fmt.Errorf("review service could not retry failed check completion: %w", retryErr),
-			)
+			retryErr = fmt.Errorf("%s: %w", checkCompletionRetryFailure, retryErr)
+			result = errors.Join(result, retryErr)
 		}
 	}
 
