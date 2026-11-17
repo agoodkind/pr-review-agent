@@ -335,3 +335,54 @@ func TestNewerPrivatePanicSupersedesOlderCompletion(t *testing.T) {
 		t.Fatalf("matching panic receipts did not stop recovery: %+v", second)
 	}
 }
+
+func TestPrivatePanicSurvivesUnfinishedMatchingCheck(t *testing.T) {
+	now := time.Now()
+	coordinator := planner()
+	snapshot := livePending()
+	snapshot.Check.Status = "in_progress"
+	snapshot.Check.Head = snapshot.PullRequest.Head
+	snapshot.Check.ExternalID = "panic-delivery"
+	private := domain.AssessmentOutcome{
+		Nonce:            "panic-receipt",
+		Disposition:      domain.AssessmentFailed,
+		Head:             snapshot.PullRequest.Head,
+		MetadataRevision: diff.PullRequestRevision(snapshot.PullRequest),
+		CheckRunID:       snapshot.Check.ID,
+		FailureClasses:   []string{"panic"},
+	}
+	private.SetRetryable(false)
+	var empty domain.AssessmentOutcome
+	snapshot.Check.Outcome = empty
+	target := reassessment.Target{
+		Key:               "tracked",
+		PrivateOutcome:    private,
+		PrivateNonce:      private.Nonce,
+		PrivateDeliveryID: snapshot.Check.ExternalID,
+	}
+
+	for index := 0; index <= coordinator.Settings.ReadBudget; index++ {
+		result := coordinator.Repair(
+			target,
+			nil,
+			snapshot,
+			now.Add(time.Duration(index)*time.Minute),
+		)
+		if result.Record != nil {
+			t.Fatalf("unfinished matching check scheduled recovery: %+v", result)
+		}
+
+		if index > 0 && result.RepairKind != "not_retryable" {
+			t.Fatalf("private panic was not retained: %+v", result)
+		}
+
+		target = result.Target
+	}
+
+	snapshot.Check.ExternalID = "different-delivery"
+	first := coordinator.Repair(target, nil, snapshot, now.Add(5*time.Minute))
+	second := coordinator.Repair(first.Target, nil, snapshot, now.Add(6*time.Minute))
+	if second.Record == nil || second.RepairKind != "missing_queue" {
+		t.Fatalf("private panic suppressed a different delivery: %+v", second)
+	}
+}

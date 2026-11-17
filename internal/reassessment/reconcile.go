@@ -267,7 +267,7 @@ func (coordinator *Coordinator) repairNonRetryable(
 	private := target.PrivateOutcome
 	sameAttempt := record == nil || record.Job.DeliveryID == target.PrivateDeliveryID &&
 		(target.PrivateGeneration == "" || record.Generation == target.PrivateGeneration)
-	if snapshot.CheckFound && privateSuperseded(private, snapshot.Check) {
+	if snapshot.CheckFound && privateSuperseded(private, target.PrivateDeliveryID, snapshot.Check) {
 		sameAttempt = false
 	}
 
@@ -292,7 +292,11 @@ func (coordinator *Coordinator) repairNonRetryable(
 	return plan, true
 }
 
-func privateSuperseded(private domain.AssessmentOutcome, check githubapp.CheckRun) bool {
+func privateSuperseded(
+	private domain.AssessmentOutcome,
+	deliveryID string,
+	check githubapp.CheckRun,
+) bool {
 	if check.ID == 0 || check.ID < private.CheckRunID {
 		return false
 	}
@@ -302,6 +306,9 @@ func privateSuperseded(private domain.AssessmentOutcome, check githubapp.CheckRu
 	}
 
 	outcome := check.Outcome
+	if check.Status == "in_progress" && check.ExternalID == deliveryID && outcome.Nonce == "" {
+		return false
+	}
 
 	return !checkFinished(check) || outcome.Nonce != private.Nonce ||
 		outcome.Disposition != private.Disposition || outcome.Head != private.Head ||
