@@ -140,7 +140,10 @@ func (service *Service) refreshedSummary(
 		return empty, err
 	}
 
+	var outcome domain.AssessmentOutcome
+
 	return Summary{
+		Outcome:                    outcome,
 		Result:                     "",
 		FileAssessmentNote:         "",
 		Head:                       job.Head,

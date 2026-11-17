@@ -63,15 +63,12 @@ func (service *Service) reportFailedCheck(
 	progress.Result = cause.Error()
 	service.enrichProviderPeriodUsage(ctx, &progress)
 
-	var statuses []ProviderStatus
-	collectProviderStatuses(cause, &statuses)
-	recordAssessment(
-		ctx,
-		domain.AssessmentFailed,
-		&progress,
-		failureNames(cause),
-		quotaRecovery(statuses),
-	)
+	outcome, persistErr := persistFailedOutcome(ctx, checkRunID, &progress, cause)
+	if persistErr != nil {
+		return errors.Join(cause, persistErr)
+	}
+
+	progress.Outcome = outcome
 	var rendered renderState
 	title := rendered.capture(renderOutputText(failureTitle(stage, cause)))
 	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
@@ -451,7 +448,7 @@ func (service *Service) writeFailureSummary(
 
 				failureProse = rendered.capture(
 					renderMaintenanceFailure(
-						rendered.capture(refreshFailureResult(existingBody, progress.Result)),
+						rendered.capture(refreshFailureDetails(existingBody, progress)),
 						title,
 						currentDetail,
 					),

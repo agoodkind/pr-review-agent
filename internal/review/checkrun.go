@@ -406,6 +406,11 @@ func (service *Service) completeCheckRun(
 		return fmt.Errorf("persist assessment outcome: %w", outcomeErr)
 	}
 
+	summary, err = refreshRetryRows(summary, outcome)
+	if err != nil {
+		return err
+	}
+
 	text, err := renderRunLog(ctx)
 	if err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
@@ -48,6 +49,10 @@ func (service *Service) reviewSnapshot(
 
 	if pullRequest.Head != head {
 		return service.cancelCheck(ctx, job, checkRun.ID)
+	}
+
+	if pullRequest.MetadataKnown {
+		progress.metadataRevision = diff.PullRequestRevision(pullRequest)
 	}
 
 	if job.AutomaticReassessment && (!pullRequest.EligibilityKnown || !pullRequest.MetadataKnown) {

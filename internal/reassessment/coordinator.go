@@ -16,6 +16,11 @@ import (
 	"goodkind.io/pr-review-agent/internal/githubapp"
 )
 
+const (
+	phaseConfirming = "confirming"
+	phaseTerminal   = "terminal"
+)
+
 // Record retains one generation and its stable attempt identity across restarts.
 type Record struct {
 	RebuildEvidence     bool                      `json:"rebuild_evidence"`
@@ -126,7 +131,7 @@ func (coordinator *Coordinator) log(ctx context.Context, message string, record 
 }
 
 func (coordinator *Coordinator) terminal(record Record, reason string, now time.Time) Record {
-	record.Phase = "terminal"
+	record.Phase = phaseTerminal
 	record.Reason = reason
 	duration, _ := time.ParseDuration(coordinator.Settings.TerminalRetention)
 	record.RetainUntilMS = now.Add(duration).UnixMilli()
@@ -140,6 +145,10 @@ func (coordinator *Coordinator) Observe(
 	job domain.ReviewJob,
 	outcome domain.AssessmentOutcome,
 ) (domain.AssessmentOutcome, error) {
+	if outcome.Retryable != nil && outcome.Disposition == domain.AssessmentDeclined {
+		outcome.SetRetryable(coordinator.Settings.RetryDeclined)
+	}
+
 	if !coordinator.Settings.Enabled || outcome.Disposition == domain.AssessmentInterrupted {
 		return outcome, nil
 	}
@@ -157,9 +166,7 @@ func (coordinator *Coordinator) Observe(
 	prior := response.Record
 	now := coordinator.Clock()
 
-	retry := outcome.Disposition == domain.AssessmentFailed ||
-		outcome.Disposition == domain.AssessmentIncomplete ||
-		outcome.Disposition == domain.AssessmentDeclined && coordinator.Settings.RetryDeclined
+	retry := outcome.RetryEligibility(coordinator.Settings.RetryDeclined)
 	if job.AutomaticReassessment && prior == nil || prior != nil && !prior.AcceptsOutcome(job) {
 		return outcome, nil
 	}
@@ -181,7 +188,7 @@ func (coordinator *Coordinator) Observe(
 		version = prior.Version
 	}
 
-	if prior == nil || prior.Head != job.Head || prior.Phase == "terminal" {
+	if prior == nil || prior.Head != job.Head || prior.Phase == phaseTerminal {
 		record = coordinator.newGeneration(key, job, now)
 	}
 
@@ -203,7 +210,7 @@ func (coordinator *Coordinator) Observe(
 
 	record.NotBeforeMS = max(record.NotBeforeMS, outcome.AvailableAtMS)
 	if !retry {
-		record.Phase = "confirming"
+		record.Phase = phaseConfirming
 	}
 
 	response, err = coordinator.Store.Send(
@@ -248,7 +255,7 @@ func (coordinator *Coordinator) DeliveryScheduled(
 	}
 
 	if response.Record != nil {
-		if response.Record.Phase != "terminal" {
+		if response.Record.Phase != phaseTerminal {
 			job.ReassessmentGeneration = response.Record.Generation
 		}
 
@@ -398,7 +405,7 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 		return coordinator.terminal(record, "expired", now)
 	}
 
-	if record.Phase != "running" && record.Phase != "confirming" &&
+	if record.Phase != "running" && record.Phase != phaseConfirming &&
 		coordinator.Settings.MaximumAttempts > 0 &&
 		record.Attempts >= coordinator.Settings.MaximumAttempts {
 		return coordinator.terminal(record, "attempts_exhausted", now)
@@ -409,17 +416,14 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 		return coordinator.terminal(record, "completed", now)
 	}
 
-	if attemptSettled(record, snapshot) {
-		if completedAt(snapshot.AttemptCheck, pr.Head, revision) {
-			return coordinator.terminal(record, "completed", now)
-		}
+	if record.Phase == phaseConfirming &&
+		unsuccessfulNotRetryableAt(record.Outcome, pr.Head, revision) {
+		return coordinator.terminal(record, string(record.Outcome.Disposition), now)
+	}
 
-		if snapshot.AttemptCheck.Outcome.Disposition == domain.AssessmentDeclined &&
-			!coordinator.Settings.RetryDeclined {
-			return coordinator.terminal(record, "declined", now)
-		}
-
-		record.Phase = "waiting"
+	record, settled := coordinator.settleAttempt(record, snapshot, revision, now)
+	if settled {
+		return record
 	}
 
 	if snapshot.AvailableAt.After(now) {
@@ -454,7 +458,7 @@ func (coordinator *Coordinator) planConsistent(
 		snapshot.LatestFound = false
 	}
 
-	if record.Phase == "running" || record.Phase == "confirming" {
+	if record.Phase == "running" || record.Phase == phaseConfirming {
 		priorCheck, priorFound, priorErr := coordinator.GitHub.FindCheckRunByExternalID(
 			ctx,
 			record.Job.InstallationID,
@@ -483,7 +487,7 @@ func (coordinator *Coordinator) planConsistent(
 
 func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Record {
 	if record.Job.MetadataOnly {
-		if record.Phase != "running" && record.Phase != "confirming" {
+		if record.Phase != "running" && record.Phase != phaseConfirming {
 			if record.AttemptID != "" {
 				record.Job.DeliveryID = "reassessment-" + rand.Text()
 				record.Job.CheckRunID = 0
@@ -510,7 +514,7 @@ func (coordinator *Coordinator) dispatchRecord(record Record, now time.Time) Rec
 		return record
 	}
 
-	if record.Phase != "running" && record.Phase != "confirming" {
+	if record.Phase != "running" && record.Phase != phaseConfirming {
 		record.AttemptID = "reassessment-" + rand.Text()
 		record.Attempts++
 	}
@@ -587,8 +591,61 @@ func completedAt(check githubapp.CheckRun, head domain.HeadSHA, revision string)
 		check.Outcome.MetadataRevision == revision
 }
 
+func outcomeNotRetryableAt(
+	outcome domain.AssessmentOutcome,
+	head domain.HeadSHA,
+	revision string,
+) bool {
+	return outcome.Retryable != nil && !*outcome.Retryable && outcome.Head == head &&
+		outcome.MetadataRevision == revision
+}
+
+func (coordinator *Coordinator) settleAttempt(
+	record Record,
+	snapshot Snapshot,
+	revision string,
+	now time.Time,
+) (Record, bool) {
+	if !attemptSettled(record, snapshot) {
+		return record, false
+	}
+
+	check := snapshot.AttemptCheck
+	if completedAt(check, snapshot.PullRequest.Head, revision) {
+		return coordinator.terminal(record, "completed", now), true
+	}
+
+	if outcomeNotRetryableAt(check.Outcome, snapshot.PullRequest.Head, revision) {
+		return coordinator.terminal(record, string(check.Outcome.Disposition), now), true
+	}
+
+	if check.Outcome.Retryable == nil && check.Outcome.Disposition == domain.AssessmentDeclined &&
+		!coordinator.Settings.RetryDeclined {
+		return coordinator.terminal(record, "declined", now), true
+	}
+
+	record.Phase = "waiting"
+
+	return record, false
+}
+
+func unsuccessfulNotRetryableAt(
+	outcome domain.AssessmentOutcome,
+	head domain.HeadSHA,
+	revision string,
+) bool {
+	return (outcome.Disposition == domain.AssessmentFailed ||
+		outcome.Disposition == domain.AssessmentIncomplete ||
+		outcome.Disposition == domain.AssessmentDeclined) && outcomeNotRetryableAt(
+		outcome,
+		head,
+		revision,
+	)
+}
+
 func attemptSettled(record Record, snapshot Snapshot) bool {
-	return (record.Phase == "running" || record.Phase == "confirming") && snapshot.AttemptFound &&
+	return (record.Phase == "running" || record.Phase == phaseConfirming) &&
+		snapshot.AttemptFound &&
 		snapshot.AttemptCheck.Status == "completed" &&
 		snapshot.AttemptCheck.Conclusion != "cancelled"
 }

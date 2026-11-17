@@ -77,7 +77,7 @@ func (coordinator *Coordinator) ScheduleMetadataEdit(
 	version := int64(0)
 	if prior != nil {
 		version = prior.Version
-		if prior.Phase != "terminal" {
+		if prior.Phase != phaseTerminal {
 			retainMetadataChecks(&record, prior)
 		}
 	}
@@ -126,7 +126,7 @@ func (coordinator *Coordinator) SupersedeMetadataEdit(
 	}
 
 	prior := response.Record
-	if prior == nil || !prior.Job.MetadataOnly || prior.Phase == "terminal" {
+	if prior == nil || !prior.Job.MetadataOnly || prior.Phase == phaseTerminal {
 		return nil, nil, nil
 	}
 

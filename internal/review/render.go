@@ -21,6 +21,7 @@ const shortHeadLength = 7
 // comment and the check run both render from this one value, so the two can
 // never disagree.
 type Summary struct {
+	Outcome                    domain.AssessmentOutcome
 	Result                     string
 	FileAssessmentNote         string
 	FileAssessmentMaximumBytes int

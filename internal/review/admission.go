@@ -186,11 +186,9 @@ func (service *Service) collectAndAdmit(
 		)
 	}
 
-	chunks := work.Chunks
-
 	verdict, err := CheckReviewBudget(
 		len(plan.contentInput.Files),
-		chunks,
+		work.Chunks,
 		settings.maxFiles,
 		settings.maxChunks,
 	)
@@ -214,11 +212,17 @@ func (service *Service) collectAndAdmit(
 		"review job skipped",
 		slog.String("reason", verdict.Reason),
 		slog.Int("files", len(admitted.input.Files)),
-		slog.Int("chunks", len(chunks)),
+		slog.Int("chunks", len(work.Chunks)),
 		slog.Int("reviewable_chunks", verdict.ReviewableChunks),
 	)
 
-	if err := service.declineReview(ctx, job, checkRun.ID, verdict); err != nil {
+	if err := service.declineReview(
+		ctx,
+		job,
+		checkRun.ID,
+		verdict,
+		progress.summary(service.now()),
+	); err != nil {
 		// A skip that cannot be written is still a run that has to end. Without
 		// this the error travels back to the dispatcher, which only logs it, and
 		// the check stays in progress with nothing on the pull request saying why.
@@ -285,8 +289,16 @@ func (service *Service) declineReview(
 	job domain.ReviewJob,
 	checkRunID int64,
 	verdict AdmissionVerdict,
+	summary Summary,
 ) error {
 	logger := gklog.L(ctx)
+	recordAssessment(ctx, domain.AssessmentDeclined, &summary, nil, 0)
+	outcome, err := persistAssessment(ctx, checkRunID)
+	if err != nil {
+		return err
+	}
+
+	summary.Outcome = outcome
 	// The state is read and written in one call, so nothing this run keeps has
 	// to be carried in from an earlier read that a concurrent edit could have
 	// overtaken. It is the same reason the failure notice is written this way.
@@ -303,7 +315,14 @@ func (service *Service) declineReview(
 						strings.TrimPrefix(prose, "## Review\n\n"),
 					),
 				)
+				prose = rendered.capture(refreshRetryRows(prose, outcome))
+			} else {
+				prose = rendered.capture(
+					renderOutputParts(prose, rendered.capture(RenderDetails(summary))),
+				)
 			}
+
+			prose += rendered.capture(reassessmentNotice(ctx))
 
 			if rendered.err != nil {
 				return summaryCommentContent{}, rendered.err

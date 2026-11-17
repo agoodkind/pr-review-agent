@@ -104,7 +104,10 @@ func (service *Service) decidePublication(
 		return empty, err
 	}
 
+	var outcome domain.AssessmentOutcome
+
 	summary := Summary{
+		Outcome:            outcome,
 		Result:             "",
 		FileAssessmentNote: "",
 		Head:               head,

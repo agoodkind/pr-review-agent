@@ -1008,9 +1008,7 @@ func (service *Service) publishVerdict(
 	}
 
 	var rendered renderState
-	body := rendered.capture(RenderBody(summary))
 	title := rendered.capture(summary.Title())
-	details := rendered.capture(RenderDetails(summary))
 	if rendered.err != nil {
 		return rendered.err
 	}
@@ -1046,6 +1044,16 @@ func (service *Service) publishVerdict(
 	// The one top level comment carries the same body plus the durable state
 	// the chunk loop advanced, so a later invocation resumes from a checkpoint
 	// this run actually reached rather than one it asserted.
+	if err := persistVerdictOutcome(ctx, checkRun.ID, &summary); err != nil {
+		return err
+	}
+
+	body := rendered.capture(RenderBody(summary))
+	details := rendered.capture(RenderDetails(summary))
+	if rendered.err != nil {
+		return rendered.err
+	}
+
 	if err := service.upsertSummaryComment(
 		ctx,
 		job,
@@ -1058,8 +1066,6 @@ func (service *Service) publishVerdict(
 	}
 
 	if summary.Decision == domain.ReviewDecisionComment {
-		recordAssessment(ctx, domain.AssessmentDeclined, &summary, nil, 0)
-
 		return service.completeCheckRun(
 			ctx,
 			job.InstallationID,
@@ -1070,8 +1076,6 @@ func (service *Service) publishVerdict(
 			details,
 		)
 	}
-
-	recordAssessment(ctx, domain.AssessmentCompleted, &summary, nil, 0)
 
 	if err := service.succeed(ctx, job, checkRun.ID, title, details); err != nil {
 		return err

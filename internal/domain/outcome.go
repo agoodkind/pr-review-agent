@@ -34,6 +34,46 @@ type AssessmentOutcome struct {
 	CheckRunID       int64                 `json:"check_run_id"`
 	ReassessmentID   string                `json:"reassessment_id,omitempty"`
 	RetryAtMS        int64                 `json:"retry_at_ms,omitempty"`
+	Retryable        *bool                 `json:"retryable,omitempty"`
+}
+
+// RetryEligibility reports whether an outcome permits an automatic retry.
+func (outcome *AssessmentOutcome) RetryEligibility(retryDeclined bool) bool {
+	if outcome.Retryable != nil {
+		return *outcome.Retryable
+	}
+
+	switch outcome.Disposition {
+	case AssessmentFailed, AssessmentIncomplete:
+		return true
+	case AssessmentDeclined:
+		return retryDeclined
+	case AssessmentCompleted, AssessmentInterrupted:
+		return false
+	default:
+		return false
+	}
+}
+
+// SetRetryable records the decision for a newly produced outcome.
+func (outcome *AssessmentOutcome) SetRetryable(retryDeclined bool) {
+	retryable := false
+	switch outcome.Disposition {
+	case AssessmentFailed, AssessmentIncomplete:
+		retryable = len(outcome.FailureClasses) == 0
+		for _, class := range outcome.FailureClasses {
+			if class != "panic" {
+				retryable = true
+
+				break
+			}
+		}
+	case AssessmentDeclined:
+		retryable = retryDeclined
+	case AssessmentCompleted, AssessmentInterrupted:
+	}
+
+	outcome.Retryable = &retryable
 }
 
 const assessmentOutcomePrefix = "<!-- pr-review-agent:outcome:v1 "

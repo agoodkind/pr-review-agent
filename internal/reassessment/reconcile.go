@@ -169,13 +169,17 @@ func (coordinator *Coordinator) Repair(
 		return coordinator.repairIneligible(plan, record, pr, now)
 	}
 
-	if record != nil && record.Job.MetadataOnly && record.Phase != "terminal" {
+	if record != nil && record.Job.MetadataOnly && record.Phase != phaseTerminal {
 		plan.RepairKind = "consistent_pending"
 		return plan
 	}
 
 	if completed, handled := coordinator.repairCompletion(plan, record, snapshot, now); handled {
 		return completed
+	}
+
+	if stopped, handled := coordinator.repairNonRetryable(plan, record, snapshot, now); handled {
+		return stopped
 	}
 
 	if !unfinishedAssessment(target, record, snapshot) {
@@ -187,7 +191,7 @@ func (coordinator *Coordinator) Repair(
 		return coordinator.confirmRepair(plan, now)
 	}
 
-	if record != nil && record.Phase != "terminal" && record.Head == pr.Head &&
+	if record != nil && record.Phase != phaseTerminal && record.Head == pr.Head &&
 		(record.MetadataRevision == "" || record.MetadataRevision == diff.PullRequestRevision(pr)) {
 		plan.RepairKind = "consistent_pending"
 		return plan
@@ -200,7 +204,7 @@ func (coordinator *Coordinator) Repair(
 	plan.RepairKind = "missing_queue"
 
 	if record != nil {
-		if record.Phase == "terminal" {
+		if record.Phase == phaseTerminal {
 			plan.RepairKind = "reactivated"
 		} else {
 			plan.RepairKind = "mismatched_head"
@@ -208,6 +212,42 @@ func (coordinator *Coordinator) Repair(
 	}
 
 	return plan
+}
+
+func (coordinator *Coordinator) repairNonRetryable(
+	plan Reconciliation,
+	record *Record,
+	snapshot LiveSnapshot,
+	now time.Time,
+) (Reconciliation, bool) {
+	target := plan.Target
+	private := target.PrivateOutcome
+	sameAttempt := record == nil || record.Job.DeliveryID == target.PrivateDeliveryID &&
+		(target.PrivateGeneration == "" || record.Generation == target.PrivateGeneration)
+	if snapshot.CheckFound && snapshot.Check.ID > private.CheckRunID &&
+		snapshot.Check.ExternalID != target.PrivateDeliveryID {
+		sameAttempt = false
+	}
+
+	pr := snapshot.PullRequest
+	if !sameAttempt || private.Nonce == "" || private.Nonce != target.PrivateNonce ||
+		target.PrivateDeliveryID == "" || private.MetadataRevision == "" ||
+		!unsuccessfulNotRetryableAt(private, pr.Head, diff.PullRequestRevision(pr)) {
+		return plan, false
+	}
+
+	if target.Confirmations < coordinator.Settings.StateConfirmations {
+		return coordinator.confirmRepair(plan, now), true
+	}
+
+	if record != nil && record.Phase != phaseTerminal {
+		updated := coordinator.terminal(*record, string(private.Disposition), now)
+		plan.Record = &updated
+	}
+
+	plan.RepairKind = "not_retryable"
+
+	return plan, true
 }
 
 func (coordinator *Coordinator) repairCompletion(
@@ -224,7 +264,7 @@ func (coordinator *Coordinator) repairCompletion(
 			return coordinator.confirmRepair(plan, now), true
 		}
 
-		if record != nil && (record.Phase != "terminal" || record.Reason != "completed") {
+		if record != nil && (record.Phase != phaseTerminal || record.Reason != "completed") {
 			updated := coordinator.terminal(*record, "completed", now)
 			updated.Head = pr.Head
 			updated.MetadataRevision = diff.PullRequestRevision(pr)
@@ -237,7 +277,7 @@ func (coordinator *Coordinator) repairCompletion(
 		return plan, true
 	}
 
-	if record != nil && record.RebuildEvidence && record.Phase != "terminal" {
+	if record != nil && record.RebuildEvidence && record.Phase != phaseTerminal {
 		plan.RepairKind = "consistent_pending"
 		return plan, true
 	}
@@ -335,7 +375,7 @@ func (coordinator *Coordinator) deferRepair(
 func (coordinator *Coordinator) confirmRepair(plan Reconciliation, now time.Time) Reconciliation {
 	interval, _ := time.ParseDuration(coordinator.Settings.ConfirmationInterval)
 	plan.Target.NotBeforeMS = now.Add(interval).UnixMilli()
-	plan.RepairKind = "confirming"
+	plan.RepairKind = phaseConfirming
 
 	return plan
 }
@@ -362,7 +402,7 @@ func (coordinator *Coordinator) repairIneligible(
 		reason = "draft"
 	}
 
-	if record.Phase == "terminal" && record.Reason == reason {
+	if record.Phase == phaseTerminal && record.Reason == reason {
 		plan.RepairKind = "consistent_ineligible"
 		return plan
 	}
@@ -395,7 +435,7 @@ func completionConfirmed(target Target, snapshot LiveSnapshot) bool {
 }
 
 func unfinishedAssessment(target Target, record *Record, snapshot LiveSnapshot) bool {
-	if record != nil && record.Phase != "terminal" {
+	if record != nil && record.Phase != phaseTerminal {
 		return true
 	}
 

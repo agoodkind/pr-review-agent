@@ -64,6 +64,70 @@ func refreshFailureResult(body, result string) (string, error) {
 	return rendering.finish(body)
 }
 
+func refreshRetryRows(body string, outcome domain.AssessmentOutcome) (string, error) {
+	start := strings.Index(body, reviewDetailsStart)
+	if start < 0 {
+		return body, nil
+	}
+
+	start, end, err := reviewDetailsRange(body, "saved summary")
+	if err != nil {
+		return "", err
+	}
+
+	retryable, retryAt := retryCells(outcome)
+	var rendered renderState
+	lines := strings.Split(body[start:end], "\n")
+
+	for _, item := range []rawDetailRow{
+		{Key: "retryable", Value: retryable},
+		{Key: "retry_at", Value: retryAt},
+	} {
+		key := rendered.capture(rawTableCell(item.Key))
+		value := rendered.capture(rawTableCell(item.Value))
+		row := rendered.capture(
+			renderOutputTemplate(
+				"output.detail_row",
+				reflect.ValueOf(rawDetailRow{
+					Key:   key,
+					Value: value,
+				}),
+			),
+		)
+		found := false
+
+		for index, line := range lines {
+			if strings.HasPrefix(line, "| `"+item.Key+"` |") {
+				lines[index] = row
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			for index, line := range lines {
+				if strings.HasPrefix(line, "| --- |") {
+					lines[index] += "\n" + row
+
+					break
+				}
+			}
+		}
+	}
+
+	return rendered.finish(body[:start] + strings.Join(lines, "\n") + body[end:])
+}
+
+func refreshFailureDetails(body string, summary Summary) (string, error) {
+	updated, err := refreshFailureResult(body, summary.Result)
+	if err != nil {
+		return "", err
+	}
+
+	return refreshRetryRows(updated, summary.Outcome)
+}
+
 func renderMaintenanceFailure(body, title, detail string) (string, error) {
 	var rendering renderState
 	notice := rendering.capture(
