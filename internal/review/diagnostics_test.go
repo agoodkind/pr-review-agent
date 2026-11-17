@@ -68,6 +68,57 @@ func TestRepeatedPreReviewFailuresReplaceThePreviousFailure(t *testing.T) {
 	}
 }
 
+func TestFailedRefreshRemovesLegacyIncompleteNotice(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{pullRequestStatus: http.StatusBadGateway})
+	summary := findingDetailsSummary()
+	summary.Usage.InputTokens = 4321
+	saved := rendered(t)(review.RenderFailureBody(summary, "", ""))
+	_, saved, found := strings.Cut(saved, "<!-- pr-review-agent:maintenance-failure:end -->\n\n")
+	if !found {
+		t.Fatal("The saved review must contain its rendered sections.")
+	}
+
+	legacy := "## Review\n\n" +
+		"1 chunk could not be reviewed on `a3c4f1c`. Apply the `test-review-agent-rerun` label to retry this head.\n\n" +
+		"The model provider is unavailable. Wait for it to recover.\n\n" +
+		testUnreviewedHeadReason + "\n\n" +
+		"The cause is recorded in this service's log, under run identifier `old-run`.\n\n" +
+		saved
+	state := marker.State{
+		RunID:   "old-run",
+		Status:  marker.StateReviewing,
+		Pending: []string{"pending"},
+	}
+	fixture.state.issueComments = []map[string]any{
+		{
+			"id":   float64(2000),
+			"user": map[string]any{"login": testBotLogin},
+			"body": legacy + "\n" + marker.EncodeState(state),
+		},
+	}
+
+	if err := fixture.run(t.Context(), fixture.forcedJob()); err == nil {
+		t.Fatal("The refresh must report the failed pull request read.")
+	}
+
+	body := failureSummaryComment(t, fixture)
+	want := "PR Review Agent could not finish this review and has not scheduled a retry."
+	if strings.Count(body, want) != 1 || strings.Contains(body, "label to retry this head") ||
+		strings.Contains(body, "The model provider is unavailable") ||
+		strings.Contains(
+			body,
+			"old-run",
+		) || !strings.Contains(body, "| `input_tokens` | `4321` |") ||
+		retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 {
+		t.Fatalf("The refresh must replace the legacy notice and retain the review: %s", body)
+	}
+
+	current := decodedSummaryState(t, fixture)
+	if len(current.Pending) != 1 || current.Pending[0] != "pending" {
+		t.Fatalf("The refresh lost the pending checkpoint: %+v", current)
+	}
+}
+
 func TestFailureUpdatesTheResultWithoutErasingSavedReviewDetails(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		name := "current details"

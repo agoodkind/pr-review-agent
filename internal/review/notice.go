@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	checkFailureMixedUsage      = "output.check-failure-mixed-usage"
-	checkFailureRateLimited     = "output.check-failure-rate-limited"
-	checkFailureMixedRateLimit  = "output.check-failure-mixed-rate-limit"
-	checkCompletionRetryFailure = "review service could not retry failed check completion"
+	checkFailureAssessmentValidation = "output.assessment-validation-title"
+	checkFailureMixedUsage           = "output.check-failure-mixed-usage"
+	checkFailureRateLimited          = "output.check-failure-rate-limited"
+	checkFailureMixedRateLimit       = "output.check-failure-mixed-rate-limit"
+	checkCompletionRetryFailure      = "review service could not retry failed check completion"
 )
 
 func (service *Service) failCheck(
@@ -160,7 +161,7 @@ func (service *Service) reportFailedCheck(
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
 	if _, valid := errors.AsType[*AssessmentValidationError](cause); valid {
-		return "output.assessment-validation-title"
+		return checkFailureAssessmentValidation
 	}
 
 	switch terminalFailureClass(cause) {
@@ -428,6 +429,11 @@ func (service *Service) writeFailureSummary(
 						progress.Observed,
 					) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
 					len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0) {
+				if existing.Status == marker.StateReviewing ||
+					existing.Status == marker.StateFailed {
+					existingBody = rendered.capture(stripLegacyFailureProse(existingBody))
+				}
+
 				failureProse = rendered.capture(
 					renderMaintenanceFailure(
 						rendered.capture(refreshFailureDetails(existingBody, progress, detail)),
