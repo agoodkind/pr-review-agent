@@ -137,6 +137,8 @@ func TestFailureUpdatesTheResultWithoutErasingSavedReviewDetails(t *testing.T) {
 				summary.Result = "previous failure result"
 				summary.Usage.InputTokens = 4321
 				body := rendered(t)(review.RenderBody(summary))
+				const nestedDetails = "<details>\n<summary>Saved diagnostics</summary>\n\nSaved output.\n</details>"
+				body = strings.Replace(body, "\n</details>", "\n"+nestedDetails+"\n</details>", 1)
 				if legacy {
 					body = strings.ReplaceAll(
 						body,
@@ -163,6 +165,10 @@ func TestFailureUpdatesTheResultWithoutErasingSavedReviewDetails(t *testing.T) {
 
 				body = failureSummaryComment(t, fixture)
 				if strings.Count(body, "| `result` |") != 1 ||
+					!strings.Contains(
+						body,
+						nestedDetails+"\n<!-- pr-review-agent:failure-diagnostics:start -->",
+					) ||
 					!strings.Contains(body, runErr.Error()) ||
 					!strings.Contains(body, "| `input_tokens` | `4321` |") ||
 					strings.Contains(body, "previous failure result") ||

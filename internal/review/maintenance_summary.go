@@ -146,7 +146,7 @@ func refreshFailureDetails(body string, summary Summary, detail string) (string,
 			return "", renderErr
 		}
 
-		details = strings.Replace(details, "\n</details>", "\n"+block+"\n\n</details>", 1)
+		details = strings.TrimSuffix(details, "</details>") + block + "\n\n</details>"
 	}
 
 	return updated[:start] + details + updated[end:], nil
