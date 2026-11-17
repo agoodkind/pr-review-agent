@@ -246,7 +246,10 @@ func (progress *reviewProgress) applyAnalysis(analysis Analysis) {
 
 // summary renders the progress as the value both failure outputs report from.
 func (progress *reviewProgress) summary(now time.Time) Summary {
+	var outcome domain.AssessmentOutcome
+
 	return Summary{
+		Outcome:            outcome,
 		Result:             "",
 		FileAssessmentNote: "",
 		Head:               progress.head,

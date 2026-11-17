@@ -30,7 +30,10 @@ func TestFileAssessmentValidationReportsRawResult(t *testing.T) {
 
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, "| `result` | `"+runError.Error()+"` |") ||
-		!strings.Contains(body, "Review stopped during file assessment validation.") ||
+		!strings.Contains(
+			body,
+			"PR Review Agent could not finish this review and has not scheduled a retry.",
+		) ||
 		strings.Contains(body, "unexpected error") ||
 		strings.Contains(body, "during model analysis") {
 		t.Fatalf("The comment must report the known validation error: %s", body)
@@ -54,11 +57,65 @@ func TestRepeatedPreReviewFailuresReplaceThePreviousFailure(t *testing.T) {
 	}
 
 	body := failureSummaryComment(t, fixture)
-	if strings.Count(body, "Review failed while reconciling existing findings.") != 1 ||
+	if strings.Count(
+		body,
+		"PR Review Agent could not finish this review and has not scheduled a retry.",
+	) != 1 ||
 		strings.Count(body, "<summary>Review details</summary>") != 1 ||
 		strings.Contains(body, "first-failed-attempt") ||
 		strings.Contains(body, "previously saved work") {
 		t.Fatalf("The comment must contain only the current failed attempt: %s", body)
+	}
+}
+
+func TestFailedRefreshRemovesLegacyIncompleteNotice(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{pullRequestStatus: http.StatusBadGateway})
+	summary := findingDetailsSummary()
+	summary.Usage.InputTokens = 4321
+	saved := rendered(t)(review.RenderFailureBody(summary, "", ""))
+	_, saved, found := strings.Cut(saved, "<!-- pr-review-agent:maintenance-failure:end -->\n\n")
+	if !found {
+		t.Fatal("The saved review must contain its rendered sections.")
+	}
+
+	legacy := "## Review\n\n" +
+		"1 chunk could not be reviewed on `a3c4f1c`. Apply the `test-review-agent-rerun` label to retry this head.\n\n" +
+		"The model provider is unavailable. Wait for it to recover.\n\n" +
+		testUnreviewedHeadReason + "\n\n" +
+		"The cause is recorded in this service's log, under run identifier `old-run`.\n\n" +
+		saved
+	state := marker.State{
+		RunID:   "old-run",
+		Status:  marker.StateReviewing,
+		Pending: []string{"pending"},
+	}
+	fixture.state.issueComments = []map[string]any{
+		{
+			"id":   float64(2000),
+			"user": map[string]any{"login": testBotLogin},
+			"body": legacy + "\n" + marker.EncodeState(state),
+		},
+	}
+
+	if err := fixture.run(t.Context(), fixture.forcedJob()); err == nil {
+		t.Fatal("The refresh must report the failed pull request read.")
+	}
+
+	body := failureSummaryComment(t, fixture)
+	want := "PR Review Agent could not finish this review and has not scheduled a retry."
+	if strings.Count(body, want) != 1 || strings.Contains(body, "label to retry this head") ||
+		strings.Contains(body, "The model provider is unavailable") ||
+		strings.Contains(
+			body,
+			"old-run",
+		) || !strings.Contains(body, "| `input_tokens` | `4321` |") ||
+		retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 {
+		t.Fatalf("The refresh must replace the legacy notice and retain the review: %s", body)
+	}
+
+	current := decodedSummaryState(t, fixture)
+	if len(current.Pending) != 1 || current.Pending[0] != "pending" {
+		t.Fatalf("The refresh lost the pending checkpoint: %+v", current)
 	}
 }
 
@@ -80,6 +137,8 @@ func TestFailureUpdatesTheResultWithoutErasingSavedReviewDetails(t *testing.T) {
 				summary.Result = "previous failure result"
 				summary.Usage.InputTokens = 4321
 				body := rendered(t)(review.RenderBody(summary))
+				const nestedDetails = "<details>\n<summary>Saved diagnostics</summary>\n\nSaved output.\n</details>"
+				body = strings.Replace(body, "\n</details>", "\n"+nestedDetails+"\n</details>", 1)
 				if legacy {
 					body = strings.ReplaceAll(
 						body,
@@ -106,12 +165,34 @@ func TestFailureUpdatesTheResultWithoutErasingSavedReviewDetails(t *testing.T) {
 
 				body = failureSummaryComment(t, fixture)
 				if strings.Count(body, "| `result` |") != 1 ||
+					!strings.Contains(
+						body,
+						nestedDetails+"\n<!-- pr-review-agent:failure-diagnostics:start -->",
+					) ||
 					!strings.Contains(body, runErr.Error()) ||
 					!strings.Contains(body, "| `input_tokens` | `4321` |") ||
 					strings.Contains(body, "previous failure result") ||
 					retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 {
 					t.Fatalf(
 						"The comment must update the result and retain saved review data: %s",
+						body,
+					)
+				}
+
+				job := fixture.forcedJob()
+				job.DeliveryID = "second-saved-failure"
+				if err := fixture.run(t.Context(), job); err == nil {
+					t.Fatal("The second review must return the failed pull request read.")
+				}
+
+				body = failureSummaryComment(t, fixture)
+				if strings.Count(
+					body,
+					"PR Review Agent could not finish this review and has not scheduled a retry.",
+				) != 1 ||
+					retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 {
+					t.Fatalf(
+						"The repeated failure must retain one notice and the saved finding: %s",
 						body,
 					)
 				}

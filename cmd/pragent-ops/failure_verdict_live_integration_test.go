@@ -684,6 +684,15 @@ func liveFailureAssertReceipt(
 				"The public failure summary does not contain a safe operational failure explanation.",
 			)
 		}
+		want := "PR Review Agent could not finish this review and has not scheduled a retry."
+		if outcome.RetryAtMS > 0 {
+			want = "PR Review Agent could not finish this review and will try again."
+		} else if outcome.Retryable != nil && !*outcome.Retryable {
+			want = "PR Review Agent hit a fatal error while reviewing this PR and cannot recover."
+		}
+		if strings.Count(comment.Body, want) != 1 {
+			t.Fatal("The public failure summary does not match the recorded retry outcome.")
+		}
 		return
 	}
 	t.Fatal("The failed assessment has no matching durable failure summary.")

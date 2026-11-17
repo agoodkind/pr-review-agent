@@ -5,6 +5,9 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
+
+	"goodkind.io/pr-review-agent/internal/domain"
 )
 
 const rawNull = "null"
@@ -47,9 +50,24 @@ func renderOutputParts(parts ...string) (string, error) {
 	)
 }
 
+func retryCells(outcome domain.AssessmentOutcome) (string, string) {
+	retryable := rawNull
+	if outcome.Retryable != nil {
+		retryable = strconv.FormatBool(*outcome.Retryable)
+	}
+
+	retryAt := rawNull
+	if outcome.RetryAtMS > 0 {
+		retryAt = time.UnixMilli(outcome.RetryAtMS).UTC().Format(time.RFC3339)
+	}
+
+	return retryable, retryAt
+}
+
 func renderRawDetails(summary Summary) (string, error) {
 	var rendering renderState
 	usage := summary.Usage
+	retryable, retryAt := retryCells(summary.Outcome)
 
 	tiers := make([]string, 0, len(usage.ServiceTiers))
 	for _, tier := range usage.ServiceTiers {
@@ -64,6 +82,8 @@ func renderRawDetails(summary Summary) (string, error) {
 					struct {
 						Head                string
 						Result              string
+						Retryable           string
+						RetryAt             string
 						Providers           string
 						Usage               UsageSummary
 						ServiceTiers        []string
@@ -73,6 +93,8 @@ func renderRawDetails(summary Summary) (string, error) {
 							rawTableCell(shortHead(summary.Head)),
 						),
 						Result:              rendering.capture(rawResultCell(summary.Result)),
+						Retryable:           rendering.capture(rawTableCell(retryable)),
+						RetryAt:             rendering.capture(rawTableCell(retryAt)),
 						Providers:           rendering.capture(rawProviderUsage(usage)),
 						Usage:               usage,
 						ServiceTiers:        tiers,

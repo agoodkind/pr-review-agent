@@ -169,9 +169,22 @@ func (coordinator *Coordinator) Repair(
 		return coordinator.repairIneligible(plan, record, pr, now)
 	}
 
-	if record != nil && record.Job.MetadataOnly && record.Phase != "terminal" {
+	if record != nil && record.Job.MetadataOnly && record.Phase != phaseTerminal {
 		plan.RepairKind = "consistent_pending"
 		return plan
+	}
+
+	if stopped, handled := coordinator.repairCurrentNonRetryable(
+		plan,
+		record,
+		snapshot,
+		now,
+	); handled {
+		return stopped
+	}
+
+	if stopped, handled := coordinator.repairNonRetryable(plan, record, snapshot, now); handled {
+		return stopped
 	}
 
 	if completed, handled := coordinator.repairCompletion(plan, record, snapshot, now); handled {
@@ -187,7 +200,7 @@ func (coordinator *Coordinator) Repair(
 		return coordinator.confirmRepair(plan, now)
 	}
 
-	if record != nil && record.Phase != "terminal" && record.Head == pr.Head &&
+	if record != nil && record.Phase != phaseTerminal && record.Head == pr.Head &&
 		(record.MetadataRevision == "" || record.MetadataRevision == diff.PullRequestRevision(pr)) {
 		plan.RepairKind = "consistent_pending"
 		return plan
@@ -200,7 +213,7 @@ func (coordinator *Coordinator) Repair(
 	plan.RepairKind = "missing_queue"
 
 	if record != nil {
-		if record.Phase == "terminal" {
+		if record.Phase == phaseTerminal {
 			plan.RepairKind = "reactivated"
 		} else {
 			plan.RepairKind = "mismatched_head"
@@ -208,6 +221,128 @@ func (coordinator *Coordinator) Repair(
 	}
 
 	return plan
+}
+
+func (coordinator *Coordinator) repairCurrentNonRetryable(
+	plan Reconciliation,
+	record *Record,
+	snapshot LiveSnapshot,
+	now time.Time,
+) (Reconciliation, bool) {
+	target := plan.Target
+	if !recordMatchesCurrentCheck(record, snapshot.Check) || !currentNonRetryableCheck(snapshot) ||
+		!checkSupersedesPrivate(target, snapshot.Check) {
+		return plan, false
+	}
+
+	if target.Confirmations < coordinator.Settings.StateConfirmations {
+		return coordinator.confirmRepair(plan, now), true
+	}
+
+	plan.RepairKind = "not_retryable"
+
+	return plan, true
+}
+
+func recordMatchesCurrentCheck(record *Record, check githubapp.CheckRun) bool {
+	if record == nil {
+		return true
+	}
+
+	return record.Phase == phaseTerminal && check.ExternalID != "" &&
+		record.Job.DeliveryID == check.ExternalID && record.Head == check.Head &&
+		(record.Job.CheckRunID == 0 || record.Job.CheckRunID == check.ID) &&
+		(!record.Job.AutomaticReassessment || record.AttemptID == check.ExternalID) &&
+		record.MetadataRevision == check.Outcome.MetadataRevision &&
+		record.Outcome.Nonce == check.Outcome.Nonce && record.Outcome.CheckRunID == check.ID
+}
+
+func (coordinator *Coordinator) repairNonRetryable(
+	plan Reconciliation,
+	record *Record,
+	snapshot LiveSnapshot,
+	now time.Time,
+) (Reconciliation, bool) {
+	target := plan.Target
+	private := target.PrivateOutcome
+	sameAttempt := record == nil || record.Job.DeliveryID == target.PrivateDeliveryID &&
+		(target.PrivateGeneration == "" || record.Generation == target.PrivateGeneration)
+	if snapshot.CheckFound && privateSuperseded(private, target.PrivateDeliveryID, snapshot.Check) {
+		sameAttempt = false
+	}
+
+	pr := snapshot.PullRequest
+	if !sameAttempt || private.Nonce == "" || private.Nonce != target.PrivateNonce ||
+		target.PrivateDeliveryID == "" || private.MetadataRevision == "" ||
+		!unsuccessfulNotRetryableAt(private, pr.Head, diff.PullRequestRevision(pr)) {
+		return plan, false
+	}
+
+	if target.Confirmations < coordinator.Settings.StateConfirmations {
+		return coordinator.confirmRepair(plan, now), true
+	}
+
+	if record != nil && record.Phase != phaseTerminal {
+		updated := coordinator.terminal(*record, string(private.Disposition), now)
+		plan.Record = &updated
+	}
+
+	plan.RepairKind = "not_retryable"
+
+	return plan, true
+}
+
+func privateSuperseded(
+	private domain.AssessmentOutcome,
+	deliveryID string,
+	check githubapp.CheckRun,
+) bool {
+	if check.ID == 0 || check.ID < private.CheckRunID {
+		return false
+	}
+
+	if check.ID > private.CheckRunID {
+		return true
+	}
+
+	outcome := check.Outcome
+	if check.Status == "in_progress" && check.ExternalID == deliveryID && outcome.Nonce == "" {
+		return false
+	}
+
+	return !checkFinished(check) || outcome.Nonce != private.Nonce ||
+		outcome.Disposition != private.Disposition || outcome.Head != private.Head ||
+		outcome.MetadataRevision != private.MetadataRevision ||
+		outcome.Retryable == nil || *outcome.Retryable
+}
+
+func currentNonRetryableCheck(snapshot LiveSnapshot) bool {
+	check := snapshot.Check
+	outcome := check.Outcome
+
+	return snapshot.CheckFound && checkFinished(check) && check.ID != 0 &&
+		check.Head == snapshot.PullRequest.Head &&
+		check.ID == outcome.CheckRunID && outcome.Nonce != "" && outcome.MetadataRevision != "" &&
+		unsuccessfulNotRetryableAt(
+			outcome,
+			snapshot.PullRequest.Head,
+			diff.PullRequestRevision(snapshot.PullRequest),
+		)
+}
+
+func checkSupersedesPrivate(target Target, check githubapp.CheckRun) bool {
+	private := target.PrivateOutcome
+	if target.PrivateNonce == "" && private.Disposition == "" &&
+		target.PrivateDeliveryID == "" && target.PrivateGeneration == "" {
+		return true
+	}
+
+	if private.CheckRunID > 0 {
+		return private.CheckRunID < check.ID
+	}
+
+	return private.Head != "" && private.MetadataRevision != "" &&
+		(private.Head != check.Outcome.Head || private.MetadataRevision != check.Outcome.MetadataRevision)
 }
 
 func (coordinator *Coordinator) repairCompletion(
@@ -224,12 +359,12 @@ func (coordinator *Coordinator) repairCompletion(
 			return coordinator.confirmRepair(plan, now), true
 		}
 
-		if record != nil && (record.Phase != "terminal" || record.Reason != "completed") {
-			updated := coordinator.terminal(*record, "completed", now)
+		if record != nil && (record.Phase != phaseTerminal || record.Reason != completed) {
+			updated := coordinator.terminal(*record, completed, now)
 			updated.Head = pr.Head
 			updated.MetadataRevision = diff.PullRequestRevision(pr)
 			plan.Record = &updated
-			plan.RepairKind = "completed"
+			plan.RepairKind = completed
 		} else {
 			plan.RepairKind = "consistent_completed"
 		}
@@ -237,7 +372,7 @@ func (coordinator *Coordinator) repairCompletion(
 		return plan, true
 	}
 
-	if record != nil && record.RebuildEvidence && record.Phase != "terminal" {
+	if record != nil && record.RebuildEvidence && record.Phase != phaseTerminal {
 		plan.RepairKind = "consistent_pending"
 		return plan, true
 	}
@@ -285,6 +420,7 @@ func observeLive(snapshot LiveSnapshot) Observation {
 	observation.CheckStatus = snapshot.Check.Status
 	observation.Disposition = snapshot.Check.Outcome.Disposition
 	observation.OutcomeNonce = snapshot.Check.Outcome.Nonce
+
 	observation.SummaryFound = snapshot.SummaryFound
 	observation.SummaryStatus = snapshot.Summary.Status
 	observation.LastReviewed = snapshot.Summary.LastReviewed
@@ -335,7 +471,7 @@ func (coordinator *Coordinator) deferRepair(
 func (coordinator *Coordinator) confirmRepair(plan Reconciliation, now time.Time) Reconciliation {
 	interval, _ := time.ParseDuration(coordinator.Settings.ConfirmationInterval)
 	plan.Target.NotBeforeMS = now.Add(interval).UnixMilli()
-	plan.RepairKind = "confirming"
+	plan.RepairKind = phaseConfirming
 
 	return plan
 }
@@ -362,7 +498,7 @@ func (coordinator *Coordinator) repairIneligible(
 		reason = "draft"
 	}
 
-	if record.Phase == "terminal" && record.Reason == reason {
+	if record.Phase == phaseTerminal && record.Reason == reason {
 		plan.RepairKind = "consistent_ineligible"
 		return plan
 	}
@@ -389,13 +525,13 @@ func completionConfirmed(target Target, snapshot LiveSnapshot) bool {
 		target.PrivateNonce != "" &&
 		private.Nonce == target.PrivateNonce &&
 		check.ID == private.CheckRunID &&
-		check.Status == "completed" &&
+		checkFinished(check) &&
 		check.Outcome.Nonce == target.PrivateNonce &&
 		completedAt(check, pr.Head, private.MetadataRevision)
 }
 
 func unfinishedAssessment(target Target, record *Record, snapshot LiveSnapshot) bool {
-	if record != nil && record.Phase != "terminal" {
+	if record != nil && record.Phase != phaseTerminal {
 		return true
 	}
 

@@ -64,7 +64,13 @@ func (service *Service) collectAdmissionInput(
 	}
 
 	if fileAdmission.Skip {
-		if err := service.declineReview(ctx, job, checkRun.ID, fileAdmission); err != nil {
+		if err := service.declineReview(
+			ctx,
+			job,
+			checkRun.ID,
+			fileAdmission,
+			progress.summary(service.now()),
+		); err != nil {
 			return empty, true, service.failCheck(
 				ctx,
 				job,

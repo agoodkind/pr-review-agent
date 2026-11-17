@@ -13,6 +13,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -403,12 +404,20 @@ func (service *Service) completeCheckRun(
 
 	outcome, outcomeErr := persistAssessment(completionCtx, checkRunID)
 	if outcomeErr != nil {
-		return fmt.Errorf("persist assessment outcome: %w", outcomeErr)
+		outcomeErr = fmt.Errorf("persist assessment outcome: %w", outcomeErr)
+		if outcome.Disposition != domain.AssessmentFailed || outcome.RetryEligibility(false) {
+			return outcomeErr
+		}
+	}
+
+	summary, err = refreshRetryRows(summary, outcome)
+	if err != nil {
+		return errors.Join(outcomeErr, err)
 	}
 
 	text, err := renderRunLog(ctx)
 	if err != nil {
-		return err
+		return errors.Join(outcomeErr, err)
 	}
 
 	if outcome.Disposition != "" {
@@ -429,8 +438,8 @@ func (service *Service) completeCheckRun(
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "complete check run", slog.String("err", err.Error()))
-		return fmt.Errorf("complete check run: %w", err)
+		return errors.Join(outcomeErr, fmt.Errorf("complete check run: %w", err))
 	}
 
-	return nil
+	return outcomeErr
 }

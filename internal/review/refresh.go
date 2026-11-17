@@ -203,7 +203,10 @@ func (service *Service) completeRefreshedCheck(
 	}
 
 	if withheld {
-		recordAssessment(ctx, domain.AssessmentDeclined, nil, nil, 0)
+		if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); !ok || !recorder.persisted {
+			recordAssessment(ctx, domain.AssessmentDeclined, &summary, nil, 0)
+		}
+
 		title := rendered.capture(
 			renderOutputTemplate("output.refresh_attention", reflect.ValueOf(nil)),
 		)
@@ -239,13 +242,14 @@ func (service *Service) completeRefreshedCheck(
 		return service.succeed(ctx, job, job.CheckRunID, title, checkSummary)
 	}
 
-	return service.succeed(
-		ctx,
-		job,
-		job.CheckRunID,
-		checkTitleAlreadyReviewed,
-		"output.already_reviewed",
+	checkSummary := rendered.capture(
+		renderOutputTemplate("output.already_reviewed", reflect.ValueOf(shortHead(job.Head))),
 	)
+	if rendered.err != nil {
+		return rendered.err
+	}
+
+	return service.succeed(ctx, job, job.CheckRunID, checkTitleAlreadyReviewed, checkSummary)
 }
 
 func (service *Service) failedRefreshCheck(
@@ -284,6 +288,9 @@ func (service *Service) failedRefreshCheck(
 		failureNames(cause),
 		quotaRecovery(statuses),
 	)
+	outcome, persistErr := persistAssessment(ctx, job.CheckRunID)
+	checkProgress.Outcome = outcome
+	progress.Outcome = outcome
 	var rendered renderState
 	title := rendered.capture(renderOutputTemplate("output.refresh_failure", reflect.ValueOf(nil)))
 	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
@@ -298,7 +305,7 @@ func (service *Service) failedRefreshCheck(
 			slog.String("err", rendered.err.Error()),
 		)
 
-		return errors.Join(cause, rendered.err)
+		return errors.Join(cause, persistErr, rendered.err)
 	}
 
 	completionErr := service.completeCheckRun(
@@ -312,11 +319,12 @@ func (service *Service) failedRefreshCheck(
 	)
 	summaryErr := service.writeFailureSummary(ctx, job, progress, title, detail)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
-	if completionErr == nil {
-		return &reportedFailureError{cause: errors.Join(cause, summaryErr, dismissErr)}
+	result := errors.Join(cause, persistErr, completionErr, summaryErr, dismissErr)
+	if completionErr == nil || persistErr != nil {
+		return &reportedFailureError{cause: result}
 	}
 
-	return errors.Join(cause, completionErr, summaryErr, dismissErr)
+	return result
 }
 
 func (service *Service) cancelRefreshedCheck(
@@ -684,16 +692,20 @@ func (service *Service) applyRefreshedVerdict(
 		)
 	}
 
-	if err := service.saveRefreshedSummary(ctx, job, refreshed, summary); err != nil {
-		return summary, err
-	}
-
 	disposition := domain.AssessmentCompleted
 	if summary.Decision == domain.ReviewDecisionComment {
 		disposition = domain.AssessmentDeclined
 	}
 
 	recordAssessment(ctx, disposition, &summary, nil, 0)
+	summary.Outcome, err = persistAssessment(ctx, job.CheckRunID)
+	if err != nil {
+		return summary, err
+	}
+
+	if err := service.saveRefreshedSummary(ctx, job, refreshed, summary); err != nil {
+		return summary, err
+	}
 
 	return summary, nil
 }
@@ -733,6 +745,11 @@ func (service *Service) saveRefreshedSummary(
 			}
 
 			prose, err = refreshFailureResult(prose, summary.Result)
+			if err != nil {
+				return summaryCommentContent{}, err
+			}
+
+			prose, err = refreshRetryRows(prose, summary.Outcome)
 			if err != nil {
 				return summaryCommentContent{}, err
 			}

@@ -13,14 +13,14 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
-	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const (
-	checkFailureMixedUsage      = "output.check-failure-mixed-usage"
-	checkFailureRateLimited     = "output.check-failure-rate-limited"
-	checkFailureMixedRateLimit  = "output.check-failure-mixed-rate-limit"
-	checkCompletionRetryFailure = "review service could not retry failed check completion"
+	checkFailureAssessmentValidation = "output.assessment-validation-title"
+	checkFailureMixedUsage           = "output.check-failure-mixed-usage"
+	checkFailureRateLimited          = "output.check-failure-rate-limited"
+	checkFailureMixedRateLimit       = "output.check-failure-mixed-rate-limit"
+	checkCompletionRetryFailure      = "review service could not retry failed check completion"
 )
 
 func (service *Service) failCheck(
@@ -63,15 +63,8 @@ func (service *Service) reportFailedCheck(
 	progress.Result = cause.Error()
 	service.enrichProviderPeriodUsage(ctx, &progress)
 
-	var statuses []ProviderStatus
-	collectProviderStatuses(cause, &statuses)
-	recordAssessment(
-		ctx,
-		domain.AssessmentFailed,
-		&progress,
-		failureNames(cause),
-		quotaRecovery(statuses),
-	)
+	outcome, persistErr := persistFailedOutcome(ctx, checkRunID, &progress, cause)
+	progress.Outcome = outcome
 	var rendered renderState
 	title := rendered.capture(renderOutputText(failureTitle(stage, cause)))
 	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
@@ -79,7 +72,7 @@ func (service *Service) reportFailedCheck(
 		renderOutputParts(detail, rendered.capture(RenderDetails(progress))),
 	)
 	if rendered.err != nil {
-		return errors.Join(cause, rendered.err)
+		return errors.Join(cause, persistErr, rendered.err)
 	}
 
 	var completeErr error
@@ -111,7 +104,7 @@ func (service *Service) reportFailedCheck(
 		completeErr = fmt.Errorf("review service could not complete check run: %w", completeErr)
 	}
 
-	result := errors.Join(cause, dismissErr, completeErr)
+	result := errors.Join(cause, persistErr, dismissErr, completeErr)
 	if completeErr != nil {
 		progress.Result = result.Error()
 		retrySummary := rendered.capture(
@@ -164,7 +157,7 @@ func (service *Service) reportFailedCheck(
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
 	if _, valid := errors.AsType[*AssessmentValidationError](cause); valid {
-		return "output.assessment-validation-title"
+		return checkFailureAssessmentValidation
 	}
 
 	switch terminalFailureClass(cause) {
@@ -409,8 +402,11 @@ func (service *Service) writeFailureSummary(
 	progress.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
 	var rendered renderState
 	title = rendered.capture(renderOutputText(title))
+	if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); ok {
+		progress.Outcome = recorder.outcome
+	}
+
 	prose := rendered.capture(RenderFailureBody(progress, title, detail))
-	prose += rendered.capture(reassessmentNotice(ctx))
 	if rendered.err != nil {
 		return rendered.err
 	}
@@ -433,36 +429,25 @@ func (service *Service) writeFailureSummary(
 						progress.Observed,
 					) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
 					len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0) {
-				currentDetail := detail
-
-				if strings.Contains(existingBody, reviewDetailsStart) {
-					var data reviewrules.PromptData
-
-					data.Identity = rendered.capture(codeSpan(shortHead(progress.Head)))
-					currentDetail = rendered.capture(
-						renderOutputParts(
-							rendered.capture(
-								service.renderFailureTemplate(ctx, "failure.saved", data),
-							),
-							detail,
-						),
-					)
+				if existing.Status == marker.StateReviewing ||
+					existing.Status == marker.StateFailed {
+					existingBody = rendered.capture(stripLegacyFailureProse(existingBody))
 				}
 
 				failureProse = rendered.capture(
 					renderMaintenanceFailure(
-						rendered.capture(refreshFailureResult(existingBody, progress.Result)),
-						title,
-						currentDetail,
+						rendered.capture(refreshFailureDetails(existingBody, progress, detail)),
+						progress.Outcome,
 					),
 				)
 				if !strings.Contains(existingBody, reviewDetailsStart) {
 					failureProse = rendered.capture(
-						renderOutputParts(failureProse, rendered.capture(RenderDetails(progress))),
+						renderOutputParts(
+							failureProse,
+							rendered.capture(failureDetails(progress, detail)),
+						),
 					)
 				}
-
-				failureProse += rendered.capture(reassessmentNotice(ctx))
 			}
 
 			if rendered.err != nil {

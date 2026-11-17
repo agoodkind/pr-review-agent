@@ -38,7 +38,7 @@ func renderOutputText(text string) (string, error) {
 		oversizedHunkReason, binaryFileReason, patchAbsentReason,
 		patchUnreadableReason, contentMissingReason, truncatedAnswerReason,
 		unreviewedHeadReason, unsupportedInlineVerdictMessage, withheldApprovalMessage,
-		"output.assessment-validation-title", "output.already_reviewed":
+		checkFailureAssessmentValidation, "output.already_reviewed":
 		return renderOutputTemplate(text, reflect.ValueOf(nil))
 	}
 

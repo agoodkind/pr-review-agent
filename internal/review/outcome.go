@@ -56,11 +56,14 @@ func recordAssessment(
 		FailureClasses:   classes,
 		AvailableAtMS:    availableAt,
 		CheckRunID:       recorder.job.CheckRunID,
+		Retryable:        nil,
 	}
 	if summary != nil {
 		recorder.outcome.MetadataRevision = summary.MetadataRevision
 		recorder.outcome.CoverageComplete = summary.CoverageComplete
 	}
+
+	recorder.outcome.SetRetryable(false)
 
 	recorder.persisted = false
 }
@@ -74,6 +77,50 @@ func failureNames(cause error) []string {
 	}
 
 	return names
+}
+
+func persistVerdictOutcome(ctx context.Context, checkID int64, summary *Summary) error {
+	disposition := domain.AssessmentCompleted
+	if summary.Decision == domain.ReviewDecisionComment {
+		disposition = domain.AssessmentDeclined
+	}
+
+	var err error
+	summary.Outcome, err = persistRecordedOutcome(ctx, checkID, disposition, summary, nil, 0)
+
+	return err
+}
+
+func persistFailedOutcome(
+	ctx context.Context,
+	checkID int64,
+	summary *Summary,
+	cause error,
+) (domain.AssessmentOutcome, error) {
+	var statuses []ProviderStatus
+	collectProviderStatuses(cause, &statuses)
+
+	return persistRecordedOutcome(
+		ctx,
+		checkID,
+		domain.AssessmentFailed,
+		summary,
+		failureNames(cause),
+		quotaRecovery(statuses),
+	)
+}
+
+func persistRecordedOutcome(
+	ctx context.Context,
+	checkID int64,
+	disposition domain.AssessmentDisposition,
+	summary *Summary,
+	classes []string,
+	availableAt int64,
+) (domain.AssessmentOutcome, error) {
+	recordAssessment(ctx, disposition, summary, classes, availableAt)
+
+	return persistAssessment(ctx, checkID)
 }
 
 func quotaRecovery(statuses []ProviderStatus) int64 {
@@ -101,6 +148,10 @@ func persistAssessment(ctx context.Context, checkID int64) (domain.AssessmentOut
 	}
 
 	recorder.outcome.CheckRunID = checkID
+	if recorder.outcome.Retryable == nil {
+		recorder.outcome.SetRetryable(false)
+	}
+
 	if recorder.persisted {
 		return recorder.outcome, nil
 	}
@@ -193,6 +244,7 @@ func (service *Service) RunWithOutcome(
 			CoverageComplete: false,
 			ReassessmentID:   "",
 			RetryAtMS:        0,
+			Retryable:        nil,
 		},
 	}
 	ctx := context.WithValue(parent, outcomeKey{}, recorder)
@@ -206,6 +258,11 @@ func (service *Service) RunWithOutcome(
 
 		recorder.outcome.Disposition = disposition
 		recorder.outcome.FailureClasses = failureNames(err)
+		recorder.outcome.SetRetryable(false)
+	}
+
+	if recorder.outcome.Retryable == nil {
+		recorder.outcome.SetRetryable(false)
 	}
 
 	return recorder.outcome, err

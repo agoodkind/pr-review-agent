@@ -40,39 +40,40 @@ func (service *Service) concludeIncomplete(
 	recordAssessment(ctx, domain.AssessmentIncomplete, &summary, classes, quotaRecovery(statuses))
 	cause := joinedChunkFailures(ctx, unread)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
+	outcome, persistErr := persistAssessment(ctx, checkRun.ID)
+	summary.Outcome = outcome
 	var rendered renderState
 	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
 
 	addAttemptedModels(&summary, statuses)
+	commentDetail := rendered.capture(incompleteCommentDetail(reason, detail))
+
 	body := rendered.capture(
-		RenderIncompleteBody(summary, pending, reason, detail, statuses...),
-	) + rendered.capture(reassessmentNotice(ctx))
+		RenderIncompleteBody(summary, pending, reason, commentDetail, statuses...),
+	)
 	title := rendered.capture(incompleteCheckTitle(pending, reason))
 	checkDetail := rendered.capture(incompleteCheckDetail(unread, summary, detail))
 	if rendered.err != nil {
-		return errors.Join(rendered.err, dismissErr)
+		return errors.Join(cause, persistErr, rendered.err, dismissErr)
 	}
 
-	if _, err := persistAssessment(ctx, checkRun.ID); err != nil {
-		return err
+	content := summaryCommentContent{Prose: body, State: state}
+	summaryErr := service.upsertSummaryComment(ctx, job, content)
+	if persistErr != nil {
+		return &reportedFailureError{cause: errors.Join(cause, persistErr, summaryErr, dismissErr)}
 	}
 
-	if err := service.upsertSummaryComment(
-		ctx,
-		job,
-		summaryCommentContent{
-			Prose: body,
-			State: state,
-		},
-	); err != nil {
-		return service.failCheck(
+	if summaryErr != nil {
+		failureErr := service.failCheck(
 			ctx,
 			job,
 			checkRun.ID,
 			progress.summary(service.now()),
 			checkFailureSummary,
-			err,
+			summaryErr,
 		)
+
+		return errors.Join(dismissErr, failureErr)
 	}
 
 	if err := service.completeCheckRun(
@@ -106,6 +107,18 @@ func (service *Service) concludeIncomplete(
 	}
 
 	return nil
+}
+
+func incompleteCommentDetail(reason, detail string) (string, error) {
+	if reason == "" {
+		return detail, nil
+	}
+
+	var rendered renderState
+
+	return rendered.finish(
+		rendered.capture(renderOutputParts(rendered.capture(renderOutputText(reason)), detail)),
+	)
 }
 
 // incompleteCheckDetail is what the check run says about a run that could not

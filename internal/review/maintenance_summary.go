@@ -64,22 +64,97 @@ func refreshFailureResult(body, result string) (string, error) {
 	return rendering.finish(body)
 }
 
-func renderMaintenanceFailure(body, title, detail string) (string, error) {
-	var rendering renderState
-	notice := rendering.capture(
-		renderOutputTemplate(
-			"output.maintenance_notice",
-			reflect.ValueOf(
-				struct {
-					Title  string
-					Detail string
-				}{
-					Title:  rendering.capture(renderOutputText(title)),
-					Detail: detail,
-				},
+func refreshRetryRows(body string, outcome domain.AssessmentOutcome) (string, error) {
+	start := strings.Index(body, reviewDetailsStart)
+	if start < 0 {
+		return body, nil
+	}
+
+	start, end, err := reviewDetailsRange(body, "saved summary")
+	if err != nil {
+		return "", err
+	}
+
+	retryable, retryAt := retryCells(outcome)
+	var rendered renderState
+	lines := strings.Split(body[start:end], "\n")
+
+	for _, item := range []rawDetailRow{
+		{Key: "retryable", Value: retryable},
+		{Key: "retry_at", Value: retryAt},
+	} {
+		key := rendered.capture(rawTableCell(item.Key))
+		value := rendered.capture(rawTableCell(item.Value))
+		row := rendered.capture(
+			renderOutputTemplate(
+				"output.detail_row",
+				reflect.ValueOf(rawDetailRow{
+					Key:   key,
+					Value: value,
+				}),
 			),
-		),
-	)
+		)
+		found := false
+
+		for index, line := range lines {
+			if strings.HasPrefix(line, "| `"+item.Key+"` |") {
+				lines[index] = row
+				found = true
+
+				break
+			}
+		}
+
+		if !found {
+			for index, line := range lines {
+				if strings.HasPrefix(line, "| --- |") {
+					lines[index] += "\n" + row
+
+					break
+				}
+			}
+		}
+	}
+
+	return rendered.finish(body[:start] + strings.Join(lines, "\n") + body[end:])
+}
+
+func refreshFailureDetails(body string, summary Summary, detail string) (string, error) {
+	updated, err := refreshFailureResult(body, summary.Result)
+	if err != nil {
+		return "", err
+	}
+
+	updated, err = refreshRetryRows(updated, summary.Outcome)
+	if err != nil || !strings.Contains(updated, reviewDetailsStart) {
+		return updated, err
+	}
+
+	start, end, err := reviewDetailsRange(updated, "saved summary")
+	if err != nil {
+		return "", err
+	}
+
+	details := stripFailureDiagnostics(updated[start:end])
+
+	if strings.TrimSpace(detail) != "" {
+		block, renderErr := renderOutputTemplate(
+			"output.failure_diagnostics",
+			reflect.ValueOf(detail),
+		)
+		if renderErr != nil {
+			return "", renderErr
+		}
+
+		details = strings.TrimSuffix(details, "</details>") + block + "\n\n</details>"
+	}
+
+	return updated[:start] + details + updated[end:], nil
+}
+
+func renderMaintenanceFailure(body string, outcome domain.AssessmentOutcome) (string, error) {
+	var rendering renderState
+	notice := rendering.capture(renderFailureNotice(outcome))
 
 	return rendering.finish(
 		rendering.capture(
@@ -145,7 +220,23 @@ func stripMaintenanceFailure(body string) string {
 
 // ClearUpdateFailure leaves the verdict and checkpoint unchanged.
 func ClearUpdateFailure(body string) string {
-	return stripReassessmentNotice(stripMaintenanceFailure(body))
+	return stripFailureDiagnostics(stripReassessmentNotice(stripMaintenanceFailure(body)))
+}
+
+func stripFailureDiagnostics(body string) string {
+	const start = "<!-- pr-review-agent:failure-diagnostics:start -->"
+	const end = "<!-- pr-review-agent:failure-diagnostics:end -->"
+	first := strings.Index(body, start)
+	if first < 0 {
+		return body
+	}
+
+	last := strings.Index(body[first:], end)
+	if last < 0 {
+		return body
+	}
+
+	return body[:first] + body[first+last+len(end):]
 }
 
 func preservedReviewDetails(body string, summary Summary) (string, error) {
