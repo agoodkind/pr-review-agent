@@ -405,19 +405,19 @@ func (service *Service) completeCheckRun(
 	outcome, outcomeErr := persistAssessment(completionCtx, checkRunID)
 	if outcomeErr != nil {
 		outcomeErr = fmt.Errorf("persist assessment outcome: %w", outcomeErr)
-		if outcome.Disposition != domain.AssessmentFailed {
+		if outcome.Disposition != domain.AssessmentFailed || outcome.RetryEligibility(false) {
 			return outcomeErr
 		}
 	}
 
 	summary, err = refreshRetryRows(summary, outcome)
 	if err != nil {
-		return err
+		return errors.Join(outcomeErr, err)
 	}
 
 	text, err := renderRunLog(ctx)
 	if err != nil {
-		return err
+		return errors.Join(outcomeErr, err)
 	}
 
 	if outcome.Disposition != "" {

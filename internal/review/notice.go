@@ -402,6 +402,10 @@ func (service *Service) writeFailureSummary(
 	progress.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
 	var rendered renderState
 	title = rendered.capture(renderOutputText(title))
+	if recorder, ok := ctx.Value(outcomeKey{}).(*outcomeRecorder); ok {
+		progress.Outcome = recorder.outcome
+	}
+
 	prose := rendered.capture(RenderFailureBody(progress, title, detail))
 	if rendered.err != nil {
 		return rendered.err

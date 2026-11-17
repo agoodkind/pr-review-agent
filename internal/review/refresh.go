@@ -319,11 +319,12 @@ func (service *Service) failedRefreshCheck(
 	)
 	summaryErr := service.writeFailureSummary(ctx, job, progress, title, detail)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
-	if completionErr == nil {
-		return &reportedFailureError{cause: errors.Join(cause, persistErr, summaryErr, dismissErr)}
+	result := errors.Join(cause, persistErr, completionErr, summaryErr, dismissErr)
+	if completionErr == nil || persistErr != nil {
+		return &reportedFailureError{cause: result}
 	}
 
-	return errors.Join(cause, persistErr, completionErr, summaryErr, dismissErr)
+	return result
 }
 
 func (service *Service) cancelRefreshedCheck(

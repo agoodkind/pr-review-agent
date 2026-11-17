@@ -297,7 +297,9 @@ func TestCompletedRetryAtAttemptLimitStopsDispatch(t *testing.T) {
 		AttemptFound: true,
 		AttemptCheck: githubapp.CheckRun{Status: "completed", Conclusion: "failure"},
 	}
-	snapshot.AttemptCheck.Outcome.SetRetryable(true)
+	snapshot.AttemptCheck.Outcome.Disposition = domain.AssessmentFailed
+	snapshot.AttemptCheck.Outcome.Head = currentHead
+	snapshot.AttemptCheck.Outcome.SetRetryable(false)
 	result := coordinator.Decide(record, snapshot, now)
 	if result.Dispatch || result.Reason != "attempts_exhausted" || result.Attempts != 1 {
 		t.Fatalf("The queue exceeded its retry limit: %+v", result)

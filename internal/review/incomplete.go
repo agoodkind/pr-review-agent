@@ -40,11 +40,7 @@ func (service *Service) concludeIncomplete(
 	recordAssessment(ctx, domain.AssessmentIncomplete, &summary, classes, quotaRecovery(statuses))
 	cause := joinedChunkFailures(ctx, unread)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
-	outcome, err := persistAssessment(ctx, checkRun.ID)
-	if err != nil {
-		return errors.Join(err, dismissErr)
-	}
-
+	outcome, persistErr := persistAssessment(ctx, checkRun.ID)
 	summary.Outcome = outcome
 	var rendered renderState
 	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
@@ -58,25 +54,26 @@ func (service *Service) concludeIncomplete(
 	title := rendered.capture(incompleteCheckTitle(pending, reason))
 	checkDetail := rendered.capture(incompleteCheckDetail(unread, summary, detail))
 	if rendered.err != nil {
-		return errors.Join(rendered.err, dismissErr)
+		return errors.Join(cause, persistErr, rendered.err, dismissErr)
 	}
 
-	if err := service.upsertSummaryComment(
-		ctx,
-		job,
-		summaryCommentContent{
-			Prose: body,
-			State: state,
-		},
-	); err != nil {
-		return service.failCheck(
+	content := summaryCommentContent{Prose: body, State: state}
+	summaryErr := service.upsertSummaryComment(ctx, job, content)
+	if persistErr != nil {
+		return &reportedFailureError{cause: errors.Join(cause, persistErr, summaryErr, dismissErr)}
+	}
+
+	if summaryErr != nil {
+		failureErr := service.failCheck(
 			ctx,
 			job,
 			checkRun.ID,
 			progress.summary(service.now()),
 			checkFailureSummary,
-			err,
+			summaryErr,
 		)
+
+		return errors.Join(dismissErr, failureErr)
 	}
 
 	if err := service.completeCheckRun(
