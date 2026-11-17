@@ -183,12 +183,12 @@ func (coordinator *Coordinator) Repair(
 		return stopped
 	}
 
-	if completed, handled := coordinator.repairCompletion(plan, record, snapshot, now); handled {
-		return completed
-	}
-
 	if stopped, handled := coordinator.repairNonRetryable(plan, record, snapshot, now); handled {
 		return stopped
+	}
+
+	if completed, handled := coordinator.repairCompletion(plan, record, snapshot, now); handled {
+		return completed
 	}
 
 	if !unfinishedAssessment(target, record, snapshot) {
@@ -267,8 +267,7 @@ func (coordinator *Coordinator) repairNonRetryable(
 	private := target.PrivateOutcome
 	sameAttempt := record == nil || record.Job.DeliveryID == target.PrivateDeliveryID &&
 		(target.PrivateGeneration == "" || record.Generation == target.PrivateGeneration)
-	if snapshot.CheckFound && snapshot.Check.ID > private.CheckRunID &&
-		snapshot.Check.ExternalID != target.PrivateDeliveryID {
+	if snapshot.CheckFound && privateSuperseded(private, snapshot.Check) {
 		sameAttempt = false
 	}
 
@@ -291,6 +290,23 @@ func (coordinator *Coordinator) repairNonRetryable(
 	plan.RepairKind = "not_retryable"
 
 	return plan, true
+}
+
+func privateSuperseded(private domain.AssessmentOutcome, check githubapp.CheckRun) bool {
+	if check.ID == 0 || check.ID < private.CheckRunID {
+		return false
+	}
+
+	if check.ID > private.CheckRunID {
+		return true
+	}
+
+	outcome := check.Outcome
+
+	return !checkFinished(check) || outcome.Nonce != private.Nonce ||
+		outcome.Disposition != private.Disposition || outcome.Head != private.Head ||
+		outcome.MetadataRevision != private.MetadataRevision ||
+		outcome.Retryable == nil || *outcome.Retryable
 }
 
 func currentNonRetryableCheck(snapshot LiveSnapshot) bool {

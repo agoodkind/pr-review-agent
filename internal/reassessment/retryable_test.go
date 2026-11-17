@@ -236,3 +236,102 @@ func TestCurrentPanicCheckPreservesMatchingTerminalAttempt(t *testing.T) {
 		t.Fatalf("unmatched automatic attempt prevented recovery: %+v", second)
 	}
 }
+
+func TestNewerPrivatePanicSupersedesOlderCompletion(t *testing.T) {
+	now := time.Now()
+	coordinator := planner()
+	snapshot := livePending()
+	snapshot.Check.ID = 11
+	snapshot.Check.Head = snapshot.PullRequest.Head
+	snapshot.Check.ExternalID = "same-delivery"
+	snapshot.Check.Outcome = domain.AssessmentOutcome{
+		Nonce:            "older-completion",
+		Disposition:      domain.AssessmentCompleted,
+		Head:             snapshot.PullRequest.Head,
+		MetadataRevision: diff.PullRequestRevision(snapshot.PullRequest),
+		CheckRunID:       snapshot.Check.ID,
+	}
+	private := domain.AssessmentOutcome{
+		Nonce:            "newer-panic",
+		Disposition:      domain.AssessmentFailed,
+		Head:             snapshot.PullRequest.Head,
+		MetadataRevision: snapshot.Check.Outcome.MetadataRevision,
+		CheckRunID:       12,
+		FailureClasses:   []string{"panic"},
+	}
+	private.SetRetryable(false)
+	target := reassessment.Target{
+		Key:               "tracked",
+		PrivateOutcome:    private,
+		PrivateNonce:      private.Nonce,
+		PrivateDeliveryID: "same-delivery",
+	}
+
+	for index := 0; index <= coordinator.Settings.ReadBudget; index++ {
+		result := coordinator.Repair(
+			target,
+			nil,
+			snapshot,
+			now.Add(time.Duration(index)*time.Minute),
+		)
+		if result.Record != nil {
+			t.Fatalf("older completion scheduled recovery at observation %d: %+v", index, result)
+		}
+
+		if index > 0 && result.RepairKind != "not_retryable" {
+			t.Fatalf("newer private panic was not retained: %+v", result)
+		}
+
+		target = result.Target
+	}
+
+	for _, scenario := range []struct {
+		checkID int64
+		nonce   string
+	}{
+		{checkID: 12, nonce: "newer-completion"},
+		{checkID: 12, nonce: private.Nonce},
+		{checkID: 13, nonce: "newer-completion"},
+	} {
+		current := snapshot
+		current.Check.ID = scenario.checkID
+		current.Check.Outcome.CheckRunID = scenario.checkID
+		current.Check.Outcome.Nonce = scenario.nonce
+		newTarget := reassessment.Target{
+			Key:               "tracked",
+			PrivateOutcome:    private,
+			PrivateNonce:      private.Nonce,
+			PrivateDeliveryID: "same-delivery",
+		}
+		var result reassessment.Reconciliation
+
+		for index := 0; index < coordinator.Settings.ReadBudget; index++ {
+			result = coordinator.Repair(
+				newTarget,
+				nil,
+				current,
+				now.Add(time.Duration(index)*time.Minute),
+			)
+			newTarget = result.Target
+		}
+
+		if result.Record == nil || result.RepairKind != "evidence_rebuild" {
+			t.Fatalf("private panic suppressed current check %d: %+v", scenario.checkID, result)
+		}
+	}
+
+	matching := snapshot
+	matching.Check.ID = private.CheckRunID
+	matching.Check.Outcome = private
+	matchingTarget := reassessment.Target{
+		Key:               "tracked",
+		PrivateOutcome:    private,
+		PrivateNonce:      private.Nonce,
+		PrivateDeliveryID: "same-delivery",
+	}
+	first := coordinator.Repair(matchingTarget, nil, matching, now)
+	second := coordinator.Repair(first.Target, nil, matching, now.Add(time.Minute))
+	if second.Record != nil || second.RepairKind != "not_retryable" {
+		t.Fatalf("matching panic receipts did not stop recovery: %+v", second)
+	}
+}
