@@ -1,6 +1,21 @@
 {{define "output.boolean"}}{{if .}}yes{{else}}no{{end}}
 {{end}}
 
+{{define "output.failure_notice"}}{{if gt .RetryAtMS 0}}PR Review Agent could not finish this review and will try again.{{else if and .Retryable (not .RetryableValue)}}PR Review Agent hit a fatal error while reviewing this PR and cannot recover.{{else}}PR Review Agent could not finish this review and has not scheduled a retry.{{end}}
+{{end}}
+
+{{define "output.failure_notice_block"}}<!-- pr-review-agent:maintenance-failure:start -->
+
+{{.}}
+
+<!-- pr-review-agent:maintenance-failure:end -->
+{{end}}
+
+{{define "output.failure_diagnostics"}}<!-- pr-review-agent:failure-diagnostics:start -->
+{{.}}
+<!-- pr-review-agent:failure-diagnostics:end -->
+{{end}}
+
 {{define "output.checkpoint"}}{{.Progress}}
 
 {{.Details}}
@@ -75,9 +90,6 @@
 {{define "output.incomplete-check-title"}}{{.Chunks}} could not be reviewed{{if .Daily}}: app token limit exhausted.{{else if .Mixed}}: app and provider usage exhausted.{{else}}. Apply `{{.Label}}` to retry.{{end}}
 {{end}}
 
-{{define "output.incomplete_lead"}}{{.Chunks}} could not be reviewed on `{{.Head}}`.{{if .LegacyDaily}} The app's daily token limit resets at 00:00 UTC.{{end}}{{if .Retry}} Apply the `{{.Label}}` label to retry this head.{{end}}
-{{end}}
-
 {{define "output.legacy_details"}}<details>
 <summary>Review details</summary>
 
@@ -94,11 +106,6 @@ The completed review statistics are unavailable.
 | Bot threads resolved | `{{.Resolved}}` |
 
 </details>
-{{end}}
-
-{{define "output.maintenance_notice"}}### {{.Title}}
-
-{{.Detail}}
 {{end}}
 
 {{define "output.progress"}}## Review

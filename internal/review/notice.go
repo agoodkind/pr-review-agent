@@ -13,7 +13,6 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/marker"
-	"goodkind.io/pr-review-agent/internal/reviewrules"
 )
 
 const (
@@ -407,7 +406,6 @@ func (service *Service) writeFailureSummary(
 	var rendered renderState
 	title = rendered.capture(renderOutputText(title))
 	prose := rendered.capture(RenderFailureBody(progress, title, detail))
-	prose += rendered.capture(reassessmentNotice(ctx))
 	if rendered.err != nil {
 		return rendered.err
 	}
@@ -430,36 +428,20 @@ func (service *Service) writeFailureSummary(
 						progress.Observed,
 					) == 0 && len(progress.Published) == 0 && len(progress.Metadata) == 0 &&
 					len(progress.Fallback) == 0 && len(progress.FileAssessments) == 0) {
-				currentDetail := detail
-
-				if strings.Contains(existingBody, reviewDetailsStart) {
-					var data reviewrules.PromptData
-
-					data.Identity = rendered.capture(codeSpan(shortHead(progress.Head)))
-					currentDetail = rendered.capture(
-						renderOutputParts(
-							rendered.capture(
-								service.renderFailureTemplate(ctx, "failure.saved", data),
-							),
-							detail,
-						),
-					)
-				}
-
 				failureProse = rendered.capture(
 					renderMaintenanceFailure(
-						rendered.capture(refreshFailureDetails(existingBody, progress)),
-						title,
-						currentDetail,
+						rendered.capture(refreshFailureDetails(existingBody, progress, detail)),
+						progress.Outcome,
 					),
 				)
 				if !strings.Contains(existingBody, reviewDetailsStart) {
 					failureProse = rendered.capture(
-						renderOutputParts(failureProse, rendered.capture(RenderDetails(progress))),
+						renderOutputParts(
+							failureProse,
+							rendered.capture(failureDetails(progress, detail)),
+						),
 					)
 				}
-
-				failureProse += rendered.capture(reassessmentNotice(ctx))
 			}
 
 			if rendered.err != nil {

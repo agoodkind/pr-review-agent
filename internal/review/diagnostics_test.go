@@ -30,7 +30,10 @@ func TestFileAssessmentValidationReportsRawResult(t *testing.T) {
 
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, "| `result` | `"+runError.Error()+"` |") ||
-		!strings.Contains(body, "Review stopped during file assessment validation.") ||
+		!strings.Contains(
+			body,
+			"PR Review Agent could not finish this review and has not scheduled a retry.",
+		) ||
 		strings.Contains(body, "unexpected error") ||
 		strings.Contains(body, "during model analysis") {
 		t.Fatalf("The comment must report the known validation error: %s", body)
@@ -54,7 +57,10 @@ func TestRepeatedPreReviewFailuresReplaceThePreviousFailure(t *testing.T) {
 	}
 
 	body := failureSummaryComment(t, fixture)
-	if strings.Count(body, "Review failed while reconciling existing findings.") != 1 ||
+	if strings.Count(
+		body,
+		"PR Review Agent could not finish this review and has not scheduled a retry.",
+	) != 1 ||
 		strings.Count(body, "<summary>Review details</summary>") != 1 ||
 		strings.Contains(body, "first-failed-attempt") ||
 		strings.Contains(body, "previously saved work") {
@@ -112,6 +118,24 @@ func TestFailureUpdatesTheResultWithoutErasingSavedReviewDetails(t *testing.T) {
 					retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 {
 					t.Fatalf(
 						"The comment must update the result and retain saved review data: %s",
+						body,
+					)
+				}
+
+				job := fixture.forcedJob()
+				job.DeliveryID = "second-saved-failure"
+				if err := fixture.run(t.Context(), job); err == nil {
+					t.Fatal("The second review must return the failed pull request read.")
+				}
+
+				body = failureSummaryComment(t, fixture)
+				if strings.Count(
+					body,
+					"PR Review Agent could not finish this review and has not scheduled a retry.",
+				) != 1 ||
+					retainedMetadataCount(t, body, summary.Metadata[0].Body) != 1 {
+					t.Fatalf(
+						"The repeated failure must retain one notice and the saved finding: %s",
 						body,
 					)
 				}

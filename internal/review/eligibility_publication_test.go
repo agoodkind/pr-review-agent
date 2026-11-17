@@ -101,6 +101,19 @@ func TestRetryOutcomePublication(t *testing.T) {
 				}
 
 				body := failureSummaryComment(t, fixture)
+				wantNotice := "PR Review Agent could not finish this review and has not scheduled a retry."
+				if scenario.enabled && scenario.retry {
+					wantNotice = "PR Review Agent could not finish this review and will try again."
+				} else if !scenario.retry {
+					wantNotice = "PR Review Agent hit a fatal error while reviewing this PR and cannot recover."
+				}
+
+				if !scenario.declined &&
+					(!strings.Contains(body, "\n\n"+wantNotice+"\n\n") ||
+						strings.Contains(body, "The queue will reassess")) {
+					t.Fatalf("comment has an incorrect failure notice: %s", body)
+				}
+
 				want := "| `retry_at` | `null` |"
 				if scenario.enabled && scenario.retry {
 					if stored == nil || stored.Phase != "waiting" ||
@@ -127,5 +140,24 @@ func TestRetryOutcomePublication(t *testing.T) {
 				}
 			},
 		)
+	}
+}
+
+func TestPanicPublishesFatalNotice(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: panicModel{}})
+	job, accepted, err := fixture.service.Admit(t.Context(), fixture.job())
+	if err != nil || !accepted {
+		t.Fatalf("admission failed: %v", err)
+	}
+
+	outcome, err := fixture.service.RunWithOutcome(t.Context(), job)
+	if err == nil || outcome.Retryable == nil || *outcome.Retryable {
+		t.Fatalf("outcome = %+v, error = %v", outcome, err)
+	}
+
+	body := failureSummaryComment(t, fixture)
+	want := "PR Review Agent hit a fatal error while reviewing this PR and cannot recover."
+	if strings.Count(body, want) != 1 || !strings.Contains(body, "| `retryable` | `false` |") {
+		t.Fatalf("comment has an incorrect fatal notice: %s", body)
 	}
 }

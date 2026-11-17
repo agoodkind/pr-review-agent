@@ -78,15 +78,11 @@ func assertProviderUnavailable(t *testing.T, providerError error) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	want := "The model provider is unavailable. Wait for it to recover."
+	want := "PR Review Agent could not finish this review and has not scheduled a retry."
 
 	body := failureSummaryComment(t, fixture)
 	if !strings.Contains(body, want) {
 		t.Fatalf("summary comment = %q, want %q", body, want)
-	}
-
-	if !strings.Contains(body, "Apply the `test-review-agent-rerun` label to retry this head.") {
-		t.Fatalf("summary comment has no same-head retry action: %q", body)
 	}
 
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
@@ -132,8 +128,11 @@ func TestAStreamDeadlineKeepsTheTimeoutClassification(t *testing.T) {
 	}
 
 	body := failureSummaryComment(t, fixture)
-	if !strings.Contains(body, "Review stopped: it ran out of time.") {
-		t.Fatalf("summary comment = %q, want the timeout classification", body)
+	if !strings.Contains(
+		body,
+		"PR Review Agent could not finish this review and has not scheduled a retry.",
+	) {
+		t.Fatalf("summary comment = %q, want the unscheduled notice", body)
 	}
 
 	if strings.Contains(body, "provider is unavailable") {

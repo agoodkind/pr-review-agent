@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 
@@ -432,7 +431,7 @@ func refreshVerdictProse(
 		summary.FileAssessments = decodeFileAssessments(existingBody)
 	}
 
-	prose := stripMaintenanceFailure(stripDurableStateMarker(existingBody))
+	prose := ClearUpdateFailure(stripDurableStateMarker(existingBody))
 
 	fallbackRecord, recordedFallback := readFallbackRecord(prose, summary.Head)
 	if summary.ApprovalWithheld && len(summary.Fallback) == 0 && recordedFallback {
@@ -574,23 +573,6 @@ func refreshThreadDetails(body string, summary Summary) (string, error) {
 	return rendering.finish(strings.Join(lines, "\n"))
 }
 
-// renderBlocking links the inline findings that a reader must resolve.
-func renderBlocking(reasons []string) (string, error) {
-	var rendering renderState
-	if len(reasons) == 0 {
-		return rendering.finish("")
-	}
-
-	resolved := make([]string, 0, len(reasons))
-	for _, reason := range reasons {
-		resolved = append(resolved, rendering.capture(renderOutputText(reason)))
-	}
-
-	return rendering.finish(
-		rendering.capture(renderOutputTemplate("output.blocking", reflect.ValueOf(resolved))),
-	)
-}
-
 func formatYesNo(value bool) (string, error) {
 	var rendering renderState
 
@@ -626,45 +608,79 @@ func RenderStartedBody(head domain.HeadSHA) (string, error) {
 	)
 }
 
-// RenderFailureBody renders the visible summary for a review that could not
-// finish. It carries the same detail table as a successful review, reporting
-// how far the review got, and it omits the review marker so the next attempt on
-// the same head is not suppressed as already reviewed.
-//
-// title and detail contain service-written text rather than provider messages.
-// The renderer can include these trusted strings without fencing or escaping.
-func RenderFailureBody(summary Summary, title string, detail string) (string, error) {
+// RenderFailureBody renders a failed review and its retained findings.
+func RenderFailureBody(summary Summary, _ string, detail string) (string, error) {
 	var rendering renderState
 	summary.Failed = true
 
-	parts := []string{strings.TrimSpace(rendering.capture(renderOutputText(title)))}
-	if trimmedDetail := strings.TrimSpace(detail); trimmedDetail != "" {
-		parts = append(parts, trimmedDetail)
-	}
+	parts := []string{rendering.capture(renderFailureNoticeBlock(summary.Outcome))}
 
 	hasVerdict := summary.ApprovalWithheld && summary.Decision != ""
 	if hasVerdict {
 		summary.Decision = domain.ReviewDecisionComment
-		parts = append(
-			parts,
-			rendering.capture(renderVerdictSection(summary, false)),
-			RenderVerdictBody(summary),
-		)
-	} else if findings := rendering.capture(renderSummaryFindings(summary)); findings != "" {
+	}
+
+	if findings := rendering.capture(renderSummaryFindings(summary)); findings != "" {
 		parts = append(parts, findings)
 	}
 
-	if !hasVerdict {
+	if hasVerdict {
+		parts = append(parts, RenderVerdictBody(summary))
+	} else {
 		if checkpoints := renderFindingCheckpoints(summary); checkpoints != "" {
 			parts = append(parts, checkpoints)
 		}
 	}
 
-	parts = append(parts, rendering.capture(RenderDetails(summary)), marker.Summary())
+	parts = append(parts, rendering.capture(failureDetails(summary, detail)), marker.Summary())
 
 	return rendering.finish(
 		rendering.capture(renderOutputTemplate("output.review_body", reflect.ValueOf(parts))),
 	)
+}
+
+func failureDetails(summary Summary, detail string, statuses ...ProviderStatus) (string, error) {
+	details, err := RenderDetails(summary, statuses...)
+	if err != nil || strings.TrimSpace(detail) == "" {
+		return details, err
+	}
+
+	block, err := renderOutputTemplate("output.failure_diagnostics", reflect.ValueOf(detail))
+	if err != nil {
+		return "", err
+	}
+
+	return strings.Replace(details, "\n</details>", "\n"+block+"\n\n</details>", 1), nil
+}
+
+func renderFailureNoticeBlock(outcome domain.AssessmentOutcome) (string, error) {
+	var rendering renderState
+
+	return rendering.finish(
+		rendering.capture(
+			renderOutputTemplate(
+				"output.failure_notice_block",
+				reflect.ValueOf(rendering.capture(renderFailureNotice(outcome))),
+			),
+		),
+	)
+}
+
+func renderFailureNotice(outcome domain.AssessmentOutcome) (string, error) {
+	data := struct {
+		RetryAtMS      int64
+		Retryable      bool
+		RetryableValue bool
+	}{
+		RetryAtMS:      outcome.RetryAtMS,
+		Retryable:      outcome.Retryable != nil,
+		RetryableValue: false,
+	}
+	if outcome.Retryable != nil {
+		data.RetryableValue = *outcome.Retryable
+	}
+
+	return renderOutputTemplate("output.failure_notice", reflect.ValueOf(data))
 }
 
 // RenderSkipBody renders the notice when admission declines a delta.
@@ -732,69 +748,16 @@ func codeSpan(text string) (string, error) {
 	)
 }
 
-// RenderIncompleteBody renders the visible comment for a pass that could not
-// read every chunk it owed.
-//
-// It states what is left and how to retry this head, and it carries no
-// review marker for the same reason the progress body carries none. reason is
-// this service's own wording for what went wrong; the provider's own sentence
-// never reaches here, because a pull request comment is public and permanent.
-//
-// The table reports coverage rather than a stage. This run reached the end and
-// published a verdict, so there is no stage it stopped at, and a chunk nobody
-// read is exactly what the coverage row is for.
+// RenderIncompleteBody renders an incomplete review and its retained findings.
 func RenderIncompleteBody(
 	summary Summary,
-	pending int,
-	reason string,
+	_ int,
+	_ string,
 	detail string,
 	statuses ...ProviderStatus,
 ) (string, error) {
 	var rendering renderState
-	legacyDaily := false
-	budgetFailure := reason == checkFailureDailyBudget || reason == checkFailureMixedUsage
-	if budgetFailure {
-		for _, status := range statuses {
-			if status.Cause == ProviderAppBudgetDenied && status.TokenWindow.Mode == "" {
-				legacyDaily = true
-				break
-			}
-		}
-	}
-
-	lead := rendering.capture(
-		renderOutputTemplate(
-			"output.incomplete_lead",
-			reflect.ValueOf(
-				struct {
-					Chunks      string
-					Head        string
-					LegacyDaily bool
-					Retry       bool
-					Label       string
-				}{
-					Chunks:      rendering.capture(chunkCount(pending)),
-					Head:        shortHead(summary.Head),
-					LegacyDaily: legacyDaily,
-					Retry:       !budgetFailure,
-					Label:       domain.RerunReviewLabel,
-				},
-			),
-		),
-	)
-	blocking := removeBlockingReasons(summary.Blocking, unreviewedHeadReason)
-	parts := []string{lead}
-
-	for _, note := range []string{
-		reason,
-		unreviewedHeadReason,
-		rendering.capture(renderBlocking(blocking)),
-		detail,
-	} {
-		if trimmed := strings.TrimSpace(rendering.capture(renderOutputText(note))); trimmed != "" {
-			parts = append(parts, trimmed)
-		}
-	}
+	parts := []string{rendering.capture(renderFailureNoticeBlock(summary.Outcome))}
 
 	if findings := rendering.capture(renderSummaryFindings(summary)); findings != "" {
 		parts = append(parts, findings)
@@ -804,22 +767,11 @@ func RenderIncompleteBody(
 		parts = append(parts, checkpoints)
 	}
 
-	parts = append(parts, rendering.capture(RenderDetails(summary, statuses...)))
+	parts = append(parts, rendering.capture(failureDetails(summary, detail, statuses...)))
 
 	return rendering.finish(
 		rendering.capture(renderOutputTemplate("output.review_body", reflect.ValueOf(parts))),
 	)
-}
-
-func removeBlockingReasons(reasons []string, removed ...string) []string {
-	kept := make([]string, 0, len(reasons))
-	for _, reason := range reasons {
-		if !slices.Contains(removed, reason) {
-			kept = append(kept, reason)
-		}
-	}
-
-	return kept
 }
 
 func replaceBlockingReason(reasons []string, oldReason string, newReason string) []string {

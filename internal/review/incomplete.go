@@ -50,9 +50,11 @@ func (service *Service) concludeIncomplete(
 	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
 
 	addAttemptedModels(&summary, statuses)
+	commentDetail := rendered.capture(incompleteCommentDetail(reason, detail))
+
 	body := rendered.capture(
-		RenderIncompleteBody(summary, pending, reason, detail, statuses...),
-	) + rendered.capture(reassessmentNotice(ctx))
+		RenderIncompleteBody(summary, pending, reason, commentDetail, statuses...),
+	)
 	title := rendered.capture(incompleteCheckTitle(pending, reason))
 	checkDetail := rendered.capture(incompleteCheckDetail(unread, summary, detail))
 	if rendered.err != nil {
@@ -108,6 +110,18 @@ func (service *Service) concludeIncomplete(
 	}
 
 	return nil
+}
+
+func incompleteCommentDetail(reason, detail string) (string, error) {
+	if reason == "" {
+		return detail, nil
+	}
+
+	var rendered renderState
+
+	return rendered.finish(
+		rendered.capture(renderOutputParts(rendered.capture(renderOutputText(reason)), detail)),
+	)
 }
 
 // incompleteCheckDetail is what the check run says about a run that could not
