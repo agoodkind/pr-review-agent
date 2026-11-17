@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -16,9 +17,10 @@ import (
 )
 
 const (
-	checkFailureMixedUsage     = "Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage."
-	checkFailureRateLimited    = "Review stopped: a provider temporarily limited the request rate."
-	checkFailureMixedRateLimit = "Review stopped: an app token limit was exhausted, and a provider temporarily limited the request rate."
+	checkFailureMixedUsage      = "output.check-failure-mixed-usage"
+	checkFailureRateLimited     = "output.check-failure-rate-limited"
+	checkFailureMixedRateLimit  = "output.check-failure-mixed-rate-limit"
+	checkCompletionRetryFailure = "review service could not retry failed check completion"
 )
 
 func (service *Service) failCheck(
@@ -58,6 +60,7 @@ func (service *Service) reportFailedCheck(
 ) error {
 	logger := gklog.L(ctx)
 	progress.Failed = true
+	progress.Result = cause.Error()
 	service.enrichProviderPeriodUsage(ctx, &progress)
 
 	var statuses []ProviderStatus
@@ -69,9 +72,15 @@ func (service *Service) reportFailedCheck(
 		failureNames(cause),
 		quotaRecovery(statuses),
 	)
-	title := failureTitle(stage, cause)
-	detail := service.terminalFailureDetail(ctx, job, cause)
-	checkSummary := detail + "\n\n" + RenderDetails(progress)
+	var rendered renderState
+	title := rendered.capture(renderOutputText(failureTitle(stage, cause)))
+	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
+	checkSummary := rendered.capture(
+		renderOutputParts(detail, rendered.capture(RenderDetails(progress))),
+	)
+	if rendered.err != nil {
+		return errors.Join(cause, rendered.err)
+	}
 
 	var completeErr error
 	if checkRunID != 0 {
@@ -93,20 +102,53 @@ func (service *Service) reportFailedCheck(
 		}
 	}
 
-	service.writeFailureSummary(ctx, job, progress, title, detail)
-
 	var dismissErr error
 	if conclusion != checkConclusionCancelled {
 		dismissErr = service.dismissFailureVerdict(ctx, job, cause)
 	}
 
 	if completeErr != nil {
-		return errors.Join(cause, dismissErr, fmt.Errorf("complete check run: %w", completeErr))
+		completeErr = fmt.Errorf("review service could not complete check run: %w", completeErr)
 	}
 
-	logger.ErrorContext(ctx, "review job failed", slog.String("err", cause.Error()))
+	result := errors.Join(cause, dismissErr, completeErr)
+	if completeErr != nil {
+		progress.Result = result.Error()
+		retrySummary := rendered.capture(
+			renderOutputParts(detail, rendered.capture(RenderDetails(progress))),
+		)
+		if rendered.err != nil {
+			result = errors.Join(result, rendered.err)
+		} else if retryErr := service.completeCheckRun(
+			ctx,
+			job.InstallationID,
+			job.Repository,
+			checkRunID,
+			conclusion,
+			title,
+			retrySummary,
+		); retryErr != nil {
+			retryErr = fmt.Errorf("%s: %w", checkCompletionRetryFailure, retryErr)
+			result = errors.Join(result, retryErr)
+		}
+	}
 
-	return &reportedFailureError{cause: errors.Join(cause, dismissErr)}
+	progress.Result = result.Error()
+	if summaryErr := service.writeFailureSummary(
+		ctx,
+		job,
+		progress,
+		title,
+		detail,
+	); summaryErr != nil {
+		result = errors.Join(result, summaryErr)
+		progress.Result = result.Error()
+		result = errors.Join(result, service.writeFailureSummary(ctx, job, progress, title, detail))
+	}
+
+	logger.ErrorContext(ctx, "review job failed", slog.String("err", result.Error()))
+
+	return &reportedFailureError{cause: result}
 }
 
 // failureTitle names why a review stopped, in the one line a reader sees in the
@@ -121,6 +163,10 @@ func (service *Service) reportFailedCheck(
 // A failed model call never reaches here. It leaves its chunk pending rather
 // than failing the run, so the neutral check reports it instead.
 func failureTitle(stage string, cause error) string {
+	if _, valid := errors.AsType[*AssessmentValidationError](cause); valid {
+		return "output.assessment-validation-title"
+	}
+
 	switch terminalFailureClass(cause) {
 	case config.FailureDailyBudget:
 		return checkFailureDailyBudget
@@ -294,12 +340,8 @@ func uniqueFailureClasses(classes []config.FailureClass) []config.FailureClass {
 // endpoint, or a credential, and none of that can be unpublished once it is in
 // a pull request comment. The run identifier is enough to pull the whole cause
 // out of the service log, which stays private.
-func publicFailureDetail(job domain.ReviewJob) string {
-	if job.DeliveryID == "" {
-		return "The cause is recorded in this service's log for this run."
-	}
-
-	return "The cause is recorded in this service's log, under run identifier `" + job.DeliveryID + "`."
+func publicFailureDetail(job domain.ReviewJob) (string, error) {
+	return renderOutputTemplate("output.failure-log-reference", reflect.ValueOf(job.DeliveryID))
 }
 
 // usageExceededError is any provider error that reports exhausted usage.
@@ -357,7 +399,7 @@ func (service *Service) writeFailureSummary(
 	progress Summary,
 	title string,
 	detail string,
-) {
+) error {
 	service.enrichProviderPeriodUsage(ctx, &progress)
 
 	ctx, cancel := detachFromReviewDeadline(ctx, service.checkCompletionTimeout)
@@ -365,13 +407,18 @@ func (service *Service) writeFailureSummary(
 
 	logger := gklog.L(ctx)
 	progress.MetadataFindingsDisplay = service.reviewPolicy.MetadataFindingsDisplay()
-	prose := RenderFailureBody(progress, title, detail)
-	prose += reassessmentNotice(ctx)
+	var rendered renderState
+	title = rendered.capture(renderOutputText(title))
+	prose := rendered.capture(RenderFailureBody(progress, title, detail))
+	prose += rendered.capture(reassessmentNotice(ctx))
+	if rendered.err != nil {
+		return rendered.err
+	}
 
-	err := service.upsertSummaryCommentFrom(
+	err := service.upsertSummaryCommentFromChecked(
 		ctx,
 		job,
-		func(existing marker.State, existingBody string) summaryCommentContent {
+		func(existing marker.State, existingBody string) (summaryCommentContent, error) {
 			failureProse := prose
 			completedHead, markedComplete := marker.FindReview(existingBody)
 
@@ -391,20 +438,35 @@ func (service *Service) writeFailureSummary(
 				if strings.Contains(existingBody, reviewDetailsStart) {
 					var data reviewrules.PromptData
 
-					data.Identity = codeSpan(shortHead(progress.Head))
-					currentDetail = service.renderFailureTemplate(
-						ctx,
-						"failure.saved",
-						data,
-					) + "\n\n" + detail
+					data.Identity = rendered.capture(codeSpan(shortHead(progress.Head)))
+					currentDetail = rendered.capture(
+						renderOutputParts(
+							rendered.capture(
+								service.renderFailureTemplate(ctx, "failure.saved", data),
+							),
+							detail,
+						),
+					)
 				}
 
-				failureProse = renderMaintenanceFailure(existingBody, title, currentDetail)
+				failureProse = rendered.capture(
+					renderMaintenanceFailure(
+						rendered.capture(refreshFailureResult(existingBody, progress.Result)),
+						title,
+						currentDetail,
+					),
+				)
 				if !strings.Contains(existingBody, reviewDetailsStart) {
-					failureProse += "\n\n" + RenderDetails(progress)
+					failureProse = rendered.capture(
+						renderOutputParts(failureProse, rendered.capture(RenderDetails(progress))),
+					)
 				}
 
-				failureProse += reassessmentNotice(ctx)
+				failureProse += rendered.capture(reassessmentNotice(ctx))
+			}
+
+			if rendered.err != nil {
+				return summaryCommentContent{}, rendered.err
 			}
 
 			return summaryCommentContent{
@@ -428,13 +490,15 @@ func (service *Service) writeFailureSummary(
 					// hunk that is still unread.
 					Unread: existing.Unread,
 				},
-			}
+			}, nil
 		},
 	)
 	if err != nil {
 		logger.ErrorContext(ctx, "write failure summary", slog.String("err", err.Error()))
-		return
+		return err
 	}
 
 	logger.InfoContext(ctx, "failure summary written", slog.Bool("visible", true))
+
+	return nil
 }

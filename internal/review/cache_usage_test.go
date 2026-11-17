@@ -34,7 +34,7 @@ func TestUsageDetailsPreserveCacheWritesAndActualServiceTiers(t *testing.T) {
 		t.Fatalf("usage combined requests with different service tiers: %+v", summary.Models)
 	}
 
-	body := review.RenderDetails(review.Summary{Usage: summary})
+	body := rendered(t)(review.RenderDetails(review.Summary{Usage: summary}))
 
 	for _, expected := range []string{
 		"| `cache_write_tokens` | `400000` |",
@@ -103,7 +103,7 @@ func TestUsageDetailsDoNotPriceUnpricedCacheWritesAsZero(t *testing.T) {
 					},
 				)
 
-				body := review.RenderDetails(review.Summary{Usage: recorder.Summary()})
+				body := rendered(t)(review.RenderDetails(review.Summary{Usage: recorder.Summary()}))
 				if !strings.Contains(
 					body,
 					"| `estimated_cache_write_cost_usd` | `"+scenario.expected+"` |",

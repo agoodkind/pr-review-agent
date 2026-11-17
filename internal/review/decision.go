@@ -78,7 +78,7 @@ func (service *Service) decidePublication(
 	startedAt time.Time,
 	settings reviewSettings,
 	inputs *publicationInputs,
-) publicationDecision {
+) (publicationDecision, error) {
 	shortfall := pass.structuralShortfall()
 	omissionsDecided := shortfall.present() && len(state.Pending) == 0 && len(state.Unread) == 0 &&
 		pass.decidedOmissions()
@@ -97,9 +97,15 @@ func (service *Service) decidePublication(
 		decision = domain.ReviewDecisionRequestChanges
 	}
 
-	blocking := blockingReasons(inputs.threads, service.botLogin, job.PullRequestRef)
+	blocking, err := blockingReasons(inputs.threads, service.botLogin, job.PullRequestRef)
+	if err != nil {
+		var empty publicationDecision
+
+		return empty, err
+	}
 
 	summary := Summary{
+		Result:             "",
 		FileAssessmentNote: "",
 		Head:               head,
 		Decision:           decision,
@@ -145,5 +151,5 @@ func (service *Service) decidePublication(
 		summary:          summary,
 		shortfall:        shortfall,
 		omissionsDecided: omissionsDecided,
-	}
+	}, nil
 }

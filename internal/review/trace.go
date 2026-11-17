@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
-	"strings"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -16,17 +16,12 @@ import (
 )
 
 // formatThreadTraceIDs renders the bot thread ids for the details table.
-func formatThreadTraceIDs(threads []threadTrace) string {
-	if len(threads) == 0 {
-		return "none"
-	}
+func formatThreadTraceIDs(threads []threadTrace) (string, error) {
+	var state renderState
 
-	ids := make([]string, 0, len(threads))
-	for _, item := range threads {
-		ids = append(ids, "`"+item.NodeID+"`")
-	}
-
-	return strings.Join(ids, ", ")
+	return state.finish(
+		state.capture(renderOutputTemplate("output.thread-trace-ids", reflect.ValueOf(threads))),
+	)
 }
 
 // countOpenThreadTraces counts the bot threads still unresolved.

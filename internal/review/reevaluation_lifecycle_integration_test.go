@@ -308,8 +308,8 @@ func TestFailedMetadataRefreshVerifiesInlineFindingsBeforeDismissal(t *testing.T
 						TotalTokens:      int64(initialRequests) * 16,
 					}
 					state := decodedSummaryState(t, fixture)
-					fixture.state.issueComments[0]["body"] = review.RenderBody(
-						saved,
+					fixture.state.issueComments[0]["body"] = rendered(t)(
+						review.RenderBody(saved),
 					) + "\n" + marker.EncodeState(state)
 				}
 

@@ -3,9 +3,8 @@ package review
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"strings"
+	"reflect"
 
 	"goodkind.io/gklog"
 	"goodkind.io/pr-review-agent/internal/domain"
@@ -41,9 +40,18 @@ func (service *Service) concludeIncomplete(
 	recordAssessment(ctx, domain.AssessmentIncomplete, &summary, classes, quotaRecovery(statuses))
 	cause := joinedChunkFailures(ctx, unread)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
-	detail := service.terminalFailureDetail(ctx, job, cause)
+	var rendered renderState
+	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
 
 	addAttemptedModels(&summary, statuses)
+	body := rendered.capture(
+		RenderIncompleteBody(summary, pending, reason, detail, statuses...),
+	) + rendered.capture(reassessmentNotice(ctx))
+	title := rendered.capture(incompleteCheckTitle(pending, reason))
+	checkDetail := rendered.capture(incompleteCheckDetail(unread, summary, detail))
+	if rendered.err != nil {
+		return errors.Join(rendered.err, dismissErr)
+	}
 
 	if _, err := persistAssessment(ctx, checkRun.ID); err != nil {
 		return err
@@ -53,13 +61,7 @@ func (service *Service) concludeIncomplete(
 		ctx,
 		job,
 		summaryCommentContent{
-			Prose: RenderIncompleteBody(
-				summary,
-				pending,
-				reason,
-				detail,
-				statuses...,
-			) + reassessmentNotice(ctx),
+			Prose: body,
 			State: state,
 		},
 	); err != nil {
@@ -79,8 +81,8 @@ func (service *Service) concludeIncomplete(
 		job.Repository,
 		checkRun.ID,
 		service.presentedConclusion(chunkFailureClasses(unread), checkConclusionDeclined),
-		incompleteCheckTitle(pending, reason),
-		incompleteCheckDetail(unread, summary, detail),
+		title,
+		checkDetail,
 	); err != nil {
 		logger.WarnContext(ctx, "complete incomplete review check", slog.String("err", err.Error()))
 		return errors.Join(err, dismissErr)
@@ -116,39 +118,60 @@ func (service *Service) concludeIncomplete(
 // provider returned HTTP 400 Bad Request: invalid_request_error:
 // upstream_failed: upstream call failed: usage credits are exhausted", which is
 // text this service never read and cannot unpublish.
-func incompleteCheckDetail(failures []chunkFailure, summary Summary, detail string) string {
-	parts := make([]string, 0, 4)
-	if numbers := unreadChunkNumbers(failures); numbers != "" {
-		parts = append(parts, "Chunks left unread: "+numbers+".")
-	}
+func incompleteCheckDetail(
+	failures []chunkFailure,
+	summary Summary,
+	detail string,
+) (string, error) {
+	var state renderState
 
-	if reason := chunkFailureReason(failures); reason != "" {
-		parts = append(parts, reason)
-	}
-
-	if statuses := renderProviderStatuses(providerStatuses(failures)); statuses != "" {
-		parts = append(parts, statuses)
-	}
-
-	parts = append(parts, detail, RenderDetails(summary))
-
-	return strings.Join(parts, "\n\n")
+	return state.finish(
+		state.capture(
+			renderOutputTemplate(
+				"output.incomplete-check-detail",
+				reflect.ValueOf(
+					struct {
+						Numbers  string
+						Reason   string
+						Statuses string
+						Detail   string
+						Details  string
+					}{
+						unreadChunkNumbers(failures),
+						state.capture(renderOutputText(chunkFailureReason(failures))),
+						state.capture(renderProviderStatuses(providerStatuses(failures))),
+						detail,
+						state.capture(RenderDetails(summary)),
+					},
+				),
+			),
+		),
+	)
 }
 
 // incompleteCheckTitle is the one line a reader sees before opening anything on
 // a run that could not finish: how much went unread, and how to retry it.
-func incompleteCheckTitle(pending int, reason string) string {
-	if reason == checkFailureDailyBudget {
-		return chunkCount(pending) + " could not be reviewed: app token limit exhausted."
-	}
+func incompleteCheckTitle(pending int, reason string) (string, error) {
+	var state renderState
 
-	if reason == checkFailureMixedUsage {
-		return chunkCount(pending) + " could not be reviewed: app and provider usage exhausted."
-	}
-
-	return fmt.Sprintf(
-		"%s could not be reviewed. Apply `%s` to retry.",
-		chunkCount(pending),
-		domain.RerunReviewLabel,
+	return state.finish(
+		state.capture(
+			renderOutputTemplate(
+				"output.incomplete-check-title",
+				reflect.ValueOf(
+					struct {
+						Chunks string
+						Daily  bool
+						Mixed  bool
+						Label  string
+					}{
+						state.capture(chunkCount(pending)),
+						reason == checkFailureDailyBudget,
+						reason == checkFailureMixedUsage,
+						domain.RerunReviewLabel,
+					},
+				),
+			),
+		),
 	)
 }

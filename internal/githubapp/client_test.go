@@ -733,7 +733,10 @@ func TestCheckRunLifecycleUsesExpectedPayloads(t *testing.T) {
 func TestCompleteCheckRunTruncatesAnOversizeLog(t *testing.T) {
 	oversize := strings.Repeat("noise line\n", 20000) + "final failing line\n"
 
-	truncated := githubapp.TruncateCheckRunText(oversize)
+	truncated, err := githubapp.TruncateCheckRunText(oversize)
+	if err != nil {
+		t.Fatalf("The check run text truncation failed: %v", err)
+	}
 
 	if len(truncated) > githubapp.MaximumCheckRunTextBytes {
 		t.Fatalf(

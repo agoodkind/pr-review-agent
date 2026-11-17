@@ -28,11 +28,13 @@ func TestInlineVerdictWithheldSummaryRequiresOwnAuthorAndExactHead(t *testing.T)
 						reviewPages: blockingVerdictReviewPage(domain.HeadSHA(testHeadSHA), true),
 					},
 				)
-				body := review.RenderBody(review.Summary{
-					Head:             testCase.head,
-					Decision:         domain.ReviewDecisionComment,
-					ApprovalWithheld: true,
-				}) + "\n" + marker.EncodeState(marker.State{
+				body := rendered(t)(
+					review.RenderBody(review.Summary{
+						Head:             testCase.head,
+						Decision:         domain.ReviewDecisionComment,
+						ApprovalWithheld: true,
+					}),
+				) + "\n" + marker.EncodeState(marker.State{
 					LastReviewed: domain.HeadSHA(testHeadSHA),
 					RunID:        "earlier-delivery",
 					Status:       marker.StateDone,

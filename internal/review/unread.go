@@ -96,10 +96,14 @@ func (service *Service) pendingScopeNotice(
 	cause error,
 ) (string, string, error) {
 	var scopeData reviewrules.PromptData
+	var rendered renderState
 
-	scopeData.Input = renderUnreadHunks(shortfall.Hunks)
+	scopeData.Input = rendered.capture(renderUnreadHunks(shortfall.Hunks))
 	scopeData.Index = len(shortfall.Hunks)
 	scopeData.Total = len(state.Pending)
+	if rendered.err != nil {
+		return "", "", rendered.err
+	}
 
 	notice, err := renderPrompt(service.reviewPolicy, "coverage.pending", scopeData)
 	if err != nil {
@@ -112,11 +116,20 @@ func (service *Service) pendingScopeNotice(
 	}
 
 	if reason := chunkFailureReason(failures); reason != "" {
-		notice = reason + "\n\n" + notice
+		notice = rendered.capture(renderOutputParts(reason, notice))
 	}
 
 	if cause != nil {
-		notice += "\n\n" + service.terminalFailureDetail(ctx, job, cause)
+		notice = rendered.capture(
+			renderOutputParts(
+				notice,
+				rendered.capture(service.terminalFailureDetail(ctx, job, cause)),
+			),
+		)
+	}
+
+	if rendered.err != nil {
+		return "", "", rendered.err
 	}
 
 	return notice, title, nil
@@ -130,6 +143,7 @@ func (service *Service) completeIncompletePublication(
 	dismissErr error,
 	logger *slog.Logger,
 ) error {
+	paths := shortfall.paths()
 	if err := service.publishPendingScope(ctx, publication, progress); err != nil {
 		return errors.Join(err, dismissErr)
 	}
@@ -138,7 +152,7 @@ func (service *Service) completeIncompletePublication(
 		ctx,
 		"review head holds changes this service cannot read",
 		slog.Int("unread_hunks", len(shortfall.Hunks)),
-		slog.Any("unread_paths", shortfall.paths()),
+		slog.Any("unread_paths", paths),
 		slog.Int("pending", len(publication.state.Pending)),
 		slog.Int64("check_run_id", publication.checkRunID),
 	)

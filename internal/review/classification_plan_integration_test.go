@@ -168,7 +168,7 @@ func TestFileReviewRequirementPreservesNecessaryGitSourceAndSemanticGaps(t *test
 					summary.FileAssessments = decisions
 					summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 					summary.FileAssessmentsDisplay = reviewrules.FindingsCollapsed
-					body := review.RenderBody(summary)
+					body := rendered(t)(review.RenderBody(summary))
 
 					_, encoded, found := strings.Cut(
 						body,

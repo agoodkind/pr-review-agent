@@ -22,26 +22,29 @@ import (
 )
 
 const (
-	checkSummaryFailure     = "Review failed."
-	checkSummaryCancelled   = "Review cancelled."
-	checkSummarySkipped     = "Review skipped."
-	checkFailureReviews     = "Review failed while reading existing reviews."
-	checkFailurePullRequest = "Review failed while loading the pull request."
-	checkFailureReconcile   = "Review failed while reconciling existing findings."
-	checkFailureDiff        = "Review failed while collecting the pull request diff."
-	checkFailureSkip        = "Review failed while recording the skipped review."
-	checkFailureAnalysis    = "Review failed during model analysis."
-	checkFailureRefresh     = "Review failed while refreshing the pull request head."
-	checkFailureThreads     = "Review failed while reading the open review threads."
-	checkFailureSummary     = "Review failed while updating the visible summary."
-	checkFailurePublish     = "Review failed while publishing the final decision."
-	checkFailureUsage       = "Review stopped: the model provider reported no remaining usage."
-	checkFailureDailyBudget = "Review stopped: the app's configured token limit was exhausted."
-	checkFailureUnavailable = "The model provider is unavailable. Wait for it to recover."
-	checkFailureDeadline    = "Review stopped: it ran out of time."
+	checkSummaryFailure       = "output.check-summary-failure"
+	checkSummaryCancelled     = "output.check-summary-cancelled"
+	checkSummarySkipped       = "output.check-summary-skipped"
+	checkFailureReviews       = "output.check-failure-reviews"
+	checkFailurePullRequest   = "output.check-failure-pull-request"
+	checkFailureReconcile     = "output.check-failure-reconcile"
+	checkFailureDiff          = "output.check-failure-diff"
+	checkFailureSkip          = "output.check-failure-skip"
+	checkFailureAnalysis      = "output.check-failure-analysis"
+	checkFailureRefresh       = "output.check-failure-refresh"
+	checkFailureThreads       = "output.check-failure-threads"
+	checkFailureSummary       = "output.check-failure-summary"
+	checkFailurePublish       = "output.check-failure-publish"
+	checkFailureUsage         = "output.check-failure-usage"
+	checkFailureDailyBudget   = "output.check-failure-daily-budget"
+	checkFailureUnavailable   = "output.check-failure-unavailable"
+	checkFailureDeadline      = "output.check-failure-deadline"
+	checkTitleAlreadyReviewed = "output.check-title-already-reviewed"
+)
+
+const (
 	// checkTitleAlreadyReviewed names a run that found nothing owed, whether
 	// the durable state says so or an existing review marker does.
-	checkTitleAlreadyReviewed = "Already reviewed"
 	// checkConclusionDeclined is how every run that reviewed less than the whole
 	// head ends: a delta the admission gate refused, a pass that left chunks
 	// pending, and a head holding changes no run can read.
@@ -880,7 +883,7 @@ func (service *Service) publishReassessed(
 		return err
 	}
 
-	decision := service.decidePublication(
+	decision, err := service.decidePublication(
 		ctx,
 		job,
 		head,
@@ -891,6 +894,9 @@ func (service *Service) publishReassessed(
 		settings,
 		inputs,
 	)
+	if err != nil {
+		return err
+	}
 
 	// A head holding something no run can read is settled first. Its shortfall
 	// outlives every later push, so the pending path's promise that the next
@@ -1001,6 +1007,14 @@ func (service *Service) publishVerdict(
 		summary.FileAssessmentNote = note
 	}
 
+	var rendered renderState
+	body := rendered.capture(RenderBody(summary))
+	title := rendered.capture(summary.Title())
+	details := rendered.capture(RenderDetails(summary))
+	if rendered.err != nil {
+		return rendered.err
+	}
+
 	if err := service.checkpointCompletedPublication(
 		ctx,
 		job,
@@ -1036,7 +1050,7 @@ func (service *Service) publishVerdict(
 		ctx,
 		job,
 		summaryCommentContent{
-			Prose: RenderBody(summary),
+			Prose: body,
 			State: state,
 		},
 	); err != nil {
@@ -1052,20 +1066,14 @@ func (service *Service) publishVerdict(
 			job.Repository,
 			checkRun.ID,
 			checkConclusionDeclined,
-			summary.Title(),
-			RenderDetails(summary),
+			title,
+			details,
 		)
 	}
 
 	recordAssessment(ctx, domain.AssessmentCompleted, &summary, nil, 0)
 
-	if err := service.succeed(
-		ctx,
-		job,
-		checkRun.ID,
-		summary.Title(),
-		RenderDetails(summary),
-	); err != nil {
+	if err := service.succeed(ctx, job, checkRun.ID, title, details); err != nil {
 		return err
 	}
 

@@ -52,7 +52,7 @@ func TestFindingDetailsExcludePublishedInlineFindings(t *testing.T) {
 	summary.Metadata = append(summary.Metadata, duplicate)
 	summary.Fallback = []domain.Finding{duplicate, refused}
 
-	body := review.RenderBody(summary)
+	body := rendered(t)(review.RenderBody(summary))
 	if strings.Contains(body, inline.Body) || strings.Contains(body, duplicate.Title) {
 		t.Fatal("The summary repeats an already published inline finding.")
 	}
@@ -80,7 +80,7 @@ func TestFindingDetailsUseLoadedDisplayWithoutChangingCheckpoints(t *testing.T) 
 			string(display),
 			func(t *testing.T) {
 				summary.MetadataFindingsDisplay = loadFindingDisplay(t, display)
-				body := review.RenderBody(summary)
+				body := rendered(t)(review.RenderBody(summary))
 
 				finding := summary.Metadata[0]
 				if strings.Contains(body, finding.Body) || strings.Contains(body, finding.Title) {
@@ -110,10 +110,12 @@ func TestFailureMetadataFindingsRemainOnlyInTheCheckpoint(t *testing.T) {
 	summary.MetadataFindingsDisplay = loadFindingDisplay(t, reviewrules.FindingsExpanded)
 	summary.ApprovalWithheld = true
 
-	body := review.RenderFailureBody(
-		summary,
-		"The review could not finish.",
-		"The provider request failed.",
+	body := rendered(t)(
+		review.RenderFailureBody(
+			summary,
+			"The review could not finish.",
+			"The provider request failed.",
+		),
 	)
 	if strings.Contains(body, summary.Metadata[0].Body) {
 		t.Fatal("The failure summary must not repeat the metadata finding.")
@@ -140,7 +142,7 @@ func TestRefusedFindingsRetainASeparateCheckpoint(t *testing.T) {
 	summary.Fallback = []domain.Finding{finding}
 	summary.ApprovalWithheld = true
 
-	body := review.RenderBody(summary)
+	body := rendered(t)(review.RenderBody(summary))
 	if _, found := marker.FindFinding(body); found {
 		t.Fatal("A refused finding checkpoint must not claim an inline publication.")
 	}

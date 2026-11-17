@@ -185,7 +185,10 @@ func TestIncompleteClassificationRetainsUnknownScopeAfterContentInspection(t *te
 	summary.FileAssessmentMaximumBytes = policy.FileAssessmentMaximumBytes()
 
 	summary.FileAssessmentsDisplay = reviewrules.FindingsCollapsed
-	if !strings.Contains(review.RenderBody(summary), "<!-- pr-review-agent:file-assessments:") {
+	if !strings.Contains(
+		rendered(t)(review.RenderBody(summary)),
+		"<!-- pr-review-agent:file-assessments:",
+	) {
 		t.Fatal("The published result must retain the unresolved file assessment.")
 	}
 }

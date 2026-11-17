@@ -40,7 +40,7 @@ func TestReconciliationFailurePreservesSavedFindingCheckpoints(t *testing.T) {
 	summary := findingDetailsSummary()
 	summary.MetadataRevision = diff.PullRequestRevision(pr)
 	summary.Fallback = []domain.Finding{severeFinding()}
-	original := review.RenderBody(summary)
+	original := rendered(t)(review.RenderBody(summary))
 
 	fixture.state.issueComments = []map[string]any{
 		{
@@ -272,10 +272,12 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 					{
 						"id":   float64(2000),
 						"user": map[string]any{"login": testBotLogin},
-						"body": review.RenderBody(summary) + "\n" + marker.EncodeState(marker.State{
-							RunID:  "prior-assessment",
-							Status: marker.StateReviewing,
-						}),
+						"body": rendered(t)(review.RenderBody(summary)) + "\n" + marker.EncodeState(
+							marker.State{
+								RunID:  "prior-assessment",
+								Status: marker.StateReviewing,
+							},
+						),
 					},
 				}
 				if err := fixture.run(t.Context(), job); err != nil {
@@ -313,11 +315,13 @@ func TestResumedReviewSeparatesPriorFindingsFromCompletedResults(t *testing.T) {
 						failureSummaryComment(t, fixture),
 					)
 					summary.CoverageComplete = false
-					fixture.state.issueComments[0]["body"] = review.RenderIncompleteBody(
-						summary,
-						len(state.Pending),
-						"The provider request failed.",
-						"",
+					fixture.state.issueComments[0]["body"] = rendered(t)(
+						review.RenderIncompleteBody(
+							summary,
+							len(state.Pending),
+							"The provider request failed.",
+							"",
+						),
 					) + "\n" + marker.EncodeState(state)
 				}
 
@@ -476,11 +480,13 @@ func TestForcedIncompleteReviewRetainsMetadataUntilExplicitReassessment(t *testi
 					{
 						"id":   float64(2000),
 						"user": map[string]any{"login": testBotLogin},
-						"body": review.RenderBody(summary) + "\n" + marker.EncodeState(marker.State{
-							RunID:   "previous-partial-review",
-							Status:  marker.StateReviewing,
-							Pending: []string{"pending-metadata"},
-						}),
+						"body": rendered(t)(review.RenderBody(summary)) + "\n" + marker.EncodeState(
+							marker.State{
+								RunID:   "previous-partial-review",
+								Status:  marker.StateReviewing,
+								Pending: []string{"pending-metadata"},
+							},
+						),
 					},
 				}
 				fixture.seedDismissedGitReview(job.Head)
@@ -654,9 +660,11 @@ func TestUnreadableSummaryPreservesFindingCheckpointsWithoutCompletingTheReview(
 		},
 	}
 
-	body := review.RenderUnreadableBody(
-		summary,
-		"The model did not finish reviewing the current changes.",
+	body := rendered(t)(
+		review.RenderUnreadableBody(
+			summary,
+			"The model did not finish reviewing the current changes.",
+		),
 	)
 	if _, completed := marker.FindReview(body); completed {
 		t.Fatal("The unreadable summary must not claim that the head completed review.")
@@ -693,7 +701,7 @@ func TestUnreadableSummaryPreservesFindingCheckpointsWithoutCompletingTheReview(
 
 	if len(record.Findings) != 1 || record.Findings[0].Body != summary.Fallback[0].Body ||
 		strings.Count(body, summary.Fallback[0].Body) != 1 ||
-		!strings.Contains(body, "The review submitted no verdict.") {
+		!strings.Contains(body, "The review did not submit a verdict.") {
 		t.Fatal("The unreadable summary must retain its refused finding and neutral verdict.")
 	}
 }

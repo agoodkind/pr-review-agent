@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -70,7 +71,11 @@ func (service *Service) publishCompletedReview(
 	progress *reviewProgress,
 	pass *chunkPass,
 ) error {
-	report, reportCalled := service.generateReport(ctx, pullRequest, pass)
+	report, reportCalled, err := service.generateReport(ctx, pullRequest, pass)
+	if err != nil {
+		return err
+	}
+
 	summary.Report = report
 	summary.Models = pass.analysis().Models
 
@@ -137,12 +142,17 @@ func (service *Service) generateReport(
 	ctx context.Context,
 	pullRequest githubapp.PullRequest,
 	pass *chunkPass,
-) (Report, bool) {
-	fallback := SanitizeReport(fallbackReport(), service.reviewPolicy.Limits())
+) (Report, bool, error) {
+	fallback, err := fallbackReport()
+	if err != nil {
+		return fallback, false, err
+	}
+
+	fallback = SanitizeReport(fallback, service.reviewPolicy.Limits())
 
 	reporter, ok := service.model.(Reporter)
 	if !ok {
-		return fallback, false
+		return fallback, false, nil
 	}
 
 	reportCtx, cancel := modelRequestContext(ctx, service.model, pass.settings.chunkTimeout)
@@ -157,13 +167,13 @@ func (service *Service) generateReport(
 	)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "Final report prompt rendering failed", "err", err)
-		return fallback, false
+		return fallback, false, nil
 	}
 
 	completion, err := reporter.Report(reportCtx, prompt)
 	if err != nil {
 		gklog.L(ctx).ErrorContext(ctx, "write final review report", slog.String("err", err.Error()))
-		return fallback, true
+		return fallback, true, nil
 	}
 
 	pass.recordReportModel(completion.Model)
@@ -176,10 +186,10 @@ func (service *Service) generateReport(
 			slog.String("err", err.Error()),
 		)
 
-		return fallback, true
+		return fallback, true, nil
 	}
 
-	return report, true
+	return report, true, nil
 }
 
 // BuildReportPrompt fits optional change context into the complete provider request.
@@ -228,8 +238,7 @@ func BuildReportPrompt(
 	)
 }
 
-func fallbackReport() Report {
-	return Report{
-		Summary: "This review checked the current pull request against its stated purpose and current changes.",
-	}
+func fallbackReport() (Report, error) {
+	text, err := renderOutputTemplate("output.report_fallback", reflect.Value{})
+	return Report{Summary: text}, err
 }

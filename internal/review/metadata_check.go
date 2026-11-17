@@ -14,7 +14,7 @@ func (service *Service) CancelMetadataCheck(ctx context.Context, job domain.Revi
 		job.Repository,
 		job.CheckRunID,
 		"skipped",
-		"Review superseded",
-		"The service admitted another check for the newest title and description.",
+		"output.metadata-check-superseded-title",
+		"output.metadata-check-superseded-detail",
 	)
 }

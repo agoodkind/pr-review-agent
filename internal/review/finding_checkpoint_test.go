@@ -12,7 +12,7 @@ import (
 func TestMetadataCheckpointRejectsInvalidFindingProvenance(t *testing.T) {
 	summary := findingDetailsSummary()
 
-	body := review.RenderBody(summary)
+	body := rendered(t)(review.RenderBody(summary))
 	if !review.MetadataMatches(body, summary.Head, summary.MetadataRevision) {
 		t.Fatal("The legacy metadata checkpoint must remain readable.")
 	}

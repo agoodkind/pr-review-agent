@@ -1,0 +1,99 @@
+{{define "output.assessment-validation-title"}}Review stopped during file assessment validation.
+{{end}}
+
+{{define "output.additional-omissions-label"}}Additional omissions
+{{end}}
+
+{{define "output.additional-omissions-reason"}}{{.}} more not listed here
+{{end}}
+
+{{define "output.check-failure-analysis"}}Review failed during model analysis.
+{{end}}
+
+{{define "output.check-failure-daily-budget"}}Review stopped: the app's configured token limit was exhausted.
+{{end}}
+
+{{define "output.check-failure-deadline"}}Review stopped: it ran out of time.
+{{end}}
+
+{{define "output.check-failure-diff"}}Review failed while collecting the pull request diff.
+{{end}}
+
+{{define "output.check-failure-mixed-rate-limit"}}Review stopped: an app token limit was exhausted, and a provider temporarily limited the request rate.
+{{end}}
+
+{{define "output.check-failure-mixed-usage"}}Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage.
+{{end}}
+
+{{define "output.check-failure-publish"}}Review failed while publishing the final decision.
+{{end}}
+
+{{define "output.check-failure-pull-request"}}Review failed while loading the pull request.
+{{end}}
+
+{{define "output.check-failure-rate-limited"}}Review stopped: a provider temporarily limited the request rate.
+{{end}}
+
+{{define "output.check-failure-reconcile"}}Review failed while reconciling existing findings.
+{{end}}
+
+{{define "output.check-failure-refresh"}}Review failed while refreshing the pull request head.
+{{end}}
+
+{{define "output.check-failure-reviews"}}Review failed while reading existing reviews.
+{{end}}
+
+{{define "output.check-failure-skip"}}Review failed while recording the skipped review.
+{{end}}
+
+{{define "output.check-failure-summary"}}Review failed while updating the visible summary.
+{{end}}
+
+{{define "output.check-failure-threads"}}Review failed while reading the open review threads.
+{{end}}
+
+{{define "output.check-failure-unavailable"}}The model provider is unavailable. Wait for it to recover.
+{{end}}
+
+{{define "output.check-failure-usage"}}Review stopped: the model provider reported no remaining usage.
+{{end}}
+
+{{define "output.check-summary-cancelled"}}Review cancelled.
+{{end}}
+
+{{define "output.check-summary-failure"}}Review failed.
+{{end}}
+
+{{define "output.check-summary-skipped"}}Review skipped.
+{{end}}
+
+{{define "output.check-title-already-reviewed"}}Already reviewed
+{{end}}
+
+{{define "output.failure-log-reference"}}The cause is recorded in this service's log{{if .}}, under run identifier `{{.}}`{{else}} for this run{{end}}.
+{{end}}
+
+{{define "output.failure_panic"}}Review failed after an internal panic.
+{{end}}
+
+{{define "output.http_status"}}HTTP {{.}}
+{{end}}
+
+{{define "output.provider-cause"}}{{if eq . "provider_succeeded"}}API completed the response{{else if eq . "app_budget_denied"}}App denied request; API not called{{else if eq . "app_budget_unavailable"}}App quota check failed; API not called{{else if eq . "provider_usage_exhausted"}}Provider reported no remaining usage{{else if eq . "provider_rate_limited"}}Provider rate limited the request{{else}}Provider request failed{{end}}
+{{end}}
+
+{{define "output.provider-statuses"}}#### Provider attempts
+
+| Provider | Model | App quota | Result |
+| --- | --- | --- | --- |
+{{range .}}| {{.Provider}} | {{.Model}} | {{if eq .Status.Limit 0}}No app limit{{else if .Status.QuotaKnown}}{{template "output.token_count" .Used}} / {{template "output.token_count" .Limit}} ({{template "output.token_count" .Remaining}} left){{else}}Unknown / {{template "output.token_count" .Limit}}{{end}} | {{.Cause}} |
+{{end}}{{range .}}{{if .Status.TokenWindow.Mode}}
+Provider {{.Provider}} uses {{.Window}}.
+{{if gt .Status.QuotaSnapshot.HistoryStartMS 0}}Measured usage starts at {{.HistoryStart}}.
+{{if not .Status.QuotaSnapshot.HistoryComplete}}The requested window includes time before measured history.
+{{end}}{{end}}{{if gt .Status.QuotaSnapshot.AvailableAtMS 0}}Admission becomes available at {{.AvailableAt}} if no additional usage is reported.
+{{end}}{{end}}{{end}}
+{{end}}
+
+{{define "output.provider-window"}}{{if eq .Mode "cron"}}cron {{.Schedule}} ({{.Timezone}}){{else}}{{.Mode}} {{.Duration}}{{end}}
+{{end}}

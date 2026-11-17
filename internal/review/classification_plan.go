@@ -80,7 +80,14 @@ func normalizeFileAssessments(
 
 		shortfall.Hunks = append(
 			shortfall.Hunks,
-			unreadHunk{Path: assessment.Path, Header: "", Reason: assessment.Reason, Target: nil},
+			unreadHunk{
+				Path:           assessment.Path,
+				Header:         "",
+				Reason:         assessment.Reason,
+				ReasonTemplate: "",
+				Target:         nil,
+				Omitted:        0,
+			},
 		)
 	}
 

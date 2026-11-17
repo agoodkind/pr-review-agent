@@ -20,7 +20,7 @@ import (
 	"goodkind.io/pr-review-agent/internal/config"
 	"goodkind.io/pr-review-agent/internal/diff"
 	"goodkind.io/pr-review-agent/internal/domain"
-	"goodkind.io/pr-review-agent/internal/githubapp"
+	"goodkind.io/pr-review-agent/internal/proseeval"
 	"goodkind.io/pr-review-agent/internal/modelrequest"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/review"
@@ -387,71 +387,7 @@ func validateProseDataset(dataset proseDataset, catalog reviewrules.Catalog) err
 }
 
 func proseCaseInput(scenario proseCase) (diff.ReviewInput, map[string]string, error) {
-	input := diff.ReviewInput{
-		PullRequest: githubapp.PullRequest{},
-		Files:       nil,
-		Metadata:    nil,
-		MergeBase:   "",
-	}
-	hashes := make(map[string]string)
-
-	for _, file := range scenario.Files {
-		if file.Path == "" || file.Patch == "" || file.CurrentContent == "" || file.Status == "" {
-			return input, hashes, errors.New(
-				"evaluation source files require path, status, patch, and current_content",
-			)
-		}
-
-		hash := proseSHA256([]byte(file.CurrentContent))
-		if file.SourceSHA256 != "" && file.SourceSHA256 != hash {
-			return input, hashes, errors.New(
-				"evaluation source hash does not match current_content",
-			)
-		}
-
-		if err := diff.ValidatePatchContent(file.Patch, file.CurrentContent); err != nil {
-			return input, hashes, err
-		}
-
-		lines, hunks, err := diff.ChangedRightLines(file.Patch)
-		if err != nil {
-			return input, hashes, err
-		}
-
-		hashes[file.Path] = hash
-		input.Files = append(
-			input.Files,
-			diff.FileContext{
-				Path:              file.Path,
-				Status:            file.Status,
-				Patch:             file.Patch,
-				CurrentContent:    file.CurrentContent,
-				ChangedRightLines: lines,
-				ChangedRightHunks: hunks,
-				CoverageComplete:  true,
-				Gap:               diff.CoverageGapNone,
-			},
-		)
-	}
-
-	for _, metadata := range scenario.Metadata {
-		hash := proseSHA256([]byte(metadata.Text))
-		if metadata.SourceSHA256 != "" && metadata.SourceSHA256 != hash {
-			return input, hashes, errors.New("evaluation metadata hash does not match text")
-		}
-
-		source := diff.MetadataSource{
-			Surface:   metadata.Surface,
-			CommitSHA: metadata.CommitSHA,
-			Text:      metadata.Text,
-			StartLine: metadata.StartLine,
-			EndLine:   metadata.EndLine,
-		}
-		hashes[source.Label()] = hash
-		input.Metadata = append(input.Metadata, source)
-	}
-
-	return input, hashes, nil
+	return proseeval.BuildInput(scenario.Files, scenario.Metadata)
 }
 
 func evaluateProseCase(ctx context.Context, cfg config.Config, scenario proseCase) (

@@ -51,10 +51,15 @@ func (service *Service) nativeVerdictBody(
 			state.LastReviewed = summary.Head
 		}
 
+		prose, err := refreshVerdictProse("", summary, false)
+		if err != nil {
+			return "", err
+		}
+
 		if err := service.upsertSummaryComment(
 			ctx,
 			job,
-			summaryCommentContent{Prose: refreshVerdictProse("", summary, false), State: state},
+			summaryCommentContent{Prose: prose, State: state},
 		); err != nil {
 			return "", err
 		}
@@ -128,7 +133,7 @@ func NativeReviewSummaryLink(
 		return "", errors.New("native.summary_link must include the summary permalink")
 	}
 
-	return link + "\n\n" + checkpoint, nil
+	return renderOutputParts(link, checkpoint)
 }
 
 func (service *Service) updateStandingVerdict(

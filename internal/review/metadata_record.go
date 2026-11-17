@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"goodkind.io/pr-review-agent/internal/diff"
@@ -192,9 +193,11 @@ func (service *Service) restoreFindingCheckpoints(
 	return record, fallback, completed, nil
 }
 
-func renderMetadataFindings(findings []domain.Finding) string {
+func renderMetadataFindings(findings []domain.Finding) (string, error) {
+	var state renderState
+
 	if len(findings) == 0 {
-		return ""
+		return state.finish("")
 	}
 
 	ordered := append([]domain.Finding(nil), findings...)
@@ -209,38 +212,40 @@ func renderMetadataFindings(findings []domain.Finding) string {
 			StartLine: 0,
 			EndLine:   0,
 		}
-		label := source.Label()
+		label := state.capture(source.Label())
 
-		parts := []string{
-			fmt.Sprintf(
-				"##### %s, lines %d-%d: %s",
-				label,
-				finding.StartLine,
-				finding.EndLine,
-				sanitizeReportText(finding.Title),
+		sections = append(
+			sections,
+			state.capture(
+				renderOutputTemplate(
+					"output.metadata-finding",
+					reflect.ValueOf(
+						struct {
+							Label      string
+							Start      int
+							End        int
+							Title      string
+							Body       string
+							Action     domain.CorrectionAction
+							Fence      string
+							Suggestion string
+						}{
+							label,
+							finding.StartLine,
+							finding.EndLine,
+							sanitizeReportText(finding.Title),
+							sanitizeReportText(finding.Body),
+							finding.CorrectionAction,
+							metadataReplacementFence(finding.Suggestion),
+							finding.Suggestion,
+						},
+					),
+				),
 			),
-			sanitizeReportText(finding.Body),
-		}
-		switch finding.CorrectionAction {
-		case "", domain.CorrectionNone:
-		case domain.CorrectionDelete:
-			parts = append(
-				parts,
-				fmt.Sprintf("Delete lines %d-%d.", finding.StartLine, finding.EndLine),
-			)
-		case domain.CorrectionReplace:
-			fence := metadataReplacementFence(finding.Suggestion)
-			parts = append(
-				parts,
-				"Replace those lines with:",
-				fence+"text\n"+finding.Suggestion+"\n"+fence,
-			)
-		}
-
-		sections = append(sections, strings.Join(parts, "\n\n"))
+		)
 	}
 
-	return strings.Join(sections, "\n\n")
+	return state.finish(state.capture(renderOutputParts(sections...)))
 }
 
 func metadataReplacementFence(text string) string {

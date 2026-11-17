@@ -1,0 +1,39 @@
+{{define "output.code_span"}}{{.Delimiter}}{{.Value}}{{.Delimiter}}
+{{end}}
+
+{{define "output.comma_list"}}{{range $index, $value := .}}{{if $index}}, {{end}}{{$value}}{{end}}
+{{end}}
+
+{{define "output.detail_row"}}| {{.Key}} | {{.Value}} |
+{{end}}
+
+{{define "output.line_list"}}{{range $index, $value := .}}{{if $index}}<br>{{end}}{{$value}}{{end}}
+{{end}}
+
+{{define "output.multiline_result"}}<pre>{{.}}</pre>
+{{end}}
+
+{{define "output.paragraphs"}}{{range $index, $part := .}}{{if $index}}
+
+{{end}}{{$part}}{{end}}
+{{end}}
+
+{{define "output.provider_usage"}}{{.Key}}: {{.Value}}
+{{end}}
+
+{{define "output.result_row"}}| `result` | {{.}} |
+{{end}}
+
+{{define "output.thread_ids_row"}}| Bot thread IDs | {{.}} |
+{{end}}
+
+{{define "output.threads_open_row"}}| Bot threads open | `{{.}}` |
+{{end}}
+
+{{define "output.threads_resolved_row"}}| Bot threads resolved | `{{.}}` |
+{{end}}
+
+{{define "output.finding_location"}}{{.Path}}:{{.EndLine}}
+{{end}}
+
+{{define "output.token_count"}}{{range $index, $group := .}}{{if $index}},{{end}}{{$group}}{{end}}{{end}}
