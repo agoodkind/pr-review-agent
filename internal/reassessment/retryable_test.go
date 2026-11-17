@@ -170,3 +170,69 @@ func TestCurrentPanicCheckPreventsMissingQueueRecovery(t *testing.T) {
 		t.Fatalf("earlier check stopped newer work: %+v", second)
 	}
 }
+
+func TestCurrentPanicCheckPreservesMatchingTerminalAttempt(t *testing.T) {
+	now := time.Now()
+	coordinator := planner()
+	snapshot := livePending()
+	snapshot.Check.Head = snapshot.PullRequest.Head
+	snapshot.Check.ExternalID = "panic-delivery"
+	snapshot.Check.Outcome = domain.AssessmentOutcome{
+		Nonce:            "panic-receipt",
+		Disposition:      domain.AssessmentFailed,
+		Head:             snapshot.PullRequest.Head,
+		MetadataRevision: diff.PullRequestRevision(snapshot.PullRequest),
+		CheckRunID:       snapshot.Check.ID,
+		FailureClasses:   []string{"panic"},
+	}
+	snapshot.Check.Outcome.SetRetryable(false)
+	record := queued(now)
+	record.Phase = "terminal"
+	record.Job.DeliveryID = snapshot.Check.ExternalID
+	record.Head = snapshot.Check.Head
+	record.MetadataRevision = snapshot.Check.Outcome.MetadataRevision
+	record.Outcome = snapshot.Check.Outcome
+	target := reassessment.Target{Key: record.Key}
+	first := coordinator.Repair(target, &record, snapshot, now)
+	second := coordinator.Repair(first.Target, &record, snapshot, now.Add(time.Minute))
+	if second.Record != nil || second.RepairKind != "not_retryable" {
+		t.Fatalf("matching terminal attempt was reactivated: %+v", second)
+	}
+
+	for _, phase := range []string{"waiting", "running"} {
+		newer := record
+		newer.Phase = phase
+		newer.Generation = "new-generation"
+		newer.Job.DeliveryID = "explicit-retry"
+		first = coordinator.Repair(target, &newer, snapshot, now)
+		second = coordinator.Repair(first.Target, &newer, snapshot, now.Add(time.Minute))
+		if second.Record != nil || second.RepairKind != "consistent_pending" {
+			t.Fatalf("earlier check stopped %s work: %+v", phase, second)
+		}
+	}
+
+	different := record
+	different.Outcome.Nonce = "different-receipt"
+	first = coordinator.Repair(target, &different, snapshot, now)
+	second = coordinator.Repair(first.Target, &different, snapshot, now.Add(time.Minute))
+	if second.Record == nil || second.RepairKind != "reactivated" {
+		t.Fatalf("unmatched terminal attempt prevented recovery: %+v", second)
+	}
+
+	different = record
+	different.Job.CheckRunID = snapshot.Check.ID + 1
+	first = coordinator.Repair(target, &different, snapshot, now)
+	second = coordinator.Repair(first.Target, &different, snapshot, now.Add(time.Minute))
+	if second.Record == nil || second.RepairKind != "reactivated" {
+		t.Fatalf("unmatched job check prevented recovery: %+v", second)
+	}
+
+	different = record
+	different.Job.AutomaticReassessment = true
+	different.AttemptID = "different-attempt"
+	first = coordinator.Repair(target, &different, snapshot, now)
+	second = coordinator.Repair(first.Target, &different, snapshot, now.Add(time.Minute))
+	if second.Record == nil || second.RepairKind != "reactivated" {
+		t.Fatalf("unmatched automatic attempt prevented recovery: %+v", second)
+	}
+}

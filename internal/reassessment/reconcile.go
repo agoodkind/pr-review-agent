@@ -230,7 +230,7 @@ func (coordinator *Coordinator) repairCurrentNonRetryable(
 	now time.Time,
 ) (Reconciliation, bool) {
 	target := plan.Target
-	if record != nil || !currentNonRetryableCheck(snapshot) ||
+	if !recordMatchesCurrentCheck(record, snapshot.Check) || !currentNonRetryableCheck(snapshot) ||
 		!checkSupersedesPrivate(target, snapshot.Check) {
 		return plan, false
 	}
@@ -242,6 +242,19 @@ func (coordinator *Coordinator) repairCurrentNonRetryable(
 	plan.RepairKind = "not_retryable"
 
 	return plan, true
+}
+
+func recordMatchesCurrentCheck(record *Record, check githubapp.CheckRun) bool {
+	if record == nil {
+		return true
+	}
+
+	return record.Phase == phaseTerminal && check.ExternalID != "" &&
+		record.Job.DeliveryID == check.ExternalID && record.Head == check.Head &&
+		(record.Job.CheckRunID == 0 || record.Job.CheckRunID == check.ID) &&
+		(!record.Job.AutomaticReassessment || record.AttemptID == check.ExternalID) &&
+		record.MetadataRevision == check.Outcome.MetadataRevision &&
+		record.Outcome.Nonce == check.Outcome.Nonce && record.Outcome.CheckRunID == check.ID
 }
 
 func (coordinator *Coordinator) repairNonRetryable(
