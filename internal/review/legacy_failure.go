@@ -46,12 +46,9 @@ func stripLegacyFailureProse(body string) (string, error) {
 		return body, nil
 	}
 
-	retained := []string{prefix}
-
 	for remaining != "" {
 		paragraph, next, more := strings.Cut(remaining, "\n\n")
 		if strings.HasPrefix(paragraph, "Resolve these inline findings:\n- ") {
-			retained = append(retained, paragraph)
 			remaining = next
 
 			continue
@@ -81,9 +78,7 @@ func stripLegacyFailureProse(body string) (string, error) {
 		}
 	}
 
-	retained = append(retained, remaining)
-
-	return strings.TrimSpace(strings.Join(retained, "\n\n")), nil
+	return strings.TrimSpace(prefix + "\n\n" + remaining), nil
 }
 
 func legacyFailureLine(paragraph string, lines map[string]struct{}) bool {

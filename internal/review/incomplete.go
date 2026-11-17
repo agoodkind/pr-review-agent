@@ -38,14 +38,14 @@ func (service *Service) concludeIncomplete(
 	}
 
 	recordAssessment(ctx, domain.AssessmentIncomplete, &summary, classes, quotaRecovery(statuses))
+	cause := joinedChunkFailures(ctx, unread)
+	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
 	outcome, err := persistAssessment(ctx, checkRun.ID)
 	if err != nil {
-		return err
+		return errors.Join(err, dismissErr)
 	}
 
 	summary.Outcome = outcome
-	cause := joinedChunkFailures(ctx, unread)
-	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
 	var rendered renderState
 	detail := rendered.capture(service.terminalFailureDetail(ctx, job, cause))
 

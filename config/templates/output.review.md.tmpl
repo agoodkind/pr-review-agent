@@ -108,11 +108,6 @@ The completed review statistics are unavailable.
 </details>
 {{end}}
 
-{{define "output.progress"}}## Review
-
-Reviewing `{{.Head}}`. {{if .Remaining}}{{.Chunks}} still to read.{{else}}Every chunk has been read.{{end}}
-{{end}}
-
 {{define "output.reassessment-notice"}}
 
 <!-- pr-review-agent:reassessment:start -->
@@ -132,13 +127,13 @@ The queue will reassess this pull request after `{{.RetryAt}}`. The reassessment
 {{define "output.refresh_title"}}Review refreshed
 {{end}}
 
-{{define "output.refresh_withheld"}}Approval remains withheld. The review summary explains what needs attention.{{.}}
+{{define "output.refresh_withheld"}}See the review summary for what still needs attention.{{.}}
 {{end}}
 
-{{define "output.refresh_summary"}}This run reassessed the standing review.{{.}}
+{{define "output.refresh_summary"}}{{.}}
 {{end}}
 
-{{define "output.already_reviewed"}}This head already has a PR-Agent review. This run did not publish a duplicate review.
+{{define "output.already_reviewed"}}PR Review Agent already reviewed commit `{{.}}`.
 {{end}}
 
 {{define "output.report_section"}}<!-- pr-review-agent:report-section:start -->
@@ -173,7 +168,7 @@ The review skipped this pull request because {{.}}.
 
 {{define "output.started"}}## Review
 
-Reviewing `{{.}}`. This comment is rewritten when the review finishes.
+Reviewing `{{.}}`.
 {{end}}
 
 {{define "output.summary_checkpoint"}}<!-- pr-review-agent:summary:v1 -->

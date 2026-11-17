@@ -39,7 +39,11 @@ func TestOutcomeRetryEligibilityAndLegacyMarkers(t *testing.T) {
 				outcome.SetRetryable(test.declined)
 				decoded := domain.DecodeAssessmentOutcome(domain.EncodeAssessmentOutcome(outcome))
 				if decoded.Retryable == nil || *decoded.Retryable != test.want {
-					t.Fatalf("retryable = %v, want %v", decoded.Retryable, test.want)
+					t.Fatalf(
+						"The decoded retryable field is %v. The expected retry eligibility is %v.",
+						decoded.Retryable,
+						test.want,
+					)
 				}
 			},
 		)

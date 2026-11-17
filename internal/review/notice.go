@@ -64,10 +64,6 @@ func (service *Service) reportFailedCheck(
 	service.enrichProviderPeriodUsage(ctx, &progress)
 
 	outcome, persistErr := persistFailedOutcome(ctx, checkRunID, &progress, cause)
-	if persistErr != nil {
-		return errors.Join(cause, persistErr)
-	}
-
 	progress.Outcome = outcome
 	var rendered renderState
 	title := rendered.capture(renderOutputText(failureTitle(stage, cause)))
@@ -76,7 +72,7 @@ func (service *Service) reportFailedCheck(
 		renderOutputParts(detail, rendered.capture(RenderDetails(progress))),
 	)
 	if rendered.err != nil {
-		return errors.Join(cause, rendered.err)
+		return errors.Join(cause, persistErr, rendered.err)
 	}
 
 	var completeErr error
@@ -108,7 +104,7 @@ func (service *Service) reportFailedCheck(
 		completeErr = fmt.Errorf("review service could not complete check run: %w", completeErr)
 	}
 
-	result := errors.Join(cause, dismissErr, completeErr)
+	result := errors.Join(cause, persistErr, dismissErr, completeErr)
 	if completeErr != nil {
 		progress.Result = result.Error()
 		retrySummary := rendered.capture(

@@ -16,7 +16,11 @@ func TestStripLegacyFailureProsePreservesSavedSections(t *testing.T) {
 	got, err := stripLegacyFailureProse(body)
 	if err != nil || strings.Contains(got, "old") || strings.Contains(got, "Review failed") ||
 		!strings.Contains(got, "Saved finding.") || !strings.Contains(got, "Saved statistics.") {
-		t.Fatalf("legacy failure cleanup = %q, error = %v", got, err)
+		t.Fatalf(
+			"Cleanup did not retain the saved findings and statistics after removing the old failure: %q, %v",
+			got,
+			err,
+		)
 	}
 }
 
@@ -25,6 +29,6 @@ func TestStripLegacyFailureProsePreservesUnrecognizedReview(t *testing.T) {
 		"The review service encountered an unexpected error and could not complete the review."
 	got, err := stripLegacyFailureProse(body)
 	if err != nil || got != body {
-		t.Fatalf("saved review = %q, error = %v", got, err)
+		t.Fatalf("Cleanup did not preserve the saved review: %q, %v", got, err)
 	}
 }

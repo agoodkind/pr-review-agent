@@ -242,13 +242,14 @@ func (service *Service) completeRefreshedCheck(
 		return service.succeed(ctx, job, job.CheckRunID, title, checkSummary)
 	}
 
-	return service.succeed(
-		ctx,
-		job,
-		job.CheckRunID,
-		checkTitleAlreadyReviewed,
-		"output.already_reviewed",
+	checkSummary := rendered.capture(
+		renderOutputTemplate("output.already_reviewed", reflect.ValueOf(shortHead(job.Head))),
 	)
+	if rendered.err != nil {
+		return rendered.err
+	}
+
+	return service.succeed(ctx, job, job.CheckRunID, checkTitleAlreadyReviewed, checkSummary)
 }
 
 func (service *Service) failedRefreshCheck(
@@ -288,10 +289,6 @@ func (service *Service) failedRefreshCheck(
 		quotaRecovery(statuses),
 	)
 	outcome, persistErr := persistAssessment(ctx, job.CheckRunID)
-	if persistErr != nil {
-		return errors.Join(cause, persistErr)
-	}
-
 	checkProgress.Outcome = outcome
 	progress.Outcome = outcome
 	var rendered renderState
@@ -308,7 +305,7 @@ func (service *Service) failedRefreshCheck(
 			slog.String("err", rendered.err.Error()),
 		)
 
-		return errors.Join(cause, rendered.err)
+		return errors.Join(cause, persistErr, rendered.err)
 	}
 
 	completionErr := service.completeCheckRun(
@@ -323,10 +320,10 @@ func (service *Service) failedRefreshCheck(
 	summaryErr := service.writeFailureSummary(ctx, job, progress, title, detail)
 	dismissErr := service.dismissFailureVerdict(ctx, job, cause)
 	if completionErr == nil {
-		return &reportedFailureError{cause: errors.Join(cause, summaryErr, dismissErr)}
+		return &reportedFailureError{cause: errors.Join(cause, persistErr, summaryErr, dismissErr)}
 	}
 
-	return errors.Join(cause, completionErr, summaryErr, dismissErr)
+	return errors.Join(cause, persistErr, completionErr, summaryErr, dismissErr)
 }
 
 func (service *Service) cancelRefreshedCheck(

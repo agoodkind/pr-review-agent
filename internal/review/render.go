@@ -147,10 +147,12 @@ func acceptedFileScope(summary Summary) bool {
 // RenderBody renders the single visible GitHub review summary.
 func RenderBody(summary Summary) (string, error) {
 	var rendering renderState
-	parts := []string{
-		rendering.capture(renderVerdictSection(summary, false)),
-		rendering.capture(renderReportSection(summary.Report)),
+	parts := []string{rendering.capture(renderVerdictSection(summary, false))}
+	if summary.Decision != domain.ReviewDecisionApprove ||
+		strings.TrimSpace(summary.Report.Summary) != "" {
+		parts = append(parts, rendering.capture(renderReportSection(summary.Report)))
 	}
+
 	if summary.FileAssessmentsDisplay == reviewrules.FindingsExpanded {
 		parts = append(
 			parts,
@@ -233,6 +235,11 @@ const (
 
 func renderVerdictSection(summary Summary, blockWithdrawn bool) (string, error) {
 	var rendering renderState
+	if summary.Decision == domain.ReviewDecisionApprove &&
+		strings.TrimSpace(summary.Report.Summary) == "" {
+		return "", nil
+	}
+
 	parts := []string{rendering.capture(verdictLead(summary))}
 	if findings := rendering.capture(renderSummaryFindings(summary)); findings != "" {
 		parts = append(parts, findings)
@@ -694,28 +701,9 @@ func RenderSkipBody(reason string) (string, error) {
 	)
 }
 
-// RenderProgressBody omits the review marker when remaining is zero.
-func RenderProgressBody(head domain.HeadSHA, remaining int) (string, error) {
-	var rendering renderState
-
-	return rendering.finish(
-		rendering.capture(
-			renderOutputTemplate(
-				"output.progress",
-				reflect.ValueOf(
-					struct {
-						Head      string
-						Remaining int
-						Chunks    string
-					}{
-						Head:      shortHead(head),
-						Remaining: remaining,
-						Chunks:    rendering.capture(chunkCount(remaining)),
-					},
-				),
-			),
-		),
-	)
+// RenderProgressBody shows the commit under review.
+func RenderProgressBody(head domain.HeadSHA, _ int) (string, error) {
+	return RenderStartedBody(head)
 }
 
 // codeSpan renders repository-controlled text as an inline code span that the

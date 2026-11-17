@@ -406,12 +406,6 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 		return coordinator.terminal(record, "expired", now)
 	}
 
-	if record.Phase != "running" && record.Phase != phaseConfirming &&
-		coordinator.Settings.MaximumAttempts > 0 &&
-		record.Attempts >= coordinator.Settings.MaximumAttempts {
-		return coordinator.terminal(record, "attempts_exhausted", now)
-	}
-
 	latest := snapshot.LatestCheck
 	if snapshot.LatestFound && completedAt(latest, pr.Head, revision) {
 		return coordinator.terminal(record, completed, now)
@@ -425,6 +419,12 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 	record, settled := coordinator.settleAttempt(record, snapshot, revision, now)
 	if settled {
 		return record
+	}
+
+	if record.Phase != "running" && record.Phase != phaseConfirming &&
+		coordinator.Settings.MaximumAttempts > 0 &&
+		record.Attempts >= coordinator.Settings.MaximumAttempts {
+		return coordinator.terminal(record, "attempts_exhausted", now)
 	}
 
 	if snapshot.AvailableAt.After(now) {

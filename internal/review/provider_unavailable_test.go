@@ -132,7 +132,10 @@ func TestAStreamDeadlineKeepsTheTimeoutClassification(t *testing.T) {
 		body,
 		"PR Review Agent could not finish this review and has not scheduled a retry.",
 	) {
-		t.Fatalf("summary comment = %q, want the unscheduled notice", body)
+		t.Fatalf(
+			"The summary comment %q does not say that the agent has not scheduled a retry.",
+			body,
+		)
 	}
 
 	if strings.Contains(body, "provider is unavailable") {

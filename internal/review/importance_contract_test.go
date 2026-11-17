@@ -122,11 +122,9 @@ func TestPublishedVerdictUsesTheFindingThreshold(t *testing.T) {
 
 				body := rendered(t)(review.RenderBody(summary))
 				if summary.Decision == domain.ReviewDecisionApprove {
-					if !strings.Contains(
-						body,
-						"This review did not identify findings at or above the minimum importance.",
-					) {
-						t.Fatalf("The approval does not state its finding threshold: %s", body)
+					if strings.Contains(body, "### Verdict") ||
+						strings.Contains(body, "### Summary") {
+						t.Fatalf("The approval includes prose without a review summary: %s", body)
 					}
 				} else if !strings.Contains(body, "Resolve the open inline findings.") {
 					t.Fatalf(

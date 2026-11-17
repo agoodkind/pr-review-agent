@@ -36,7 +36,10 @@ func TestPrivatePanicStopsRecoveryForSameAttempt(t *testing.T) {
 	first := coordinator.Repair(target, &record, snapshot, now)
 	result := coordinator.Repair(first.Target, &record, snapshot, now.Add(time.Minute))
 	if result.Record == nil || result.Record.Phase != "terminal" || result.Record.Dispatch {
-		t.Fatalf("panic was rescheduled: %+v", result)
+		t.Fatalf(
+			"The coordinator did not return a terminal record with dispatch disabled: %+v",
+			result,
+		)
 	}
 
 	newer := record
@@ -196,7 +199,7 @@ func TestCurrentPanicCheckPreservesMatchingTerminalAttempt(t *testing.T) {
 	first := coordinator.Repair(target, &record, snapshot, now)
 	second := coordinator.Repair(first.Target, &record, snapshot, now.Add(time.Minute))
 	if second.Record != nil || second.RepairKind != "not_retryable" {
-		t.Fatalf("matching terminal attempt was reactivated: %+v", second)
+		t.Fatalf("The coordinator reactivated the matching terminal attempt: %+v", second)
 	}
 
 	for _, phase := range []string{"waiting", "running"} {
@@ -279,7 +282,7 @@ func TestNewerPrivatePanicSupersedesOlderCompletion(t *testing.T) {
 		}
 
 		if index > 0 && result.RepairKind != "not_retryable" {
-			t.Fatalf("newer private panic was not retained: %+v", result)
+			t.Fatalf("The coordinator did not retain the newer private panic outcome: %+v", result)
 		}
 
 		target = result.Target
@@ -373,7 +376,7 @@ func TestPrivatePanicSurvivesUnfinishedMatchingCheck(t *testing.T) {
 		}
 
 		if index > 0 && result.RepairKind != "not_retryable" {
-			t.Fatalf("private panic was not retained: %+v", result)
+			t.Fatalf("The coordinator did not retain the private panic outcome: %+v", result)
 		}
 
 		target = result.Target

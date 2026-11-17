@@ -176,6 +176,7 @@ func TestRenderBodyLeadsWithTheVerdictThenTheDetails(t *testing.T) {
 			test.name,
 			func(t *testing.T) {
 				summary := testSummary()
+				summary.Report.Summary = "The change updates how the service handles errors."
 				summary.Decision = test.decision
 				summary.Published = test.published
 				summary.Blocking = test.blocking
@@ -3268,7 +3269,10 @@ func TestAnIncompleteRunPublishesOnlyItsActualInlineFindings(t *testing.T) {
 
 	comments := bodiesOf(fixture.state.issueComments)
 	if len(comments) != 1 || !strings.Contains(comments[0], "has not scheduled a retry") {
-		t.Fatalf("comments = %v, want one unscheduled failure notice", comments)
+		t.Fatalf(
+			"The comments must include one notice that the agent has not scheduled a retry: %v",
+			comments,
+		)
 	}
 }
 
@@ -4502,12 +4506,12 @@ func TestResolvedThreadsRefreshTheVerdictAtAReviewedHead(t *testing.T) {
 	// The visible comment must not keep claiming severe findings after the
 	// verdict flipped.
 	body, ok := fixture.state.issueComments[len(fixture.state.issueComments)-1]["body"].(string)
-	if !ok ||
-		!strings.Contains(
+	if !ok || strings.Contains(body, "Resolve the open inline findings.") ||
+		!strings.Contains(body, "<summary>Review details</summary>") {
+		t.Fatalf(
+			"The refreshed approval must retain review details and omit the request for changes: %v",
 			body,
-			"This review did not identify findings at or above the minimum importance.",
-		) {
-		t.Fatalf("summary comment = %v, want the refreshed verdict prose", body)
+		)
 	}
 }
 
@@ -6077,7 +6081,7 @@ func assertSanitizedFailureComment(
 	body := failureSummaryComment(t, fixture)
 	want := "PR Review Agent could not finish this review and has not scheduled a retry."
 	if !strings.Contains(body, want) {
-		t.Fatalf("summary comment = %q, want the stated failure %q", body, want)
+		t.Fatalf("The summary comment %q does not contain the failure notice %q.", body, want)
 	}
 
 	if !strings.Contains(body, "under run identifier `delivery-1`") {
@@ -6617,7 +6621,7 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 				}
 
 				if body := failureSummaryComment(t, fixture); !strings.Contains(body, want) {
-					t.Fatalf("summary comment = %q, want %q", body, want)
+					t.Fatalf("The summary comment %q does not contain %q.", body, want)
 				}
 			},
 		)
@@ -6700,7 +6704,10 @@ func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T)
 					body,
 					"PR Review Agent could not finish this review and has not scheduled a retry.",
 				) {
-					t.Fatalf("summary comment = %q, want the unscheduled notice", body)
+					t.Fatalf(
+						"The summary comment %q does not say that the agent has not scheduled a retry.",
+						body,
+					)
 				}
 			},
 		)
@@ -8260,10 +8267,8 @@ func TestTheReviewSaysItStartedBeforeItReadsAnything(t *testing.T) {
 		t.Fatal("the pull request was never told anything")
 	}
 
-	// The start body is the only one that promises a rewrite and counts no
-	// chunks, because it is written before any chunk has been read.
 	first := fixture.state.issueCommentBodies[0]
-	if !strings.Contains(first, "This comment is rewritten when the review finishes.") {
+	if !strings.HasPrefix(first, "## Review\n\nReviewing `"+testHeadSHA[:7]+"`.\n\n<details>") {
 		t.Fatalf(
 			"the first thing written to the pull request was %q, want the review saying it started",
 			first,
@@ -8324,7 +8329,8 @@ func TestProgressOmitsPublishedInlineFindings(t *testing.T) {
 	progress := ""
 
 	for _, body := range fixture.state.issueCommentBodies {
-		if strings.Contains(body, "still to read") {
+		state, found := marker.DecodeState(body)
+		if found && len(state.Completed) > 0 && len(state.Pending) > 0 {
 			progress = body
 		}
 	}

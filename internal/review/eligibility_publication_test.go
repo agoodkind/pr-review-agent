@@ -1,7 +1,9 @@
 package review_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"goodkind.io/pr-review-agent/internal/config"
+	"goodkind.io/pr-review-agent/internal/domain"
 	"goodkind.io/pr-review-agent/internal/openai"
 	"goodkind.io/pr-review-agent/internal/reassessment"
 	"goodkind.io/pr-review-agent/internal/review"
@@ -76,7 +79,10 @@ func TestRetryOutcomePublication(t *testing.T) {
 								Record:  stored,
 							})
 						default:
-							t.Errorf("unexpected action %q", mutation.Action)
+							t.Errorf(
+								"The test server received an unexpected action: %q.",
+								mutation.Action,
+							)
 						}
 					}),
 				)
@@ -97,7 +103,7 @@ func TestRetryOutcomePublication(t *testing.T) {
 				ctx := review.WithOutcomeSink(t.Context(), coordinator.Observe)
 				outcome, err := fixture.service.RunWithOutcome(ctx, admitted)
 				if err != nil || outcome.Retryable == nil || *outcome.Retryable != scenario.retry {
-					t.Fatalf("outcome = %+v, error = %v", outcome, err)
+					t.Fatalf("The review returned outcome %+v with error %v.", outcome, err)
 				}
 
 				body := failureSummaryComment(t, fixture)
@@ -159,5 +165,33 @@ func TestPanicPublishesFatalNotice(t *testing.T) {
 	want := "PR Review Agent hit a fatal error while reviewing this PR and cannot recover."
 	if strings.Count(body, want) != 1 || !strings.Contains(body, "| `retryable` | `false` |") {
 		t.Fatalf("comment has an incorrect fatal notice: %s", body)
+	}
+}
+
+func TestFailedReviewReportsOutcomeWhenStorageFails(t *testing.T) {
+	fixture := newServiceFixture(t, serviceFixtureOptions{model: panicModel{}})
+	job, accepted, err := fixture.service.Admit(t.Context(), fixture.job())
+	if err != nil || !accepted {
+		t.Fatalf("The service could not admit the review: %v", err)
+	}
+
+	storageErr := errors.New("outcome storage is unavailable")
+	ctx := review.WithOutcomeSink(
+		t.Context(),
+		func(_ context.Context, _ domain.ReviewJob, outcome domain.AssessmentOutcome) (
+			domain.AssessmentOutcome,
+			error,
+		) {
+			return outcome, storageErr
+		},
+	)
+	_, err = fixture.service.RunWithOutcome(ctx, job)
+	if !errors.Is(err, storageErr) || fixture.state.lastUpdateCheckRun["status"] != "completed" ||
+		!strings.Contains(failureSummaryComment(t, fixture), "fatal error") {
+		t.Fatalf(
+			"The review must report the storage error and publish the failure: %v, %v",
+			err,
+			fixture.state.lastUpdateCheckRun,
+		)
 	}
 }

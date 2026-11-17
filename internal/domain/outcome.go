@@ -37,7 +37,7 @@ type AssessmentOutcome struct {
 	Retryable        *bool                 `json:"retryable,omitempty"`
 }
 
-// RetryEligibility reports whether an outcome permits an automatic retry.
+// RetryEligibility uses the disposition for older outcomes without a retryable field.
 func (outcome *AssessmentOutcome) RetryEligibility(retryDeclined bool) bool {
 	if outcome.Retryable != nil {
 		return *outcome.Retryable
