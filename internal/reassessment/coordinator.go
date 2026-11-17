@@ -19,6 +19,7 @@ import (
 const (
 	phaseConfirming = "confirming"
 	phaseTerminal   = "terminal"
+	completed       = "completed"
 )
 
 // Record retains one generation and its stable attempt identity across restarts.
@@ -413,7 +414,7 @@ func (coordinator *Coordinator) Decide(record Record, snapshot Snapshot, now tim
 
 	latest := snapshot.LatestCheck
 	if snapshot.LatestFound && completedAt(latest, pr.Head, revision) {
-		return coordinator.terminal(record, "completed", now)
+		return coordinator.terminal(record, completed, now)
 	}
 
 	if record.Phase == phaseConfirming &&
@@ -586,9 +587,13 @@ func (coordinator *Coordinator) deferAfterFailure(
 }
 
 func completedAt(check githubapp.CheckRun, head domain.HeadSHA, revision string) bool {
-	return check.Status == "completed" && check.Outcome.Disposition == domain.AssessmentCompleted &&
+	return checkFinished(check) && check.Outcome.Disposition == domain.AssessmentCompleted &&
 		check.Outcome.Head == head &&
 		check.Outcome.MetadataRevision == revision
+}
+
+func checkFinished(check githubapp.CheckRun) bool {
+	return check.Status == completed
 }
 
 func outcomeNotRetryableAt(
@@ -612,7 +617,7 @@ func (coordinator *Coordinator) settleAttempt(
 
 	check := snapshot.AttemptCheck
 	if completedAt(check, snapshot.PullRequest.Head, revision) {
-		return coordinator.terminal(record, "completed", now), true
+		return coordinator.terminal(record, completed, now), true
 	}
 
 	if outcomeNotRetryableAt(check.Outcome, snapshot.PullRequest.Head, revision) {
@@ -646,6 +651,6 @@ func unsuccessfulNotRetryableAt(
 func attemptSettled(record Record, snapshot Snapshot) bool {
 	return (record.Phase == "running" || record.Phase == phaseConfirming) &&
 		snapshot.AttemptFound &&
-		snapshot.AttemptCheck.Status == "completed" &&
+		checkFinished(snapshot.AttemptCheck) &&
 		snapshot.AttemptCheck.Conclusion != "cancelled"
 }

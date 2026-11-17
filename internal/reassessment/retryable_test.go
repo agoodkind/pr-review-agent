@@ -82,3 +82,91 @@ func TestConfirmingPanicDoesNotDispatchWithoutCheck(t *testing.T) {
 		t.Fatalf("completion did not wait for check confirmation: %+v", result)
 	}
 }
+
+func TestCurrentPanicCheckPreventsMissingQueueRecovery(t *testing.T) {
+	now := time.Now()
+	coordinator := planner()
+	snapshot := livePending()
+	snapshot.Check.Head = snapshot.PullRequest.Head
+	snapshot.Check.ExternalID = "panic-delivery"
+	snapshot.Check.Outcome = domain.AssessmentOutcome{
+		Nonce:            "panic-receipt",
+		Disposition:      domain.AssessmentFailed,
+		Head:             snapshot.PullRequest.Head,
+		MetadataRevision: diff.PullRequestRevision(snapshot.PullRequest),
+		FailureClasses:   []string{"panic"},
+		CheckRunID:       snapshot.Check.ID,
+	}
+	snapshot.Check.Outcome.SetRetryable(false)
+	target := reassessment.Target{Key: "tracked"}
+	first := coordinator.Repair(target, nil, snapshot, now)
+	if first.Record != nil || first.RepairKind != "confirming" {
+		t.Fatalf("first observation did not wait for confirmation: %+v", first)
+	}
+
+	second := coordinator.Repair(first.Target, nil, snapshot, now.Add(time.Minute))
+	if second.Record != nil || second.RepairKind != "not_retryable" {
+		t.Fatalf("confirmed panic created a retry: %+v", second)
+	}
+
+	older := target
+	older.PrivateNonce = "previous-receipt"
+	older.PrivateDeliveryID = "previous-delivery"
+	older.PrivateOutcome = snapshot.Check.Outcome
+	older.PrivateOutcome.CheckRunID--
+	older.PrivateOutcome.Nonce = older.PrivateNonce
+	older.PrivateOutcome.Disposition = domain.AssessmentCompleted
+	first = coordinator.Repair(older, nil, snapshot, now)
+	second = coordinator.Repair(first.Target, nil, snapshot, now.Add(time.Minute))
+	if second.Record != nil || second.RepairKind != "not_retryable" {
+		t.Fatalf("older private outcome replaced the current check: %+v", second)
+	}
+
+	newerPrivate := older
+	newerPrivate.PrivateOutcome.CheckRunID = snapshot.Check.ID + 1
+	newerPrivate.PrivateOutcome.Disposition = domain.AssessmentFailed
+	newerPrivate.PrivateOutcome.FailureClasses = []string{"other"}
+	newerPrivate.PrivateOutcome.SetRetryable(false)
+	first = coordinator.Repair(newerPrivate, nil, snapshot, now)
+	second = coordinator.Repair(first.Target, nil, snapshot, now.Add(time.Minute))
+	if second.Record == nil || second.RepairKind != "missing_queue" {
+		t.Fatalf("older check suppressed newer private work: %+v", second)
+	}
+
+	for _, scenario := range []string{"head", "check head", "revision", "legacy", "check ID"} {
+		t.Run(
+			scenario,
+			func(t *testing.T) {
+				changed := snapshot
+				switch scenario {
+				case "head":
+					changed.Check.Outcome.Head = domain.HeadSHA("older-head")
+				case "check head":
+					changed.Check.Head = domain.HeadSHA("older-head")
+				case "revision":
+					changed.Check.Outcome.MetadataRevision = "older-revision"
+				case "legacy":
+					changed.Check.Outcome.Retryable = nil
+				case "check ID":
+					changed.Check.Outcome.CheckRunID++
+				}
+
+				initial := coordinator.Repair(target, nil, changed, now)
+				repaired := coordinator.Repair(initial.Target, nil, changed, now.Add(time.Minute))
+				if repaired.Record == nil || repaired.RepairKind != "missing_queue" {
+					t.Fatalf("stale or legacy evidence prevented recovery: %+v", repaired)
+				}
+			},
+		)
+	}
+
+	newer := queued(now)
+	newer.Job.DeliveryID = "explicit-retry"
+	newer.Generation = "new-generation"
+	newer.MetadataRevision = snapshot.Check.Outcome.MetadataRevision
+	first = coordinator.Repair(target, &newer, snapshot, now)
+	second = coordinator.Repair(first.Target, &newer, snapshot, now.Add(time.Minute))
+	if second.Record != nil || second.RepairKind != "consistent_pending" {
+		t.Fatalf("earlier check stopped newer work: %+v", second)
+	}
+}
