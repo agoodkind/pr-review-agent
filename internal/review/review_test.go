@@ -791,7 +791,7 @@ func TestAHunkThatCannotSplitLeavesTheHeadUnapproved(t *testing.T) {
 	assertDeclinedCheckDoesNotPass(t, fixture)
 
 	body := failureSummaryComment(t, fixture)
-	if !strings.Contains(body, "completion budget") {
+	if !strings.Contains(body, "the model exceeded its output limit") {
 		t.Fatalf("summary comment does not name why the hunk went unread:\n%s", body)
 	}
 
@@ -1654,7 +1654,7 @@ func TestACommentGitHubRefusesFallsBackToTheSummaryWithoutBlocking(t *testing.T)
 	}
 
 	body, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || !strings.Contains(body, "GitHub could not place the finding inline") {
+	if !ok || !strings.Contains(body, "GitHub could not place this finding inline") {
 		t.Fatalf(
 			"summary comment does not explain the fallback:\n%v",
 			fixture.state.issueComments[0]["body"],
@@ -1809,7 +1809,7 @@ func TestAFailedChunkStaysPendingAndTheNextRunFinishesIt(t *testing.T) {
 	assertDeclinedCheckDoesNotPass(t, fixture)
 
 	output, ok := fixture.state.lastUpdateCheckRun["output"].(map[string]any)
-	if !ok || !strings.Contains(fmt.Sprint(output["title"]), "1 chunk could not be reviewed") {
+	if !ok || !strings.Contains(fmt.Sprint(output["title"]), "The agent could not review 1 chunk") {
 		t.Fatalf(
 			"check title = %v, want the count of unread chunks",
 			fixture.state.lastUpdateCheckRun["output"],
@@ -4864,7 +4864,7 @@ func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testi
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if !strings.Contains(body, "dismissed by hand") {
+	if !strings.Contains(body, "A person dismissed the blocking review on this commit.") {
 		t.Fatalf("summary comment does not say why the open findings carry no block:\n%s", body)
 	}
 
@@ -5060,7 +5060,7 @@ func TestDismissingAnApprovalStillLetsALaterBlockBeSubmitted(t *testing.T) {
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if strings.Contains(body, "dismissed by hand") {
+	if strings.Contains(body, "A person dismissed the blocking review on this commit.") {
 		t.Fatalf("summary comment reports a withheld block where one was submitted:\n%s", body)
 	}
 }
@@ -5107,7 +5107,7 @@ func TestAVerdictNobodyDismissedRefreshesAsBefore(t *testing.T) {
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if strings.Contains(body, "dismissed by hand") {
+	if strings.Contains(body, "A person dismissed the blocking review on this commit.") {
 		t.Fatalf("summary comment reports a dismissal that never happened:\n%s", body)
 	}
 
@@ -5955,7 +5955,7 @@ func TestAFailedSavedStateReadCompletesTheCheckBeforeAdmission(t *testing.T) {
 		t.Fatalf("output = %v, want object", fixture.state.lastUpdateCheckRun["output"])
 	}
 
-	if output["title"] != "Review failed while updating the visible summary." {
+	if output["title"] != "The review failed while updating the summary comment." {
 		t.Fatalf("title = %v, want the saved state read stage", output["title"])
 	}
 }
@@ -6044,7 +6044,7 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 	assertSanitizedFailureComment(
 		t,
 		fixture,
-		"Review failed while reconciling existing findings.",
+		"The review failed while checking existing findings.",
 		"reconcile failed",
 	)
 	assertRawFailureResult(t, failureSummaryComment(t, fixture), err.Error())
@@ -6143,7 +6143,7 @@ func TestTheNeutralCheckNamesTheUnreadChunksWithoutQuotingTheProvider(t *testing
 	}
 
 	output := checkOutput(t, fixture)
-	if !strings.Contains(fmt.Sprint(output["title"]), "could not be reviewed") {
+	if !strings.Contains(fmt.Sprint(output["title"]), "The agent could not review") {
 		t.Fatalf("title = %v, want the count of unread chunks", output["title"])
 	}
 
@@ -6157,7 +6157,7 @@ func TestTheNeutralCheckNamesTheUnreadChunksWithoutQuotingTheProvider(t *testing
 	}
 
 	for _, want := range []string{
-		"Chunks left unread: 1, 2.",
+		"The agent did not read these chunks: 1, 2.",
 		"under run identifier `delivery-1`",
 		"<summary>Review details</summary>",
 	} {
@@ -6182,7 +6182,7 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	wantReason := "Review stopped: the app's configured token limit was exhausted."
+	wantReason := "The review stopped because usage exhausted the app token limit."
 
 	checkSummary, ok := checkOutput(t, fixture)["summary"].(string)
 	if !ok || !strings.Contains(checkSummary, wantReason) {
@@ -6238,7 +6238,7 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 
 	for _, output := range []string{checkSummary, failureSummaryComment(t, fixture)} {
 		for _, want := range []string{
-			"Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage.",
+			"The review stopped because usage exhausted the app token limit and a provider reported that its usage limit prevents further requests.",
 		} {
 			if !strings.Contains(output, want) {
 				t.Fatalf("usage detail missing %q from %s", want, output)
@@ -6248,7 +6248,7 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 
 	if title := fmt.Sprint(checkOutput(t, fixture)["title"]); !strings.Contains(
 		title,
-		"app and provider usage exhausted",
+		"usage exhausted both the app and provider limits",
 	) {
 		t.Fatalf("check title = %q", title)
 	}
@@ -6281,7 +6281,7 @@ func TestUsageExhaustionPassesWhenConfigured(t *testing.T) {
 	assertSanitizedFailureComment(
 		t,
 		fixture,
-		"Review stopped: the model provider reported no remaining usage.",
+		"The model provider reported that its usage limit prevents further requests.",
 		"The usage limit has been reached",
 	)
 
@@ -6463,7 +6463,7 @@ func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 		t.Fatalf("check summary lost the pointer to the cause:\n%s", checkSummary)
 	}
 
-	for _, want := range []string{"Chunks left unread: 1."} {
+	for _, want := range []string{"The agent did not read these chunks: 1."} {
 		if !strings.Contains(checkSummary, want) {
 			t.Fatalf("check summary missing %q:\n%s", want, checkSummary)
 		}
@@ -6514,7 +6514,7 @@ func TestAGitHubTimeoutIsTitledADeadlineRatherThanTheStageItDiedIn(t *testing.T)
 		t.Fatalf("title = %v, want a string title on the check run", output["title"])
 	}
 
-	if title != "Review stopped: it ran out of time." {
+	if title != "The review stopped because it ran out of time." {
 		t.Fatalf("title = %q, want the deadline named rather than the stage it died in", title)
 	}
 
@@ -6556,22 +6556,22 @@ func TestServicePublishesAFailureNoticeForEveryReachableStage(t *testing.T) {
 	}{
 		{
 			name:    "pull request load",
-			title:   "Review failed while loading the pull request.",
+			title:   "The review failed while loading the pull request.",
 			options: serviceFixtureOptions{pullRequestStatus: http.StatusInternalServerError},
 		},
 		{
 			name:    "reconciliation",
-			title:   "Review failed while reconciling existing findings.",
+			title:   "The review failed while checking existing findings.",
 			options: serviceFixtureOptions{reconcileErr: errors.New("reconcile failed")},
 		},
 		{
 			name:    "diff collection",
-			title:   "Review failed while collecting the pull request diff.",
+			title:   "The review failed while collecting the pull request diff.",
 			options: serviceFixtureOptions{collector: failingCollector{}},
 		},
 		{
 			name:  "head refresh",
-			title: "Review failed while refreshing the pull request head.",
+			title: "The review failed while checking the current pull request commit.",
 			options: serviceFixtureOptions{
 				pullRequestStatusAfterFirstRead: http.StatusInternalServerError,
 			},
@@ -6641,7 +6641,7 @@ func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 		t.Fatal("Reject: want the rejection cause")
 	}
 
-	assertSanitizedFailureComment(t, fixture, "Review failed.", "review queue is full")
+	assertSanitizedFailureComment(t, fixture, "The review failed.", "review queue is full")
 	assertRawFailureResult(t, failureSummaryComment(t, fixture), err.Error())
 
 	if fixture.state.lastSubmitReview != nil {
@@ -6660,17 +6660,17 @@ func TestServiceReportsAPublicationFailureWithoutChangingAnyReview(t *testing.T)
 	}{
 		{
 			name:    "review reads fail",
-			title:   "Review failed while reading existing reviews.",
+			title:   "The review failed while reading existing reviews.",
 			options: serviceFixtureOptions{reviewListStatus: http.StatusInternalServerError},
 		},
 		{
 			name:    "review submission fails",
-			title:   "Review failed while publishing the final decision.",
+			title:   "The review failed while publishing its final decision.",
 			options: serviceFixtureOptions{submitReviewStatus: http.StatusInternalServerError},
 		},
 		{
 			name:    "thread read fails",
-			title:   "Review failed while reading the open review threads.",
+			title:   "The review failed while reading open review threads.",
 			options: serviceFixtureOptions{listThreadsStatus: http.StatusInternalServerError},
 		},
 	}
@@ -6740,7 +6740,7 @@ func TestServiceReportsTheSavedStateReadFailureWhenTheNoticeCannotBeWritten(t *t
 	}
 
 	output := checkOutput(t, fixture)
-	if output["title"] != "Review failed while updating the visible summary." {
+	if output["title"] != "The review failed while updating the summary comment." {
 		t.Fatalf("title = %v, want the saved state read stage", output["title"])
 	}
 }
@@ -6789,7 +6789,7 @@ func TestServiceReviewsTheSameHeadAgainAfterAnIncompleteRun(t *testing.T) {
 	}
 
 	rewritten, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || strings.Contains(rewritten, "could not be reviewed") {
+	if !ok || strings.Contains(rewritten, "The agent could not review") {
 		t.Fatalf(
 			"rewritten comment = %v, want the normal review summary",
 			fixture.state.issueComments[0]["body"],
@@ -7517,7 +7517,7 @@ func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 			cause: &stubProviderFailure{
 				reason: "the connection carrying the answer closed early",
 			},
-			want:    "Review failed while reconciling existing findings.",
+			want:    "The review failed while checking existing findings.",
 			leaking: "the connection carrying the answer closed early",
 		},
 		{
@@ -7525,19 +7525,19 @@ func TestCheckTitleNamesTheClassWithoutQuotingTheProvider(t *testing.T) {
 			cause: &stubProviderFailure{
 				reason: "scan codex SSE events: upstream_malformed_request",
 			},
-			want:    "Review failed while reconciling existing findings.",
+			want:    "The review failed while checking existing findings.",
 			leaking: "upstream_malformed_request",
 		},
 		{
 			name:    "no remaining usage",
 			cause:   &stubProviderFailure{reason: "The usage limit has been reached", usage: true},
-			want:    "Review stopped: the model provider reported no remaining usage.",
+			want:    "The model provider reported that its usage limit prevents further requests.",
 			leaking: "The usage limit has been reached",
 		},
 		{
 			name:    "ran out of time",
 			cause:   fmt.Errorf("resolve threads: %w", context.DeadlineExceeded),
-			want:    "Review stopped: it ran out of time.",
+			want:    "The review stopped because it ran out of time.",
 			leaking: "context deadline exceeded",
 		},
 	}
@@ -7735,7 +7735,7 @@ func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissI
 	assertSanitizedFailureComment(
 		t,
 		fixture,
-		"Review failed while reconciling existing findings.",
+		"The review failed while checking existing findings.",
 		"reconcile exploded",
 	)
 
@@ -8268,7 +8268,10 @@ func TestTheReviewSaysItStartedBeforeItReadsAnything(t *testing.T) {
 	}
 
 	first := fixture.state.issueCommentBodies[0]
-	if !strings.HasPrefix(first, "## Review\n\nReviewing `"+testHeadSHA[:7]+"`.\n\n<details>") {
+	if !strings.HasPrefix(
+		first,
+		"## Review\n\nThe agent is reviewing `"+testHeadSHA[:7]+"`.\n\n<details>",
+	) {
 		t.Fatalf(
 			"the first thing written to the pull request was %q, want the review saying it started",
 			first,

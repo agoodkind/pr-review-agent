@@ -1,14 +1,14 @@
-{{define "output.binary-file-reason"}}a binary file that does not provide a reviewable patch
+{{define "output.binary-file-reason"}}the file contains binary data and does not provide a reviewable patch
 {{end}}
 
 {{define "output.blocking"}}Resolve these inline findings:{{range .}}
 - {{.}}{{end}}
 {{end}}
 
-{{define "output.content-missing-reason"}}GitHub will not serve this file's content at this commit
+{{define "output.content-missing-reason"}}GitHub will not serve this file at this commit
 {{end}}
 
-{{define "output.fallback_findings"}}GitHub could not place the {{if .Single}}finding{{else}}findings{{end}} inline. {{if .Single}}It appears{{else}}They appear{{end}} here.
+{{define "output.fallback_findings"}}GitHub could not place {{if .Single}}this finding{{else}}these findings{{end}} inline.
 
 #### Findings{{range .Findings}}
 
@@ -93,25 +93,25 @@ Replace those lines with:
 {{.}}
 {{end}}
 
-{{define "output.omissions_empty"}}The review omitted no changed content.
+{{define "output.omissions_empty"}}The review did not omit any changed content.
 {{end}}
 
 {{define "output.open-thread"}}{{if .URL}}[{{end}}{{.Label}}{{if gt .Line 0}}:{{.Line}}{{end}}{{if .URL}}]({{.URL}}){{end}}
 {{end}}
 
-{{define "output.oversized-hunk-reason"}}larger than one model request allows
+{{define "output.oversized-hunk-reason"}}the change exceeds the size limit for one model request
 {{end}}
 
-{{define "output.patch-absent-reason"}}GitHub supplied no patch for this file
+{{define "output.patch-absent-reason"}}GitHub did not supply a patch for this file
 {{end}}
 
-{{define "output.patch-unreadable-reason"}}the patch GitHub supplied could not be read whole
+{{define "output.patch-unreadable-reason"}}the service could not read the complete patch from GitHub
 {{end}}
 
 {{define "output.thread-trace-ids"}}{{range $index, $thread := .}}{{if $index}}, {{end}}`{{$thread.NodeID}}`{{else}}none{{end}}
 {{end}}
 
-{{define "output.truncated-answer-reason"}}the model's answer ran past its completion budget, and a hunk cannot be split further
+{{define "output.truncated-answer-reason"}}the model exceeded its output limit and the service cannot split this hunk further
 {{end}}
 
 {{define "output.truncated-label"}}{{.}}...
@@ -162,8 +162,8 @@ This list omits {{.Omitted}} more unread changes.{{end}}
 {{define "output.unreadable-verdict"}}The review did not submit a verdict.
 {{end}}
 
-{{define "output.unsupported-inline-verdict-message"}}The current review has no actionable inline finding to support requested changes.
+{{define "output.unsupported-inline-verdict-message"}}The current review does not identify an actionable inline finding that supports requesting changes.
 {{end}}
 
-{{define "output.withheld-approval-message"}}The current review cannot approve this head. The review summary explains what remains unresolved.
+{{define "output.withheld-approval-message"}}The current review cannot approve this commit. The review summary explains what remains unresolved.
 {{end}}

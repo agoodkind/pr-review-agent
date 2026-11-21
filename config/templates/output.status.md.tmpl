@@ -7,70 +7,70 @@
 {{define "output.additional-omissions-reason"}}{{.}} more not listed here
 {{end}}
 
-{{define "output.check-failure-analysis"}}Review failed during model analysis.
+{{define "output.check-failure-analysis"}}The review failed during model analysis.
 {{end}}
 
-{{define "output.check-failure-daily-budget"}}Review stopped: the app's configured token limit was exhausted.
+{{define "output.check-failure-daily-budget"}}The review stopped because usage exhausted the app token limit.
 {{end}}
 
-{{define "output.check-failure-deadline"}}Review stopped: it ran out of time.
+{{define "output.check-failure-deadline"}}The review stopped because it ran out of time.
 {{end}}
 
-{{define "output.check-failure-diff"}}Review failed while collecting the pull request diff.
+{{define "output.check-failure-diff"}}The review failed while collecting the pull request diff.
 {{end}}
 
-{{define "output.check-failure-mixed-rate-limit"}}Review stopped: an app token limit was exhausted, and a provider temporarily limited the request rate.
+{{define "output.check-failure-mixed-rate-limit"}}The review stopped because usage exhausted the app token limit and a provider temporarily limited the request rate.
 {{end}}
 
-{{define "output.check-failure-mixed-usage"}}Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage.
+{{define "output.check-failure-mixed-usage"}}The review stopped because usage exhausted the app token limit and a provider reported that its usage limit prevents further requests.
 {{end}}
 
-{{define "output.check-failure-publish"}}Review failed while publishing the final decision.
+{{define "output.check-failure-publish"}}The review failed while publishing its final decision.
 {{end}}
 
-{{define "output.check-failure-pull-request"}}Review failed while loading the pull request.
+{{define "output.check-failure-pull-request"}}The review failed while loading the pull request.
 {{end}}
 
-{{define "output.check-failure-rate-limited"}}Review stopped: a provider temporarily limited the request rate.
+{{define "output.check-failure-rate-limited"}}The review stopped because a provider temporarily limited the request rate.
 {{end}}
 
-{{define "output.check-failure-reconcile"}}Review failed while reconciling existing findings.
+{{define "output.check-failure-reconcile"}}The review failed while checking existing findings.
 {{end}}
 
-{{define "output.check-failure-refresh"}}Review failed while refreshing the pull request head.
+{{define "output.check-failure-refresh"}}The review failed while checking the current pull request commit.
 {{end}}
 
-{{define "output.check-failure-reviews"}}Review failed while reading existing reviews.
+{{define "output.check-failure-reviews"}}The review failed while reading existing reviews.
 {{end}}
 
-{{define "output.check-failure-skip"}}Review failed while recording the skipped review.
+{{define "output.check-failure-skip"}}The review failed while recording the skipped review.
 {{end}}
 
-{{define "output.check-failure-summary"}}Review failed while updating the visible summary.
+{{define "output.check-failure-summary"}}The review failed while updating the summary comment.
 {{end}}
 
-{{define "output.check-failure-threads"}}Review failed while reading the open review threads.
+{{define "output.check-failure-threads"}}The review failed while reading open review threads.
 {{end}}
 
 {{define "output.check-failure-unavailable"}}The model provider is unavailable. Wait for it to recover.
 {{end}}
 
-{{define "output.check-failure-usage"}}Review stopped: the model provider reported no remaining usage.
+{{define "output.check-failure-usage"}}The model provider reported that its usage limit prevents further requests.
 {{end}}
 
-{{define "output.check-summary-cancelled"}}Review cancelled.
+{{define "output.check-summary-cancelled"}}The service canceled the review.
 {{end}}
 
-{{define "output.check-summary-failure"}}Review failed.
+{{define "output.check-summary-failure"}}The review failed.
 {{end}}
 
-{{define "output.check-summary-skipped"}}Review skipped.
+{{define "output.check-summary-skipped"}}The service skipped the review.
 {{end}}
 
 {{define "output.check-title-already-reviewed"}}Already reviewed
 {{end}}
 
-{{define "output.failure-log-reference"}}The cause is recorded in this service's log{{if .}}, under run identifier `{{.}}`{{else}} for this run{{end}}.
+{{define "output.failure-log-reference"}}The service log records the cause{{if .}} under run identifier `{{.}}`{{else}} for this run{{end}}.
 {{end}}
 
 {{define "output.failure_panic"}}Review failed after an internal panic.
@@ -79,7 +79,7 @@
 {{define "output.http_status"}}HTTP {{.}}
 {{end}}
 
-{{define "output.provider-cause"}}{{if eq . "provider_succeeded"}}API completed the response{{else if eq . "app_budget_denied"}}App denied request; API not called{{else if eq . "app_budget_unavailable"}}App quota check failed; API not called{{else if eq . "provider_usage_exhausted"}}Provider reported no remaining usage{{else if eq . "provider_rate_limited"}}Provider rate limited the request{{else}}Provider request failed{{end}}
+{{define "output.provider-cause"}}{{if eq . "provider_succeeded"}}API completed the response{{else if eq . "app_budget_denied"}}The app rejected the request before calling the API{{else if eq . "app_budget_unavailable"}}The app could not check its quota and did not call the API{{else if eq . "provider_usage_exhausted"}}The provider reported that its usage limit prevents further requests{{else if eq . "provider_rate_limited"}}Provider rate limited the request{{else}}Provider request failed{{end}}
 {{end}}
 
 {{define "output.provider-statuses"}}#### Provider attempts
@@ -91,7 +91,7 @@
 Provider {{.Provider}} uses {{.Window}}.
 {{if gt .Status.QuotaSnapshot.HistoryStartMS 0}}Measured usage starts at {{.HistoryStart}}.
 {{if not .Status.QuotaSnapshot.HistoryComplete}}The requested window includes time before measured history.
-{{end}}{{end}}{{if gt .Status.QuotaSnapshot.AvailableAtMS 0}}Admission becomes available at {{.AvailableAt}} if no additional usage is reported.
+{{end}}{{end}}{{if gt .Status.QuotaSnapshot.AvailableAtMS 0}}The app can accept requests at {{.AvailableAt}} if recorded usage does not increase.
 {{end}}{{end}}{{end}}
 {{end}}
 

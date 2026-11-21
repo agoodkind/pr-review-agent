@@ -27,6 +27,8 @@ type assessmentSnapshot struct {
 // Older review bodies recorded incomplete coverage with this sentence prefix.
 const legacyUnreviewedHeadReason = "This head was not fully reviewed"
 
+const unreviewedCommitReason = "The agent must finish reviewing this commit before it can approve."
+
 func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	metadata, recorded, err := decodeMetadataRecord(body)
 
@@ -40,7 +42,8 @@ func parseAssessmentSnapshot(body string) assessmentSnapshot {
 		decisionReason:    decodeDecisionReasonMarker(body),
 		approvalWithheld:  strings.Contains(body, approvalWithheldMarker),
 		legacyWholeHead: strings.TrimSpace(body) != "" &&
-			!strings.Contains(body, legacyUnreviewedHeadReason),
+			!strings.Contains(body, legacyUnreviewedHeadReason) &&
+			!strings.Contains(body, unreviewedCommitReason),
 	}
 	if accepted, found := decodeOmissionDecisionMarker(body); found {
 		snapshot.omissionsAccepted = accepted

@@ -54,7 +54,7 @@ func TestAcceptedFileScopeUsesConfiguredDetails(t *testing.T) {
 
 				body := rendered(t)(review.RenderBody(summary))
 				if strings.Contains(body, "### Omissions") ||
-					strings.Contains(body, "could not be reviewed") {
+					strings.Contains(body, "The agent could not review") {
 					t.Fatal("An accepted content exclusion appeared as an unfinished review.")
 				}
 

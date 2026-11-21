@@ -114,7 +114,7 @@ func TestInlineVerdictSummaryFallbackStillBlocksForExistingActionableThread(t *t
 	body := failureSummaryComment(t, fixture)
 
 	for _, expected := range []string{
-		"GitHub could not place the finding inline",
+		"GitHub could not place this finding inline",
 		"Severe defect",
 		"Resolve the open inline findings.",
 	} {
