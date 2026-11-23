@@ -82,7 +82,8 @@ func stripLegacyFailureProse(body string) (string, error) {
 }
 
 func legacyFailureLine(paragraph string, lines map[string]struct{}) bool {
-	if legacyIncompleteLead.MatchString(paragraph) || legacyFailureDetail.MatchString(paragraph) {
+	if legacyIncompleteLead.MatchString(paragraph) || legacyFailureDetail.MatchString(paragraph) ||
+		strings.HasPrefix(paragraph, legacyUnreviewedHeadReason) {
 		return true
 	}
 
@@ -92,7 +93,26 @@ func legacyFailureLine(paragraph string, lines map[string]struct{}) bool {
 }
 
 func legacyFailureLines() (map[string]struct{}, error) {
-	lines := make(map[string]struct{})
+	// Older comments used check titles as failure notices.
+	lines := map[string]struct{}{
+		"Review failed during model analysis.":                                                                          {},
+		"Review stopped: the app's configured token limit was exhausted.":                                               {},
+		"Review stopped: it ran out of time.":                                                                           {},
+		"Review failed while collecting the pull request diff.":                                                         {},
+		"Review stopped: an app token limit was exhausted, and a provider temporarily limited the request rate.":        {},
+		"Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage.": {},
+		"Review failed while publishing the final decision.":                                                            {},
+		"Review failed while loading the pull request.":                                                                 {},
+		"Review stopped: a provider temporarily limited the request rate.":                                              {},
+		"Review failed while reconciling existing findings.":                                                            {},
+		"Review failed while refreshing the pull request head.":                                                         {},
+		"Review failed while reading existing reviews.":                                                                 {},
+		"Review failed while recording the skipped review.":                                                             {},
+		"Review failed while updating the visible summary.":                                                             {},
+		"Review failed while reading the open review threads.":                                                          {},
+		"Review stopped: the model provider reported no remaining usage.":                                               {},
+		"Review failed.": {},
+	}
 
 	for _, key := range []string{
 		checkFailureAssessmentValidation,

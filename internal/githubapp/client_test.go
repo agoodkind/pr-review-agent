@@ -750,7 +750,7 @@ func TestCompleteCheckRunTruncatesAnOversizeLog(t *testing.T) {
 		t.Fatal("truncated log dropped the end of the run")
 	}
 
-	if !strings.Contains(truncated, "truncated to fit the check run") {
+	if !strings.Contains(truncated, "removed earlier lines to fit GitHub’s log size limit") {
 		t.Fatal("truncated log does not say it was truncated")
 	}
 }

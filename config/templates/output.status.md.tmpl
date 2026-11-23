@@ -7,70 +7,70 @@
 {{define "output.additional-omissions-reason"}}{{.}} more not listed here
 {{end}}
 
-{{define "output.check-failure-analysis"}}Review failed during model analysis.
+{{define "output.check-failure-analysis"}}PR Review Agent could not finish analyzing the changes.
 {{end}}
 
-{{define "output.check-failure-daily-budget"}}Review stopped: the app's configured token limit was exhausted.
+{{define "output.check-failure-daily-budget"}}PR Review Agent stopped after using its full token budget.
 {{end}}
 
-{{define "output.check-failure-deadline"}}Review stopped: it ran out of time.
+{{define "output.check-failure-deadline"}}PR Review Agent ran out of time.
 {{end}}
 
-{{define "output.check-failure-diff"}}Review failed while collecting the pull request diff.
+{{define "output.check-failure-diff"}}PR Review Agent could not collect the pull request diff.
 {{end}}
 
-{{define "output.check-failure-mixed-rate-limit"}}Review stopped: an app token limit was exhausted, and a provider temporarily limited the request rate.
+{{define "output.check-failure-mixed-rate-limit"}}PR Review Agent used its full token budget. A provider also limited the request rate.
 {{end}}
 
-{{define "output.check-failure-mixed-usage"}}Review stopped: the app exhausted its configured token limit, and a provider API reported no remaining usage.
+{{define "output.check-failure-mixed-usage"}}PR Review Agent used its full token budget. A provider also reported that its usage limit blocked more requests.
 {{end}}
 
-{{define "output.check-failure-publish"}}Review failed while publishing the final decision.
+{{define "output.check-failure-publish"}}PR Review Agent could not publish its decision.
 {{end}}
 
-{{define "output.check-failure-pull-request"}}Review failed while loading the pull request.
+{{define "output.check-failure-pull-request"}}PR Review Agent could not load the pull request.
 {{end}}
 
-{{define "output.check-failure-rate-limited"}}Review stopped: a provider temporarily limited the request rate.
+{{define "output.check-failure-rate-limited"}}A provider temporarily limited the request rate.
 {{end}}
 
-{{define "output.check-failure-reconcile"}}Review failed while reconciling existing findings.
+{{define "output.check-failure-reconcile"}}PR Review Agent could not check existing findings.
 {{end}}
 
-{{define "output.check-failure-refresh"}}Review failed while refreshing the pull request head.
+{{define "output.check-failure-refresh"}}PR Review Agent could not check the latest commit.
 {{end}}
 
-{{define "output.check-failure-reviews"}}Review failed while reading existing reviews.
+{{define "output.check-failure-reviews"}}PR Review Agent could not read existing reviews.
 {{end}}
 
-{{define "output.check-failure-skip"}}Review failed while recording the skipped review.
+{{define "output.check-failure-skip"}}PR Review Agent could not record that it skipped the review.
 {{end}}
 
-{{define "output.check-failure-summary"}}Review failed while updating the visible summary.
+{{define "output.check-failure-summary"}}PR Review Agent could not update the summary comment.
 {{end}}
 
-{{define "output.check-failure-threads"}}Review failed while reading the open review threads.
+{{define "output.check-failure-threads"}}PR Review Agent could not read open review threads.
 {{end}}
 
 {{define "output.check-failure-unavailable"}}The model provider is unavailable. Wait for it to recover.
 {{end}}
 
-{{define "output.check-failure-usage"}}Review stopped: the model provider reported no remaining usage.
+{{define "output.check-failure-usage"}}A model provider reported that its usage limit blocked more requests.
 {{end}}
 
-{{define "output.check-summary-cancelled"}}Review cancelled.
+{{define "output.check-summary-cancelled"}}PR Review Agent canceled the review.
 {{end}}
 
-{{define "output.check-summary-failure"}}Review failed.
+{{define "output.check-summary-failure"}}PR Review Agent could not finish the review.
 {{end}}
 
-{{define "output.check-summary-skipped"}}Review skipped.
+{{define "output.check-summary-skipped"}}PR Review Agent skipped the review.
 {{end}}
 
 {{define "output.check-title-already-reviewed"}}Already reviewed
 {{end}}
 
-{{define "output.failure-log-reference"}}The cause is recorded in this service's log{{if .}}, under run identifier `{{.}}`{{else}} for this run{{end}}.
+{{define "output.failure-log-reference"}}{{if .}}Search the service log for run `{{.}}` to find the cause.{{else}}Check the service log for the cause.{{end}}
 {{end}}
 
 {{define "output.failure_panic"}}Review failed after an internal panic.
@@ -79,7 +79,7 @@
 {{define "output.http_status"}}HTTP {{.}}
 {{end}}
 
-{{define "output.provider-cause"}}{{if eq . "provider_succeeded"}}API completed the response{{else if eq . "app_budget_denied"}}App denied request; API not called{{else if eq . "app_budget_unavailable"}}App quota check failed; API not called{{else if eq . "provider_usage_exhausted"}}Provider reported no remaining usage{{else if eq . "provider_rate_limited"}}Provider rate limited the request{{else}}Provider request failed{{end}}
+{{define "output.provider-cause"}}{{if eq . "provider_succeeded"}}API completed the response{{else if eq . "app_budget_denied"}}PR Review Agent rejected the request before calling the API{{else if eq . "app_budget_unavailable"}}PR Review Agent could not check its quota and skipped the API call{{else if eq . "provider_usage_exhausted"}}Provider reported that its usage limit blocked more requests{{else if eq . "provider_rate_limited"}}Provider rate limited the request{{else}}Provider request failed{{end}}
 {{end}}
 
 {{define "output.provider-statuses"}}#### Provider attempts
@@ -91,7 +91,7 @@
 Provider {{.Provider}} uses {{.Window}}.
 {{if gt .Status.QuotaSnapshot.HistoryStartMS 0}}Measured usage starts at {{.HistoryStart}}.
 {{if not .Status.QuotaSnapshot.HistoryComplete}}The requested window includes time before measured history.
-{{end}}{{end}}{{if gt .Status.QuotaSnapshot.AvailableAtMS 0}}Admission becomes available at {{.AvailableAt}} if no additional usage is reported.
+{{end}}{{end}}{{if gt .Status.QuotaSnapshot.AvailableAtMS 0}}PR Review Agent can accept requests at {{.AvailableAt}} if usage does not increase.
 {{end}}{{end}}{{end}}
 {{end}}
 
