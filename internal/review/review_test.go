@@ -6051,12 +6051,7 @@ func TestServiceFailsBeforePublicationWhenReconciliationFails(t *testing.T) {
 		t.Fatalf("submitted review = %v, want none on a failure", fixture.state.lastSubmitReview)
 	}
 
-	assertSanitizedFailureComment(
-		t,
-		fixture,
-		"PR Review Agent could not check existing findings.",
-		"reconcile failed",
-	)
+	assertSanitizedFailureComment(t, fixture, "reconcile failed")
 	assertRawFailureResult(t, failureSummaryComment(t, fixture), err.Error())
 }
 
@@ -6083,7 +6078,6 @@ func failureSummaryComment(t *testing.T, fixture *serviceFixture) string {
 func assertSanitizedFailureComment(
 	t *testing.T,
 	fixture *serviceFixture,
-	statedFailure string,
 	rawCause string,
 ) {
 	t.Helper()
@@ -6215,7 +6209,7 @@ func TestServiceNamesUsageExhaustionInCheckAndNotice(t *testing.T) {
 		t.Fatalf("check summary published the raw provider cause:\n%s", checkSummary)
 	}
 
-	assertSanitizedFailureComment(t, fixture, wantReason, "usage credits are exhausted")
+	assertSanitizedFailureComment(t, fixture, "usage credits are exhausted")
 
 	if strings.Contains(
 		failureSummaryComment(t, fixture),
@@ -6265,12 +6259,14 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 }
 
 func TestUsageExhaustionPassesWhenConfigured(t *testing.T) {
+	const providerCause = "Provider usage quota is empty."
+
 	fixture := newServiceFixture(
 		t,
 		serviceFixtureOptions{
 			model: &sequenceModel{
 				err: &stubProviderFailure{
-					reason: "The usage limit has been reached",
+					reason: providerCause,
 					usage:  true,
 				},
 			},
@@ -6288,12 +6284,7 @@ func TestUsageExhaustionPassesWhenConfigured(t *testing.T) {
 		t.Fatalf("conclusion = %v, want success", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 
-	assertSanitizedFailureComment(
-		t,
-		fixture,
-		"A model provider reported that its usage limit blocked more requests.",
-		"The usage limit has been reached",
-	)
+	assertSanitizedFailureComment(t, fixture, providerCause)
 
 	if len(fixture.state.submittedReviews) != 0 {
 		t.Fatalf("submitted reviews = %v, want none", fixture.state.submittedReviews)
@@ -6476,10 +6467,8 @@ func TestAnIncompleteRunReportsProgressInTheCommentAndTheCheck(t *testing.T) {
 		t.Fatalf("check summary lost the pointer to the cause:\n%s", checkSummary)
 	}
 
-	for _, want := range []string{"PR Review Agent did not read chunks 1."} {
-		if !strings.Contains(checkSummary, want) {
-			t.Fatalf("check summary missing %q:\n%s", want, checkSummary)
-		}
+	if !strings.Contains(checkSummary, "PR Review Agent did not read chunk 1.") {
+		t.Fatalf("Check summary did not identify unread chunk 1 in %q.", checkSummary)
 	}
 }
 
@@ -6654,12 +6643,7 @@ func TestServiceRejectReportsTheFailureInTheSummaryComment(t *testing.T) {
 		t.Fatal("Reject: want the rejection cause")
 	}
 
-	assertSanitizedFailureComment(
-		t,
-		fixture,
-		"PR Review Agent could not finish the review.",
-		"review queue is full",
-	)
+	assertSanitizedFailureComment(t, fixture, "review queue is full")
 	assertRawFailureResult(t, failureSummaryComment(t, fixture), err.Error())
 
 	if fixture.state.lastSubmitReview != nil {
@@ -7749,12 +7733,7 @@ func assertFailedRunReviewState(t *testing.T, pages [][]map[string]any, dismissI
 		t.Fatalf("conclusion = %v, want failure", fixture.state.lastUpdateCheckRun["conclusion"])
 	}
 
-	assertSanitizedFailureComment(
-		t,
-		fixture,
-		"PR Review Agent could not check existing findings.",
-		"reconcile exploded",
-	)
+	assertSanitizedFailureComment(t, fixture, "reconcile exploded")
 
 	if state := decodedSummaryState(t, fixture); state.Status != marker.StateFailed {
 		t.Fatalf("state status = %q, want %q", state.Status, marker.StateFailed)

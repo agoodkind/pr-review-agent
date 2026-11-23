@@ -145,12 +145,14 @@ func incompleteCheckDetail(
 				reflect.ValueOf(
 					struct {
 						Numbers  string
+						Single   bool
 						Reason   string
 						Statuses string
 						Detail   string
 						Details  string
 					}{
 						unreadChunkNumbers(failures),
+						len(failures) == 1,
 						state.capture(renderOutputText(chunkFailureReason(failures))),
 						state.capture(renderProviderStatuses(providerStatuses(failures))),
 						detail,

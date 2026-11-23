@@ -76,7 +76,7 @@
 {{define "output.file-budget-reason"}}the changed file count ({{index . 0}}) exceeds the {{index . 1}} file review budget
 {{end}}
 
-{{define "output.incomplete-check-detail"}}{{if .Numbers}}PR Review Agent did not read chunks {{.Numbers}}.
+{{define "output.incomplete-check-detail"}}{{if .Numbers}}PR Review Agent did not read {{if .Single}}chunk{{else}}chunks{{end}} {{.Numbers}}.
 
 {{end}}{{if .Reason}}{{.Reason}}
 
