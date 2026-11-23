@@ -4865,7 +4865,10 @@ func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testi
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if !strings.Contains(body, "PR Review Agent will not submit its dismissed blocking review again.") {
+	if !strings.Contains(
+		body,
+		"PR Review Agent will not submit its dismissed blocking review again.",
+	) {
 		t.Fatalf("summary comment does not say why the open findings carry no block:\n%s", body)
 	}
 
@@ -5061,7 +5064,10 @@ func TestDismissingAnApprovalStillLetsALaterBlockBeSubmitted(t *testing.T) {
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if strings.Contains(body, "PR Review Agent will not submit its dismissed blocking review again.") {
+	if strings.Contains(
+		body,
+		"PR Review Agent will not submit its dismissed blocking review again.",
+	) {
 		t.Fatalf("summary comment reports a withheld block where one was submitted:\n%s", body)
 	}
 }
@@ -5108,7 +5114,10 @@ func TestAVerdictNobodyDismissedRefreshesAsBefore(t *testing.T) {
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if strings.Contains(body, "PR Review Agent will not submit its dismissed blocking review again.") {
+	if strings.Contains(
+		body,
+		"PR Review Agent will not submit its dismissed blocking review again.",
+	) {
 		t.Fatalf("summary comment reports a dismissal that never happened:\n%s", body)
 	}
 
