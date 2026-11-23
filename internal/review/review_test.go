@@ -6769,11 +6769,10 @@ func TestServiceReviewsTheSameHeadAgainAfterAnIncompleteRun(t *testing.T) {
 		t.Fatalf("first Run: %v", err)
 	}
 
-	if !strings.Contains(failureSummaryComment(t, fixture), "has not scheduled a retry") {
-		t.Fatalf(
-			"summary comment = %q, want the unread chunk wording",
-			failureSummaryComment(t, fixture),
-		)
+	const failureNotice = "PR Review Agent could not finish this review and has not scheduled a retry."
+	failedComment := failureSummaryComment(t, fixture)
+	if !strings.Contains(failedComment, failureNotice) {
+		t.Fatalf("The first comment must report the incomplete review: %q", failedComment)
 	}
 
 	// The retry runs against the neutral check the first attempt left behind,
@@ -6798,7 +6797,7 @@ func TestServiceReviewsTheSameHeadAgainAfterAnIncompleteRun(t *testing.T) {
 	}
 
 	rewritten, ok := fixture.state.issueComments[0]["body"].(string)
-	if !ok || strings.Contains(rewritten, "PR Review Agent could not review") {
+	if !ok || strings.Contains(rewritten, failureNotice) {
 		t.Fatalf(
 			"rewritten comment = %v, want the normal review summary",
 			fixture.state.issueComments[0]["body"],
