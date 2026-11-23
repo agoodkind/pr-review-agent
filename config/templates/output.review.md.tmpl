@@ -76,7 +76,7 @@
 {{define "output.file-budget-reason"}}the changed file count ({{index . 0}}) exceeds the {{index . 1}} file review budget
 {{end}}
 
-{{define "output.incomplete-check-detail"}}{{if .Numbers}}The agent did not read these chunks: {{.Numbers}}.
+{{define "output.incomplete-check-detail"}}{{if .Numbers}}PR Review Agent did not read chunks {{.Numbers}}.
 
 {{end}}{{if .Reason}}{{.Reason}}
 
@@ -87,7 +87,7 @@
 {{.Details}}
 {{end}}
 
-{{define "output.incomplete-check-title"}}The agent could not review {{.Chunks}}{{if .Daily}} because usage exhausted the app token limit.{{else if .Mixed}} because usage exhausted both the app and provider limits.{{else}}. Apply `{{.Label}}` to retry.{{end}}
+{{define "output.incomplete-check-title"}}PR Review Agent could not review {{.Chunks}}.{{if .Daily}} It used its full token budget.{{else if .Mixed}} Both the app and a provider blocked more requests because of usage limits.{{else}} Apply `{{.Label}}` to retry.{{end}}
 {{end}}
 
 {{define "output.legacy_details"}}<details>
@@ -115,7 +115,7 @@ The queue will reassess this pull request after `{{.RetryAt}}`. The reassessment
 <!-- pr-review-agent:reassessment:end -->
 {{end}}
 
-{{define "output.report_fallback"}}This review checked the pull request against its stated purpose and changes.
+{{define "output.report_fallback"}}PR Review Agent checked whether the changes match the stated purpose.
 {{end}}
 
 {{define "output.refresh_failure"}}Review refresh failed
@@ -168,17 +168,17 @@ The review skipped this pull request because {{.}}.
 
 {{define "output.started"}}## Review
 
-The agent is reviewing `{{.}}`.
+PR Review Agent is reviewing `{{.}}`.
 {{end}}
 
 {{define "output.summary_checkpoint"}}<!-- pr-review-agent:summary:v1 -->
 {{.}}
 {{end}}
 
-{{define "output.unreviewed-head-reason"}}The agent must finish reviewing this commit before it can approve.
+{{define "output.unreviewed-head-reason"}}This commit needs a complete review before approval.
 {{end}}
 
-{{define "output.verdict_lead"}}{{if eq .Decision "COMMENT"}}This review does not approve or request changes.{{else if ne .Decision "REQUEST_CHANGES"}}This review did not identify findings at or above the minimum importance.{{else if .Metadata}}Resolve the findings in the rejection review.{{else}}Resolve the open inline findings.{{end}}
+{{define "output.verdict_lead"}}{{if eq .Decision "COMMENT"}}PR Review Agent did not approve or request changes.{{else if ne .Decision "REQUEST_CHANGES"}}This review did not identify findings at or above the minimum importance.{{else if .Metadata}}Resolve the findings in the rejection review.{{else}}Resolve the open inline findings.{{end}}
 {{end}}
 
 {{define "output.verdict_section"}}<!-- pr-review-agent:verdict-section:start -->
@@ -193,5 +193,5 @@ The agent is reviewing `{{.}}`.
 {{define "output.verdict_title"}}{{if eq . "COMMENT"}}Review needs attention{{else if eq . "REQUEST_CHANGES"}}Changes requested{{else}}Approved{{end}}
 {{end}}
 
-{{define "output.withdrawn_block"}}A person dismissed the blocking review on this commit. The service will not submit it again. Resolve the remaining findings before the next refresh can approve.
+{{define "output.withdrawn_block"}}Someone dismissed the review that blocked this commit. PR Review Agent will not submit it again. Resolve the open findings before the next refresh can approve.
 {{end}}

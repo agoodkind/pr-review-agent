@@ -171,7 +171,7 @@ func stripActiveReviewProgress(body string) (string, error) {
 	}
 
 	progress, remaining, found := strings.Cut(remaining, "\n\n")
-	active := strings.HasPrefix(progress, "The agent is reviewing `") ||
+	active := strings.HasPrefix(progress, "PR Review Agent is reviewing `") ||
 		strings.HasPrefix(progress, "Reviewing `")
 	if !active || strings.Contains(progress, "\n") {
 		return rendering.finish(body)

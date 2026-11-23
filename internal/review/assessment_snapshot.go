@@ -27,7 +27,7 @@ type assessmentSnapshot struct {
 // Older review bodies recorded incomplete coverage with this sentence prefix.
 const legacyUnreviewedHeadReason = "This head was not fully reviewed"
 
-const unreviewedCommitReason = "The agent must finish reviewing this commit before it can approve."
+const unreviewedCommitReason = "This commit needs a complete review before approval."
 
 func parseAssessmentSnapshot(body string) assessmentSnapshot {
 	metadata, recorded, err := decodeMetadataRecord(body)

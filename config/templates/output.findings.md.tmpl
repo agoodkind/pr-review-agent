@@ -1,11 +1,11 @@
-{{define "output.binary-file-reason"}}the file contains binary data and does not provide a reviewable patch
+{{define "output.binary-file-reason"}}GitHub did not provide a reviewable patch for this binary file
 {{end}}
 
 {{define "output.blocking"}}Resolve these inline findings:{{range .}}
 - {{.}}{{end}}
 {{end}}
 
-{{define "output.content-missing-reason"}}GitHub will not serve this file at this commit
+{{define "output.content-missing-reason"}}GitHub did not provide this version of the file
 {{end}}
 
 {{define "output.fallback_findings"}}GitHub could not place {{if .Single}}this finding{{else}}these findings{{end}} inline.
@@ -93,25 +93,25 @@ Replace those lines with:
 {{.}}
 {{end}}
 
-{{define "output.omissions_empty"}}The review did not omit any changed content.
+{{define "output.omissions_empty"}}PR Review Agent did not skip any changed content.
 {{end}}
 
 {{define "output.open-thread"}}{{if .URL}}[{{end}}{{.Label}}{{if gt .Line 0}}:{{.Line}}{{end}}{{if .URL}}]({{.URL}}){{end}}
 {{end}}
 
-{{define "output.oversized-hunk-reason"}}the change exceeds the size limit for one model request
+{{define "output.oversized-hunk-reason"}}this change is too large for one model request
 {{end}}
 
 {{define "output.patch-absent-reason"}}GitHub did not supply a patch for this file
 {{end}}
 
-{{define "output.patch-unreadable-reason"}}the service could not read the complete patch from GitHub
+{{define "output.patch-unreadable-reason"}}PR Review Agent could not read the full patch from GitHub
 {{end}}
 
 {{define "output.thread-trace-ids"}}{{range $index, $thread := .}}{{if $index}}, {{end}}`{{$thread.NodeID}}`{{else}}none{{end}}
 {{end}}
 
-{{define "output.truncated-answer-reason"}}the model exceeded its output limit and the service cannot split this hunk further
+{{define "output.truncated-answer-reason"}}model output exceeded its limit, and PR Review Agent cannot split this part of the diff further
 {{end}}
 
 {{define "output.truncated-label"}}{{.}}...
@@ -162,8 +162,8 @@ This list omits {{.Omitted}} more unread changes.{{end}}
 {{define "output.unreadable-verdict"}}The review did not submit a verdict.
 {{end}}
 
-{{define "output.unsupported-inline-verdict-message"}}The current review does not identify an actionable inline finding that supports requesting changes.
+{{define "output.unsupported-inline-verdict-message"}}PR Review Agent did not find an inline issue that justifies requesting changes.
 {{end}}
 
-{{define "output.withheld-approval-message"}}The current review cannot approve this commit. The review summary explains what remains unresolved.
+{{define "output.withheld-approval-message"}}This review cannot approve the commit. Check the summary for what still needs attention.
 {{end}}

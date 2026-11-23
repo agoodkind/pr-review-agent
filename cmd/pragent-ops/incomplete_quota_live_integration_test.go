@@ -160,13 +160,13 @@ func TestLiveIncompleteQuotaPresentation(t *testing.T) {
 	_, details, _ := strings.Cut(body, "<details>")
 	quotaRefused := strings.Contains(
 		details,
-		"The provider reported that its usage limit prevents further requests",
-	) || strings.Contains(details, "The app rejected the request before calling the API")
+		"Provider reported that its usage limit blocked more requests",
+	) || strings.Contains(details, "PR Review Agent rejected the request before calling the API")
 	for _, otherOutcome := range []string{
 		"API completed the response",
 		"Provider request failed",
 		"Provider rate limited the request",
-		"The app could not check its quota",
+		"PR Review Agent could not check its quota",
 	} {
 		if strings.Contains(details, otherOutcome) {
 			quotaRefused = false
@@ -176,7 +176,7 @@ func TestLiveIncompleteQuotaPresentation(t *testing.T) {
 		strings.Contains(body, "has not decided whether these unread changes are necessary") &&
 		strings.Contains(
 			body,
-			"the change exceeds the size limit for one model request",
+			"this change is too large for one model request",
 		) && len(state.Pending) > 0
 	if !quotaRefused || !omissionsUndecided {
 		t.Skipf(

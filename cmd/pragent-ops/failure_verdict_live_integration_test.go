@@ -210,7 +210,7 @@ func TestLiveFailurePresentationPreservesSavedReview(t *testing.T) {
 	}
 	if !strings.Contains(current.Body, details) || strings.Contains(
 		current.Body,
-		"The agent is reviewing `",
+		"PR Review Agent is reviewing `",
 	) || strings.Contains(current.Body, invalidCredential) {
 		t.Fatal(
 			"The failure lost saved details, retained active progress, or exposed the invalid credential.",
