@@ -4865,7 +4865,7 @@ func TestADismissedBlockIsNotRestatedButStillApprovesWhenThreadsResolve(t *testi
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if !strings.Contains(body, "Someone dismissed the review that blocked this commit.") {
+	if !strings.Contains(body, "PR Review Agent will not submit its dismissed blocking review again.") {
 		t.Fatalf("summary comment does not say why the open findings carry no block:\n%s", body)
 	}
 
@@ -5061,7 +5061,7 @@ func TestDismissingAnApprovalStillLetsALaterBlockBeSubmitted(t *testing.T) {
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if strings.Contains(body, "Someone dismissed the review that blocked this commit.") {
+	if strings.Contains(body, "PR Review Agent will not submit its dismissed blocking review again.") {
 		t.Fatalf("summary comment reports a withheld block where one was submitted:\n%s", body)
 	}
 }
@@ -5108,7 +5108,7 @@ func TestAVerdictNobodyDismissedRefreshesAsBefore(t *testing.T) {
 		t.Fatal("summary comment body is not a string")
 	}
 
-	if strings.Contains(body, "Someone dismissed the review that blocked this commit.") {
+	if strings.Contains(body, "PR Review Agent will not submit its dismissed blocking review again.") {
 		t.Fatalf("summary comment reports a dismissal that never happened:\n%s", body)
 	}
 
@@ -6249,7 +6249,7 @@ func TestIncompleteReviewSeparatesAppAndProviderUsage(t *testing.T) {
 
 	if title := fmt.Sprint(checkOutput(t, fixture)["title"]); !strings.Contains(
 		title,
-		"Both the app and a provider blocked more requests because of usage limits.",
+		"App and provider usage limits blocked more requests.",
 	) {
 		t.Fatalf("check title = %q", title)
 	}

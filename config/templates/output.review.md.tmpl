@@ -87,7 +87,7 @@
 {{.Details}}
 {{end}}
 
-{{define "output.incomplete-check-title"}}PR Review Agent could not review {{.Chunks}}.{{if .Daily}} It used its full token budget.{{else if .Mixed}} Both the app and a provider blocked more requests because of usage limits.{{else}} Apply `{{.Label}}` to retry.{{end}}
+{{define "output.incomplete-check-title"}}PR Review Agent could not review {{.Chunks}}.{{if .Daily}} It used its full token budget.{{else if .Mixed}} App and provider usage limits blocked more requests.{{else}} Apply `{{.Label}}` to retry.{{end}}
 {{end}}
 
 {{define "output.legacy_details"}}<details>
@@ -178,7 +178,7 @@ PR Review Agent is reviewing `{{.}}`.
 {{define "output.unreviewed-head-reason"}}This commit needs a complete review before approval.
 {{end}}
 
-{{define "output.verdict_lead"}}{{if eq .Decision "COMMENT"}}PR Review Agent did not approve or request changes.{{else if ne .Decision "REQUEST_CHANGES"}}This review did not identify findings at or above the minimum importance.{{else if .Metadata}}Resolve the findings in the rejection review.{{else}}Resolve the open inline findings.{{end}}
+{{define "output.verdict_lead"}}{{if eq .Decision "COMMENT"}}PR Review Agent left a comment without approving or requesting changes.{{else if ne .Decision "REQUEST_CHANGES"}}This review did not identify findings at or above the minimum importance.{{else if .Metadata}}Resolve the findings in the rejection review.{{else}}Resolve the open inline findings.{{end}}
 {{end}}
 
 {{define "output.verdict_section"}}<!-- pr-review-agent:verdict-section:start -->
@@ -193,5 +193,5 @@ PR Review Agent is reviewing `{{.}}`.
 {{define "output.verdict_title"}}{{if eq . "COMMENT"}}Review needs attention{{else if eq . "REQUEST_CHANGES"}}Changes requested{{else}}Approved{{end}}
 {{end}}
 
-{{define "output.withdrawn_block"}}Someone dismissed the review that blocked this commit. PR Review Agent will not submit it again. Resolve the open findings before the next refresh can approve.
+{{define "output.withdrawn_block"}}PR Review Agent will not submit its dismissed blocking review again. Resolve the open findings before the next refresh can approve.
 {{end}}
