@@ -939,37 +939,6 @@
       ]
     },
     {
-      "id": "pr_title",
-      "category": "prose",
-      "title": "Write a precise pull request title",
-      "instructions": [
-        "Use this title format:",
-        "",
-        "[TICKET-12345] Direct statement of what changed",
-        "",
-        "Start with the ticket in square brackets when a ticket exists.",
-        "",
-        "For a small ad-hoc, out-of-scope, or untracked change with no ticket, omit both the title prefix and the `Ticket:` line. Do not use `[NO TICKET]` or another placeholder.",
-        "",
-        "State what changed, not why it matters.",
-        "",
-        "Keep the title specific to the behavior, surface area, or system.",
-        "",
-        "Use backticks only around code symbols. Leave plain prose unwrapped.",
-        "",
-        "Examples:",
-        "",
-        "`[AGENCY-11267] Add plaid relink URL for server-driven relink`",
-        "",
-        "`[AGENCY-11193] Fix consent screen freeze in ExternalAccountLinking`",
-        "",
-        "`Expand dependabot auto-merge for dev dependencies` // (no ticket)",
-        "",
-        "Use the supplied ticket when a ticket exists; do not invent a ticket, ticket URL, or placeholder.",
-        "Preserve the title format without requiring a specific provider, organization, or ticket prefix."
-      ]
-    },
-    {
       "id": "pr_problem_first",
       "category": "prose",
       "title": "Open pull request descriptions with the actual problem",
