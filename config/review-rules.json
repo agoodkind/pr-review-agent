@@ -1172,7 +1172,6 @@
         "## Examples",
         "",
         "Use these as drafting patterns, not as fixed templates.",
-        "Use fictional ticket IDs, repository names, and URLs in example material. Do not use private company information as sample content.",
         "Do not require a title format, ticket, link, or section solely because it appears in an example. Apply the requirements that govern the actual artifact and context.",
         "",
         "### Problem Before Change",
@@ -1387,7 +1386,6 @@
       "title": "Require explicit direction for external messages",
       "instructions": [
         "Require explicit user direction before sending or scheduling a Slack message, replying to a non-AI bot on GitHub, or commenting on, editing, or updating a Jira ticket.",
-        "Require explicit user direction before posting a public comment or opening a pull request in a repository the user does not own or maintain.",
         "A request to draft, review, investigate, or summarize does not authorize sending a visible message.",
         "Produce the requested draft without publication.",
         "",
